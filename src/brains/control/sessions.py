@@ -1,0 +1,957 @@
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import platform
+import uuid
+from datetime import timedelta
+from typing import Any, cast
+
+from brains.control.common import normalize_path, slug_from_path, unique_slug, utc_now
+from brains.control.events import append_event
+from brains.storage.db import SessionLocal
+from brains.storage.migrations import init_db
+from brains.storage.models import (
+    AgentSession,
+    AgentTask,
+    Handoff,
+    Org,
+    Workspace,
+    WorkspaceClaim,
+)
+
+
+class WorkspaceNotFoundError(ValueError):
+    pass
+
+
+class AgentSessionNotFoundError(ValueError):
+    pass
+
+
+# Filesystem markers that identify a path as a legitimate project root.
+# Used by :func:`has_project_marker` so :func:`register_workspace` can emit a
+# warning event when an agent auto-registers an "umbrella" folder (e.g. the
+# parent dir of several repos) that isn't really a project on its own.
+WORKSPACE_PROJECT_MARKERS: tuple[str, ...] = (
+    ".git",
+    "pyproject.toml",
+    "package.json",
+    "Cargo.toml",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Gemfile",
+    "mix.exs",
+    "composer.json",
+    "requirements.txt",
+    "setup.py",
+    ".hg",
+    ".svn",
+)
+
+STALE_SESSION_TTL_SECONDS = 30 * 60
+
+
+def _fallback_machine_id() -> str:
+    value = platform.node().strip() or "unknown-machine"
+    return value[:64]
+
+
+def current_machine_id() -> str:
+    """Return a stable per-machine identifier persisted under the brains state dir."""
+    from brains.api.admin_key import state_dir
+
+    path = state_dir() / "machine-id"
+    try:
+        if path.exists():
+            existing = path.read_text(encoding="utf-8").strip()
+            if existing:
+                return existing[:64]
+        machine_id = uuid.uuid4().hex
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(machine_id + "\n", encoding="utf-8")
+        with contextlib.suppress(OSError):
+            os.chmod(path, 0o600)
+        return machine_id
+    except (OSError, UnicodeError):
+        return _fallback_machine_id()
+
+
+def has_project_marker(path: str) -> bool:
+    """Return True if ``path`` looks like a real project root.
+
+    Checks for any of the well-known markers in
+    :data:`WORKSPACE_PROJECT_MARKERS` either as a sibling file/folder or
+    via a suffix match (``*.csproj``, ``*.sln`` style). Returns False when
+    ``path`` doesn't exist on disk.
+    """
+    if not path or not os.path.isdir(path):
+        return False
+    try:
+        entries = set(os.listdir(path))
+    except OSError:
+        return False
+    for marker in WORKSPACE_PROJECT_MARKERS:
+        if marker in entries:
+            return True
+    for entry in entries:
+        lowered = entry.lower()
+        if lowered.endswith((".csproj", ".sln", ".fsproj", ".vbproj")):
+            return True
+    return False
+
+
+def _pid_alive(pid: int) -> bool:
+    """Cross-platform check that ``pid`` belongs to a live process.
+
+    Ported from agent-hivemind ``agent_hivemind.db._pid_alive``. Returns
+    ``False`` for non-positive PIDs so the reaper treats sessions with a
+    missing or sentinel ``pid`` as candidates for reaping only when the
+    caller already checked the column is populated.
+
+    On Windows we use ``OpenProcess`` + ``GetExitCodeProcess`` because
+    ``os.kill(pid, 0)`` is unreliable there. On POSIX we use the standard
+    ``os.kill(pid, 0)`` signal-0 trick: ``PermissionError`` still means
+    the PID exists (we just can't signal it).
+    """
+    if pid is None or pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            # ``ctypes.windll`` only exists on Windows; reaching it through
+            # ``getattr`` keeps the module type-checkable on every platform.
+            windll = getattr(ctypes, "windll", None)
+            if windll is None:  # pragma: no cover - Windows-only attribute
+                raise AttributeError("ctypes.windll")
+            kernel32 = windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong(0)
+                ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                if not ok:
+                    return False
+                return exit_code.value == STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            # Fall back to POSIX-style probe if ctypes can't load kernel32
+            # (extremely unusual; tests under emulation can hit this).
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but we lack permission to signal it.
+        return True
+
+
+def reap_zombie_sessions() -> list[str]:
+    """Mark crashed sessions as ended, release their claims and tasks.
+
+    A session is "zombie" if it is not yet marked ended (``ended_at IS NULL``)
+    and its recorded PID is no longer alive on this machine. Sessions stamped
+    with a different ``machine_id`` are reaped only when their heartbeat is
+    stale, because their PIDs are meaningful only on their origin machine. For
+    each such session we:
+
+    * Stamp ``ended_at = now`` and append a ``zombie reaped`` note to the
+      session summary.
+    * Delete every ``workspace_claims`` row owned by the dead session.
+    * Flip every ``agent_tasks`` row claimed by the dead session in
+      ``in_progress`` state back to ``available`` so another agent can pick
+      it up.
+    * Emit a ``session_reaped`` event for the audit ledger.
+
+    Returns the list of reaped session IDs. Safe to call on a fresh database
+    (returns an empty list).
+    """
+    init_db()
+    reaped: list[str] = []
+    reaped_workspaces: dict[str, int] = {}
+    machine_id = current_machine_id()
+    with SessionLocal() as session:
+        live_rows = session.query(AgentSession).filter(AgentSession.ended_at.is_(None)).all()
+        now = utc_now()
+        stale_cutoff = now - timedelta(seconds=STALE_SESSION_TTL_SECONDS)
+        for row in live_rows:
+            pid = row.pid
+            note: str
+            if row.machine_id and row.machine_id != machine_id:
+                last_activity = row.last_activity_at
+                if last_activity is None:
+                    # No heartbeat evidence yet; don't guess from a foreign PID.
+                    continue
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=now.tzinfo)
+                if last_activity >= stale_cutoff:
+                    continue
+                note = (
+                    "zombie reaped: foreign machine "
+                    f"{row.machine_id} stale for >{STALE_SESSION_TTL_SECONDS}s"
+                )
+            else:
+                if pid is None or pid <= 0:
+                    # No PID recorded — can't prove the local/legacy session is dead.
+                    continue
+                if _pid_alive(pid):
+                    continue
+                note = f"zombie reaped: pid {pid} dead"
+            row.ended_at = now
+            if getattr(row, "state", None) not in _TERMINAL_SESSION_STATES:
+                # Reaping is a terminal path: ``ended_at`` and the explicit
+                # state must move together or the store grows contradictory
+                # Sessions that read as running forever (BL-P0-07).
+                row.state = "failed"
+            row.summary = f"{row.summary}\n{note}".strip() if row.summary else note
+            session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == row.id).delete(
+                synchronize_session=False
+            )
+            session.query(AgentTask).filter(
+                AgentTask.claimed_by_session_id == row.id,
+                AgentTask.status == "in_progress",
+            ).update(
+                {
+                    "status": "available",
+                    "claimed_by_session_id": None,
+                    "claimed_at": None,
+                },
+                synchronize_session=False,
+            )
+            reaped.append(row.id)
+            reaped_workspaces[row.id] = row.workspace_id
+        if reaped:
+            session.commit()
+    for sid in reaped:
+        append_event(
+            "session_reaped",
+            f"zombie session reaped: {sid}",
+            workspace_id=reaped_workspaces.get(sid),
+            session_id=sid,
+        )
+    return reaped
+
+
+def register_workspace(
+    path: str,
+    slug: str | None = None,
+    name: str | None = None,
+    org_id: int | None = None,
+) -> Workspace:
+    init_db()
+    normalized = normalize_path(path)
+    with SessionLocal() as session:
+        existing = session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
+        if existing:
+            return existing
+        all_slugs = {row.slug for row in session.query(Workspace.slug).all()}
+        final_slug = slug or unique_slug(slug_from_path(normalized), all_slugs)
+        # Every Workspace creation path assigns valid Org scope (BL-P0-07):
+        # an explicit Org must exist, otherwise the install's default Org is
+        # used, matching the one-time backfill in migration 120.
+        if org_id is None:
+            from brains.control.orgs import ensure_default_org
+
+            resolved_org_id = int(ensure_default_org()["id"])
+        else:
+            org = session.query(Org).filter(Org.id == org_id).one_or_none()
+            if org is None:
+                raise ValueError(f"unknown org: {org_id}")
+            resolved_org_id = org.id
+        workspace = Workspace(
+            slug=final_slug,
+            path=normalized,
+            name=name or final_slug,
+            status="active",
+            org_id=resolved_org_id,
+        )
+        session.add(workspace)
+        session.commit()
+        session.refresh(workspace)
+    has_marker = has_project_marker(normalized)
+    append_event(
+        "workspace_registered",
+        f"workspace registered: {final_slug}",
+        workspace_id=workspace.id,
+        metadata={"path": normalized, "has_project_marker": has_marker},
+    )
+    # Soft warning when an agent auto-registers a path that doesn't look like
+    # a real project root (e.g. umbrella parent folder). Doesn't refuse —
+    # keeps existing flows working — but ``brains workspaces doctor`` surfaces
+    # these so operators can prune.
+    if not has_marker:
+        append_event(
+            "workspace_registered_no_marker",
+            (
+                f"workspace registered without project marker: {final_slug} "
+                f"({normalized}) — looks like an umbrella folder or empty "
+                "directory; consider pruning with `brains-ai workspaces prune`."
+            ),
+            workspace_id=workspace.id,
+            metadata={"path": normalized},
+        )
+    return workspace
+
+
+def get_workspace(
+    path: str | None = None, slug: str | None = None, id: int | None = None
+) -> Workspace:
+    init_db()
+    with SessionLocal() as session:
+        query = session.query(Workspace)
+        if id is not None:
+            row = query.filter(Workspace.id == id).one_or_none()
+        elif slug is not None:
+            row = query.filter(Workspace.slug == slug).one_or_none()
+        elif path is not None:
+            row = query.filter(Workspace.path == normalize_path(path)).one_or_none()
+        else:
+            row = None
+        if row is None:
+            raise WorkspaceNotFoundError("workspace not found")
+        return row
+
+
+def list_workspaces(*, org_id: int | None = None, include_archived: bool = False) -> list[dict]:
+    init_db()
+    with SessionLocal() as session:
+        query = session.query(Workspace)
+        if org_id is not None:
+            query = query.filter(Workspace.org_id == org_id)
+        if not include_archived:
+            query = query.filter(Workspace.status == "active")
+        rows = query.order_by(Workspace.name, Workspace.slug).all()
+        return [
+            {
+                "id": row.id,
+                "slug": row.slug,
+                "name": row.name,
+                "path": row.path,
+                "status": row.status,
+                "visibility": row.visibility,
+                "org_id": row.org_id,
+                "last_touched_at": (
+                    row.last_touched_at.isoformat() if row.last_touched_at else None
+                ),
+            }
+            for row in rows
+        ]
+
+
+def start_session(
+    workspace_path: str,
+    tool: str = "codex",
+    pid: int | None = None,
+    metadata: dict[str, Any] | None = None,
+    operator: str | None = None,
+) -> dict:
+    workspace = register_workspace(workspace_path)
+    # Resolve who owns this session before we open it so the row can be
+    # stamped with ``created_by_operator_id``. Defaults to the auto-
+    # provisioned ``admin`` operator on any single-operator install —
+    # see ``brains.control.operators.resolve_current_operator``.
+    from brains.control.operators import resolve_current_operator
+
+    operator_record = resolve_current_operator(operator=operator)
+    # Sweep zombies before opening a new session so the new agent inherits
+    # a clean view of workspace claims and task locks.
+    reap_zombie_sessions()
+    # Decay stale handoffs so the welcome packet never advertises an
+    # ancient "active" handoff as something the new session should pick.
+    try:
+        from brains.control.handoffs import mark_stale_handoffs
+
+        mark_stale_handoffs()
+    except Exception:
+        pass
+    session_id = f"ses_{uuid.uuid4().hex[:12]}"
+    init_db()
+    with SessionLocal() as db_session:
+        row = AgentSession(
+            id=session_id,
+            workspace_id=workspace.id,
+            tool=tool,
+            pid=pid or os.getpid(),
+            machine_id=current_machine_id(),
+            created_by_operator_id=operator_record["id"],
+            metadata_json=json.dumps(metadata or {}),
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        active = (
+            db_session.query(Handoff)
+            .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
+            .order_by(Handoff.set_at.desc(), Handoff.id.desc())
+            .first()
+        )
+        active_handoff = (
+            {
+                "id": active.id,
+                "title": active.title,
+                "body": active.body,
+                "status": active.status,
+            }
+            if active
+            else None
+        )
+    # Build the discoverability welcome packet so the agent sees unread
+    # mail, applicable patterns, workspace memory keys, registered-tool
+    # status and indexed-source status without having to call five tools.
+    # Defensive: a welcome failure must never block session start.
+    #
+    # Built BEFORE the ``session_start`` event so the event's metadata
+    # can carry a snapshot of the offered counts. That snapshot is the
+    # join key for adoption queries — e.g. "of the sessions where
+    # welcome.unread_messages > 0, how many fired a read_messages event
+    # within 2 minutes?" — without inventing a new telemetry table.
+    try:
+        from brains.control.welcome import build_welcome
+
+        welcome = build_welcome(workspace, session_id)
+    except Exception:
+        welcome = None
+    welcome_metadata: dict[str, Any] = {
+        "tool": tool,
+        "operator": operator_record["slug"],
+    }
+    if welcome is not None:
+        tool_status = welcome.get("tool_status") or {}
+        index_status = welcome.get("index_status") or {}
+        welcome_metadata["welcome"] = {
+            "unread_messages": int((welcome.get("unread_messages") or {}).get("count", 0)),
+            "applicable_patterns": len(welcome.get("applicable_patterns") or []),
+            "knowledge": int((welcome.get("knowledge") or {}).get("count", 0)),
+            "relevant_memories": len(welcome.get("relevant_memories") or []),
+            "tools_missing": int(tool_status.get("missing", 0)),
+            "tools_unverified": int(tool_status.get("unverified", 0)),
+            "index_sources": int(index_status.get("sources", 0)),
+            "hints": len(welcome.get("hints") or []),
+        }
+    append_event(
+        "session_start",
+        f"{tool} session started",
+        workspace_id=workspace.id,
+        session_id=session_id,
+        metadata=welcome_metadata,
+    )
+    # Best-effort: warm the code graph + embeddings in the background so the first
+    # retrieval call this session makes is instant. Never blocks session start.
+    try:
+        from brains.context.prewarm import schedule_prewarm
+
+        schedule_prewarm(workspace_path)
+    except Exception:
+        pass
+    return {
+        "session_id": session_id,
+        "workspace": workspace.slug,
+        "operator": operator_record["slug"],
+        "active_handoff": active_handoff,
+        "welcome": welcome,
+    }
+
+
+def _runtime_machine_id(session, runtime_id: int | None) -> str | None:
+    """The machine a Runtime actually runs on, where the row can be read.
+
+    A spawn Session is created by the *hub* process, so stamping it with the
+    hub's machine would record a box the agent never runs on - and every
+    surface that reads the stamp (the zombie reaper, reconciliation, command
+    routing) would then be reasoning about the wrong machine. The Runtime's
+    own registration is the authority.
+    """
+    if runtime_id is None:
+        return None
+    from brains.storage.models import Runtime
+
+    row = session.get(Runtime, runtime_id)
+    return row.machine_id if row is not None and row.machine_id else None
+
+
+def open_spawn_session(
+    *,
+    persona_id: int,
+    tool: str,
+    issue_id: int | None = None,
+    runtime_id: int | None = None,
+    workspace_path: str | None = None,
+    org_id: int | None = None,
+    operator: str | None = None,
+) -> dict:
+    """Create a pending ``agent_sessions`` row for a remote persona spawn (F0.1).
+
+    Unlike :func:`start_session` this stamps the WS2 link columns
+    ``{persona_id, issue_id, runtime_id}``, records **no** pid (the agent runs on
+    a remote runtime, not this process), and reuses/registers a workspace so the
+    NOT NULL ``workspace_id`` FK is satisfied. The companion
+    ``control.assignments.enqueue_spawn`` queues the order the daemon pulls.
+    """
+    from brains.control.operators import resolve_current_operator
+
+    init_db()
+    operator_record = resolve_current_operator(operator=operator)
+    workspace = register_workspace(workspace_path or os.getcwd(), org_id=org_id)
+    if org_id is not None and workspace.org_id != org_id:
+        raise ValueError(
+            f"workspace {workspace.slug!r} belongs to another Org and cannot host this Session"
+        )
+    session_id = f"ses_{uuid.uuid4().hex[:12]}"
+    with SessionLocal() as db_session:
+        row = AgentSession(
+            id=session_id,
+            workspace_id=workspace.id,
+            tool=tool,
+            pid=None,
+            machine_id=_runtime_machine_id(db_session, runtime_id) or current_machine_id(),
+            created_by_operator_id=operator_record["id"],
+            issue_id=issue_id,
+            persona_id=persona_id,
+            runtime_id=runtime_id,
+            state="spawning",
+        )
+        db_session.add(row)
+        db_session.commit()
+        db_session.refresh(row)
+        result = _agent_session_to_dict(row)
+    append_event(
+        "spawn_session_opened",
+        f"spawn session {session_id} for persona {persona_id}",
+        workspace_id=workspace.id,
+        session_id=session_id,
+        metadata={
+            "persona_id": persona_id,
+            "issue_id": issue_id,
+            "runtime_id": runtime_id,
+        },
+    )
+    return result
+
+
+def _agent_session_to_dict(row: AgentSession) -> dict:
+    started = row.started_at
+    ended = row.ended_at
+    duration_seconds = None
+    if started is not None and ended is not None:
+        duration_seconds = max(0.0, (ended - started).total_seconds())
+    return {
+        "id": row.id,
+        "status": "ended" if row.ended_at is not None else "running",
+        # F3.2 explicit lifecycle (spawning/running/blocked/completed/failed).
+        "state": getattr(row, "state", None) or ("completed" if ended else "running"),
+        "tool": row.tool,
+        "workspace_id": row.workspace_id,
+        "machine_id": row.machine_id,
+        "issue_id": row.issue_id,
+        "persona_id": row.persona_id,
+        "runtime_id": row.runtime_id,
+        "pid": row.pid,
+        "started_at": row.started_at.isoformat() if row.started_at else None,
+        "last_activity_at": row.last_activity_at.isoformat() if row.last_activity_at else None,
+        "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+        "duration_seconds": duration_seconds,
+        "summary": row.summary,
+        # BL-P0-05: whether a console message can reach this Session's agent at
+        # all. Declared by the launch shape rather than guessed by the console,
+        # so a composer is disabled with a reason instead of accepting text
+        # that would be settled ``unsupported`` a moment later.
+        "message_capability": _message_capability(row.tool),
+    }
+
+
+def _message_capability(tool: str | None) -> dict:
+    try:
+        from brains.exec import session_channel
+
+        return session_channel.message_capability(tool)
+    except Exception:  # pragma: no cover - capability lookup must not break a read
+        return {"supported": False, "reason": "the message capability could not be determined"}
+
+
+# Terminal session states stamp ``ended_at`` + a duration.
+SESSION_STATES = {"spawning", "running", "blocked", "completed", "failed"}
+_TERMINAL_SESSION_STATES = {"completed", "failed"}
+
+
+def set_session_state(session_id: str, state: str, *, summary: str | None = None) -> dict:
+    """Transition a session's explicit lifecycle state (F3.2).
+
+    ``completed``/``failed`` stamp ``ended_at`` (so duration is computed) and a
+    summary; ``blocked``/``running``/``spawning`` are non-terminal. Publishes a
+    ``session.state`` event on the session topic so the console updates live.
+    """
+    if state not in SESSION_STATES:
+        raise ValueError(f"invalid session state: {state!r}")
+    init_db()
+    with SessionLocal() as session:
+        row = session.get(AgentSession, session_id)
+        if row is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        row.state = state
+        if summary is not None:
+            row.summary = summary
+        if state in _TERMINAL_SESSION_STATES and row.ended_at is None:
+            row.ended_at = utc_now()
+        session.commit()
+        session.refresh(row)
+        result = _agent_session_to_dict(row)
+    if state in _TERMINAL_SESSION_STATES:
+        # The Session can no longer receive anything (BL-P0-05).
+        _cancel_open_commands(
+            session_id,
+            reason=f"the Session reached {state} before the command was delivered",
+        )
+    try:
+        from brains.api.realtime_publish import publish_session
+
+        publish_session(None, "session.state", result)
+    except Exception:
+        pass
+    return result
+
+
+def list_agent_sessions(
+    *,
+    status: str | None = None,
+    issue_id: int | None = None,
+    persona_id: int | None = None,
+    runtime_id: int | None = None,
+    workspace_id: int | None = None,
+    machine_id: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Read ``agent_sessions`` filtered by the WS2 link columns (board/operator
+    read surface). ``status`` is derived: ``running`` (``ended_at IS NULL``) or
+    ``ended``."""
+    init_db()
+    with SessionLocal() as session:
+        query = session.query(AgentSession)
+        if issue_id is not None:
+            query = query.filter(AgentSession.issue_id == issue_id)
+        if persona_id is not None:
+            query = query.filter(AgentSession.persona_id == persona_id)
+        if runtime_id is not None:
+            query = query.filter(AgentSession.runtime_id == runtime_id)
+        if workspace_id is not None:
+            query = query.filter(AgentSession.workspace_id == workspace_id)
+        if machine_id is not None:
+            query = query.filter(AgentSession.machine_id == machine_id)
+        if status == "running":
+            query = query.filter(AgentSession.ended_at.is_(None))
+        elif status == "ended":
+            query = query.filter(AgentSession.ended_at.isnot(None))
+        rows = (
+            query.order_by(AgentSession.started_at.desc(), AgentSession.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return [_agent_session_to_dict(r) for r in rows]
+
+
+def get_agent_session(session_id: str) -> dict | None:
+    init_db()
+    with SessionLocal() as session:
+        row = session.get(AgentSession, session_id)
+        return _agent_session_to_dict(row) if row is not None else None
+
+
+def list_agent_session_events(session_id: str, *, limit: int = 100) -> list[dict]:
+    """Recent ledger/stdout events for a session (newest first), for WS backfill."""
+    from brains.storage.models import Event
+
+    init_db()
+    with SessionLocal() as session:
+        rows = (
+            session.query(Event)
+            .filter(Event.session_id == session_id)
+            .order_by(Event.created_at.desc(), Event.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "kind": r.kind,
+                "message": r.message,
+                "metadata_json": r.metadata_json,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+
+
+def end_session(session_id: str, summary: str = "") -> dict:
+    init_db()
+    with SessionLocal() as session:
+        row = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+        if row is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        if row.ended_at is not None:
+            raise ValueError(f"session already ended: {session_id}")
+        now = utc_now()
+        row.ended_at = now
+        row.summary = summary
+        if getattr(row, "state", None) not in _TERMINAL_SESSION_STATES:
+            row.state = "completed"
+        workspace = session.query(Workspace).filter(Workspace.id == row.workspace_id).one()
+        workspace.last_touched_at = now
+        workspace.last_summary = summary
+        session.commit()
+        workspace_id = row.workspace_id
+    append_event(
+        "session_end",
+        summary or "(no summary)",
+        workspace_id=workspace_id,
+        session_id=session_id,
+    )
+    # A Session that has ended can receive nothing, so its queue is settled
+    # rather than left pending: an operator must not be shown a message or a
+    # stop that no consumer will ever pick up (BL-P0-05).
+    _cancel_open_commands(session_id, reason="the Session ended before the command was delivered")
+    try:
+        with SessionLocal() as session:
+            workspace = session.query(Workspace).filter(Workspace.id == workspace_id).one()
+            from brains.control.views import refresh_views
+
+            refresh_views(workspace.path)
+    except Exception:
+        pass
+    return {"ok": True, "session_id": session_id}
+
+
+# --------------------------------------------------------------------------- #
+# Terminal synchronisation (BL-P0-05)
+# --------------------------------------------------------------------------- #
+
+#: How long after a Session was opened a reconciliation refuses to declare it
+#: unowned. A daemon registers the process a moment *after* the hub row is
+#: created, so a reconciliation that ran in that window would end a Session
+#: that is starting normally.
+RECONCILE_GRACE_SECONDS = 90
+
+
+def _cancel_open_commands(session_id: str, *, reason: str, result: str | None = None) -> None:
+    try:
+        from brains.control import session_commands as commands_ctl
+
+        commands_ctl.cancel_open_for_session(
+            session_id,
+            reason=reason,
+            result=result or commands_ctl.RESULT_SESSION_ENDED,
+        )
+    except Exception:  # pragma: no cover - queue settlement is best effort here
+        pass
+
+
+def finalize_session(
+    session_id: str,
+    *,
+    state: str = "failed",
+    summary: str,
+    cancel_reason: str | None = None,
+) -> dict | None:
+    """Bring a Session to a terminal state exactly once, and clean up after it.
+
+    This is the one place a Session ends for a reason other than its own
+    process reporting completion - an operator stop, a Runtime that restarted
+    and no longer owns the process - and it has to be safe against the Session
+    finishing naturally at the same moment. The stamp is therefore a single
+    conditional UPDATE on ``ended_at IS NULL``: the natural finish and the
+    stop race, exactly one wins, and the loser changes nothing rather than
+    overwriting a completion with a failure.
+
+    Everything the ended Session was holding is released in the same pass -
+    its Workspace claim, its in-progress Tasks, its open commands - and an
+    Issue it was working is moved to ``blocked`` rather than back to ``open``,
+    because re-opening it would have the daemon immediately re-spawn the work
+    an operator just stopped.
+
+    Returns the Session row when this call ended it, and ``None`` when it was
+    already terminal.
+    """
+    if state not in _TERMINAL_SESSION_STATES:
+        raise ValueError(f"a terminal state must be one of {sorted(_TERMINAL_SESSION_STATES)}")
+    init_db()
+    now = utc_now()
+    with SessionLocal() as session:
+        row = session.get(AgentSession, session_id)
+        if row is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        issue_id = row.issue_id
+        workspace_id = row.workspace_id
+        # Conditional stamp: the natural finish and this call race for it.
+        updated = (
+            session.query(AgentSession)
+            .filter(AgentSession.id == session_id, AgentSession.ended_at.is_(None))
+            .update(
+                {
+                    "ended_at": now,
+                    "state": state,
+                    "summary": summary,
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated:
+            session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == session_id).delete(
+                synchronize_session=False
+            )
+            session.query(AgentTask).filter(
+                AgentTask.claimed_by_session_id == session_id,
+                AgentTask.status == "in_progress",
+            ).update(
+                {"status": "available", "claimed_by_session_id": None, "claimed_at": None},
+                synchronize_session=False,
+            )
+        session.commit()
+        if not updated:
+            _cancel_open_commands(session_id, reason=summary)
+            return None
+        session.expire_all()
+        result = _agent_session_to_dict(cast("AgentSession", session.get(AgentSession, session_id)))
+    _cancel_open_commands(session_id, reason=cancel_reason or summary)
+    if issue_id is not None:
+        _block_issue_for_stopped_session(issue_id, summary, session_id)
+    append_event(
+        "session_finalized",
+        summary,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        metadata={"state": state, "issue_id": issue_id},
+    )
+    try:
+        from brains.api.realtime_publish import publish_session
+
+        publish_session(None, "session.state", result)
+    except Exception:  # pragma: no cover - realtime is best effort
+        pass
+    return result
+
+
+def _block_issue_for_stopped_session(issue_id: int, summary: str, session_id: str) -> None:
+    """Move an in-flight Issue to ``blocked`` when its Session was stopped.
+
+    Returning it to ``open`` would be worse than doing nothing: the assignment
+    poll would surface it again within seconds and the daemon would re-spawn
+    exactly the work an operator just stopped. ``blocked`` keeps the Issue
+    visible and waiting for a human instead.
+    """
+    try:
+        from brains.control import issues as issues_ctl
+
+        issue = issues_ctl.get_issue(issue_id)
+        if issue is None or issue.get("status") != "in_progress":
+            return
+        issues_ctl.transition(issue_id, "blocked", session_id=session_id)
+    except Exception:  # pragma: no cover - Issue sync is best effort
+        pass
+
+
+def reconcile_machine_sessions(
+    machine_id: str | None,
+    owned_session_ids: list[str] | set[str],
+    *,
+    runtime_id: int | None = None,
+    reason: str | None = None,
+    grace_seconds: int = RECONCILE_GRACE_SECONDS,
+) -> list[dict]:
+    """End the Sessions a consumer is recorded as running but no longer owns.
+
+    A Runtime that restarts loses every process handle it held. The hub still
+    has those Sessions marked running, and their operators still see a live
+    console, so the daemon reports what it *does* own on startup and reconnect
+    and everything else scoped to that consumer is brought to a terminal state
+    with a truthful summary.
+
+    The scope is the strongest binding available. Given a ``runtime_id``, that
+    Runtime's Sessions are the scope whatever machine they are stamped with: a
+    spawn row carries the hub's machine until the daemon opens it, and adding
+    the machine as a second condition would silently exclude exactly the
+    Sessions that most need reconciling. With no ``runtime_id`` the machine is
+    the only binding there is, and it is used alone.
+
+    Sessions younger than ``grace_seconds`` are left alone: a daemon opens the
+    hub row a moment before it registers the process, and reconciling inside
+    that window would end a Session that is starting normally.
+    """
+    if runtime_id is None and not machine_id:
+        return []
+    owned = {str(sid) for sid in owned_session_ids}
+    init_db()
+    cutoff = utc_now() - timedelta(seconds=max(0, grace_seconds))
+    with SessionLocal() as session:
+        query = session.query(AgentSession).filter(AgentSession.ended_at.is_(None))
+        if runtime_id is not None:
+            query = query.filter(AgentSession.runtime_id == runtime_id)
+        else:
+            query = query.filter(AgentSession.machine_id == machine_id)
+        candidates = []
+        for row in query.all():
+            if row.id in owned:
+                continue
+            started = row.started_at
+            if started is not None and started.tzinfo is None:
+                started = started.replace(tzinfo=cutoff.tzinfo)
+            if started is not None and started > cutoff:
+                continue
+            candidates.append(row.id)
+    where = f"runtime {runtime_id}" if runtime_id is not None else f"machine {machine_id}"
+    summary = reason or (
+        f"reconciled on {where}: the Runtime does not own an agent process for this "
+        "Session, so its outcome is unknown"
+    )
+    out: list[dict] = []
+    for session_id in candidates:
+        finalized = finalize_session(session_id, state="failed", summary=summary)
+        if finalized is not None:
+            out.append(finalized)
+    return out
+
+
+def list_sessions(workspace_path: str | None = None, limit: int = 50) -> list[dict]:
+    # Layer 2 of the multi-operator model: filter by visibility BEFORE
+    # we touch the DB so private workspaces never leak into the result
+    # for operators without explicit membership. ``None`` = admin or
+    # back-compat fallback = no filter, identical to pre-Layer-2.
+    from brains.control.memberships import visible_workspace_ids_for_current
+
+    visible = visible_workspace_ids_for_current()
+    init_db()
+    with SessionLocal() as session:
+        query = session.query(AgentSession, Workspace).join(
+            Workspace, Workspace.id == AgentSession.workspace_id
+        )
+        if workspace_path:
+            query = query.filter(Workspace.path == normalize_path(workspace_path))
+        if visible is not None:
+            query = query.filter(AgentSession.workspace_id.in_(visible))
+        rows = (
+            query.order_by(AgentSession.started_at.desc(), AgentSession.id.desc())
+            .limit(limit)
+            .all()
+        )
+        return [
+            {
+                "id": row.id,
+                "workspace": workspace.slug,
+                "tool": row.tool,
+                "started_at": row.started_at.isoformat(),
+                "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+                "summary": row.summary,
+            }
+            for row, workspace in rows
+        ]

@@ -1,0 +1,511 @@
+name: ci
+
+# The blocking quality gate for every push to main and every pull request
+# (BL-P1-01). Every job below fails the workflow when it fails: there is no
+# `continue-on-error` on a required gate, and no gate reports success on a
+# command that did not run. The release workflow (release.yml) does NOT re-run
+# this — tag pushes are expected to be on commits that already passed ci.
+#
+# Gate map (docs/QUALITY_GATES.md §4):
+#   docs        documentation contract + generated traceability contract
+#   lint        ruff check + ruff format
+#   typecheck   mypy
+#   test        pytest acceptance subset + full unit/integration suite
+#   migrations  migration contract + frozen-baseline rendering contract
+#   spa         SPA typecheck, production build, committed-bundle comparison
+#   package     wheel + sdist build and shipped-data assertions
+#   privacy     personal-identifier and product-vocabulary scan
+#   docker      runtime image build + container health smoke
+#   e2e         Playwright journey suite against an ephemeral hub
+#   gate        one required status that depends on all of the above
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  docs:
+    name: documentation + traceability contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+
+      - name: Documentation contract
+        run: uv run python scripts/check_docs.py
+
+      # Derives SPA routes, API client calls, mounted server routes, entities,
+      # migrations and stable-ID test markers from source and fails on any
+      # orphan or unmatched surface (BL-P1-10).
+      - name: Generated traceability contract
+        run: uv run python scripts/check_traceability.py
+
+      - name: Contract self-tests
+        run: uv run pytest -q tests/test_check_docs.py tests/test_check_traceability.py
+
+  lint:
+    name: ruff lint + format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+      - name: Lint (ruff check)
+        run: uv run ruff check --output-format=github .
+      - name: Format check (ruff format)
+        run: uv run ruff format --check --diff .
+
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+      # Blocking. The checked surface is `files` in [tool.mypy]; widening it is
+      # a deliberate change, but nothing in it may regress.
+      - name: Type-check (mypy)
+        run: uv run mypy
+
+  test:
+    name: pytest (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python ${{ matrix.python }}
+        run: uv python install ${{ matrix.python }}
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+
+      # The AC-mapped acceptance contracts run first so a product-promise
+      # regression is attributable without reading the whole suite log.
+      - name: Brains acceptance tests
+        run: >
+          uv run pytest -q -m acceptance
+          --junitxml=reports/acceptance-${{ matrix.python }}.xml
+
+      - name: Unit + integration tests
+        run: >
+          uv run pytest -q --maxfail=20
+          --junitxml=reports/pytest-${{ matrix.python }}.xml
+          --cov=brains
+          --cov-report=xml:coverage.xml
+          --cov-report=term-missing:skip-covered
+
+      - name: Upload test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-reports-${{ matrix.python }}
+          path: |
+            reports/
+            coverage.xml
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload coverage to Codecov
+        if: matrix.python == '3.12'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: brains-py3.12
+          fail_ci_if_error: false
+          # Public repo — tokenless upload supported. Add CODECOV_TOKEN later if needed.
+
+  migrations:
+    name: migration + baseline contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install project + dev extras
+        run: uv sync --extra dev
+
+      # The frozen baseline plus the ordered, checksummed delta corpus is the
+      # schema contract: these modules assert a fresh store and every legacy
+      # store reach the same schema, that the committed baseline is exactly
+      # what the generator renders for the tables it froze, and that every way
+      # the ledger can be wrong is detected rather than absorbed.
+      - name: Migration and baseline contract
+        run: >
+          uv run pytest -q
+          tests/test_migration_contract.py
+          tests/test_baseline_schema_generation.py
+          tests/test_consolidation_migration.py
+          tests/test_sqlite_integrity.py
+          --junitxml=reports/migrations.xml
+
+      - name: Baseline rendering is deterministic
+        # The frozen baseline is compared against the generator by
+        # tests/test_baseline_schema_generation.py. This step additionally
+        # proves the renderer is stable across processes, so "regenerate the
+        # baseline" is a reproducible operation rather than a diff-producing
+        # one.
+        run: |
+          set -euo pipefail
+          for backend in sqlite postgresql; do
+            uv run python scripts/generate_baseline_schema.py "$backend" > "render-a-$backend.sql"
+            uv run python scripts/generate_baseline_schema.py "$backend" > "render-b-$backend.sql"
+            diff -u "render-a-$backend.sql" "render-b-$backend.sql"
+          done
+          echo "ok: baseline DDL rendering is deterministic"
+
+      - name: Migration corpus has no uncommitted drift
+        run: |
+          set -e
+          if ! git diff --quiet -- src/brains/storage; then
+            echo "::error::the migration gate modified tracked storage files"
+            git --no-pager diff --stat -- src/brains/storage
+            exit 1
+          fi
+          echo "ok: tracked storage files untouched"
+
+      - name: Upload migration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-reports
+          path: |
+            reports/
+            render-*.sql
+          retention-days: 7
+          if-no-files-found: ignore
+
+  spa:
+    name: SPA typecheck + build + bundle contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `npm ci` (never `npm install`) is the only install defined by the
+      # lockfile alone, and it refuses to run when package.json and
+      # package-lock.json disagree.
+      - name: Install SPA dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck SPA
+        working-directory: frontend
+        run: npm run typecheck
+
+      # Rebuilds the console into a scratch directory and compares it with the
+      # bundle committed under src/brains/web/spa, which the wheel ships.
+      - name: Committed bundle matches source
+        run: python scripts/check_spa_bundle.py --no-install --keep
+
+      - name: Worktree is unchanged by the bundle gate
+        run: |
+          set -e
+          if ! git diff --quiet -- src/brains/web/spa; then
+            echo "::error::the bundle gate modified the committed SPA bundle"
+            git --no-pager diff --stat -- src/brains/web/spa
+            exit 1
+          fi
+          echo "ok: committed bundle untouched"
+
+      - name: Upload rebuilt bundle
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spa-rebuilt-bundle
+          path: frontend/.bundle-check/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  package:
+    name: build wheel + sdist
+    needs: [docs, lint, typecheck, test, migrations, spa]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Build distribution
+        run: uv build
+      - name: Show artifacts
+        run: ls -la dist
+
+      # A wheel that omits the SPA bundle, the frozen baseline DDL or the SQL
+      # migrations cannot serve the console or create/upgrade a database, and
+      # neither `uv build` nor an import test notices.
+      - name: Distribution ships the runtime data files
+        run: python scripts/check_distribution.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  privacy:
+    name: privacy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No personal identifiers
+        # The patterns live in a repository secret rather than in this file.
+        # Spelling them here would publish the very list they exist to catch:
+        # a reader learns exactly which identifiers are worth searching for,
+        # which is more useful to a stranger than to us.
+        env:
+          PRIVACY_PATTERNS: ${{ secrets.PRIVACY_PATTERNS }}
+        run: |
+          if [ -z "${PRIVACY_PATTERNS}" ]; then
+            echo "::notice::PRIVACY_PATTERNS is not set; skipping"
+            exit 0
+          fi
+          if git grep -nI -i -E "${PRIVACY_PATTERNS}" -- .; then
+            echo "::error::personal identifier found (see matches above)"; exit 1
+          fi
+          echo "ok: no personal identifiers"
+      - name: Product UI uses Pod terminology
+        # Squad remains a documented storage/control alias, but product-facing
+        # UI must use the Brains product term Pod.
+        run: |
+          if git grep -nI -i -E 'feature crew|\bsquad\b|\btribe\b' -- frontend/src; then
+            echo "::error::non-product team vocabulary found in the modern UI"; exit 1
+          fi
+          echo "ok: modern UI uses Pod terminology"
+
+  docker-smoke:
+    name: docker image smoke
+    needs: [docs, lint, typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build runtime image
+        run: docker build -t brains-ai:ci .
+      - name: Run container + health check
+        # Builds AND RUNS the image. `docker build` never evaluates
+        # CMD/ENTRYPOINT, so an entrypoint that names a non-existent binary
+        # (e.g. the dropped `brains` vs `brains-ai`) only fails at container
+        # start. This job catches that class of regression by starting the
+        # image and waiting for the container's own HEALTHCHECK (which probes
+        # the gateway plus dashboard and MCP listeners) to report healthy. We use the
+        # internal healthcheck rather than an external curl because serve-all
+        # binds to loopback inside the container by default.
+        run: |
+          set -e
+          docker run -d --name brains-smoke brains-ai:ci
+          status=starting
+          for i in $(seq 1 40); do
+            running=$(docker inspect -f '{{.State.Running}}' brains-smoke 2>/dev/null || echo false)
+            status=$(docker inspect -f '{{.State.Health.Status}}' brains-smoke 2>/dev/null || echo missing)
+            [ "$status" = "healthy" ] && break
+            if [ "$running" != "true" ]; then status="exited:$(docker inspect -f '{{.State.ExitCode}}' brains-smoke 2>/dev/null)"; break; fi
+            sleep 2
+          done
+          echo "--- container logs ---"
+          docker logs brains-smoke || true
+          if [ "$status" != "healthy" ]; then
+            echo "::error::image did not become healthy (entrypoint/serve-all broken); status=$status"
+            exit 1
+          fi
+          echo "ok: image starts and all serve-all children are healthy"
+      - name: Capture container logs
+        if: failure()
+        run: docker logs brains-smoke > docker-smoke.log 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: docker-smoke-logs
+          path: docker-smoke.log
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Teardown
+        if: always()
+        run: docker rm -f brains-smoke || true
+
+  brains-e2e:
+    name: Brains E2E (Playwright)
+    needs: [docs, lint, typecheck, spa]
+    runs-on: ubuntu-latest
+    env:
+      BRAINS_API_KEY: ci-e2e-key
+      BRAINS_E2E_BASE_URL: http://127.0.0.1:8810
+      BRAINS_E2E_KEY: ci-e2e-key
+      BRAINS_PREWARM_INDEX_ON_SESSION: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install project
+        run: uv sync --extra dev
+
+      - name: Boot ephemeral hub + seed
+        run: |
+          set -euo pipefail
+          export BRAINS_STATE_DIR="$RUNNER_TEMP/brains-e2e-state"
+          export BRAINS_DB_URL="sqlite:///$BRAINS_STATE_DIR/brains.db"
+          mkdir -p "$BRAINS_STATE_DIR"
+          uv run uvicorn brains.main:app --host 127.0.0.1 --port 8810 >hub.log 2>&1 &
+          hub_pid=$!
+          echo "$hub_pid" > hub.pid
+          ready=false
+          for i in $(seq 1 40); do
+            if ! kill -0 "$hub_pid" 2>/dev/null; then
+              echo "::error::hub exited before becoming healthy"
+              cat hub.log
+              exit 1
+            fi
+            if curl -fsS http://127.0.0.1:8810/health >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::hub did not become healthy"
+            cat hub.log
+            exit 1
+          fi
+          org_json=$(curl -fsS -X POST http://127.0.0.1:8810/v1/orgs \
+            -H "x-api-key: $BRAINS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"slug":"demo","name":"Demo Org"}')
+          org_id=$(printf '%s' "$org_json" | uv run python -c \
+            'import json,sys; print(json.load(sys.stdin)["id"])')
+
+          runtime_json=$(curl -fsS -X POST http://127.0.0.1:8810/v1/runtimes/register \
+            -H "x-api-key: $BRAINS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"machine_id\":\"ci-machine\",\"machine_label\":\"CI Runtime\",\"org_id\":$org_id,\"tools\":[{\"tool\":\"copilot\",\"display_name\":\"Copilot\",\"capabilities\":{\"models\":[\"claude-sonnet-4.5\",\"gpt-4o\"],\"commands\":[\"copilot\"]}}]}")
+          runtime_id=$(printf '%s' "$runtime_json" | uv run python -c \
+            'import json,sys; print(json.load(sys.stdin)["runtimes"][0]["id"])')
+
+          curl -fsS -X POST http://127.0.0.1:8810/v1/orgs/demo/personas \
+            -H "x-api-key: $BRAINS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"slug\":\"mason\",\"name\":\"Mason\",\"model\":\"claude-sonnet-4.5\",\"tool\":\"copilot\",\"default_runtime_id\":$runtime_id}"
+          curl -fsS -X POST http://127.0.0.1:8810/v1/orgs/demo/projects \
+            -H "x-api-key: $BRAINS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"slug":"apollo","name":"Apollo Launch"}'
+          curl -fsS -X POST http://127.0.0.1:8810/v1/projects/apollo/issues \
+            -H "x-api-key: $BRAINS_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Seed issue","body":"Exercise the Brains operator journey.","priority":"p1"}'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install e2e deps + browser
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # Blocking: every J1-J11 browser journey contract must pass on the exact
+      # candidate. Remaining real-runtime/provider limitations stay explicit in
+      # docs/product/TRACEABILITY.md rather than being hidden by the harness.
+      - name: Run Brains E2E
+        working-directory: tests/e2e
+        run: npx playwright test
+
+      - name: Stop hub
+        if: always()
+        run: kill "$(cat hub.pid)" 2>/dev/null || true
+
+      - name: Upload hub log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brains-e2e-hub-log
+          path: hub.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: brains-e2e-report
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  gate:
+    name: quality gate
+    # One status to require on the branch: it is green only when every gate
+    # above succeeded, and a skipped or cancelled dependency fails it.
+    needs:
+      - docs
+      - lint
+      - typecheck
+      - test
+      - migrations
+      - spa
+      - package
+      - privacy
+      - docker-smoke
+      - brains-e2e
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every gate passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS"
+          if printf '%s' "$RESULTS" | grep -q '"result": *"\(failure\|cancelled\|skipped\)"'; then
+            echo "::error::at least one required quality gate did not pass"
+            exit 1
+          fi
+          echo "ok: every required quality gate passed"

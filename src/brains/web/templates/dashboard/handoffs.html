@@ -1,0 +1,71 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, relative_time, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Handoffs</div>
+    <h1 class="page-header__title">
+      Handoffs
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Session-to-session bookmarks so the next agent can pick up cleanly.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='handoffs', title="What is a handoff?") %}
+  <p>A <strong>handoff</strong> is a structured note one session leaves for the next agent to pick up — title, body, and optional links. Sessions drop them at meaningful pauses (end of phase, blocking on input, before sleep) so context never lives only in one chat window.</p>
+  <p>A handoff cycles through <code>active</code> → <code>picked</code> → <code>cleared</code>. The "Active" filter is the default; widen to "All" to see history.</p>
+{% endcall %}
+
+{{ list_controls(
+    '/dashboard/handoffs',
+    search_value=search_value,
+    search_placeholder='Search title / workspace / body…',
+    filters=[
+      {'name': 'status', 'label': 'Status', 'value': status_filter,
+       'options': [('', 'All'), ('active', 'active'), ('picked', 'picked'), ('cleared', 'cleared')]},
+    ],
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if handoffs %}
+  <table class="data is-rowlink">
+    <thead>
+      <tr><th>Workspace</th><th>Title</th><th>Status</th><th>Set at</th></tr>
+    </thead>
+    <tbody>
+      {% for h in handoffs %}
+      <tr onclick="window.location='/dashboard/handoffs/{{ h.handoff_id }}'">
+        <td>{{ h.workspace }}</td>
+        <td>
+          <a href="/dashboard/handoffs/{{ h.handoff_id }}" class="row" style="gap: var(--space-2); text-decoration: none; color: inherit;">
+            {{ icon('arrow-up-right') }}
+            <strong>{{ h.title }}</strong>
+          </a>
+        </td>
+        <td>{{ status_pill(h.status) }}</td>
+        <td>{{ relative_time(h.set_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No handoffs match the current filter',
+        body='Sessions drop handoffs at meaningful pauses. Try `All` to include cleared ones.',
+        icon_name='arrow-up-right'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/handoffs',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    filters=[{'name': 'status', 'value': status_filter}],
+    shown=handoffs|length,
+) }}
+{% endblock %}

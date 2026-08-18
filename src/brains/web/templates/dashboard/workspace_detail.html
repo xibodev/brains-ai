@@ -1,0 +1,130 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import pill, status_pill, relative_time, empty_state %}
+
+{% block page %}
+<div class="row" style="margin-bottom: var(--space-3);">
+  <a href="/dashboard/workspaces" class="btn is-ghost is-sm">
+    ← Workspaces
+  </a>
+</div>
+
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Workspace</div>
+    <h1 class="page-header__title row" style="gap: var(--space-2);">
+      {{ icon('database') }}
+      <code class="mono">{{ workspace.slug }}</code>
+      {{ status_pill(workspace.status) }}
+    </h1>
+    <p class="page-header__subtitle">
+      <code class="mono muted">{{ workspace.path }}</code>
+    </p>
+    {% if workspace.last_summary %}
+    <p class="muted" style="margin-top: var(--space-2);">{{ workspace.last_summary }}</p>
+    {% endif %}
+  </div>
+  <div class="row" style="gap: var(--space-2); flex-shrink: 0;">
+    {% if workspace.last_touched_at %}
+    <span class="muted" style="align-self: center;">last touched {{ relative_time(workspace.last_touched_at) }}</span>
+    {% endif %}
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('bot') }}<span>Active sessions</span></div>
+    <div class="stat-card__value tabular">{{ sessions|length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('list-checks') }}<span>Tasks</span></div>
+    <div class="stat-card__value tabular">{{ tasks|length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('sparkles') }}<span>Open decisions</span></div>
+    <div class="stat-card__value tabular">{{ decisions|length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('arrow-up-right') }}<span>Handoffs</span></div>
+    <div class="stat-card__value tabular">{{ handoffs|length }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('activity') }}<span>Events (recent)</span></div>
+    <div class="stat-card__value tabular">{{ events|length }}</div>
+  </div>
+</div>
+
+<div class="split-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-top: var(--space-4);">
+  <div class="panel">
+    <div class="panel__header">
+      <div>
+        <h2 class="panel__title">{{ icon('sparkles') }} Open decisions</h2>
+      </div>
+      <a href="/dashboard/decisions" class="btn is-ghost is-sm">All →</a>
+    </div>
+    {% if decisions %}
+    <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2);">
+      {% for d in decisions %}
+      <li class="row is-between" style="padding: var(--space-2); border-radius: var(--radius-sm);">
+        <a href="/dashboard/decisions/{{ d.code }}" class="row" style="gap: var(--space-2);">
+          <code class="mono">{{ d.code }}</code>
+          <span>{{ d.title }}</span>
+        </a>
+        <span class="muted">{{ relative_time(d.created_at) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      {{ empty_state('No open decisions', body='Sessions in this workspace haven\'t raised any.', icon_name='sparkles') }}
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel__header">
+      <div>
+        <h2 class="panel__title">{{ icon('arrow-up-right') }} Active handoffs</h2>
+      </div>
+      <a href="/dashboard/handoffs" class="btn is-ghost is-sm">All →</a>
+    </div>
+    {% if handoffs %}
+    <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: var(--space-2);">
+      {% for h in handoffs %}
+      <li class="row is-between" style="padding: var(--space-2); border-radius: var(--radius-sm);">
+        <div>
+          <strong>{{ h.title }}</strong>
+          {{ status_pill(h.status) }}
+        </div>
+        <span class="muted">{{ relative_time(h.set_at) }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      {{ empty_state('No active handoffs', icon_name='arrow-up-right') }}
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel" style="margin-top: var(--space-4);">
+  <div class="panel__header">
+    <div>
+      <h2 class="panel__title">{{ icon('activity') }} Recent activity</h2>
+      <p class="panel__subtitle">Latest events in this workspace.</p>
+    </div>
+  </div>
+  {% if events %}
+  <ul class="activity-feed">
+    {% for ev in events %}
+    <li>
+      <span class="activity-feed__time">{{ relative_time(ev.created_at) }}</span>
+      <span class="activity-feed__icon">{{ icon('activity') }}</span>
+      <span class="activity-feed__body">
+        <strong>{{ ev.kind }}</strong>
+        <span class="muted">· {{ ev.message }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    {{ empty_state('No events yet for this workspace', icon_name='activity') }}
+  {% endif %}
+</div>
+{% endblock %}

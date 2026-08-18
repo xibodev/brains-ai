@@ -1,0 +1,87 @@
+# Brains sidekick — box deploy (co-hosted with atlas)
+#
+# Internet-reachable, approval-gated copilot+brains sidekick. Front this with the
+# Caddyfile (TLS + bearer) and run the egress lock (scripts/gate-egress-lock.sh)
+# BEFORE exposing. Fill deploy/box/.env from .env.example. The control surfaces bind
+# to loopback inside the container; Caddy is the only public ingress.
+#
+#   docker compose -f deploy/box/compose.box.yml --env-file deploy/box/.env up -d
+#
+# NOTE: this is the deploy SCAFFOLD prepared for the founder-run cutover. It does NOT
+# embed any secret — every credential comes from .env / the host secret store.
+
+name: brains-sidekick
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brains
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: brains
+    volumes:
+      - brains-pg:/var/lib/postgresql/data
+    networks: [brains-internal]
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    # GPU optional; remove the deploy block on a CPU-only box.
+    volumes:
+      - brains-ollama:/root/.ollama
+    networks: [brains-internal]
+
+  brains:
+    image: ${BRAINS_IMAGE:-brains-ai:latest}   # see "install from PyPI" note below
+    restart: unless-stopped
+    depends_on: [postgres, ollama]
+    # Runs as a dedicated low-priv user; the egress lock (host nft) polices this uid.
+    user: "${BRAINS_EXEC_UID:-10001}:${BRAINS_EXEC_GID:-10001}"
+    environment:
+      BRAINS_DB_URL: postgresql+psycopg://brains:brains@postgres:5432/brains
+      BRAINS_EMBED_MODEL: nomic-embed-text
+      BRAINS_OLLAMA_BASE_URL: http://ollama:11434
+      # --- security posture ---
+      BRAINS_GATE_MODE: strict
+      BRAINS_API_KEY: ${BRAINS_API_KEY:?set in .env}          # gateway/dashboard bearer
+      BRAINS_RELAY_TOKEN: ${BRAINS_RELAY_TOKEN:?set in .env}  # /relay/* bearer (else 503)
+      BRAINS_MCP_BIND: 127.0.0.1                              # MCP stays loopback; not public
+      # --- bridges (fill the ones you use) ---
+      BRAINS_WHATSAPP_TOKEN: ${BRAINS_WHATSAPP_TOKEN:-}
+      BRAINS_WHATSAPP_PHONE_ID: ${BRAINS_WHATSAPP_PHONE_ID:-}
+      BRAINS_WHATSAPP_RECIPIENT: ${BRAINS_WHATSAPP_RECIPIENT:-}
+      # --- agent CLI creds: mount read-scoped tokens, NEVER broad ones ---
+      # GH_TOKEN / git credentials / cloud profiles via the secrets mount below.
+    volumes:
+      - brains-state:/home/brains/.brains
+      - ${BRAINS_WORKSPACES:-./workspaces}:/workspaces           # repos the sidekick may touch
+      - ${BRAINS_SECRETS_DIR:-./secrets}:/run/secrets:ro          # scoped creds, read-only
+    # Only the loopback ports are exposed to Caddy via the proxy network.
+    networks: [brains-internal, brains-edge]
+    command: ["brains-ai", "serve-all",
+              "--gateway-host", "0.0.0.0", "--dashboard-host", "0.0.0.0"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [brains]
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [brains-edge]
+
+networks:
+  brains-internal:
+  brains-edge:
+
+volumes:
+  brains-pg:
+  brains-ollama:
+  brains-state:
+  caddy-data:
+  caddy-config:

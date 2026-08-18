@@ -1,0 +1,66 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, relative_time, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Decisions</div>
+    <h1 class="page-header__title">
+      Decisions
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Questions sessions raised that need a human answer.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='decisions', title="What is a decision?") %}
+  <p>A <strong>decision</strong> (also called a "decision request" or "ask") is a question a session asks the operator when it doesn't have enough information to proceed unilaterally — usually filed via the <code>brains.ask_human</code> tool.</p>
+  <p>Each decision carries the question body, optional <em>proposed answer</em>, and stays in the queue until you resolve it. Click a row to read context, see the proposed answer, and approve or override.</p>
+{% endcall %}
+
+{{ list_controls(
+    '/dashboard/decisions',
+    search_value=search_value,
+    search_placeholder='Search code / title / workspace…',
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if open_decisions %}
+  <table class="data">
+    <thead>
+      <tr><th>Code</th><th>Workspace</th><th>Title</th><th>Filed</th></tr>
+    </thead>
+    <tbody>
+      {% for d in open_decisions %}
+      <tr>
+        <td>
+          <a href="/dashboard/decisions/{{ d.code }}" class="row" style="gap: var(--space-2);">
+            {{ icon('sparkles') }}
+            <code class="mono">{{ d.code }}</code>
+          </a>
+        </td>
+        <td>{{ d.workspace }}</td>
+        <td>{{ d.title }}</td>
+        <td>{{ relative_time(d.created_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No open decisions',
+        body='Sessions raise decisions via `brains.ask_human`. When one is waiting, it shows up here.',
+        icon_name='sparkles'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/decisions',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    shown=open_decisions|length,
+) }}
+{% endblock %}

@@ -1,0 +1,9 @@
+name: Brains
+version: 0.0.1
+schema: v1
+models:
+  - name: Brains Auto
+    provider: openai
+    model: brains-auto
+    apiBase: http://localhost:8787/v1
+    apiKey: local-dev-key

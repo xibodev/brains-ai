@@ -1,0 +1,26 @@
+{
+  "name": "brains-ai UAT",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
+  "forwardPorts": [8000, 55432, 4317, 4318, 13133],
+  "portsAttributes": {
+    "8000": { "label": "brains gateway" },
+    "55432": { "label": "postgres (UAT sidecar)" },
+    "4318": { "label": "otel collector (HTTP)" },
+    "4317": { "label": "otel collector (gRPC)" },
+    "13133": { "label": "otel collector health" }
+  },
+  "postCreateCommand": "pip install --upgrade pip && pip install -e '.[dev,all]'",
+  "postStartCommand": "echo '[devcontainer] ready. Postgres/OTel sidecars are not auto-launched in this devcontainer (docker-in-docker dropped to avoid yarn-GPG build break). Use a Postgres service container or external instance if needed.'",
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1"
+  }
+}

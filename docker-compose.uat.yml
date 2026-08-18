@@ -1,0 +1,39 @@
+# UAT sidecars for the brains-ai Codespace / dev environment.
+#
+# Brings up:
+# - Postgres 16 on host port 55432 so the BRAINS_TEST_PG_URL-gated
+#   integration tests can run against a real backend.
+# - OpenTelemetry collector with OTLP/HTTP on :4318 and OTLP/gRPC on :4317.
+#   The collector logs every received span to its own stdout so a Step 6
+#   wire-up smoke test can `docker logs` the collector and grep for
+#   ServiceName=brains.
+#
+# This file is for LOCAL / CODESPACE UAT only. Production deployments
+# don't use it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: brains-uat-postgres
+    environment:
+      POSTGRES_USER: brains
+      POSTGRES_PASSWORD: brains
+      POSTGRES_DB: brains_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brains -d brains_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.106.1
+    container_name: brains-uat-otel
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./.devcontainer/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # health_check extension

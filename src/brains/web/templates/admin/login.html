@@ -1,0 +1,31 @@
+{% extends "partials/_html.html" %}
+{% from "partials/_macros.html" import notice %}
+
+{% block title %}Brains Admin · Sign in{% endblock %}
+
+{% block body %}
+<main class="auth-shell">
+  <div class="auth-card panel">
+    <div class="auth-card__brand">brains · admin</div>
+    <h1 class="auth-card__title">Sign in</h1>
+    <p class="auth-card__hint muted">
+      Paste your admin key below. The key is generated on first run and stored at
+      <code>~/.brains/admin-key</code>. View it with
+      <code>brains-ai admin-key show --reveal</code> or rotate it with
+      <code>brains-ai admin-key rotate</code>. You can also override it by setting
+      <code>BRAINS_API_KEY</code>.
+    </p>
+    {% if error %}{{ notice(error, tone='danger') }}{% endif %}
+    <form method="post" action="/admin/login" class="form-grid">
+      {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}" />{% endif %}
+      <div class="form-row">
+        <label class="form-label" for="key">Admin key</label>
+        <input class="form-control" type="password" id="key" name="key" autocomplete="off" autofocus />
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn is-primary">Sign in</button>
+      </div>
+    </form>
+  </div>
+</main>
+{% endblock %}

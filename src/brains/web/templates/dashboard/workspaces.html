@@ -1,0 +1,88 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, relative_time, pill, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Workspaces</div>
+    <h1 class="page-header__title">
+      Workspaces
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">
+      Repositories brains tracks for the current operator.
+      {% if hide_test %}<span class="muted">Hiding pytest-fixture workspaces.</span>{% endif %}
+    </p>
+  </div>
+</div>
+
+{% call info_toggle(key='workspaces', title="What is a workspace?") %}
+  <p>A <strong>workspace</strong> is a repository (or a working-tree path) brains has registered. Sessions, tasks, decisions, handoffs, and patterns are all scoped to a workspace, so the dashboard's filters and the agent's memory stay focused on what's actually relevant.</p>
+  <p>Layer-2 memberships control who can see which workspace; pytest-fixture workspaces are hidden by default. Click a workspace name to see its full session history, open tasks, and pattern catalog.</p>
+{% endcall %}
+
+{{ list_controls(
+    '/dashboard/workspaces',
+    search_value=search_value,
+    search_placeholder='Search slug or path…',
+    filters=[
+      {'name': 'status', 'label': 'Status', 'value': status_filter,
+       'options': [('', 'All statuses'), ('active', 'active'), ('archived', 'archived'), ('retired', 'retired')]},
+      {'name': 'hide_test', 'label': 'Hide tests', 'value': '1' if hide_test else '0',
+       'options': [('1', 'Yes (hide pytest)'), ('0', 'No (show all)')]},
+    ],
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if workspaces %}
+  <table class="data">
+    <thead>
+      <tr><th>Slug</th><th>Path</th><th>Status</th><th>Last touched</th></tr>
+    </thead>
+    <tbody>
+      {% for w in workspaces %}
+      <tr>
+        <td>
+          <a href="/dashboard/workspaces/{{ w.slug }}" class="row" style="gap: var(--space-2);">
+            {{ icon('database') }}
+            <code>{{ w.slug }}</code>
+          </a>
+        </td>
+        <td><code class="mono muted" style="font-size: var(--fs-xs);">{{ w.path }}</code></td>
+        <td>{{ status_pill(w.status) }}</td>
+        <td>{{ relative_time(w.last_touched_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No workspaces match the current filter',
+        body='Adjust the search term or status filter, or run `brains-ai workspaces adopt <path>` to register a repo.',
+        icon_name='database'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/workspaces',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    filters=[
+      {'name': 'status', 'value': status_filter},
+      {'name': 'hide_test', 'value': '1' if hide_test else '0'},
+    ],
+    shown=workspaces|length,
+) }}
+
+<div class="notice is-info" style="margin-top: var(--space-5);">
+  {{ icon('info') }}
+  <div>
+    Polluted by old test runs? Run
+    <code>brains workspaces prune --slug-prefix test- --slug-prefix adopt- --path-contains pytest --apply</code>
+    to clean up. Existing tests now write to a tmp DB so this won't recur.
+  </div>
+</div>
+{% endblock %}

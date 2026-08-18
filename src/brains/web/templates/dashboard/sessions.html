@@ -1,0 +1,88 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, relative_time, pill, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Sessions</div>
+    <h1 class="page-header__title">
+      Sessions
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Every coding session brains has seen — active and ended.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='sessions', title="What is a session?") %}
+  <p>A <strong>session</strong> is one continuous run of an agent (Copilot CLI, Claude Code, Codex, etc.) talking to brains. Sessions register at start, write events as they work, file decisions/handoffs, claim tasks, and end when the agent finishes.</p>
+  <p>Click a session ID to open the session detail page — full event timeline, tools used, decisions raised, and the workspace it ran in.</p>
+{% endcall %}
+
+{% set tool_opts = [('', 'All tools')] %}
+{% for t in tool_options %}{% set _ = tool_opts.append((t, t)) %}{% endfor %}
+
+{{ list_controls(
+    '/dashboard/sessions',
+    search_value=search_value,
+    search_placeholder='Search id / workspace / tool / summary…',
+    filters=[
+      {'name': 'tool', 'label': 'Tool', 'value': tool_filter, 'options': tool_opts},
+      {'name': 'state', 'label': 'State', 'value': state_filter,
+       'options': [('', 'All'), ('active', 'active'), ('ended', 'ended')]},
+    ],
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if sessions %}
+  <table class="data">
+    <thead>
+      <tr>
+        <th>ID</th><th>Workspace</th><th>Tool</th><th>Started</th><th>Ended</th><th>Summary</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td>
+          <a href="/dashboard/sessions/{{ s.id }}" class="row" style="gap: var(--space-2);">
+            {{ icon('bot') }}
+            <code class="mono">{{ s.id }}</code>
+          </a>
+        </td>
+        <td>{{ s.workspace }}</td>
+        <td>{{ pill(s.tool, tone='accent') }}</td>
+        <td>{{ relative_time(s.started_at) }}</td>
+        <td>
+          {% if s.ended_at is none %}
+            {{ status_pill('active') }}
+          {% else %}
+            {{ relative_time(s.ended_at) }}
+          {% endif %}
+        </td>
+        <td class="muted">{{ s.summary or '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No sessions match the current filter',
+        body='Sessions appear here once a coding agent connects via the MCP gateway.',
+        icon_name='bot'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/sessions',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    filters=[
+      {'name': 'tool', 'value': tool_filter},
+      {'name': 'state', 'value': state_filter},
+    ],
+    shown=sessions|length,
+) }}
+{% endblock %}

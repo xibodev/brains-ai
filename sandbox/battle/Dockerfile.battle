@@ -1,0 +1,39 @@
+# Battle-test image: brains + dev + postgres driver + (Layer B) a real AI CLI.
+# Self-contained. Node + Claude Code CLI are baked in so the two "machines" can
+# each run a genuine AI coding agent wired to brains over MCP.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git curl ca-certificates jq \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 1000 --shell /bin/bash agent
+
+WORKDIR /opt/brains
+COPY . /opt/brains
+RUN pip install -e '.[dev]' && pip install 'psycopg[binary]>=3.1' 'asyncpg>=0.29'
+
+# Node.js 20 + the two real AI CLIs (Layer B: a genuine agent per machine —
+# Claude Code on one, GitHub Copilot CLI on the other — each authed with the
+# operator's own provider credentials and wired to brains over MCP).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gnupg \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y --no-install-recommends nodejs \
+ && npm install -g @anthropic-ai/claude-code @github/copilot \
+ && npm cache clean --force \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /home/agent/.brains /home/agent/work \
+ && chown -R agent:agent /home/agent /opt/brains
+
+USER agent
+ENV HOME=/home/agent \
+    BRAINS_STATE_DIR=/home/agent/.brains
+WORKDIR /home/agent/work
+EXPOSE 8787 9876 9877

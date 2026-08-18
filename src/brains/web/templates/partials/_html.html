@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <script>
+    // No-flash theme: apply the saved preference (default light) before paint.
+    (function () {
+      try {
+        var t = localStorage.getItem('brains-theme') || 'light';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+      // Delegated toggle: works on every page (dashboard + admin) without
+      // depending on a per-page script bundle. document exists already.
+      document.addEventListener('click', function (ev) {
+        var btn = ev.target.closest && ev.target.closest('.js-theme-toggle');
+        if (!btn) return;
+        var root = document.documentElement;
+        var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('brains-theme', next); } catch (e) {}
+      });
+    })();
+  </script>
+  <title>{% block title %}Brains{% endblock %}</title>
+  <link rel="stylesheet" href="{{ static_url('brains.css') }}" />
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

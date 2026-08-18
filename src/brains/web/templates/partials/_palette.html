@@ -1,0 +1,26 @@
+{# Renders the ⌘K command palette JS payload.
+   Builds the command list inline from the currently-rendered nav (dashboard_nav
+   and/or admin_nav) so callers don't need to pass extra context. Pages can also
+   inject extra commands via the `palette_extra` variable (list of {label,hint,href}).
+#}
+{% set _cmds = [] %}
+{% for nav_key, nav_label, nav_href, nav_icon in (dashboard_nav or []) %}
+  {% set _ = _cmds.append({'label': 'Go to ' ~ nav_label, 'hint': 'dashboard', 'href': nav_href}) %}
+{% endfor %}
+{% for nav_key, nav_label, nav_href, nav_icon in (admin_nav or []) %}
+  {% set _ = _cmds.append({'label': nav_label, 'hint': 'admin', 'href': nav_href}) %}
+{% endfor %}
+{% if dashboard_nav %}
+  {% set _ = _cmds.append({'label': 'Open admin console', 'hint': 'switch', 'href': '/admin/overview'}) %}
+{% endif %}
+{% if admin_nav %}
+  {% set _ = _cmds.append({'label': 'Open dashboard', 'hint': 'switch', 'href': '/dashboard'}) %}
+{% endif %}
+{% set _ = _cmds.append({'label': 'Sign out', 'hint': 'session', 'href': '/admin/logout'}) %}
+{% for c in (palette_extra or []) %}
+  {% set _ = _cmds.append(c) %}
+{% endfor %}
+<script>
+window.__BRAINS_COMMANDS__ = {{ _cmds | tojson }};
+</script>
+<script src="{{ static_url('palette.js') }}" defer></script>

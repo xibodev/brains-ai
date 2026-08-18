@@ -1,0 +1,22 @@
+models:
+  cheap:
+    provider: ollama
+    model: gemma4:latest
+  default:
+    provider: ollama
+    model: qwen2.5-coder:7b
+  strong:
+    provider: ollama
+    model: gemma4:31b
+  deep:
+    provider: ollama
+    model: gemma4:31b
+
+routes:
+  trivial: cheap
+  unknown: cheap
+  code_fix: default
+  code_explanation: default
+  docs_lookup: default
+  architecture: strong
+  research: strong

@@ -1,0 +1,53 @@
+# Brains-v2 sandbox — isolated from the host's live brains + tool configs.
+#
+#   docker compose -f sandbox/docker-compose.yml up -d --build
+#   curl http://127.0.0.1:18787/health        # gateway
+#   curl http://127.0.0.1:19876/              # dashboard
+#   docker compose -f sandbox/docker-compose.yml exec sandbox bash
+#   docker compose -f sandbox/docker-compose.yml down -v   # wipe everything
+#
+# Host ports are deliberately shifted into the 1xxxx range so they never
+# collide with a brains already running on the host (8787/9876/9877).
+name: brains-sandbox
+
+services:
+  sandbox:
+    build:
+      context: ..
+      dockerfile: sandbox/Dockerfile
+    image: brains-sandbox:dev
+    container_name: brains-sandbox
+    # Live code edits: the host repo is mounted READ-ONLY so the container
+    # can never write back into the host working tree. The editable install
+    # resolves /opt/brains/src from this mount, so .py edits apply live.
+    volumes:
+      - ..:/opt/brains:ro
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      # Absolute sqlite path (four slashes) keeps the DB inside the isolated
+      # state dir instead of the mounted (read-only) repo CWD.
+      BRAINS_DB_URL: sqlite:////home/agent/.brains/brains.db
+      # Bind the MCP SSE server to all interfaces inside the container so it
+      # is reachable on the published port. ALLOW_PUBLIC skips the loopback
+      # Host-header check (the published port is still loopback-only on the
+      # host); auth stays on, so unauthenticated calls get 401.
+      BRAINS_MCP_BIND: 0.0.0.0
+      BRAINS_MCP_ALLOW_PUBLIC: "1"
+      # Reach the host's Ollama for real-model testing. Harmless if Ollama
+      # isn't running — only used when a model tier routes to the `ollama`
+      # provider. Generous timeout covers first-call (cold) model loads.
+      BRAINS_OLLAMA_BASE_URL: http://host.docker.internal:11434
+      BRAINS_OLLAMA_TIMEOUT_SECONDS: "180"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:18787:8787"   # gateway
+      - "127.0.0.1:19876:9876"   # dashboard
+      - "127.0.0.1:19877:9877"   # mcp (serve-all wires it)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 25s

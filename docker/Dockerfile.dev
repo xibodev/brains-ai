@@ -1,0 +1,56 @@
+# Development image for hacking on brains itself.
+#
+# Why a separate Dockerfile?
+#   - The root Dockerfile builds a slim, immutable runtime: it copies src/ in,
+#     does a non-editable `pip install .`, and runs as the non-root `brains`
+#     user. That image is great for shipping; it's painful to iterate against
+#     because code edits require a rebuild.
+#   - This image does `pip install -e .` so the bind-mounted ../src tree
+#     becomes the live source. Edit on the host, restart the process in the
+#     container, no rebuild needed.
+#
+# Build:
+#   docker compose -f docker/docker-compose.dev.yml build
+# Run:
+#   docker compose -f docker/docker-compose.dev.yml up
+# Ports are shifted by +10000 so the dev stack never collides with a brains
+# install already running on the host (8787 -> 18787, 9876 -> 19876,
+# 9877 -> 19877).
+
+FROM python:3.12-slim AS dev
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    BRAINS_STATE_DIR=/data/.brains \
+    HOME=/data
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini ca-certificates curl git \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 1000 brains \
+ && useradd  --system --uid 1000 --gid brains --home-dir /data --shell /bin/bash brains \
+ && mkdir -p /data /data/.brains /app \
+ && chown -R brains:brains /data /app
+
+WORKDIR /app
+
+COPY --chown=brains:brains pyproject.toml README.md LICENSE ./
+COPY --chown=brains:brains src ./src
+
+RUN pip install --no-cache-dir -e .
+
+USER brains
+WORKDIR /data
+VOLUME ["/data"]
+
+EXPOSE 8787 9876 9877
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request,sys; \
+sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=3).status==200 else 1)" \
+  || exit 1
+
+ENTRYPOINT ["/usr/bin/tini", "--", "brains"]
+CMD ["serve-all"]

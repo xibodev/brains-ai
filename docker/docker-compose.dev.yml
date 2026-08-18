@@ -1,0 +1,64 @@
+# Isolated dev stack for hacking on brains without disrupting any
+# brains instance already running on the host.
+#
+# Port mapping uses a +10000 offset so the dev stack and a host install
+# can coexist:
+#   host install (default)   dev stack (this file)
+#   gateway   8787      <->  18787
+#   dashboard 9876      <->  19876
+#   mcp/sse   9877      <->  19877
+#
+# State lives in an isolated named volume (brains-dev-data) so the dev
+# stack has its own brains.db / brains.runtime.yaml / admin-key and
+# never touches the host's ~/.brains.
+
+services:
+  brains-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dev
+    image: brains-ai:dev
+    container_name: brains-dev
+    restart: unless-stopped
+    environment:
+      # Bind MCP SSE to 0.0.0.0 inside the container so the host can
+      # reach it on the published port. Safe here because the container
+      # itself is only reachable on 127.0.0.1 (see ports: below).
+      BRAINS_MCP_ALLOW_PUBLIC: "1"
+      BRAINS_MCP_BIND: "0.0.0.0"
+      # Optional: pin a known admin key for dev so curl commands don't
+      # need to re-read the file after each rebuild.
+      # BRAINS_API_KEYS: "dev-local-key"
+    # Override gateway + dashboard bind hosts to 0.0.0.0 so Docker's
+    # port forward can reach them. The CLI defaults to 127.0.0.1 which
+    # makes the services unreachable from the host inside a container.
+    command:
+      - "serve-all"
+      - "--gateway-host"
+      - "0.0.0.0"
+      - "--dashboard-host"
+      - "0.0.0.0"
+    volumes:
+      - brains-dev-data:/data
+      # Bind-mount the source so edits on the host land inside the
+      # container immediately. Editable install (pip install -e .)
+      # picks them up the next time a process starts.
+      - ../src:/app/src
+    ports:
+      - "127.0.0.1:18787:8787"
+      - "127.0.0.1:19876:9876"
+      - "127.0.0.1:19877:9877"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  brains-dev-data:
+    name: brains-dev-data

@@ -1,0 +1,56 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, relative_time %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">
+      <a href="/dashboard/handoffs" class="muted" style="text-decoration: none;">← Handoffs</a>
+    </div>
+    <h1 class="page-header__title">
+      <span>{{ handoff.title }}</span>
+    </h1>
+    <p class="page-header__subtitle">Handoff #{{ handoff.handoff_id }} · workspace <code class="mono">{{ handoff.workspace }}</code></p>
+  </div>
+  <div class="row" style="gap: var(--space-2);">
+    {{ status_pill(handoff.status) }}
+  </div>
+</div>
+
+<div class="grid-2-col">
+  <div class="panel">
+    <div class="panel__header">
+      <h2 class="panel__title">{{ icon('arrow-up-right') }} Body</h2>
+    </div>
+    {% if handoff.body %}
+      <div class="task-body">{{ handoff.body }}</div>
+    {% else %}
+      <div class="muted">No body provided.</div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel__header">
+      <h2 class="panel__title">{{ icon('info') }} Details</h2>
+    </div>
+    <dl class="kv">
+      <dt>Workspace</dt><dd class="mono">{{ handoff.workspace }}</dd>
+      <dt>Status</dt><dd>{{ status_pill(handoff.status) }}</dd>
+      <dt>Set at</dt><dd>{{ relative_time(handoff.set_at) }}</dd>
+      <dt>Set by session</dt>
+      <dd>
+        {% if handoff.set_by_session_id %}
+          <a class="mono" href="/dashboard/sessions/{{ handoff.set_by_session_id }}">{{ handoff.set_by_session_id }}</a>
+        {% else %}—{% endif %}
+      </dd>
+      <dt>Picked up at</dt><dd>{{ relative_time(handoff.picked_up_at) }}</dd>
+      <dt>Picked up by session</dt>
+      <dd>
+        {% if handoff.picked_up_by_session_id %}
+          <a class="mono" href="/dashboard/sessions/{{ handoff.picked_up_by_session_id }}">{{ handoff.picked_up_by_session_id }}</a>
+        {% else %}—{% endif %}
+      </dd>
+    </dl>
+  </div>
+</div>
+{% endblock %}

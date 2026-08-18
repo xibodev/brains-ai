@@ -1,0 +1,182 @@
+# Rung 3 topology: "remote" collaborators that share NOTHING but a network-
+# reachable brains hub. Models "invite a remote friend; their CLI coordinates
+# through the shared brain" without any external service.
+#
+#   - hub        : one brains server + its own Postgres (the shared coordination
+#                  plane, like a hosted brains the team points at).
+#   - carol/dave/erin : thin persona containers. Each has only the CLI + an MCP
+#                  wiring to the hub's SSE endpoint with its OWN operator key.
+#                  Each sits on its OWN isolated network, so a persona can reach
+#                  the hub but NOT the database directly and NOT the other
+#                  personas. No shared volume between personas. The ONLY shared
+#                  surface is the hub.
+#
+# Build the image first (reuses the battle image — has both CLIs + brains):
+#   docker build -f sandbox/battle/Dockerfile.battle -t brains-battle:dev .
+name: brains-remote
+
+x-persona-base: &persona-base
+  image: brains-battle:dev
+  volumes:
+    - ../..:/opt/brains:ro
+  # Thin client: run no brains here, just stay alive; the run execs the CLI.
+  command: ["sleep", "infinity"]
+
+services:
+  rpg:
+    image: postgres:16-alpine
+    container_name: remote-pg
+    environment:
+      POSTGRES_USER: brains
+      POSTGRES_PASSWORD: brains
+      POSTGRES_DB: brains
+    networks: [dbnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U brains -d brains"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  hub:
+    image: brains-battle:dev
+    container_name: remote-hub
+    depends_on:
+      rpg:
+        condition: service_healthy
+    volumes:
+      - ../..:/opt/brains:ro
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_DB_URL: postgresql+psycopg://brains:brains@rpg:5432/brains
+      BRAINS_RUNTIME_OVERLAY: /home/agent/.brains/brains.runtime.yaml
+      BRAINS_MCP_BIND: 0.0.0.0
+      BRAINS_MCP_ALLOW_PUBLIC: "1"
+      BRAINS_OPERATOR: admin
+    command:
+      - bash
+      - -lc
+      - >
+        mkdir -p /home/agent/.brains &&
+        printf 'schema_version: 1\nsubsystems:\n  storage:\n    backend: postgres\n' > /home/agent/.brains/brains.runtime.yaml &&
+        exec brains-ai up --gateway-host 0.0.0.0 --dashboard-host 0.0.0.0
+    networks: [dbnet, net-carol, net-dave, net-erin, net-frank, net-grace, net-heidi, net-ivan, net-judy]
+    ports:
+      - "127.0.0.1:33787:8787"
+      - "127.0.0.1:33876:9876"
+      - "127.0.0.1:33877:9877"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
+
+  carol:
+    <<: *persona-base
+    container_name: remote-carol
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: carol
+    networks: [net-carol]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  dave:
+    <<: *persona-base
+    container_name: remote-dave
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: dave
+    networks: [net-dave]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  erin:
+    <<: *persona-base
+    container_name: remote-erin
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: erin
+    networks: [net-erin]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  frank:
+    <<: *persona-base
+    container_name: remote-frank
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: frank
+    networks: [net-frank]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  grace:
+    <<: *persona-base
+    container_name: remote-grace
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: grace
+    networks: [net-grace]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  heidi:
+    <<: *persona-base
+    container_name: remote-heidi
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: heidi
+    networks: [net-heidi]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  ivan:
+    <<: *persona-base
+    container_name: remote-ivan
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: ivan
+    networks: [net-ivan]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+  judy:
+    <<: *persona-base
+    container_name: remote-judy
+    environment:
+      HOME: /home/agent
+      BRAINS_STATE_DIR: /home/agent/.brains
+      BRAINS_OPERATOR: judy
+    networks: [net-judy]
+    depends_on:
+      hub:
+        condition: service_healthy
+
+# Per-persona networks: hub joins all of them; each persona joins only its own.
+# Personas therefore reach the hub but never each other or the DB (dbnet).
+networks:
+  dbnet: {}
+  net-carol: {}
+  net-dave: {}
+  net-erin: {}
+  net-frank: {}
+  net-grace: {}
+  net-heidi: {}
+  net-ivan: {}
+  net-judy: {}

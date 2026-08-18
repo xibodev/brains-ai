@@ -1,0 +1,33 @@
+# Brains sidekick — Caddy front (TLS + bearer auth at the edge).
+# Replace sidekick.example.com with your hostname. Caddy auto-provisions TLS.
+#
+# Public surface is intentionally minimal:
+#   /dashboard*  -> operator console (also bearer-checked by brains itself)
+#   /relay/*     -> WhatsApp/Chatwoot/bugsink webhooks (bearer-checked by brains)
+# The MCP server (9877) and the raw gateway are NOT exposed publicly.
+
+sidekick.example.com {
+	encode gzip
+
+	# Operator console + its JSON APIs.
+	@dashboard path /dashboard*
+	handle @dashboard {
+		reverse_proxy brains:9876
+	}
+
+	# Inbound webhooks (relay). brains enforces BRAINS_RELAY_TOKEN; this is defence
+	# in depth — also require a header at the edge if your webhook source can send one.
+	@relay path /relay/*
+	handle @relay {
+		reverse_proxy brains:8787
+	}
+
+	# Everything else: closed.
+	handle {
+		respond "not found" 404
+	}
+
+	log {
+		output file /data/access.log
+	}
+}

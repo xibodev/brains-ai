@@ -1,0 +1,80 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import pill, status_pill, relative_time, empty_state %}
+
+{% block page %}
+<div class="row" style="margin-bottom: var(--space-3);">
+  <a href="/dashboard/sessions" class="btn is-ghost is-sm">
+    ← Sessions
+  </a>
+</div>
+
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Session</div>
+    <h1 class="page-header__title row" style="gap: var(--space-2);">
+      {{ icon('bot') }}
+      <code class="mono">{{ session.id }}</code>
+      {% if session.ended_at %}
+        {{ status_pill('ended') }}
+      {% else %}
+        {{ status_pill('active') }}
+      {% endif %}
+    </h1>
+    <p class="page-header__subtitle">
+      {{ pill(session.tool, tone='accent') }}
+      · workspace <code class="mono">{{ session.workspace }}</code>
+    </p>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('activity') }}<span>Started</span></div>
+    <div class="stat-card__value" style="font-size: var(--fs-lg);">{{ relative_time(session.started_at) }}</div>
+  </div>
+  {% if session.ended_at %}
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('activity') }}<span>Ended</span></div>
+    <div class="stat-card__value" style="font-size: var(--fs-lg);">{{ relative_time(session.ended_at) }}</div>
+  </div>
+  {% endif %}
+  <div class="stat-card">
+    <div class="stat-card__label">{{ icon('activity') }}<span>Events</span></div>
+    <div class="stat-card__value tabular">{{ events|length }}</div>
+  </div>
+</div>
+
+{% if session.summary %}
+<div class="panel" style="margin-top: var(--space-4);">
+  <div class="panel__header">
+    <h2 class="panel__title">{{ icon('sparkles') }} Summary</h2>
+  </div>
+  <p style="white-space: pre-wrap;">{{ session.summary }}</p>
+</div>
+{% endif %}
+
+<div class="panel" style="margin-top: var(--space-4);">
+  <div class="panel__header">
+    <div>
+      <h2 class="panel__title">{{ icon('activity') }} Event timeline</h2>
+      <p class="panel__subtitle">Every event this session produced or was tagged on.</p>
+    </div>
+  </div>
+  {% if events %}
+  <ul class="activity-feed">
+    {% for ev in events %}
+    <li>
+      <span class="activity-feed__time">{{ relative_time(ev.created_at) }}</span>
+      <span class="activity-feed__icon">{{ icon('activity') }}</span>
+      <span class="activity-feed__body">
+        <strong>{{ ev.kind }}</strong>
+        <span class="muted">· {{ ev.message }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    {{ empty_state('No events recorded for this session', icon_name='activity') }}
+  {% endif %}
+</div>
+{% endblock %}

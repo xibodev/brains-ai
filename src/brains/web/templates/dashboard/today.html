@@ -1,0 +1,112 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import pill, status_pill, relative_time, empty_state, panel %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">{{ greeting_eyebrow }}</div>
+    <h1 class="page-header__title">{{ greeting }}, {{ operator or 'operator' }}</h1>
+    <p class="page-header__subtitle">{{ summary_line }}</p>
+  </div>
+  <div class="muted tabular" style="font-size: var(--fs-sm); align-self: center;">
+    {{ today_label }}
+  </div>
+</div>
+
+<h2 class="muted" style="font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.12em; margin: 0 0 var(--space-3);">
+  Needs you
+</h2>
+<div class="attention-zone">
+  {% for tile in attention_tiles %}
+  <a href="{{ tile.href }}" class="attention-tile {{ tile.tone_class }}">
+    <span class="attention-tile__dot"></span>
+    <div class="attention-tile__body">
+      <div class="attention-tile__count">{{ tile.count }}</div>
+      <div class="attention-tile__label">{{ tile.label }}</div>
+    </div>
+    {% if tile.icon %}<span class="muted">{{ icon(tile.icon) }}</span>{% endif %}
+  </a>
+  {% endfor %}
+</div>
+
+<h2 class="muted" style="font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.12em; margin: 0 0 var(--space-3);">
+  Quick actions
+</h2>
+<div class="quick-actions">
+  {% for action in quick_actions %}
+  {% if action.method == 'post' %}
+  <form method="post" action="{{ action.href }}" style="margin:0;">
+    <button type="submit" class="btn is-ghost is-sm">
+      {{ icon(action.icon) }}<span>{{ action.label }}</span>
+    </button>
+  </form>
+  {% else %}
+  <a href="{{ action.href }}" class="btn is-ghost is-sm">
+    {{ icon(action.icon) }}<span>{{ action.label }}</span>
+  </a>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<div class="split-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); margin-bottom: var(--space-4);">
+  <div class="panel">
+    <div class="panel__header">
+      <div>
+        <h2 class="panel__title">{{ icon('activity') }} Last 24h</h2>
+        <p class="panel__subtitle">Real activity, pytest filtered.</p>
+      </div>
+    </div>
+    <dl class="kv">
+      <dt>Events</dt><dd class="tabular">{{ stats_24h.events }}</dd>
+      <dt>Decisions resolved</dt><dd class="tabular">{{ stats_24h.decisions_resolved }}</dd>
+      <dt>Handoffs picked up</dt><dd class="tabular">{{ stats_24h.handoffs_picked }}</dd>
+      <dt>Sessions started</dt><dd class="tabular">{{ stats_24h.sessions_started }}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <div class="panel__header">
+      <div>
+        <h2 class="panel__title">{{ icon('database') }} Universe</h2>
+        <p class="panel__subtitle">What's in the system right now.</p>
+      </div>
+    </div>
+    <dl class="kv">
+      <dt>Workspaces</dt><dd class="tabular">{{ counts.workspaces }}</dd>
+      <dt>Active sessions</dt><dd class="tabular">{{ counts.active_sessions }}</dd>
+      <dt>Open decisions</dt><dd class="tabular">{{ counts.open_decisions }}</dd>
+      <dt>Active tasks</dt><dd class="tabular">{{ counts.active_tasks }}</dd>
+      <dt>Active handoffs</dt><dd class="tabular">{{ counts.active_handoffs }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel__header">
+    <div>
+      <h2 class="panel__title">{{ icon('activity') }} Recent activity</h2>
+      <p class="panel__subtitle">Operator-relevant events; pytest pollution hidden.</p>
+    </div>
+    <a href="/dashboard/events" class="btn is-ghost is-sm">View all →</a>
+  </div>
+  {% if recent_events %}
+  <ul class="activity-feed activity-feed--scroll">
+    {% for ev in recent_events %}
+    <li>
+      <span class="activity-feed__time">{{ relative_time(ev.created_at) }}</span>
+      <span class="activity-feed__icon">{{ icon(ev._icon or 'activity') }}</span>
+      <span class="activity-feed__body">
+        <strong>{{ ev.kind }}</strong>
+        <span class="muted">· {{ ev.message }}</span>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    {{ empty_state(
+        'Nothing happened in the last 24h',
+        body='Sessions, decisions, handoffs and route choices all show up here. Try the gateway.',
+        icon_name='activity'
+    ) }}
+  {% endif %}
+</div>
+{% endblock %}

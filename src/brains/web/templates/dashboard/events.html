@@ -1,0 +1,68 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import pill, relative_time, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Events</div>
+    <h1 class="page-header__title">
+      Events
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Append-only event log across sessions, gateway, and control plane.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='events', title="What is the event log?") %}
+  <p>Every session start/end, every decision filed or resolved, every handoff, every route decision, every tool verification, and every task transition writes a row here. The event log is the source of truth for "what happened" — Overview's 24-hour rollup is computed from these rows.</p>
+  <p>Filter by <strong>kind</strong> (e.g. <code>decision_filed</code>, <code>handoff_picked_up</code>) or search by message/session to scope down. Newest first.</p>
+{% endcall %}
+
+{% set kind_opts = [('', 'All kinds')] %}
+{% for k in kind_options %}{% set _ = kind_opts.append((k, k)) %}{% endfor %}
+
+{{ list_controls(
+    '/dashboard/events',
+    search_value=search_value,
+    search_placeholder='Search message / kind / session…',
+    filters=[
+      {'name': 'kind', 'label': 'Kind', 'value': kind_filter, 'options': kind_opts},
+    ],
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if events %}
+  <table class="data">
+    <thead>
+      <tr><th>Time</th><th>Kind</th><th>Message</th><th>Session</th></tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td>{{ relative_time(e.created_at) }}</td>
+        <td>{{ pill(e.kind, tone='accent') }}</td>
+        <td>{{ e.message }}</td>
+        <td><code class="mono muted" style="font-size: var(--fs-xs);">{{ e.session_id or '' }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No events match the current filter',
+        body='Events appear here as sessions interact with brains.',
+        icon_name='activity'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/events',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    filters=[{'name': 'kind', 'value': kind_filter}],
+    shown=events|length,
+) }}
+{% endblock %}

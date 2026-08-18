@@ -1,0 +1,78 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, pill, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Tasks</div>
+    <h1 class="page-header__title">
+      Tasks
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Coordination tasks claimable by sessions; grouped by status.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='tasks', title="What is a task?") %}
+  <p><strong>Tasks</strong> are units of work that any session can claim and execute. They flow through four states: <code>available</code> → <code>in_progress</code> → <code>done</code>, with <code>blocked</code> as an off-ramp when a task can't proceed.</p>
+  <p>Tasks are workspace-scoped — a session only sees tasks for workspaces it can read (Layer-2 visibility). Click any card to open the full task with body, history, and claim state.</p>
+{% endcall %}
+
+{{ list_controls(
+    '/dashboard/tasks',
+    search_value=search_value,
+    search_placeholder='Search code / title / workspace…',
+    filters=[
+      {'name': 'status', 'label': 'Status', 'value': status_filter,
+       'options': [('', 'All'), ('available', 'available'), ('in_progress', 'in_progress'), ('blocked', 'blocked'), ('done', 'done')]},
+      {'name': 'priority', 'label': 'Priority', 'value': priority_filter,
+       'options': [('', 'All'), ('p1', 'p1'), ('p2', 'p2'), ('p3', 'p3')]},
+    ],
+    per_page=per_page,
+    show_per_page=False,
+) }}
+
+{% set buckets = {'available': [], 'in_progress': [], 'blocked': [], 'done': []} %}
+{% for t in tasks %}
+  {% set _ = buckets.setdefault(t.status, []).append(t) %}
+{% endfor %}
+
+<div class="kanban">
+  {% for col in ['available', 'in_progress', 'blocked', 'done'] %}
+  {% set items = buckets.get(col, []) %}
+  <div class="panel kanban__column{% if not items %} is-empty{% endif %}">
+    <div class="kanban__header">
+      {{ status_pill(col) }}
+      <span class="muted tabular">({{ items|length }})</span>
+    </div>
+    {% if items %}
+    <ul class="kanban__list">
+      {% for t in items %}
+      <li>
+        <a class="task-card" href="/dashboard/tasks/{{ t.code }}">
+          <div class="row is-between" style="gap: var(--space-2);">
+            <strong class="mono" style="font-size: var(--fs-sm);">{{ t.code }}</strong>
+            {{ pill(t.priority, tone='neutral') }}
+          </div>
+          <div class="task-card__title">{{ t.title }}</div>
+          <div class="muted" style="font-size: var(--fs-xs); margin-top: var(--space-1);">{{ t.workspace }}</div>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <div class="kanban__empty">empty</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{% if not tasks %}
+  {{ empty_state(
+      'No tasks match the current filter',
+      body='Create a task via `brains-ai add_task` or relax the filter to see done tasks.',
+      icon_name='list-checks'
+  ) }}
+{% endif %}
+{% endblock %}

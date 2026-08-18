@@ -1,0 +1,77 @@
+# last_verified: 2026-08-01T19:29:19.185-06:00
+# verified_by: GitHub Copilot CLI
+# verification_basis: HEAD 6eb071bba49a5e678fb6ee8a35a3b21199136374; static inspection against the current Brains feature and backlog contracts; deployment not verified
+
+name: Feature request
+description: Propose a new capability or a change to existing behaviour.
+title: "[feat] "
+labels: ["enhancement", "needs-discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Read this first
+
+        Brains is the product and implementation identity.
+        Feature requests must start from the final product outcome:
+
+        - Read the [Product Brief](../../docs/product/PRODUCT_BRIEF.md), [Feature Contract](../../docs/product/FEATURE_CONTRACT.md),
+          [Journeys](../../docs/product/PERSONAS_AND_JOURNEYS.md), and [Current Backlog](../../docs/product/BACKLOG.md).
+        - Identify the affected `F*`/`B*`, Persona, `J*`, and `AC-*` IDs.
+        - Keep the canonical Brains package, CLI, namespace, MCP, state, and browser identity consistent.
+        - Open the issue and align on the contract before submitting a large implementation.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What pain point or limitation are you running into? Concrete is better than abstract.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like Brains to behave? CLI surface, API contract, config shape, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: |
+        What workarounds exist today? Why are they insufficient? Could this live in a separate tool
+        rather than in Brains itself?
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope estimate
+      description: |
+        Approximate code surface this would touch (router? CLI? a single provider adapter? the dashboard?).
+        Estimate is helpful, not binding.
+
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract mapping
+      description: List affected Feature, Persona, Journey, acceptance, and backlog IDs.
+      placeholder: "F3, P1/P5, J8, AC-F3-05/06, BL-P0-05"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I reviewed the canonical product contract and current backlog.
+          required: true
+        - label: I have searched existing issues and discussions.
+          required: true
+        - label: I understand that acceptance requires the quality gates and evidence defined in `docs/QUALITY_GATES.md`.
+          required: true

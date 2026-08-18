@@ -1,0 +1,17 @@
+# The Vite HTML entry is the source template for the committed SPA bundle.
+# Force LF checkouts so a Windows worktree (which would otherwise get CRLF
+# line endings from `core.autocrlf=true`) builds byte-identical output to a
+# Linux checkout of the same commit.
+frontend/index.html text eol=lf
+
+# The committed operator-console bundle is a build artifact that CI compares
+# byte-for-byte against a fresh `vite build`. Git must never translate its line
+# endings: a `core.autocrlf=true` checkout would otherwise produce a worktree
+# copy that differs from the blob CI built, and a wheel built from that
+# worktree would ship CRLF JavaScript.
+src/brains/web/spa/** -text
+
+# The frozen baseline DDL is the schema contract and is checksummed on
+# newline-normalised text; keep the bytes stable across platforms too.
+src/brains/storage/baseline/*.sql text eol=lf
+src/brains/storage/sql_migrations/*.sql text eol=lf

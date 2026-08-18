@@ -1,0 +1,99 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+develop-eggs/
+eggs/
+.eggs/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+MANIFEST
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# --- Test / coverage ---
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+.quality-run/
+# JUnit XML written by the CI test and migration gates.
+reports/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# --- Brains runtime state ---
+brains.db
+brains.db-journal
+brains.db-wal
+brains.db-shm
+.brains/
+.brains-gate-bin/
+brains.runtime.yaml
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Secrets / local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- IDE / editors ---
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Node (for any future frontend) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Misc ---
+*.bak
+*.tmp
+*.old
+_out.txt
+_commit_msg.txt
+
+# Playwright MCP scratch (screenshots, snapshots, logs) - never commit
+.playwright-mcp/
+
+# --- Frontend (SPA) ---
+frontend/node_modules/
+frontend/.tsbuild/
+frontend/dist/
+# Scratch output of scripts/check_spa_bundle.py; never committed.
+frontend/.bundle-check/
+.vite/

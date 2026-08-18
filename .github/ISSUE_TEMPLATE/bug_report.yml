@@ -1,0 +1,98 @@
+# last_verified: 2026-08-01T19:29:19.185-06:00
+# verified_by: GitHub Copilot CLI
+# verification_basis: HEAD 6eb071bba49a5e678fb6ee8a35a3b21199136374; static inspection against the current Brains product and issue-reporting contract; deployment not verified
+
+name: Bug report
+description: Something is broken or behaves differently from documented behaviour.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a Brains bug. Identify the exact code or artifact you exercised; version or release
+        labels alone are not sufficient evidence.
+
+        For security vulnerabilities, **do not** use this form -- please report through
+        [GitHub Security Advisories](https://github.com/xibodev/brains-ai/security/advisories/new) instead.
+
+  - type: input
+    id: identity
+    attributes:
+      label: Exact candidate identity
+      description: Commit SHA and, if installed, output of `brains-ai version` plus image/wheel identity.
+      placeholder: "commit <40-char SHA>; brains-ai version output; artifact digest if applicable"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Install method
+      options:
+        - pipx install brains-ai
+        - pip install brains-ai
+        - editable install from a clone (uv pip install -e .)
+        - container image (ghcr.io/xibodev/brains-ai)
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS + Python
+      description: e.g. `Windows 11 23H2 / Python 3.12.5`
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: |
+        Minimum steps to reproduce. If the bug involves the gateway, include the exact request payload
+        (with secrets redacted) and the response you saw.
+      placeholder: |
+        1. `brains-ai setup`
+        2. `brains-ai serve`
+        3. `curl -X POST http://127.0.0.1:8787/v1/messages -H "x-api-key: <redacted>" -d '{...}'`
+        4. Got `<actual>`, expected `<expected>`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: Include the relevant Feature, Journey, or `AC-*` ID when known.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour (include stack trace or full error response)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Include relevant process output or `<state>/sessions/service.log`. Strip API keys, provider tokens,
+        personal data, and repository secrets.
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I identified the exact commit or artifact that reproduces the bug.
+          required: true
+        - label: I searched existing issues and discussions and found nothing matching.
+          required: true
+        - label: I have stripped credentials and PII from anything I am pasting.
+          required: true

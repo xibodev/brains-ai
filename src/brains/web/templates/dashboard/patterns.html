@@ -1,0 +1,86 @@
+{% extends "dashboard/base.html" %}
+{% from "partials/_macros.html" import status_pill, pill, empty_state, info_toggle %}
+{% from "partials/_list_chrome.html" import list_controls, list_pagination %}
+{% from "partials/_charts.html" import sparkline %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <div class="page-header__eyebrow">Patterns</div>
+    <h1 class="page-header__title">
+      Patterns
+      <span class="muted tabular" style="font-size: var(--fs-lg); font-weight: 500;">· {{ total }}</span>
+    </h1>
+    <p class="page-header__subtitle">Reusable knowledge nuggets surfaced from completed work.</p>
+  </div>
+</div>
+
+{% call info_toggle(key='patterns', title="What is a pattern?") %}
+  <p>A <strong>pattern</strong> is a small, reusable learning that sessions propose when they notice "we keep doing this" — e.g. "always run <code>uv run pytest</code> with <code>--ignore=tests/test_dashboard.py</code> in this repo". Patterns help future sessions skip rediscovery.</p>
+  <p>Patterns move <code>proposed</code> → <code>approved</code> (operator endorses) or <code>rejected</code> (operator disagrees). Approved patterns get surfaced to sessions working in the same workspace.</p>
+{% endcall %}
+
+<div class="row" style="gap: var(--space-2); margin-bottom: var(--space-3);">
+  {% for s in ['proposed', 'approved', 'rejected', 'all'] %}
+  <a href="/dashboard/patterns?status={{ s }}"
+     class="btn {{ 'is-primary' if s == status else 'is-ghost' }} is-sm">
+    {{ s }}
+  </a>
+  {% endfor %}
+</div>
+
+{% set cat_opts = [('', 'All')] %}
+{% for c in category_options %}{% set _ = cat_opts.append((c, c)) %}{% endfor %}
+
+{{ list_controls(
+    '/dashboard/patterns',
+    search_value=search_value,
+    search_placeholder='Search name / description / category…',
+    filters=[
+      {'name': 'category', 'label': 'Category', 'value': category_filter, 'options': cat_opts},
+    ],
+    per_page=per_page,
+) }}
+
+<div class="panel">
+  {% if patterns %}
+  <table class="data">
+    <thead>
+      <tr><th>Name</th><th>Category</th><th>Description</th><th>Status</th><th>Usage</th><th style="width:140px;">Relative</th></tr>
+    </thead>
+    <tbody>
+      {% set _max = ((patterns | map(attribute='usage_count') | max) or 1) %}
+      {% for p in patterns %}
+      <tr>
+        <td><strong>{{ p.name }}</strong></td>
+        <td>{{ pill(p.category, tone='accent') }}</td>
+        <td class="muted">{{ p.description }}</td>
+        <td>{{ status_pill(p.status) }}</td>
+        <td class="tabular">{{ p.usage_count }}</td>
+        <td>
+          <div class="usage-bar" title="{{ p.usage_count }} of {{ _max }}">
+            <div class="usage-bar__fill" style="width: {{ ((p.usage_count / _max) * 100) | round(1) }}%"></div>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty_state(
+        'No patterns match the current filter',
+        body='Patterns are proposed by sessions and approved by you. Try the `all` tab.',
+        icon_name='layers'
+    ) }}
+  {% endif %}
+</div>
+
+{{ list_pagination(
+    '/dashboard/patterns',
+    page=page, per_page=per_page, total=total,
+    search_value=search_value,
+    filters=[{'name': 'category', 'value': category_filter}],
+    extra_params={'status': status},
+    shown=patterns|length,
+) }}
+{% endblock %}

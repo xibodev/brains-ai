@@ -1,0 +1,156 @@
+name: release
+
+# Triggered by a SemVer tag push (e.g. `v0.1.0a3`, `v0.2.0`, `v1.0.0`).
+#
+# Jobs:
+#   1. build      — produce sdist + wheel into dist/
+#   2. pypi       — publish to PyPI via Trusted Publishers (OIDC, no tokens)
+#   3. docker     — build + push multi-arch image to GHCR
+#   4. release    — create a GitHub Release with the dist/ artifacts attached
+#
+# One-time setup (must be done by a repo admin before the first tag push):
+#
+#   PyPI  (REQUIRED AGAIN IF THE REPOSITORY MOVES: a Trusted Publisher is
+#          bound to one owner/repository pair, so a tag pushed from anywhere
+#          else is rejected until a matching publisher is registered.)
+#     1. Reserve the project name on https://pypi.org (one manual upload
+#        of any version with `uv publish --token …`, OR claim via Trusted
+#        Publisher form on a fresh project).
+#     2. https://pypi.org/manage/project/brains-ai/settings/publishing/
+#        add a Trusted Publisher:
+#          Owner:           xibodev
+#          Repository:      brains-ai
+#          Workflow name:   release.yml
+#          Environment:     pypi   (must match `environment:` below)
+#
+#   GHCR:
+#     Nothing — uses GITHUB_TOKEN with packages:write.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build wheel + sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Verify tag matches package version
+        run: python scripts/check_release_version.py "$GITHUB_REF_NAME"
+      - run: uv build
+      - run: ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  pypi:
+    name: publish to PyPI (trusted publisher)
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/brains-ai
+    permissions:
+      id-token: write   # mandatory for OIDC -> PyPI
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true
+          # Tolerate re-runs against an already-published version (PyPI is
+          # immutable; a slot can be burned by an aborted release that still
+          # managed to upload before being cancelled). Without this, every
+          # subsequent tag attempt would 400 here and block the GH release.
+          skip-existing: true
+
+  docker:
+    name: build + push GHCR image
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/brains-ai
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: create GitHub Release
+    needs: [pypi, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          PRE=""
+          case "$TAG" in
+            *a*|*b*|*rc*) PRE="--prerelease" ;;
+          esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            $PRE \
+            dist/*

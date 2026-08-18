@@ -1,0 +1,17 @@
+{
+  "name": "brains-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Brains operator-console E2E acceptance suite for journeys J1-J11 and their mapped acceptance criteria.",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

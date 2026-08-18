@@ -1,0 +1,37 @@
+# OTel collector config for brains-ai UAT.
+#
+# Receives OTLP/HTTP on :4318 and OTLP/gRPC on :4317. Exports every span
+# to the collector's own stdout (debug exporter) so a UAT smoke test can
+# assert "we received spans from service.name=brains" by reading
+# `docker logs brains-uat-otel`.
+#
+# health_check extension on :13133 lets us wait-for-readiness before
+# firing test traffic at the gateway.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 1s
+
+exporters:
+  debug:
+    verbosity: detailed
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
