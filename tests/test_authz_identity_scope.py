@@ -1281,7 +1281,11 @@ def test_runtime_credential_cannot_reach_a_console_surface(client, enrolled_mach
     assert resp.status_code == 403
 
 
-def test_runtime_credential_cannot_mint_a_console_cookie(client, enrolled_machine):
+def test_runtime_credential_cannot_mint_a_console_cookie(client, enrolled_machine, monkeypatch):
+    # The legacy /admin HTML is retired from the default install; opt in so
+    # this exercises the route-level refusal itself (the retired 404 path is
+    # covered by tests/test_experimental_gate.py).
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
     resp = client.post(
         "/admin/login", data={"key": enrolled_machine["key"]}, follow_redirects=False
     )
@@ -1297,7 +1301,8 @@ def test_scopeless_operator_cannot_reach_a_console_surface(client):
     assert dashboard_client.get("/dashboard/api/decisions", headers=headers).status_code == 403
 
 
-def test_scopeless_operator_cannot_mint_a_console_cookie(client):
+def test_scopeless_operator_cannot_mint_a_console_cookie(client, monkeypatch):
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
     _record, key, _headers = _operator(_slug("scopeless-login"))
     resp = client.post("/admin/login", data={"key": key}, follow_redirects=False)
     assert resp.status_code == 303
@@ -1356,7 +1361,8 @@ def test_bootstrap_admin_still_reaches_install_dashboard_surfaces(client, path):
     assert dashboard_client.get(path, headers=ADMIN_AUTH).status_code == 200
 
 
-def test_admin_html_page_still_redirects_when_unauthenticated(client):
+def test_admin_html_page_still_redirects_when_unauthenticated(client, monkeypatch):
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
     resp = client.get("/admin/config", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"].startswith("/admin/login?next=")

@@ -26,6 +26,7 @@ import brains.control.events as events_module
 import brains.control.sessions as sessions_module
 import brains.storage.db as db_module
 import brains.storage.migrations as migrations_module
+from brains.control.common import utc_now
 
 
 @pytest.fixture
@@ -83,6 +84,9 @@ def test_reaper_marks_dead_session_ended_and_releases_claims(isolated_db) -> Non
                     workspace_id=workspace.id,
                     tool="codex",
                     pid=_dead_pid(),
+                    # New reaper contract: dead pid + stale heartbeat.
+                    started_at=utc_now() - timedelta(hours=2),
+                    last_activity_at=utc_now() - timedelta(hours=2),
                 ),
                 AgentSession(
                     id=live_id,
@@ -93,8 +97,6 @@ def test_reaper_marks_dead_session_ended_and_releases_claims(isolated_db) -> Non
             ]
         )
         db_session.flush()
-        from brains.control.common import utc_now
-
         db_session.add(
             WorkspaceClaim(
                 workspace_id=workspace.id,
@@ -179,6 +181,8 @@ def test_start_session_reaps_prior_zombies(isolated_db) -> None:
                 workspace_id=workspace.id,
                 tool="codex",
                 pid=_dead_pid(),
+                started_at=utc_now() - timedelta(hours=2),
+                last_activity_at=utc_now() - timedelta(hours=2),
             )
         )
         db_session.commit()

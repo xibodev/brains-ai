@@ -19,6 +19,11 @@ from brains.control.recurring import (
     is_valid_schedule,
     list_recurring_tasks,
 )
+from brains.experimental import (
+    EXPERIMENTAL_ENV,
+    EXPERIMENTAL_MCP_TOOLS,
+    experimental_enabled,
+)
 from brains.mcp import tools
 from brains.mcp.sse_auth import (
     ALLOW_PUBLIC_ENV,
@@ -104,6 +109,13 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "list_workspace_claims": tools.list_workspace_claims_tool,
     "send_message": tools.send_message_tool,
     "read_messages": tools.read_messages_tool,
+    "inbox_wait": tools.inbox_wait_tool,
+    "mail_send": tools.mail_send_tool,
+    "mail_status": tools.mail_status_tool,
+    "list_live_agents": tools.list_live_agents_tool,
+    "topic_post": tools.topic_post_tool,
+    "topic_read": tools.topic_read_tool,
+    "topic_list": tools.topic_list_tool,
     "ask_peer": tools.ask_peer_tool,
     "wait_for_request": tools.wait_for_request_tool,
     "answer_request": tools.answer_request_tool,
@@ -182,7 +194,12 @@ LEAN_TOOLS = frozenset(
         "resolve_decision",
         "claim_workspace",
         "read_messages",
+        "inbox_wait",
         "send_message",
+        "list_live_agents",
+        "topic_post",
+        "topic_read",
+        "topic_list",
         "plan_request",
         "get_context_pack",
     }
@@ -192,11 +209,18 @@ LEAN_TOOLS = frozenset(
 def _resolve_active_tools() -> list[str]:
     raw = (os.environ.get("BRAINS_MCP_TOOLS") or "").strip().lower()
     if raw in ("", "full", "all"):
-        return list(TOOL_REGISTRY)
-    if raw == "lean":
-        return [n for n in TOOL_REGISTRY if n in LEAN_TOOLS]
-    wanted = {x.strip() for x in raw.split(",") if x.strip()}
-    return [n for n in TOOL_REGISTRY if n in wanted]
+        selected = list(TOOL_REGISTRY)
+    elif raw == "lean":
+        selected = [n for n in TOOL_REGISTRY if n in LEAN_TOOLS]
+    else:
+        wanted = {x.strip() for x in raw.split(",") if x.strip()}
+        selected = [n for n in TOOL_REGISTRY if n in wanted]
+    # Experimental gate: the normal install neither advertises nor executes
+    # the experimental tools, whatever selection mode named them. An explicit
+    # allowlist is not an opt-in — only BRAINS_MCP_EXPERIMENTAL=1 is.
+    if not experimental_enabled():
+        selected = [n for n in selected if n not in EXPERIMENTAL_MCP_TOOLS]
+    return selected
 
 
 ACTIVE_TOOLS = _resolve_active_tools()
@@ -221,6 +245,18 @@ def call_tool(tool_name: str, **kwargs):
     fn = TOOL_REGISTRY.get(tool_name)
     if fn is None:
         raise ValueError(f"unknown Brains tool: {tool_name}")
+    # Defence in depth for the experimental gate: registration already keeps
+    # these out of the advertised surface, but a direct dispatch (tests,
+    # internal callers, a future transport that bypasses registration) must
+    # refuse exactly as loudly.
+    if tool_name in EXPERIMENTAL_MCP_TOOLS and not experimental_enabled():
+        from brains.experimental import EXPERIMENTAL_TOOL_REASONS
+
+        reason = EXPERIMENTAL_TOOL_REASONS.get(tool_name, "not yet mature")
+        raise ValueError(
+            f"'{tool_name}' is experimental and disabled: {reason}. "
+            f"Set {EXPERIMENTAL_ENV}=1 to enable it."
+        )
     return fn(**kwargs)
 
 
@@ -338,12 +374,19 @@ def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     sweep judges only an expired attempt lease, and the runtime sweep judges
     only silence past the heartbeat TTL.
 
+    Scheduled auto-fire is experimental (limited grammar, cooperative gate,
+    no end-to-end journey evidence), so the fire loop runs only when
+    ``BRAINS_MCP_EXPERIMENTAL=1``. The sweeps are maintenance, not
+    automation, and always run. Manual fire is unaffected.
+
     Returns a list of ``{name, task_code}`` entries describing each firing so
     callers (and tests) can verify scheduler behavior without sleeping.
     """
     now = now or datetime.now(UTC)
     _sweep_governed_actions()
     _sweep_stale_runtimes()
+    if not experimental_enabled():
+        return []
     fired: list[dict] = []
     for definition in list_recurring_tasks(enabled=True):
         name = definition.get("name")
@@ -407,6 +450,13 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
         guarded_app = MCPAuthMiddleware(sse_app, allowed_hosts=host_allowlist_for(host))
         print(f"Brains MCP server running on http://{host}:{port}/sse", file=sys.stderr)
         print(f"Scheduler active (every {scheduler_interval}s)", file=sys.stderr)
+        if experimental_enabled():
+            print("Autopilot auto-fire: enabled (experimental)", file=sys.stderr)
+        else:
+            print(
+                f"Autopilot auto-fire: disabled (experimental; set {EXPERIMENTAL_ENV}=1 to enable)",
+                file=sys.stderr,
+            )
         if settings.allow_unauthenticated_api:
             print(
                 "MCP SSE auth: DISABLED (settings.allow_unauthenticated_api=True)",

@@ -229,7 +229,7 @@ structured evidence expectations for these same IDs are maintained in
 - AC-B1-03: streaming and non-streaming responses identify the actual upstream model.
 - AC-B1-04: auth, redaction, bounded errors, usage, retries, and circuit policy apply consistently.
 
-**Status:** present/partial (E1/E2 only). Exact, tier, and explicit `brains/auto` routing are distinguished and every route records whether it is simulated; `/v1/responses` remains a thin compatibility wrapper and default tiers remain simulated through `echo` until configured.
+**Status:** present/partial (E1/E2 only). Exact, tier, and explicit `brains/auto` routing are distinguished and every route records whether it is simulated; `/v1/responses` remains a thin compatibility wrapper and default tiers remain simulated through `echo` until configured. The model-serving routes and the `brains-ai run` launcher are gated experimental (`BRAINS_EXPERIMENTAL_GATEWAY`) — off in the normal install, with model access expected from each CLI's own provider logins.
 
 ### B2 - Coordination plane and MCP
 

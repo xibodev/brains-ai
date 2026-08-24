@@ -1,15 +1,20 @@
 """Single-process supervisor for the brains stack.
 
 Ported from agent-hivemind's ``hive-service`` (Phase 2 PR-4 of the
-consolidation plan). Supervises:
+consolidation plan). Supervises by default:
 
 * ``brains.main:app``        \u2014 the gateway FastAPI app on :8787
-* ``brains.dashboard.app``   \u2014 the dashboard FastAPI app on :9876
 
 The MCP SSE server (``brains.mcp.server`` on :9877) is what agent tools
-connect to, so it is supervised by default alongside the gateway and
-dashboard. Pass ``--no-mcp`` to leave it out. Its bind host is driven by
-``BRAINS_MCP_BIND`` / ``BRAINS_MCP_ALLOW_PUBLIC`` per the MCP auth design.
+connect to, so it is supervised by default alongside the gateway. Pass
+``--no-mcp`` to leave it out. Its bind host is driven by ``BRAINS_MCP_BIND``
+/ ``BRAINS_MCP_ALLOW_PUBLIC`` per the MCP auth design.
+
+The legacy dashboard (``brains.dashboard.app`` on :9876) is a retired
+surface: it is supervised only when explicitly requested with
+``--dashboard`` or ``BRAINS_LEGACY_SURFACES=1`` (see
+``brains.experimental``). ``--no-dashboard`` remains accepted as a no-op
+veto for back-compatibility.
 
 Features:
 * Combined logging to ``<state_dir>/sessions/service.log`` (rotated at 5MB).
@@ -22,7 +27,7 @@ Features:
 
 Run:
 
-    brains serve-all [--no-gateway] [--no-dashboard] [--no-mcp]
+    brains serve-all [--no-gateway] [--dashboard] [--no-mcp]
     python -m brains.control.supervisor [...]
 """
 
@@ -196,7 +201,7 @@ def _build_children(args: argparse.Namespace) -> list[Child]:
                 ],
             )
         )
-    if not args.no_dashboard:
+    if _include_legacy_dashboard(args):
         children.append(
             Child(
                 "dashboard",
@@ -243,10 +248,33 @@ def _clear_pidfile() -> None:
         _pid_path().unlink()
 
 
+def _include_legacy_dashboard(args: argparse.Namespace) -> bool:
+    """The legacy dashboard is retired from the normal install.
+
+    It runs only when explicitly requested: ``--dashboard``, or the
+    ``BRAINS_LEGACY_SURFACES`` opt-in. ``--no-dashboard`` (kept for
+    back-compatibility) is a veto that wins over both.
+    """
+    if args.no_dashboard:
+        return False
+    from brains.experimental import legacy_surfaces_enabled
+
+    return bool(getattr(args, "dashboard", False)) or legacy_surfaces_enabled()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="brains-supervisor")
     parser.add_argument("--no-gateway", action="store_true")
-    parser.add_argument("--no-dashboard", action="store_true")
+    parser.add_argument(
+        "--no-dashboard",
+        action="store_true",
+        help="Back-compat veto: never start the legacy dashboard child.",
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Opt in to the retired legacy dashboard child (normally off).",
+    )
     parser.add_argument("--no-mcp", action="store_true")
     parser.add_argument("--gateway-host", default="127.0.0.1")
     parser.add_argument("--gateway-port", type=int, default=8787)

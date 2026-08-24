@@ -163,11 +163,20 @@ def _pid_alive(pid: int) -> bool:
 def reap_zombie_sessions() -> list[str]:
     """Mark crashed sessions as ended, release their claims and tasks.
 
-    A session is "zombie" if it is not yet marked ended (``ended_at IS NULL``)
-    and its recorded PID is no longer alive on this machine. Sessions stamped
-    with a different ``machine_id`` are reaped only when their heartbeat is
-    stale, because their PIDs are meaningful only on their origin machine. For
-    each such session we:
+    A session is "zombie" only when **two** signals agree it is gone:
+
+    * its recorded PID is no longer alive on this machine (or, for a
+      foreign-machine session, its heartbeat is stale), AND
+    * its opportunistic heartbeat — ``last_activity_at``, falling back to
+      ``started_at`` — is older than ``STALE_SESSION_TTL_SECONDS``.
+
+    The heartbeat gate exists because the recorded PID is frequently the
+    brains stdio child rather than the agent itself, so a dead PID alone
+    proves nothing: field reports showed actively-messaging sessions reaped
+        nine seconds after their last message. Fresh activity always wins;
+        a quiet session with a dead PID is the only thing this reaper takes.
+
+    For each such session we:
 
     * Stamp ``ended_at = now`` and append a ``zombie reaped`` note to the
       session summary.
@@ -210,7 +219,20 @@ def reap_zombie_sessions() -> list[str]:
                     continue
                 if _pid_alive(pid):
                     continue
-                note = f"zombie reaped: pid {pid} dead"
+                # PID dead is necessary but not sufficient: the recorded pid
+                # may be a short-lived launcher/stdio child while the agent
+                # keeps working. Require the heartbeat to be stale too.
+                last_activity = row.last_activity_at or row.started_at
+                if last_activity is None:
+                    continue
+                if last_activity.tzinfo is None:
+                    last_activity = last_activity.replace(tzinfo=now.tzinfo)
+                if last_activity >= stale_cutoff:
+                    continue
+                note = (
+                    f"zombie reaped: pid {pid} dead and no activity for "
+                    f">{STALE_SESSION_TTL_SECONDS}s"
+                )
             row.ended_at = now
             if getattr(row, "state", None) not in _TERMINAL_SESSION_STATES:
                 # Reaping is a terminal path: ``ended_at`` and the explicit
@@ -244,6 +266,61 @@ def reap_zombie_sessions() -> list[str]:
             session_id=sid,
         )
     return reaped
+
+
+def _terminal_or_ended(row: AgentSession) -> bool:
+    return row.ended_at is not None or getattr(row, "state", None) in _TERMINAL_SESSION_STATES
+
+
+def live_replacement_session_ids(
+    session, workspace_id: int | None, exclude_session_id: str | None = None
+) -> list[str]:
+    """Live sessions in the same workspace, freshest first (bounded).
+
+    Surfaced in dead-handle errors so a caller can recover without the
+    discovery dance — the single most expensive step in field report #2.
+    """
+    q = (
+        session.query(AgentSession)
+        .filter(
+            AgentSession.ended_at.is_(None),
+            AgentSession.workspace_id == workspace_id,
+        )
+        .order_by(AgentSession.last_activity_at.desc().nullslast())
+        .limit(5)
+    )
+    if exclude_session_id:
+        q = q.filter(AgentSession.id != exclude_session_id)
+    return [row.id for row in q.all()]
+
+
+def require_live_session(session, session_id: str | None, *, action: str) -> AgentSession:
+    """Raise a loud, actionable error unless ``session_id`` names a live session.
+
+    Every agent-facing surface that takes a session handle as *attribution*
+    or *recipient* validates through this: a dead handle must never be
+    silently accepted (field report #2: brains let messages be sent AS a
+    reaped session, and dead-handle reads were indistinguishable from an
+    empty inbox). The error carries ended_at, the recorded reason, and the
+    workspace's live replacement candidates.
+    """
+    if not session_id:
+        raise ValueError(f"{action} requires a session id")
+    row = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+    if row is None:
+        raise ValueError(f"unknown session: {session_id} ({action})")
+    if not _terminal_or_ended(row):
+        return row
+    replacements = live_replacement_session_ids(session, row.workspace_id)
+    reason = (row.summary or "").strip()
+    reason_tail = f"; reason: {reason[-160:]}" if reason else ""
+    raise ValueError(
+        f"session {session_id} is ended (state={getattr(row, 'state', None)}, "
+        f"ended_at={row.ended_at.isoformat() if row.ended_at else None}{reason_tail}); "
+        f"refusing {action} against a dead handle. "
+        f"live replacement candidates in the same workspace: "
+        f"{replacements if replacements else '[]'}"
+    )
 
 
 def register_workspace(

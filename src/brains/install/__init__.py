@@ -52,7 +52,7 @@ def _set_bridge(name: str) -> _SubsystemSpec:
     return _SubsystemSpec(
         feature=name,
         extra=name,
-        label=f"{name.title()} bridge",
+        label=f"{name.title()} bridge (experimental)",
         description=EXTRAS[name].description,
         setter=setter,
         reader=reader,
@@ -73,7 +73,7 @@ def _postgres_spec() -> _SubsystemSpec:
     return _SubsystemSpec(
         feature="postgres",
         extra="postgres",
-        label="Postgres backend (replaces SQLite)",
+        label="Postgres backend (replaces SQLite) (experimental)",
         description=EXTRAS["postgres"].description,
         setter=setter,
         reader=reader,
@@ -91,7 +91,7 @@ def _otel_spec() -> _SubsystemSpec:
     return _SubsystemSpec(
         feature="otel",
         extra="otel",
-        label="OpenTelemetry exports",
+        label="OpenTelemetry exports (experimental)",
         description=EXTRAS["otel"].description,
         setter=setter,
         reader=reader,
@@ -116,7 +116,7 @@ def _litellm_spec() -> _SubsystemSpec:
     return _SubsystemSpec(
         feature="litellm",
         extra="litellm",
-        label="LiteLLM provider",
+        label="LiteLLM provider (experimental)",
         description=EXTRAS["litellm"].description,
         setter=setter,
         reader=reader,

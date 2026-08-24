@@ -610,6 +610,53 @@ class HelpRequest(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class HelpRequestConstraint(Base):
+    """Optional harness constraint on a peer-help request (comms slice 1).
+
+    A separate table rather than a column on the frozen ``help_requests``
+    baseline: post-freeze schema changes ship as additive deltas, and the
+    frozen table's rendering must stay byte-identical.
+
+    Grammar of ``required_tool``: an exact tool name (``claude``) or
+    ``not:<tool>`` (``not:copilot``), case-insensitive, matched against the
+    claiming session's ``tool``. Absent row = any harness may claim.
+    """
+
+    __tablename__ = "help_request_constraints"
+    request_code: Mapped[str] = mapped_column(ForeignKey("help_requests.code"), primary_key=True)
+    required_tool: Mapped[str] = mapped_column(String(64))
+
+
+class TopicPost(Base):
+    """One post on a named agent topic (message board, comms slice 1).
+
+    Topics are install-wide and flat: any live session may post, replies
+    reference their parent via ``reply_to_id``, and delivery to busy agents
+    happens through the mailbox — posting blasts one notification per other
+    workspace with live sessions (see ``brains.control.topics``), so an
+    agent only ever polls its own inbox.
+    """
+
+    __tablename__ = "topic_posts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    topic: Mapped[str] = mapped_column(String(64), index=True)
+    from_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    from_workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    reply_to_id: Mapped[int | None] = mapped_column(ForeignKey("topic_posts.id"), nullable=True)
+    subject: Mapped[str] = mapped_column(String(256))
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Informational harness hint on the post (``claude`` / ``not:copilot``).
+    #: Unlike help requests this is advisory in slice 1 — readers self-select.
+    required_tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
 class ToolSessionLink(Base):
     """Many-to-one mapping from a tool's own session id to a brain session.
 

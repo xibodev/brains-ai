@@ -117,6 +117,7 @@ def test_is_due_every_is_case_insensitive() -> None:
 def test_scheduler_tick_fires_only_due_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BRAINS_MCP_EXPERIMENTAL", "1")
     now = _now()
     # Three recurring tasks: one due, one not-yet-due, one with no last_fired.
     monkeypatch.setattr(
@@ -157,6 +158,7 @@ def test_scheduler_tick_fires_only_due_tasks(
 def test_scheduler_tick_swallows_per_task_errors_and_keeps_going(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BRAINS_MCP_EXPERIMENTAL", "1")
     now = _now()
     monkeypatch.setattr(
         mcp_server,
@@ -181,6 +183,7 @@ def test_scheduler_tick_swallows_per_task_errors_and_keeps_going(
 def test_scheduler_tick_skips_entries_without_a_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("BRAINS_MCP_EXPERIMENTAL", "1")
     now = _now()
     monkeypatch.setattr(
         mcp_server,
@@ -233,6 +236,28 @@ def test_scheduler_tick_runs_the_runtime_sweep_even_when_fire_list_is_empty(
     )
     mcp_server._scheduler_tick(now=now)
     assert swept == [mcp_server._runtime_stale_ttl_seconds()]
+
+
+# --- Experimental gate: scheduled auto-fire + tool surface -----------------
+
+
+def test_scheduler_tick_does_not_auto_fire_without_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scheduled auto-fire is experimental: the default install never fires."""
+    monkeypatch.delenv("BRAINS_MCP_EXPERIMENTAL", raising=False)
+    now = _now()
+    monkeypatch.setattr(
+        mcp_server,
+        "list_recurring_tasks",
+        lambda **_kw: [{"name": "due-hourly", "cron_expr": "hourly", "last_fired_at": None}],
+    )
+    monkeypatch.setattr(
+        mcp_server,
+        "fire_recurring_task",
+        lambda *_a, **_kw: pytest.fail("scheduled auto-fire must be gated"),
+    )
+    assert mcp_server._scheduler_tick(now=now) == []
 
 
 def test_runtime_stale_ttl_seconds_uses_documented_default(monkeypatch) -> None:
@@ -299,15 +324,40 @@ def test_list_tools_returns_brains_prefixed_names() -> None:
     assert "brains_plan_request" in names
     assert "brains_search_repo" in names
     assert "brains_learn_propose" in names
-    assert "brains_graph_build" in names
-    assert "brains_graph_query" in names
-    assert "brains_graph_neighbors" in names
-    assert "brains_graph_path" in names
-    assert "brains_graph_subsystems" in names
-    assert "brains_graph_export" in names
     assert "brains_retrieve_original" in names
+    # Experimental tools are absent from the default advertised surface.
+    experimental = {f"brains_{n}" for n in mcp_server.EXPERIMENTAL_MCP_TOOLS}
+    assert not (experimental & set(names))
     # Registry shouldn't be empty - this catches accidental wipes.
     assert len(names) >= 30
+
+
+def test_experimental_tools_opt_in_advertises_and_allows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BRAINS_MCP_EXPERIMENTAL", "1")
+    selected = set(mcp_server._resolve_active_tools())
+    assert selected >= mcp_server.EXPERIMENTAL_MCP_TOOLS
+
+    # An explicit allowlist naming an experimental tool still needs the env.
+    monkeypatch.delenv("BRAINS_MCP_EXPERIMENTAL", raising=False)
+    monkeypatch.setenv("BRAINS_MCP_TOOLS", "search_semantic,start_session")
+    allowlisted = set(mcp_server._resolve_active_tools())
+    assert "start_session" in allowlisted
+    assert "search_semantic" not in allowlisted
+
+
+def test_call_tool_refuses_experimental_tool_without_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BRAINS_MCP_EXPERIMENTAL", raising=False)
+    with pytest.raises(ValueError, match="BRAINS_MCP_EXPERIMENTAL"):
+        mcp_server.call_tool("brains_graph_query", workspace_path=".", question="x")
+    monkeypatch.setenv("BRAINS_MCP_EXPERIMENTAL", "1")
+    # With the opt-in the dispatch reaches the registered tool; a stub keeps
+    # this a gate test rather than a graph test.
+    monkeypatch.setitem(mcp_server.TOOL_REGISTRY, "graph_query", lambda **_kw: {"ok": True})
+    assert mcp_server.call_tool("brains_graph_query", workspace_path=".") == {"ok": True}
 
 
 def test_registered_mcp_tool_names_are_anthropic_safe() -> None:

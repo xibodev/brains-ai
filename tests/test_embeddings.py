@@ -348,9 +348,19 @@ def test_chunk_text_windows():
 
 
 def test_search_semantic_mcp_tool_registered():
-    from brains.mcp.server import list_tools
+    """`search_semantic` is experimental: absent from the default advertised
+    surface, present once BRAINS_MCP_EXPERIMENTAL opts in."""
+    import os
 
-    assert "brains_search_semantic" in list_tools()
+    from brains.mcp.server import _resolve_active_tools, list_tools
+
+    assert "brains_search_semantic" not in list_tools()
+    assert "search_semantic" not in set(_resolve_active_tools())
+    os.environ["BRAINS_MCP_EXPERIMENTAL"] = "1"
+    try:
+        assert "search_semantic" in set(_resolve_active_tools())
+    finally:
+        os.environ.pop("BRAINS_MCP_EXPERIMENTAL", None)
 
 
 def test_search_semantic_mcp_tool_wraps(tmp_path, monkeypatch):

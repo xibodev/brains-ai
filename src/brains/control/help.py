@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, or_
@@ -40,7 +40,7 @@ from brains.control.common import utc_now
 from brains.control.events import append_event
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
-from brains.storage.models import AgentSession, HelpRequest, Workspace
+from brains.storage.models import AgentSession, HelpRequest, HelpRequestConstraint, Workspace
 
 
 # How often to re-poll the DB while blocked on ask_peer / wait_for_request.
@@ -73,7 +73,16 @@ class HelpExpiredError(ValueError):
     """Raised when answer_request targets a request that already expired."""
 
 
-def _row_to_dict(row: HelpRequest) -> dict[str, Any]:
+def _required_tool_for(session, code: str) -> str | None:
+    row = (
+        session.query(HelpRequestConstraint)
+        .filter(HelpRequestConstraint.request_code == code)
+        .one_or_none()
+    )
+    return row.required_tool if row else None
+
+
+def _row_to_dict(session, row: HelpRequest) -> dict[str, Any]:
     return {
         "code": row.code,
         "from_session_id": row.from_session_id,
@@ -84,6 +93,7 @@ def _row_to_dict(row: HelpRequest) -> dict[str, Any]:
         "question": row.question,
         "context": row.context,
         "status": row.status,
+        "required_tool": _required_tool_for(session, row.code),
         "claimed_by_session_id": row.claimed_by_session_id,
         "claimed_at": row.claimed_at.isoformat() if row.claimed_at else None,
         "answer": row.answer,
@@ -97,6 +107,39 @@ def _row_to_dict(row: HelpRequest) -> dict[str, Any]:
 
 def _next_code() -> str:
     return f"HR-{uuid.uuid4().hex[:8]}"
+
+
+#: Harness-constraint grammar (agent comms slice 1): an exact tool name or
+#: ``not:<tool>``, case-insensitive. ``None``/empty means any harness.
+def normalize_required_tool(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    req = raw.strip().lower()
+    if not req:
+        return None
+    if req.startswith("not:"):
+        target = req[4:].strip()
+        if not target:
+            raise ValueError("required_tool 'not:' needs a tool name")
+        return f"not:{target}"
+    return req
+
+
+def tool_matches_requirement(required_tool: str | None, tool: str | None) -> bool:
+    """True when ``tool`` may claim a request carrying ``required_tool``.
+
+    An empty claimer tool matches only unconstrained requests: a session
+    that cannot name its harness cannot prove it satisfies either form.
+    """
+    if not required_tool:
+        return True
+    claimer = (tool or "").strip().lower()
+    if not claimer:
+        return False
+    req = required_tool.strip().lower()
+    if req.startswith("not:"):
+        return claimer != req[4:]
+    return claimer == req
 
 
 def _resolve_session_workspace_id(session, session_id: str | None) -> int | None:
@@ -127,22 +170,56 @@ def _current_ask_depth_for_session(session, session_id: str | None) -> int:
     return row.ask_depth + 1
 
 
+#: How long a *claimed* request may stay unanswered before it expires.
+#: Expiry otherwise counts only time spent ``open`` — once a peer claims a
+#: request and goes to gather real evidence (grep the repo, run a probe),
+#: punishing that work by expiring the request discards exactly the answer
+#: the evidence requirement demanded. Field report 2026-08-24, issue #3.
+DEFAULT_CLAIM_GRACE_SECONDS = 600
+
+
+def _claim_grace_seconds() -> int:
+    try:
+        raw = int(
+            os.environ.get("BRAINS_HELP_CLAIM_GRACE_SECONDS", str(DEFAULT_CLAIM_GRACE_SECONDS))
+        )
+    except ValueError:
+        return DEFAULT_CLAIM_GRACE_SECONDS
+    return max(1, raw)
+
+
 def _expire_due(session) -> int:
-    """Flip stale ``open`` / ``claimed`` requests to ``expired``.
+    """Flip stale requests to ``expired``.
+
+    Expiry counts only time spent ``open``: an unclaimed request past its
+    deadline dies, but a **claimed** request survives its original
+    ``expires_at`` — the claim is the promise that someone is actively
+    producing the evidence-backed answer. A claimed request expires only
+    when the claim itself goes stale (no answer within
+    ``BRAINS_HELP_CLAIM_GRACE_SECONDS``, default 600s), so an abandoned
+    claim cannot park a request forever.
 
     Called opportunistically by every public entry point so callers don't
     have to babysit the table. Returns the count of rows flipped, mainly
     for tests.
     """
     now = utc_now()
-    q = session.query(HelpRequest).filter(
+    grace_cutoff = now - timedelta(seconds=_claim_grace_seconds())
+    open_q = session.query(HelpRequest).filter(
         HelpRequest.expires_at < now,
-        HelpRequest.status.in_(("open", "claimed")),
+        HelpRequest.status == "open",
     )
-    count = q.count()
-    if count:
-        q.update({"status": "expired"}, synchronize_session=False)
-    return count
+    open_count = open_q.count()
+    if open_count:
+        open_q.update({"status": "expired"}, synchronize_session=False)
+    claimed_q = session.query(HelpRequest).filter(
+        HelpRequest.status == "claimed",
+        HelpRequest.claimed_at < grace_cutoff,
+    )
+    claimed_count = claimed_q.count()
+    if claimed_count:
+        claimed_q.update({"status": "expired"}, synchronize_session=False)
+    return open_count + claimed_count
 
 
 def ask_peer(
@@ -154,8 +231,14 @@ def ask_peer(
     to_session_id: str | None = None,
     context: str = "",
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    required_tool: str | None = None,
 ) -> dict[str, Any]:
     """File a help request and block until a peer answers or it expires.
+
+    ``required_tool`` constrains which harness may claim the request —
+    an exact tool name (``"claude"``) or ``not:<tool>`` (``"not:copilot"``,
+    "any harness except this one"). This is how a session asks a *different*
+    CLI to validate its work without either side sharing context.
 
     Returns the request dict; ``status`` will be one of:
 
@@ -172,6 +255,7 @@ def ask_peer(
         raise ValueError("question is required")
     if to_workspace is None and to_session_id is None:
         raise ValueError("ask_peer requires to_workspace or to_session_id")
+    required_tool_norm = normalize_required_tool(required_tool)
     timeout_ms = max(100, int(timeout_ms))
 
     init_db()
@@ -180,6 +264,12 @@ def ask_peer(
     code = _next_code()
     with SessionLocal() as session:
         _expire_due(session)
+        if from_session_id:
+            # Attribution is validated against liveness: a reaped session
+            # cannot file asks (field report #2, issue a).
+            from brains.control.sessions import require_live_session
+
+            require_live_session(session, from_session_id, action="ask_peer")
         depth = _current_ask_depth_for_session(session, from_session_id)
         if depth > MAX_ASK_DEPTH:
             raise HelpDeadlockError(
@@ -201,6 +291,10 @@ def ask_peer(
             expires_at=expires_at,
         )
         session.add(row)
+        if required_tool_norm:
+            # Harness constraint lives in its own delta-created table: the
+            # help_requests table is frozen baseline and must not drift.
+            session.add(HelpRequestConstraint(request_code=code, required_tool=required_tool_norm))
         session.commit()
         session.refresh(row)
         request_id = row.id
@@ -214,6 +308,7 @@ def ask_peer(
             "code": code,
             "to_workspace": to_workspace,
             "to_session_id": to_session_id,
+            "required_tool": required_tool_norm,
             "depth": depth,
         },
     )
@@ -234,8 +329,19 @@ def ask_peer(
                 break
             if polled.status in ("answered", "expired", "cancelled"):
                 final_status = polled.status
-                result = _row_to_dict(polled)
+                result = _row_to_dict(session, polled)
                 break
+            if polled.status == "claimed" and polled.claimed_at is not None:
+                # A peer claimed it and is gathering evidence: stop counting
+                # the asker's original timeout and wait out the claim grace
+                # instead, so a good-but-slow answer isn't discarded.
+                claimed_at = polled.claimed_at
+                if claimed_at.tzinfo is None:
+                    claimed_at = claimed_at.replace(tzinfo=UTC)
+                grace_deadline = claimed_at + timedelta(seconds=_claim_grace_seconds())
+                remaining = (grace_deadline - datetime.now(UTC)).total_seconds()
+                if remaining > 0:
+                    deadline = max(deadline, time.monotonic() + remaining)
         if time.monotonic() >= deadline:
             # Flip ourselves to expired and return that snapshot.
             with SessionLocal() as session:
@@ -246,10 +352,10 @@ def ask_peer(
                     expiring.status = "expired"
                     session.commit()
                     session.refresh(expiring)
-                    result = _row_to_dict(expiring)
+                    result = _row_to_dict(session, expiring)
                 else:
                     result = (
-                        _row_to_dict(expiring)
+                        _row_to_dict(session, expiring)
                         if expiring
                         else {
                             "code": code,
@@ -294,18 +400,22 @@ def wait_for_request(
     timeout_ms = max(100, int(timeout_ms))
 
     init_db()
-    # Resolve peer's workspace slug once; we won't refetch it on every loop.
+    # Resolve peer's workspace slug + harness once; we won't refetch on
+    # every loop. The harness gates which constrained requests this peer
+    # may claim (``required_tool`` matching).
     resolved_slug: str | None = workspace_slug
-    if resolved_slug is None:
-        with SessionLocal() as session:
-            row = (
-                session.query(AgentSession, Workspace)
-                .join(Workspace, Workspace.id == AgentSession.workspace_id)
-                .filter(AgentSession.id == session_id)
-                .one_or_none()
-            )
-            if row is not None:
-                resolved_slug = row[1].slug
+    my_tool: str | None = None
+    with SessionLocal() as session:
+        row = (
+            session.query(AgentSession, Workspace)
+            .outerjoin(Workspace, Workspace.id == AgentSession.workspace_id)
+            .filter(AgentSession.id == session_id)
+            .one_or_none()
+        )
+        if row is not None:
+            my_tool = row[0].tool
+            if resolved_slug is None:
+                resolved_slug = row[1].slug if row[1] is not None else None
 
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     poll = _poll_interval_seconds()
@@ -323,7 +433,11 @@ def wait_for_request(
             if resolved_slug:
                 filters.append(HelpRequest.to_workspace == resolved_slug)
             query = (
-                session.query(HelpRequest)
+                session.query(HelpRequest, HelpRequestConstraint.required_tool)
+                .outerjoin(
+                    HelpRequestConstraint,
+                    HelpRequestConstraint.request_code == HelpRequest.code,
+                )
                 .filter(
                     HelpRequest.status == "open",
                     or_(*filters),
@@ -335,7 +449,15 @@ def wait_for_request(
                     (HelpRequest.from_workspace_id.is_(None))
                     | (HelpRequest.from_workspace_id.in_(visible))
                 )
-            candidate = query.first()
+            # Harness constraint: skip requests this session's tool may not
+            # claim. They stay open for a matching peer; we keep polling.
+            candidate: HelpRequest | None = None
+            candidate_required_tool: str | None = None
+            for row, required_tool in query.limit(25).all():
+                if tool_matches_requirement(required_tool, my_tool):
+                    candidate = row
+                    candidate_required_tool = required_tool
+                    break
             if candidate is not None:
                 # Atomic claim: re-check the row is still open via a
                 # conditional update so two waiters can't both grab it.
@@ -360,7 +482,7 @@ def wait_for_request(
                 session.commit()
                 if updated:
                     session.refresh(candidate)
-                    result = _row_to_dict(candidate)
+                    result = _row_to_dict(session, candidate)
                     append_event(
                         "help_claimed",
                         f"{candidate.code}: claimed by {session_id}",
@@ -368,6 +490,8 @@ def wait_for_request(
                         metadata={
                             "code": candidate.code,
                             "from_session_id": candidate.from_session_id,
+                            "required_tool": candidate_required_tool,
+                            "claimer_tool": my_tool,
                         },
                     )
                     return result
@@ -424,7 +548,7 @@ def answer_request(
             row.claimed_by_session_id = session_id
         session.commit()
         session.refresh(row)
-        result = _row_to_dict(row)
+        result = _row_to_dict(session, row)
 
     append_event(
         "help_answered",
@@ -466,7 +590,7 @@ def list_open_help_requests(
                 | (HelpRequest.from_workspace_id.in_(visible))
             )
         rows = query.order_by(HelpRequest.created_at.asc()).limit(limit).all()
-        return [_row_to_dict(row) for row in rows]
+        return [_row_to_dict(session, row) for row in rows]
 
 
 __all__ = [

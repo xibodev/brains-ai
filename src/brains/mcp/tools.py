@@ -1,3 +1,5 @@
+from typing import Any
+
 from brains.config import settings
 from brains.context.code_graph import (
     build_code_graph,
@@ -46,7 +48,7 @@ from brains.control.knowledge import (
     search_knowledge,
 )
 from brains.control.learn import propose_from_history
-from brains.control.mailbox import read_messages, send_message
+from brains.control.mailbox import inbox_wait, read_messages, send_message  # noqa: I001
 from brains.control.patterns import (
     approve_pattern,
     list_patterns,
@@ -90,6 +92,7 @@ from brains.control.tool_registry import (
     register_tool,
     verify_tool,
 )
+from brains.control.topics import list_topics, live_agent_sessions, post_topic, read_topic
 from brains.control.views import refresh_views
 from brains.control.webhooks import (
     create_webhook_trigger,
@@ -797,6 +800,7 @@ def send_message_tool(
     to_session_id: str | None = None,
     workspace_path: str | None = None,
     kind: str = "info",
+    route_to_current: bool = False,
 ):
     return send_message(
         subject=subject,
@@ -805,6 +809,7 @@ def send_message_tool(
         to_session_id=to_session_id,
         workspace_path=workspace_path,
         kind=kind,
+        route_to_current=route_to_current,
     )
 
 
@@ -820,6 +825,77 @@ def read_messages_tool(
         include_read=include_read,
         limit=limit,
     )
+
+
+def inbox_wait_tool(session_id: str, timeout_ms: int = 25000):
+    """Block until this session has unread mail OR a claimable peer request.
+
+    The single long-poll an agent loops on instead of sleep-polling two
+    surfaces. Returns ``{"wakeup": "mail" | "peer_request" | None}``.
+    """
+    return inbox_wait(session_id, timeout_ms=timeout_ms)
+
+
+def mail_send_tool(to: str, subject: str, body: str = "", session_id: str | None = None):
+    """Send one outbound email via configured SMTP (SES works through its
+    SMTP endpoint = config only). Refuses when the mailer is unconfigured."""
+    from brains.control.mailer import send_email
+
+    return send_email(to, subject, body, session_id=session_id)
+
+
+def mail_status_tool():
+    """Redacted mailer configuration snapshot (booleans + host; no secrets)."""
+    from brains.control.mailer import mailer_status
+
+    return mailer_status()
+
+
+def list_live_agents_tool(ttl_seconds: int | None = None):
+    """Discover every live agent session on this brain, across all workspaces.
+
+    Returns session id, workspace, harness/tool, state and freshness. This
+    is how a session finds peers to ask directly (comms scenario 1).
+    """
+    return live_agent_sessions(ttl_seconds=ttl_seconds)
+
+
+def topic_post_tool(
+    topic: str,
+    subject: str,
+    body: str = "",
+    from_session_id: str | None = None,
+    workspace_path: str | None = None,
+    required_tool: str | None = None,
+    reply_to: int | None = None,
+    blast: bool = True,
+):
+    """Post to a named topic board (message board / pub-sub).
+
+    Blasts one inbox notification per other workspace with live sessions,
+    so agents only ever poll their own mailbox. ``required_tool`` is an
+    advisory harness hint ("claude" or "not:copilot").
+    """
+    return post_topic(
+        topic,
+        subject,
+        body,
+        from_session_id=from_session_id,
+        workspace_path=workspace_path,
+        required_tool=required_tool,
+        reply_to=reply_to,
+        blast=blast,
+    )
+
+
+def topic_read_tool(topic: str | None = None, limit: int = 50, reply_to: int | None = None):
+    """Read a topic board (or all boards) — newest posts first."""
+    return read_topic(topic, limit=limit, reply_to=reply_to)
+
+
+def topic_list_tool(limit: int = 100):
+    """List topics with post counts and latest activity."""
+    return list_topics(limit=limit)
 
 
 def capture_snapshot_tool(
@@ -917,6 +993,27 @@ def adoption_report_tool(
     )
 
 
+def _auto_fire_notice(cron_expr: str) -> dict[str, Any] | None:
+    """Loud, honest notice when a schedule cannot actually auto-fire.
+
+    Scheduled auto-fire is experimental and disabled in the normal install;
+    a definition created with a non-manual schedule would otherwise sit
+    forever unfired with no explanation. Manual definitions are unaffected.
+    """
+    from brains.experimental import EXPERIMENTAL_ENV, experimental_enabled
+
+    if experimental_enabled() or (cron_expr or "").strip().lower() == "manual":
+        return None
+    return {
+        "experimental_auto_fire_disabled": True,
+        "notice": (
+            f"Scheduled auto-fire is experimental and disabled: this {cron_expr!r} "
+            f"definition will not fire on its own. Set {EXPERIMENTAL_ENV}=1 to "
+            f"enable auto-fire, or fire it manually."
+        ),
+    }
+
+
 def create_recurring_task_tool(
     workspace_path: str,
     name: str,
@@ -928,7 +1025,7 @@ def create_recurring_task_tool(
     squad: str | None = None,
     session_id: str | None = None,
 ):
-    return create_recurring_task(
+    result = create_recurring_task(
         workspace_path,
         name=name,
         title_template=title_template,
@@ -939,6 +1036,10 @@ def create_recurring_task_tool(
         squad=squad,
         session_id=session_id,
     )
+    notice = _auto_fire_notice(cron_expr)
+    if notice:
+        result.update(notice)
+    return result
 
 
 def list_recurring_tasks_tool(
@@ -954,7 +1055,12 @@ def list_recurring_tasks_tool(
 
 
 def set_recurring_enabled_tool(name: str, enabled: bool = True):
-    return set_recurring_enabled(name, enabled=enabled)
+    result = set_recurring_enabled(name, enabled=enabled)
+    if isinstance(result, dict):
+        notice = _auto_fire_notice(result.get("cron_expr", ""))
+        if notice:
+            result.update(notice)
+    return result
 
 
 def fire_recurring_task_tool(name: str, session_id: str | None = None):
@@ -989,12 +1095,17 @@ def ask_peer_tool(
     to_session_id: str | None = None,
     context: str = "",
     timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+    required_tool: str | None = None,
 ):
     """Ask another peer (session or workspace) a question and block until
     they answer or the request expires. Returns the resolved request.
 
     Either ``to_workspace`` or ``to_session_id`` must be set. ``context``
     is an optional free-form string the peer can use to ground the answer.
+
+    ``required_tool`` constrains the claiming harness — exact tool name
+    (``"claude"``) or ``not:<tool>`` (``"not:copilot"``) — so a session can
+    route validation to a different CLI without sharing context.
     """
     return ask_peer(
         subject,
@@ -1004,6 +1115,7 @@ def ask_peer_tool(
         to_session_id=to_session_id,
         context=context,
         timeout_ms=timeout_ms,
+        required_tool=required_tool,
     )
 
 

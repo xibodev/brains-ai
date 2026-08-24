@@ -23,6 +23,11 @@ import tempfile
 from pathlib import Path
 
 os.environ.setdefault("BRAINS_API_KEY", "local-dev-key")
+# The model-serving surface is experimental and off in production installs;
+# the gateway contract suites (OpenAI/Anthropic facades, run CLI) exercise it
+# explicitly, so tests opt in process-wide. Gate tests delenv to pin the
+# default-off behavior.
+os.environ.setdefault("BRAINS_EXPERIMENTAL_GATEWAY", "1")
 # Tests open hundreds of sessions; the on-by-default background pre-indexer would
 # spawn a daemon graph-build/embed thread per session-start and race the test
 # SQLite DB. Keep it OFF in tests (real default stays on). Tests that exercise

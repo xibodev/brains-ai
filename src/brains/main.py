@@ -21,6 +21,11 @@ from brains.api.webhooks import router as wh
 from brains.api.ws import router as ws_router
 from brains.authz.deps import install_principal_context
 from brains.config import settings
+from brains.experimental import (
+    GATEWAY_ENV,
+    gateway_experimental_enabled,
+    legacy_surfaces_enabled,
+)
 from brains.observability import configure_otel
 from brains.observability.dump import install as install_dump
 from brains.storage.migrations import init_db
@@ -78,6 +83,43 @@ app.include_router(ws_router)
 install_dump(app)
 
 
+# Model-serving routes (B1) are experimental: the normal install does not
+# offer brains as a model proxy — model access comes from each CLI's own
+# provider logins. The native control-plane API (/v1/sessions, /v1/admin/*,
+# coordination, webhooks) is unaffected. Registered BEFORE the copilot alias
+# middleware so this gate sees the canonical rewritten /v1/* paths.
+_MODEL_COMPAT_PATHS = frozenset(
+    {
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/messages",
+        "/v1/models",
+        "/v1/count_tokens",
+    }
+)
+
+
+@app.middleware("http")
+async def _experimental_gateway_gate(request, call_next):
+    if request.url.path in _MODEL_COMPAT_PATHS and not gateway_experimental_enabled():
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "error": {
+                    "message": (
+                        "brains model gateway is experimental and disabled in the "
+                        f"normal install; set {GATEWAY_ENV}=1 to enable it"
+                    ),
+                    "type": "gateway_disabled",
+                }
+            },
+            status_code=404,
+        )
+    return await call_next(request)
+
+
 # Copilot CLI compatibility — the GitHub Copilot CLI appends bare paths
 # (``/chat/completions``, ``/responses``, ``/models``) to its
 # ``COPILOT_API_URL`` base rather than ``/v1/...``. Rewrite them so the
@@ -98,4 +140,27 @@ async def _copilot_path_alias(request, call_next):
     if target is not None:
         request.scope["path"] = target
         request.scope["raw_path"] = target.encode("ascii")
+    return await call_next(request)
+
+
+# Retired legacy surfaces (B9/BL-P2-01): the gateway no longer serves the
+# server-rendered /admin HTML pages in the normal install. The modern
+# console at /app is the operator entrypoint. The JSON APIs under
+# /admin/api/* are untouched — the legacy dashboard app (itself opt-in via
+# BRAINS_LEGACY_SURFACES / serve-all --dashboard) still consumes them.
+_LEGACY_ADMIN_PREFIX = "/admin"
+
+
+@app.middleware("http")
+async def _retire_legacy_admin_html(request, call_next):
+    path = request.url.path
+    legacy_html = path.startswith(_LEGACY_ADMIN_PREFIX) and not path.startswith("/admin/api")
+    if legacy_html and not legacy_surfaces_enabled():
+        if request.method in ("GET", "HEAD"):
+            from starlette.responses import RedirectResponse
+
+            return RedirectResponse("/app", status_code=307)
+        from starlette.responses import PlainTextResponse
+
+        return PlainTextResponse("Not Found", status_code=404)
     return await call_next(request)

@@ -1819,13 +1819,15 @@ def test_reaping_a_zombie_session_synchronizes_state_with_ended_at(tmp_path):
         session.execute(
             text(
                 "INSERT INTO agent_sessions (id, workspace_id, tool, pid, machine_id, state, "
-                "started_at) VALUES (:id, :ws, 'pytest', 999999, :machine, 'running', :ts)"
+                # Reaper contract: dead pid AND stale heartbeat.
+                "started_at, last_activity_at) VALUES (:id, :ws, 'pytest', 999999, :machine, "
+                "'running', :ts, :ts)"
             ),
             {
                 "id": session_id,
                 "ws": workspace.id,
                 "machine": current_machine_id(),
-                "ts": datetime.now(UTC).isoformat(),
+                "ts": (datetime.now(UTC) - timedelta(hours=2)).isoformat(),
             },
         )
         session.commit()

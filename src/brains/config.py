@@ -327,6 +327,18 @@ class Settings(BaseSettings):
     openai_compatible_api_key: str | None = Field(default=None)
     openai_compatible_timeout_seconds: float = Field(default=60.0)
     litellm_timeout_seconds: float = Field(default=60.0)
+    # Outbound email (SMTP; SES works through its SMTP endpoint = config only).
+    # Empty smtp_host = mailer disabled. Password may be a "${ENV_NAME}" ref
+    # resolved from the environment / secrets.env like provider keys.
+    smtp_host: str = Field(default="")
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")  # env-ref friendly, never logged
+    smtp_from: str = Field(default="")  # e.g. "Brains <brains@example.com>"
+    smtp_use_starttls: bool = Field(default=True)
+    smtp_timeout_seconds: float = Field(default=15.0)
+    # Operator notify address: ASKs are emailed here when the mailer is on.
+    operator_notify_email: str = Field(default="")
     # GitHub Copilot provider (proxies api.githubcopilot.com via an
     # OAuth-resolved session token). See ``brains.auth.copilot`` for the
     # auth flow. ``oauth_token`` is the env override and stays out of the

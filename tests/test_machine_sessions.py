@@ -132,7 +132,10 @@ def test_reaper_uses_ttl_for_foreign_sessions_and_pid_for_own_machine(
                     tool="codex",
                     pid=own_dead_pid,
                     machine_id=own_machine,
-                    last_activity_at=now,
+                    # Dead pid alone is not enough anymore (field report:
+                    # the recorded pid is often the stdio child). The reaper
+                    # also requires a stale heartbeat.
+                    last_activity_at=now - timedelta(seconds=STALE_SESSION_TTL_SECONDS + 1),
                 ),
             ]
         )

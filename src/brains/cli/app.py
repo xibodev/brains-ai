@@ -151,6 +151,21 @@ def _print_json(value):
     print(json.dumps(value, indent=2, default=str))
 
 
+def _require_experimental_cli(label: str) -> None:
+    """Refuse an experimental command unless BRAINS_MCP_EXPERIMENTAL opts in.
+
+    Mirrors the CLI's one-line ``error: <msg>`` style and exits 2 so scripts
+    compose; the message always names the enabling switch.
+    """
+    from brains.experimental import ExperimentalDisabledError, require_experimental
+
+    try:
+        require_experimental(label)
+    except ExperimentalDisabledError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from None
+
+
 @app.command("version")
 def version_cli():
     """Print brains version + schema version + installed extras."""
@@ -233,9 +248,17 @@ def serve_all_cli(
     no_gateway: bool = False,
     no_dashboard: bool = False,
     no_mcp: bool = False,
+    dashboard: bool = typer.Option(
+        False,
+        "--dashboard",
+        help="Opt in to the retired legacy dashboard child (normally off; "
+        "also enabled by BRAINS_LEGACY_SURFACES=1).",
+    ),
 ):
-    """Supervise gateway + dashboard + MCP server in one process (restart-on-crash).
+    """Supervise gateway + MCP server in one process (restart-on-crash).
 
+    The legacy dashboard is retired from the normal install and runs only
+    with --dashboard / BRAINS_LEGACY_SURFACES=1 (--no-dashboard vetoes both).
     The MCP server is what agent CLIs/IDEs connect to, so it is included by
     default. Pass --no-mcp to leave it out. Its bind host follows
     BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (defaults to loopback).
@@ -247,6 +270,8 @@ def serve_all_cli(
         argv.append("--no-gateway")
     if no_dashboard:
         argv.append("--no-dashboard")
+    if dashboard:
+        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
@@ -292,11 +317,18 @@ def up_cli(
     no_gateway: bool = False,
     no_dashboard: bool = False,
     no_mcp: bool = False,
+    dashboard: bool = typer.Option(
+        False,
+        "--dashboard",
+        help="Opt in to the retired legacy dashboard child (normally off; "
+        "also enabled by BRAINS_LEGACY_SURFACES=1).",
+    ),
 ):
-    """Zero-to-running: init the DB + workspace, then supervise the full stack.
+    """Zero-to-running: init the DB + workspace, then supervise the stack.
 
-    Equivalent to `brains-ai init` followed by `brains-ai serve-all` (gateway +
-    dashboard + MCP). Idempotent — safe to re-run.
+    Equivalent to `brains-ai init` followed by `brains-ai serve-all` (gateway
+    + MCP; legacy dashboard only with --dashboard / BRAINS_LEGACY_SURFACES=1).
+    Idempotent — safe to re-run.
     """
     from brains.api.admin_key import ensure_admin_key
     from brains.control.sessions import register_workspace
@@ -312,6 +344,8 @@ def up_cli(
         argv.append("--no-gateway")
     if no_dashboard:
         argv.append("--no-dashboard")
+    if dashboard:
+        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
@@ -429,6 +463,21 @@ def unwire_cli(
 
 @app.command("dashboard")
 def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
+    """Run the retired legacy dashboard (opt-in only).
+
+    The modern console is served by the gateway at /app. This surface is
+    retired from the normal install; start it explicitly with
+    BRAINS_LEGACY_SURFACES=1.
+    """
+    from brains.experimental import LEGACY_SURFACES_ENV, legacy_surfaces_enabled
+
+    if not legacy_surfaces_enabled():
+        typer.echo(
+            f"error: the legacy dashboard is retired from the normal install "
+            f"(use the gateway console at /app, or set {LEGACY_SURFACES_ENV}=1 to run it)",
+            err=True,
+        )
+        raise typer.Exit(2)
     from brains.dashboard.app import app as dashboard_app
 
     uvicorn.run(dashboard_app, host=host, port=port)
@@ -1673,7 +1722,7 @@ def repo_search_persist_cli(q: str, path: str = ".", limit: int = 50):
 @app.command("graph-export")
 def graph_export_cli(workspace_path: str = ".", out_dir: str = "."):
     """Export the visible code graph as standalone SVG + HTML files."""
-
+    _require_experimental_cli("code graph export")
     _print_json(graph_export(workspace_path, out_dir))
 
 
@@ -1681,6 +1730,7 @@ def graph_export_cli(workspace_path: str = ".", out_dir: str = "."):
 def graph_build_cli(workspace_path: str = ".", max_files: int = 2000):
     """Build (or rebuild) the code graph for a workspace. Usually unnecessary —
     graph queries auto-build on first use."""
+    _require_experimental_cli("code graph build")
     from brains.context.code_graph import build_code_graph
 
     _print_json(build_code_graph(workspace_path, max_files=max_files))
@@ -1692,6 +1742,7 @@ def graph_query_cli(
 ):
     """Natural-language code-graph query (callers, impact, structure). Auto-builds
     the graph on first use."""
+    _require_experimental_cli("code graph query")
     from brains.context.code_graph import graph_query
 
     print(graph_query(workspace_path, question, depth=depth, token_budget=token_budget))
@@ -1702,6 +1753,7 @@ def graph_neighbors_cli(
     node_query: str, workspace_path: str = ".", relation: str | None = None, limit: int = 50
 ):
     """Neighbours (callers/callees/imports/contains) of a graph node. Auto-builds."""
+    _require_experimental_cli("code graph neighbors")
     from brains.context.code_graph import graph_neighbors
 
     _print_json(graph_neighbors(workspace_path, node_query, relation=relation, limit=limit))
@@ -1710,6 +1762,7 @@ def graph_neighbors_cli(
 @app.command("graph-path")
 def graph_path_cli(src_query: str, dst_query: str, workspace_path: str = ".", max_depth: int = 6):
     """Shortest relationship path between two graph nodes. Auto-builds."""
+    _require_experimental_cli("code graph path")
     from brains.context.code_graph import graph_path
 
     _print_json(graph_path(workspace_path, src_query, dst_query, max_depth=max_depth))
@@ -1718,6 +1771,7 @@ def graph_path_cli(src_query: str, dst_query: str, workspace_path: str = ".", ma
 @app.command("graph-subsystems")
 def graph_subsystems_cli(workspace_path: str = "."):
     """List detected subsystems (graph communities). Auto-builds."""
+    _require_experimental_cli("code graph subsystems")
     from brains.context.code_graph import list_subsystems
 
     _print_json(list_subsystems(workspace_path))
@@ -1725,6 +1779,7 @@ def graph_subsystems_cli(workspace_path: str = "."):
 
 @app.command("docs-index")
 def docs_index_cli(workspace: str = "."):
+    _require_experimental_cli("docs indexing for semantic retrieval")
     result = index_docs(workspace)
     refresh_views(workspace)
     _print_json({"workspace": result["workspace"], "count": result["count"]})
@@ -1742,7 +1797,10 @@ def embed_repo_cli(path: str = ".", model: str | None = None):
     Requires an embedding model — set `embed_model` (e.g. nomic-embed-text)
     in config/overlay, or pass --model. Re-running is cheap (content-hash
     deduped); only changed files are re-embedded.
+
+    Experimental: requires BRAINS_MCP_EXPERIMENTAL=1.
     """
+    _require_experimental_cli("repo embedding")
     from brains.context.semantic import embed_repo
 
     _print_json(embed_repo(path, model=model))
@@ -1761,7 +1819,10 @@ def search_semantic_cli(
 
     --exclude/--include take comma-separated path substrings/globs, e.g.
     --exclude "/docs/,/tests/,test_" to surface implementation over docs/tests.
+
+    Experimental: requires BRAINS_MCP_EXPERIMENTAL=1.
     """
+    _require_experimental_cli("semantic search")
     from brains.context.semantic import semantic_search_with_status
 
     inc = [s.strip() for s in include.split(",") if s.strip()] if include else None
@@ -1829,6 +1890,98 @@ def orient_cli(
             exclude=exc,
         )
     )
+
+
+@app.command("live-agents")
+def live_agents_cli(ttl_seconds: int = typer.Option(900, "--ttl-seconds")):
+    """List every live agent session on this brain, across all workspaces."""
+    from brains.control.topics import live_agent_sessions
+
+    _print_json(live_agent_sessions(ttl_seconds=ttl_seconds))
+
+
+@app.command("topic-post")
+def topic_post_cli(
+    topic: str,
+    subject: str,
+    body: str = typer.Option("", "--body"),
+    workspace: str = typer.Option(".", "--workspace"),
+    session: str | None = typer.Option(None, "--session"),
+    required_tool: str | None = typer.Option(None, "--required-tool"),
+    reply_to: int | None = typer.Option(None, "--reply-to"),
+    no_blast: bool = typer.Option(False, "--no-blast"),
+):
+    """Post to a topic board; notifies other live workspaces via their inbox."""
+    from brains.control.topics import post_topic
+
+    _print_json(
+        post_topic(
+            topic,
+            subject,
+            body,
+            from_session_id=session,
+            workspace_path=workspace,
+            required_tool=required_tool,
+            reply_to=reply_to,
+            blast=not no_blast,
+        )
+    )
+
+
+@app.command("topic-read")
+def topic_read_cli(
+    topic: str | None = typer.Argument(None),
+    limit: int = typer.Option(50, "--limit"),
+    reply_to: int | None = typer.Option(None, "--reply-to"),
+):
+    """Read a topic board (or every board) — newest posts first."""
+    from brains.control.topics import read_topic
+
+    _print_json(read_topic(topic, limit=limit, reply_to=reply_to))
+
+
+@app.command("topic-list")
+def topic_list_cli(limit: int = typer.Option(100, "--limit")):
+    """List topics with post counts and latest activity."""
+    from brains.control.topics import list_topics
+
+    _print_json(list_topics(limit=limit))
+
+
+@app.command("mail-send")
+def mail_send_cli(
+    to: str = typer.Option(...),
+    subject: str = typer.Option(...),
+    body: str = typer.Option("", "--body"),
+    session: str | None = typer.Option(None, "--session"),
+):
+    """Send one outbound email via configured SMTP (SES = config only)."""
+    from brains.control.mailer import MailerError, send_email
+
+    try:
+        _print_json(send_email(to, subject, body, session_id=session))
+    except MailerError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from None
+
+
+@app.command("mail-status")
+def mail_status_cli():
+    """Redacted mailer configuration snapshot."""
+    from brains.control.mailer import mailer_status
+
+    _print_json(mailer_status())
+
+
+@app.command("inbox-wait")
+def inbox_wait_cli(
+    session: str = typer.Option(...),
+    timeout_ms: int = typer.Option(25000, "--timeout-ms"),
+):
+    """Block until unread mail or a claimable peer request arrives (long-poll)."""
+    from brains.control.mailbox import inbox_wait
+
+    _print_json(inbox_wait(session, timeout_ms=timeout_ms))
 
 
 @app.command("check-source")
@@ -2470,6 +2623,12 @@ def message_send_cli(
     to_session: str | None = None,
     workspace: str | None = None,
     kind: str = "info",
+    route_to_current: bool = typer.Option(
+        False,
+        "--route-to-current",
+        help="If to_session is ended and its workspace has exactly one live "
+        "session, deliver there instead (explicit opt-in; otherwise refused).",
+    ),
 ):
     _print_json(
         send_message(
@@ -2479,6 +2638,7 @@ def message_send_cli(
             to_session_id=to_session,
             workspace_path=workspace,
             kind=kind,
+            route_to_current=route_to_current,
         )
     )
 

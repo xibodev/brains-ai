@@ -132,7 +132,23 @@ def run_tool_cli(
     Every argument after the tool name is forwarded verbatim — unknown
     flags (``--resume``, ``--model``, etc.) are not consumed by brains.
     """
+    from brains.experimental import GATEWAY_ENV, gateway_experimental_enabled
+
+    if not gateway_experimental_enabled():
+        typer.secho(
+            f"error: the brains model gateway is experimental and disabled in the "
+            f"normal install (launch `{spec_binary_hint(tool)}` with its own provider "
+            f"login instead, or set {GATEWAY_ENV}=1)",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(2)
     spec = _resolve_tool(tool)
     # ctx.args carries everything after the tool name verbatim when the
     # command is registered with allow_extra_args=True.
     _exec_tool(spec, list(ctx.args))
+
+
+def spec_binary_hint(tool: str) -> str:
+    """The binary a gated ``run`` would have launched, for the refusal text."""
+    return _tools().get(tool, ToolSpec(binary=tool, env={})).binary

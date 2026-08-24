@@ -282,6 +282,14 @@ def file_decision_request(
         refresh_views(workspace.path)
     except Exception:
         pass
+    # ASKs deserve email: best-effort operator copy when the mailer is
+    # configured. Never blocks or fails the ask (durable row is authoritative).
+    try:
+        from brains.control.mailer import notify_ask
+
+        notify_ask(code, title, workspace.slug)
+    except Exception:
+        pass
     return {"code": code, "status": "open", "workspace": workspace.slug}
 
 

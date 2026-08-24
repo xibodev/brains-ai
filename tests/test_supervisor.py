@@ -19,19 +19,36 @@ import time
 import brains.control.supervisor as supervisor
 
 
-def test_build_children_includes_all_three_by_default() -> None:
+def test_build_children_includes_gateway_and_mcp_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("BRAINS_LEGACY_SURFACES", raising=False)
     parser = supervisor._build_parser()
     args = parser.parse_args([])
     children = supervisor._build_children(args)
     names = {c.name for c in children}
-    assert names == {"gateway", "dashboard", "mcp"}
+    assert names == {"gateway", "mcp"}
+
+
+def test_build_children_dashboard_is_explicit_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("BRAINS_LEGACY_SURFACES", raising=False)
+    parser = supervisor._build_parser()
+
+    by_flag = supervisor._build_children(parser.parse_args(["--dashboard"]))
+    assert {c.name for c in by_flag} == {"gateway", "dashboard", "mcp"}
+
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
+    by_env = supervisor._build_children(parser.parse_args([]))
+    assert {c.name for c in by_env} == {"gateway", "dashboard", "mcp"}
+
+    # --no-dashboard is a back-compat veto that wins over the env opt-in.
+    vetoed = supervisor._build_children(parser.parse_args(["--no-dashboard"]))
+    assert {c.name for c in vetoed} == {"gateway", "mcp"}
 
 
 def test_build_children_respects_no_mcp() -> None:
     parser = supervisor._build_parser()
     args = parser.parse_args(["--no-mcp"])
     children = supervisor._build_children(args)
-    assert {c.name for c in children} == {"gateway", "dashboard"}
+    assert {c.name for c in children} == {"gateway"}
 
 
 def test_mcp_child_argv_passes_port_override() -> None:
@@ -51,10 +68,9 @@ def test_build_children_respects_disable_flags() -> None:
 
 def test_child_argv_passes_host_and_port_overrides() -> None:
     parser = supervisor._build_parser()
-    args = parser.parse_args(["--gateway-port", "18787", "--dashboard-port", "19876"])
+    args = parser.parse_args(["--dashboard", "--gateway-port", "18787"])
     children = {c.name: c for c in supervisor._build_children(args)}
     assert "18787" in children["gateway"].argv
-    assert "19876" in children["dashboard"].argv
     assert "brains.main:app" in children["gateway"].argv
     assert "brains.dashboard.app:app" in children["dashboard"].argv
 

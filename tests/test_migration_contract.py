@@ -110,6 +110,10 @@ HISTORICAL_LEDGER_IDS = (
     "138_skill_attachments",
 )
 
+#: Deltas shipped in THIS generation that postdate the checksum regime: they
+#: must run for real everywhere, never adopted as legacy evidence.
+POST_CHECKSUM_DELTAS = ("139_agent_comms",)
+
 _LEGACY_LEDGER_DDL = """
 CREATE TABLE schema_versions (
     id INTEGER NOT NULL PRIMARY KEY,
@@ -286,7 +290,7 @@ def test_fresh_sqlite_reaches_the_declared_schema(isolated_db, tmp_path):
     assert report.pending == []
     assert report.failed == []
     assert report.findings == []
-    assert set(report.applied) == {"0000_baseline", *HISTORICAL_LEDGER_IDS}
+    assert set(report.applied) == {"0000_baseline", *HISTORICAL_LEDGER_IDS, *POST_CHECKSUM_DELTAS}
 
     migrated = _schema_shape(isolated_db)
     declared = _create_all_shape(tmp_path, "declared.sqlite")
@@ -306,7 +310,7 @@ def test_fresh_ledger_records_checksum_backend_and_outcome(isolated_db):
     run_migrations()
     rows = _ledger_rows(isolated_db)
 
-    assert set(rows) == {"0000_baseline", *HISTORICAL_LEDGER_IDS}
+    assert set(rows) == {"0000_baseline", *HISTORICAL_LEDGER_IDS, *POST_CHECKSUM_DELTAS}
     for version, row in rows.items():
         assert row["status"] == STATUS_APPLIED, version
         assert row["backend"] == "sqlite", version
@@ -360,7 +364,7 @@ def test_concurrent_first_boot_converges(tmp_path, monkeypatch):
 
     assert errors == []
     rows = _ledger_rows(db_path)
-    assert set(rows) == {"0000_baseline", *HISTORICAL_LEDGER_IDS}
+    assert set(rows) == {"0000_baseline", *HISTORICAL_LEDGER_IDS, *POST_CHECKSUM_DELTAS}
     assert {row["status"] for row in rows.values()} == {STATUS_APPLIED}
 
 
@@ -377,7 +381,8 @@ def test_legacy_full_ledger_upgrades_without_re_running_deltas(isolated_db, tmp_
 
     assert report.healthy is True
     # Only the baseline had no row; every historical delta is left alone.
-    assert report.executed == ["0000_baseline"]
+    # Post-checksum deltas of this generation run for real on top.
+    assert report.executed == ["0000_baseline", *POST_CHECKSUM_DELTAS]
     assert {finding.code for finding in report.findings} == {
         "ledger_gap",
         "legacy_checksum_adopted",
@@ -605,7 +610,7 @@ def test_shipped_corpus_is_ordered_unique_and_checksummed():
     assert ids == sorted(ids)
     assert len(ids) == len(set(ids))
     assert ids[0] == "0000_baseline"
-    assert set(ids) == {"0000_baseline", *HISTORICAL_LEDGER_IDS}
+    assert set(ids) == {"0000_baseline", *HISTORICAL_LEDGER_IDS, *POST_CHECKSUM_DELTAS}
     for spec in specs:
         assert len(spec.checksum_for("sqlite")) == 64
         assert len(spec.migration_id) <= registry.MAX_MIGRATION_ID_LENGTH
@@ -1359,7 +1364,7 @@ def test_db_migrations_cli_reports_readiness(isolated_db):
 
     applied = runner.invoke(cli_app, ["db", "migrate"])
     assert applied.exit_code == 0, applied.output
-    expected_count = 1 + len(HISTORICAL_LEDGER_IDS)
+    expected_count = 1 + len(HISTORICAL_LEDGER_IDS) + len(POST_CHECKSUM_DELTAS)
     assert json.loads(applied.stdout)["counts"]["executed_this_run"] == expected_count
 
     after = runner.invoke(cli_app, ["db", "migrations"])

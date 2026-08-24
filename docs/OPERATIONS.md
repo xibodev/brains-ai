@@ -27,10 +27,10 @@ Source-defined launch commands:
 | Command | Source-defined effect | Verification status |
 |---|---|---|
 | `brains-ai setup` | Initialize shared state, key/operator/workspace setup, and agent wiring workflow. | Source/tests present; not run by this verification. |
-| `brains-ai serve-all` | Supervise gateway, dashboard, and MCP child processes. | Source/tests present; not run. |
-| `brains-ai up` | Convenience full-stack command used by repository harnesses. | Source/tests present; not run. |
+| `brains-ai serve-all` | Supervise gateway and MCP child processes; the legacy dashboard child runs only with `--dashboard` or `BRAINS_LEGACY_SURFACES=1`. | Source/tests present; not run. |
+| `brains-ai up` | Convenience stack command used by repository harnesses. | Source/tests present; not run. |
 | `brains-ai serve` | Run the gateway surface. | Source present; not run. |
-| `brains-ai dashboard` | Run the legacy dashboard/admin process. | Source present; not run. |
+| `brains-ai dashboard` | Run the retired legacy dashboard/admin process (refuses without `BRAINS_LEGACY_SURFACES=1`). | Source present; not run. |
 | `brains-ai mcp` | Run the MCP server. | Source present; not run. |
 | `brains-ai daemon start` | Start the Runtime daemon path. | Source/tests present; not run. |
 | `brains-ai service install|start|stop|restart|status|logs|uninstall` | Manage a user-level OS service. | Renderer/command tests present; installed state unverified. |
@@ -39,7 +39,7 @@ Do not use the removed `brains` executable. Legacy install helpers and the dev D
 
 ## Installation and package publication
 
-The public Python distribution is `brains-ai` and the recommended isolated installation is `pipx install brains-ai`. `brains-ai setup --path <workspace>` initializes local state and wiring; `brains-ai serve-all` starts the gateway, browser console, and MCP server. The opt-in `--service` setup flag installs the same supervised stack as a user-level autostart service.
+The public Python distribution is `brains-ai` and the recommended isolated installation is `pipx install brains-ai`. `brains-ai setup --path <workspace>` initializes local state and wiring; `brains-ai serve-all` starts the gateway (including the `/app` console) and the MCP server. The opt-in `--service` setup flag installs the same supervised stack as a user-level autostart service.
 
 For a file-backed SQLite URL, storage bootstrap creates the database's missing parent directory before SQLAlchemy opens the file. A first run on a clean home directory therefore creates `~/.brains` itself; in-memory and SQLite `file:` URI databases are left to SQLite's own handling.
 
@@ -49,8 +49,8 @@ For a file-backed SQLite URL, storage bootstrap creates the database's missing p
 
 | Process/surface | Default bind/port | Primary routes | Notes |
 |---|---|---|---|
-| Gateway | `127.0.0.1:8787` | `/health`, `/v1/*`, `/app*`, `/admin*`, `/hooks/*`, `/relay/*` | Modern Brains surface and model gateway. |
-| Legacy dashboard | `127.0.0.1:9876` | `/dashboard*`, `/admin*` | Separate process; not the Runtime daemon API. |
+| Gateway | `127.0.0.1:8787` | `/health`, `/v1/*`, `/app*`, `/admin*`, `/hooks/*`, `/relay/*` | Modern Brains surface and model gateway; legacy `/admin` HTML redirects to `/app` unless `BRAINS_LEGACY_SURFACES=1`. |
+| Legacy dashboard | `127.0.0.1:9876` | `/dashboard*`, `/admin*` | Separate retired process; started only via `serve-all --dashboard` or `BRAINS_LEGACY_SURFACES=1`. |
 | MCP SSE | port `9877`; bind controlled by MCP settings | `/sse` transport | Public bind requires explicit opt-in and still requires auth. |
 | wa-web sidecar | `8788` by default | `/health`, `/send` | Separate Node service. |
 
@@ -431,6 +431,52 @@ Tool selection:
 - comma-separated names: explicit allowlist.
 
 For shared or exposed environments, prefer the smallest allowlist that supports the operator workflow.
+
+### Experimental gate
+
+Some surfaces are real but not yet mature (unproven end to end, evidence below E3, or a cooperative enforcement boundary). The normal install hides and refuses them; an explicit environment flag is the only opt-in, and every refusal names its switch. The registry lives in `brains.experimental`.
+
+`BRAINS_MCP_EXPERIMENTAL=1` enables:
+
+- the experimental MCP tools: `search_semantic`, `graph_build`, `graph_query`, `graph_neighbors`, `graph_path`, `graph_subsystems`, `graph_export`, and `session_message`;
+- Autopilot *scheduled auto-fire* (the MCP scheduler's due loop); manual fire stays ungated;
+- the CLI equivalents: `graph-*`, `docs-index`, `embed-repo`, `search-semantic`.
+
+An explicit `BRAINS_MCP_TOOLS` allowlist does not bypass this gate — only the environment flag does.
+
+`BRAINS_LEGACY_SURFACES=1` enables:
+
+- the legacy dashboard child (`serve-all --dashboard` also works; `--no-dashboard` vetoes both);
+- the gateway's legacy `/admin` HTML pages (otherwise they redirect to `/app`; non-GET answers 404). The `/admin/api/*` JSON surface stays available either way.
+
+`BRAINS_EXPERIMENTAL_GATEWAY=1` enables:
+
+- the model-serving surface: the OpenAI/Anthropic-compatible proxy routes (`/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages`, `/v1/models`, `/v1/count_tokens`) and the `brains-ai run <tool>` launcher. Disabled, those routes answer 404 with a pointer to this switch; model access is expected to come from each CLI's own provider logins. The native control-plane API (`/v1/sessions`, `/v1/admin/*`, coordination, webhooks) and the console are unaffected.
+
+Optional pip extras (`telegram`, `slack`, `whatsapp`, `whatsapp_web`, `postgres`, `otel`, `litellm`) remain install-gated through `brains-ai features`, and their wizard labels carry `(experimental)` — enabling one is an explicit act already.
+
+### Agent-to-agent comms
+
+The coordination plane carries four comms primitives alongside tasks/claims/handoffs. All are mailbox-centric by design — an agent only ever polls its own inbox:
+
+- **Discovery** — `list_live_agents` (MCP) / `brains-ai live-agents` returns every live session on the brain across all workspaces with its harness (`tool`), state, and freshness. Live means not ended and active within `BRAINS_TOPIC_BLAST_TTL` seconds (default 900); freshness is the opportunistic heartbeat every brain tool call stamps.
+- **Direct + workspace mail** — existing `send_message`/`read_messages`; a message addressed via `workspace_path` reaches whatever session is alive in that workspace.
+- **Peer help** — existing `ask_peer`/`wait_for_request`/`answer_request`, now with an optional harness constraint: `required_tool="claude"` or `"not:copilot"` (case-insensitive). A session whose tool does not satisfy the constraint never claims the request; it stays open for a matching harness. This is the cross-CLI validation path (PR review asks, plan checks, adversarial passes) without either side sharing context.
+- **One poll primitive** — `inbox_wait` (MCP) / `brains-ai inbox-wait` blocks until the session has unread mail OR a claimable peer request, returning which woke it. Cadence remains operator/agent policy; this makes each tick latency-bounded instead of sleep-guessed.
+- **Attribution and dead handles are validated** — sends and asks from an ended session are refused; reading/polling an ended session errors loudly naming `ended_at`, the recorded reason, and live replacement candidates in the same workspace. Rerouting mail to a workspace's current live session is explicit sender opt-in (`route_to_current`) and only when exactly one candidate exists — silent rerouting is rejected by design.
+- **Topic boards** — `topic_post`/`topic_read`/`topic_list` (MCP) / `brains-ai topic-post|topic-read|topic-list`. Topics are install-wide named boards; posts may thread via `reply_to`. Posting blasts exactly one `kind="topic"` inbox notification per *other* workspace with live sessions — never the poster's own — so scenario 5's simplification holds: agents poll only their inbox. The board itself is the archive for workspaces that were quiet at post time. `required_tool` on a post is an advisory hint in this slice; enforced claiming is exclusive to peer help.
+
+Topic posts are an append-only archive like knowledge entries — no unresolved-work lifecycle — so they sit outside the coordination-queue health families by design.
+
+### Outbound email
+
+Brains can send plain-text email over SMTP (stdlib only; Amazon SES works through its SMTP endpoint, so SES is configuration, not code). Disabled until `BRAINS_SMTP_HOST` is set; credentials may be `"${ENV_NAME}"` refs resolved from the environment / `secrets.env` and are never logged or echoed in errors.
+
+- `mail_send` (MCP) / `brains-ai mail-send` — one mail; audited via the events ledger (`email_sent`, recipient + subject, never body).
+- `mail_status` (MCP) / `brains-ai mail-status` — redacted configuration snapshot.
+- ASKs are copied to `BRAINS_OPERATOR_NOTIFY_EMAIL` best-effort when the mailer is configured; an email outage never blocks or fails an ask (the durable row is authoritative).
+
+Enforcement truthfulness: sends are config-gated and audited but not yet routed through the governed-action approval contract — treat this as an operator-trusted surface until that lands.
 
 ## Service operation
 
