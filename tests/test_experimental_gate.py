@@ -90,9 +90,15 @@ def test_gateway_admin_html_redirects_to_app_when_retired(gateway_client):
     assert response.headers["location"] == "/app"
 
 
-def test_gateway_admin_html_post_answers_404_when_retired(gateway_client):
-    response = gateway_client.post("/admin/login", data={"key": "nope"})
+def test_gateway_legacy_admin_post_answers_404_when_retired(gateway_client):
+    response = gateway_client.post("/admin/config", data={})
     assert response.status_code == 404
+
+
+def test_gateway_admin_login_remains_core_when_legacy_ui_is_retired(gateway_client):
+    response = gateway_client.post("/admin/login", data={"key": "nope"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/admin/login?error=")
 
 
 def test_gateway_admin_html_served_when_opted_in(monkeypatch):

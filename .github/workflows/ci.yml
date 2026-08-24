@@ -330,7 +330,7 @@ jobs:
         # (e.g. the dropped `brains` vs `brains-ai`) only fails at container
         # start. This job catches that class of regression by starting the
         # image and waiting for the container's own HEALTHCHECK (which probes
-        # the gateway plus dashboard and MCP listeners) to report healthy. We use the
+        # the gateway plus MCP listener) to report healthy. We use the
         # internal healthcheck rather than an external curl because serve-all
         # binds to loopback inside the container by default.
         run: |
@@ -350,7 +350,7 @@ jobs:
             echo "::error::image did not become healthy (entrypoint/serve-all broken); status=$status"
             exit 1
           fi
-          echo "ok: image starts and all serve-all children are healthy"
+          echo "ok: image starts and default serve-all children are healthy"
       - name: Capture container logs
         if: failure()
         run: docker logs brains-smoke > docker-smoke.log 2>&1 || true

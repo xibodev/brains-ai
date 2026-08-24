@@ -12,6 +12,8 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -21,6 +23,7 @@ import brains.context.repo_indexer as repo_indexer_module
 import brains.control.events as events_module
 import brains.control.recurring as recurring_module
 import brains.control.sessions as sessions_module
+import brains.control.webhooks as webhooks_module
 import brains.storage.db as db_module
 import brains.storage.migrations as migrations_module
 from brains.api.auth import mint_browser_token, reset_rate_limit_state
@@ -42,6 +45,7 @@ def isolated_db(tmp_path, monkeypatch):
         sessions_module,
         events_module,
         recurring_module,
+        webhooks_module,
         repo_indexer_module,
     ):
         if hasattr(module, "engine"):
@@ -86,6 +90,10 @@ def test_admin_reap_closes_zombie_sessions(isolated_db, tmp_path) -> None:
         row = session.query(AgentSession).filter(AgentSession.id == result["session_id"]).one()
         row.pid = 999999999
         row.ended_at = None
+        # Reaper contract: an impossible PID is insufficient by itself;
+        # the opportunistic heartbeat must also be stale.
+        row.last_activity_at = datetime.now(UTC) - timedelta(hours=2)
+        row.started_at = datetime.now(UTC) - timedelta(hours=2)
         session.commit()
 
     client = _authed_client()

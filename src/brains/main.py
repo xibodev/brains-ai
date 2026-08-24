@@ -149,12 +149,17 @@ async def _copilot_path_alias(request, call_next):
 # /admin/api/* are untouched — the legacy dashboard app (itself opt-in via
 # BRAINS_LEGACY_SURFACES / serve-all --dashboard) still consumes them.
 _LEGACY_ADMIN_PREFIX = "/admin"
+_CORE_ADMIN_AUTH_PATHS = frozenset({"/admin/login", "/admin/logout"})
 
 
 @app.middleware("http")
 async def _retire_legacy_admin_html(request, call_next):
     path = request.url.path
-    legacy_html = path.startswith(_LEGACY_ADMIN_PREFIX) and not path.startswith("/admin/api")
+    legacy_html = (
+        path.startswith(_LEGACY_ADMIN_PREFIX)
+        and not path.startswith("/admin/api")
+        and path not in _CORE_ADMIN_AUTH_PATHS
+    )
     if legacy_html and not legacy_surfaces_enabled():
         if request.method in ("GET", "HEAD"):
             from starlette.responses import RedirectResponse
