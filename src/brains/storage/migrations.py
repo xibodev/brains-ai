@@ -112,6 +112,21 @@ SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
 SEVERITY_INFO = "info"
 
+# One development-only migration body reached this machine's live store before
+# 139 was committed and released. The draft added ``help_requests.required_tool``
+# directly; the immutable release moved that state into the additive
+# ``help_request_constraints`` table so the frozen baseline did not drift.
+#
+# This allowlist is intentionally exact and backend-specific. It does NOT turn
+# checksum mismatches into warnings generally: every other migration/checksum
+# pair remains a hard refusal. Migration 140 converges the leaked draft schema
+# to the released shape and preserves any populated constraint values.
+_PRE_RELEASE_CHECKSUM_COMPAT: dict[tuple[str, str], frozenset[str]] = {
+    ("139_agent_comms", "sqlite"): frozenset(
+        {"af734f5b5ba05f3ff9a6439e6f6e825b7b65bcecf795bd5e94eaefdc48cfb05e"}
+    ),
+}
+
 
 class MigrationError(RuntimeError):
     """Base class for every refusal raised by the migration runner."""
@@ -700,6 +715,24 @@ def _settle_recorded(
         return _legacy_adoption(active, spec, backend, findings), True
     expected = spec.checksum_for(row.backend or backend)
     if row.checksum != expected:
+        accepted = _PRE_RELEASE_CHECKSUM_COMPAT.get(
+            (spec.migration_id, row.backend or backend), frozenset()
+        )
+        if row.checksum in accepted:
+            findings.append(
+                MigrationFinding(
+                    code="pre_release_checksum_accepted",
+                    severity=SEVERITY_WARNING,
+                    migration_id=spec.migration_id,
+                    detail=(
+                        "accepted one exact pre-release SQLite checksum leaked before "
+                        "the immutable migration was published; migration "
+                        "140_agent_comms_repair converges that draft schema without "
+                        "rewriting the ledger"
+                    ),
+                )
+            )
+            return row.effective_status, False
         raise MigrationChecksumError(
             f"migration {spec.migration_id} was applied with checksum {row.checksum} but the "
             f"shipped implementation hashes to {expected}. A migration a database has already "

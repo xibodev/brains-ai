@@ -112,7 +112,7 @@ HISTORICAL_LEDGER_IDS = (
 
 #: Deltas shipped in THIS generation that postdate the checksum regime: they
 #: must run for real everywhere, never adopted as legacy evidence.
-POST_CHECKSUM_DELTAS = ("139_agent_comms",)
+POST_CHECKSUM_DELTAS = ("139_agent_comms", "140_agent_comms_repair")
 
 _LEGACY_LEDGER_DDL = """
 CREATE TABLE schema_versions (
@@ -491,6 +491,70 @@ def test_edited_historical_migration_is_refused(isolated_db):
     status = migration_status()
     assert status["healthy"] is False
     assert status["findings"][0]["code"] == "runner_refused"
+
+
+def test_only_exact_leaked_139_checksum_is_repaired(isolated_db):
+    """The development leak is accepted narrowly and converged by migration 140."""
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "INSERT INTO help_requests "
+            "(code, subject, question, status, ask_depth, created_at, expires_at) "
+            "VALUES ('HR-DRAFT', 'draft', 'draft?', 'open', 1, ?, ?)",
+            ("2026-01-01T00:00:00+00:00", "2030-01-01T00:00:00+00:00"),
+        )
+        # Reproduce the pre-release draft shape and ledger state: direct column,
+        # no side table/index, and the exact checksum observed on the live store.
+        conn.execute("DELETE FROM schema_versions WHERE version = '140_agent_comms_repair'")
+        conn.execute("DROP TABLE help_request_constraints")
+        conn.execute("DROP INDEX ix_topic_posts_from_workspace_id")
+        conn.execute("ALTER TABLE help_requests ADD COLUMN required_tool VARCHAR(64)")
+        conn.execute(
+            "UPDATE help_requests SET required_tool = 'not:copilot' WHERE code = 'HR-DRAFT'"
+        )
+        conn.execute(
+            "UPDATE schema_versions SET checksum = ? WHERE version = '139_agent_comms'",
+            ("af734f5b5ba05f3ff9a6439e6f6e825b7b65bcecf795bd5e94eaefdc48cfb05e",),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    report = run_migrations()
+    assert report.healthy is True
+    assert "140_agent_comms_repair" in report.executed
+    assert any(f.code == "pre_release_checksum_accepted" for f in report.findings)
+
+    conn = _connect(isolated_db)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(help_requests)")}
+        assert "required_tool" not in columns
+        assert conn.execute(
+            "SELECT required_tool FROM help_request_constraints WHERE request_code = 'HR-DRAFT'"
+        ).fetchone() == ("not:copilot",)
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(topic_posts)").fetchall()}
+        assert "ix_topic_posts_from_workspace_id" in indexes
+    finally:
+        conn.close()
+
+
+def test_unknown_139_checksum_is_still_refused(isolated_db):
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "UPDATE schema_versions SET checksum = ? WHERE version = '139_agent_comms'",
+            ("f" * 64,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    with pytest.raises(MigrationChecksumError, match="139_agent_comms"):
+        init_db()
 
 
 def test_interrupted_migration_is_reported_and_retried(isolated_db):
