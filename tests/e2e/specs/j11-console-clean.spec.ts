@@ -45,7 +45,7 @@ test('J11 (F0.2) the canonical command center persists across a full reload', as
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
 });
 
-test('J11 workspace-first shell is responsive and Labs fails closed', async ({ page, consoleGuard }) => {
+test('J11 workspace-first shell is responsive and reports the explicit Labs gate', async ({ page, consoleGuard }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/app/command-center');
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
@@ -60,24 +60,27 @@ test('J11 workspace-first shell is responsive and Labs fails closed', async ({ p
     labs_enabled: boolean;
     data: Array<Record<string, unknown>>;
   };
-  expect(body.labs_enabled).toBe(false);
+  // The E2E harness opts into Labs so J1-J10 can exercise those gated screens.
+  // Default-off behavior is covered by the operator API and gate unit tests.
+  expect(body.labs_enabled).toBe(true);
   expect(body.data.every((row) => !('command' in row) && !('argv' in row))).toBe(true);
 
   await page.goto('/app/labs');
-  await expect(page).toHaveURL(/\/app\/command-center$/);
-  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Labs' })).toBeVisible();
   consoleGuard.assertClean();
 });
 
 test('J11 Act uses typed HTTP and leaves host actions disabled', async ({ page, consoleGuard }) => {
   const title = `Typed browser task ${Date.now()}`;
-  await page.goto('/app/act?capability=task.create&workspace=demo-workspace');
+  await page.goto('/app/act?capability=task.create&workspace=not-visible');
   const sheet = page.locator('.operator-action-sheet');
   await expect(sheet.getByRole('heading', { name: 'Create task' })).toBeVisible();
+  const workspace = await sheet.getByLabel('Workspace').inputValue();
+  expect(workspace).not.toBe('not-visible');
   await sheet.getByLabel('Title').fill(title);
   const [created] = await Promise.all([
     page.waitForResponse((response) =>
-      response.url().includes('/v1/operator/workspaces/demo-workspace/tasks') &&
+      response.url().includes(`/v1/operator/workspaces/${encodeURIComponent(workspace)}/tasks`) &&
       response.request().method() === 'POST',
     ),
     sheet.getByRole('button', { name: 'Create task', exact: true }).click(),

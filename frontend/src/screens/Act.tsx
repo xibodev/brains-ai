@@ -91,7 +91,10 @@ function capabilityDescription(key: string): string {
 }
 
 function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { capability: OperatorCapability; workspaces: OperatorWorkspace[]; initialWorkspace?: string; navigate: (to: string) => void }) {
-  const [workspace, setWorkspace] = useState(initialWorkspace || workspaces[0]?.slug || "");
+  const visibleInitialWorkspace = workspaces.some((row) => row.slug === initialWorkspace)
+    ? initialWorkspace!
+    : workspaces[0]?.slug || "";
+  const [workspace, setWorkspace] = useState(visibleInitialWorkspace);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [sessionId, setSessionId] = useState("");

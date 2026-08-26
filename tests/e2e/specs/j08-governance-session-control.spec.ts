@@ -48,7 +48,7 @@ test('J8.2 unsupported chat is explicit and stop is durably idempotent', async (
 
   await page.goto('/app/labs/sessions');
   await page.locator('.card-list .softcard').first().click();
-  await page.getByRole('button', { name: /open in chat/i }).click();
+  await page.getByRole('button', { name: /message session/i }).click();
   await expect(page.getByText(/messaging is unavailable/i)).toBeVisible();
   await expect(page.getByPlaceholder(/this agent cannot receive messages/i)).toBeDisabled();
 

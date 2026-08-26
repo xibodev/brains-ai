@@ -2,7 +2,6 @@ import { useState } from "react";
 import { api } from "../api/client";
 import type { Session, SessionEvent } from "../api/types";
 import { useOrg } from "../store/OrgContext";
-import { useDock } from "../store/DockContext";
 import { useAsync } from "../store/useAsync";
 import { useTopic } from "../realtime/useRealtime";
 import { ScreenHead } from "./ScreenHead";
@@ -12,10 +11,9 @@ import { AsyncBoundary } from "../components/EmptyState";
 import { useToast } from "../components/Toast";
 import { relativeTime } from "../components/format";
 
-// Sessions — list → read-centric detail (event stream). Steering is the dock.
+// Labs Session view: read-centric detail plus truthful, capability-gated messaging.
 export function Sessions() {
   const { activeOrg } = useOrg();
-  const { openInChat } = useDock();
   const { toast } = useToast();
   const [selected, setSelected] = useState<Session | null>(null);
 
@@ -77,8 +75,8 @@ export function Sessions() {
             <div>
               {selected ? (
                 <SessionDetail
+                  key={String(selected.id)}
                   session={selected}
-                  onOpenChat={() => openInChat(selected.id)}
                   onStop={() => void stop(selected)}
                 />
               ) : (
@@ -94,26 +92,54 @@ export function Sessions() {
 
 function SessionDetail({
   session,
-  onOpenChat,
   onStop,
 }: {
   session: Session;
-  onOpenChat: () => void;
   onStop: () => void;
 }) {
+  const { toast } = useToast();
+  const [messagingOpen, setMessagingOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const events = useAsync<SessionEvent[]>(
     () => api.sessionEvents(session.id, { limit: "100" }),
     [session.id],
   );
   useTopic([`session/${session.id}/stdout`], () => events.refetch());
 
+  const capability = session.message_capability;
+  const ended = session.status === "ended" || Boolean(session.ended_at);
+  const blockedReason = capability?.supported === true
+    ? null
+    : capability?.reason || "the runtime did not report an interactive input channel";
+  const composerDisabled = ended || Boolean(blockedReason) || sending;
+
+  const send = async () => {
+    const text = draft.trim();
+    if (!text || composerDisabled) return;
+    setSending(true);
+    try {
+      const command = await api.messageSession(session.id, text, crypto.randomUUID());
+      if (command.status === "failed") {
+        toast(command.error ?? "The message could not be delivered");
+      } else {
+        setDraft("");
+        toast(command.status === "acknowledged" ? "Message delivered" : "Message queued");
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : "Message failed to send");
+    } finally {
+      setSending(false);
+    }
+  };
+
   return (
     <div>
       <div className="row spread" style={{ marginBottom: 12 }}>
         <h2>{session.persona_name ?? `Session ${session.id}`}</h2>
         <div className="row">
-          <button className="btn small" onClick={onOpenChat}>
-            Open in chat
+          <button className="btn small" onClick={() => setMessagingOpen((open) => !open)}>
+            {messagingOpen ? "Hide messaging" : "Message session"}
           </button>
           {(session.state === "running" || session.status === "running") && (
             <button className="btn small danger" onClick={onStop}>
@@ -130,6 +156,36 @@ function SessionDetail({
           <span className="meta">{Math.round(session.duration_seconds)}s</span>
         )}
       </div>
+      {messagingOpen && (
+        <SoftCard style={{ marginBottom: 16 }}>
+          {blockedReason && (
+            <div className="meta" role="note" style={{ marginBottom: 8 }}>
+              Messaging is unavailable for this session: {blockedReason}
+            </div>
+          )}
+          <div className="composer" style={{ padding: 0, borderTop: 0 }}>
+            <textarea
+              value={draft}
+              placeholder={
+                blockedReason
+                  ? "this agent cannot receive messages"
+                  : ended
+                    ? "this session has ended"
+                    : "message session..."
+              }
+              disabled={composerDisabled}
+              onChange={(event) => setDraft(event.target.value)}
+            />
+            <button
+              className="btn primary"
+              disabled={composerDisabled || !draft.trim()}
+              onClick={() => void send()}
+            >
+              {sending ? "Sending..." : "Send"}
+            </button>
+          </div>
+        </SoftCard>
+      )}
       <div className="eyebrow" style={{ marginBottom: 8 }}><span>Event stream</span></div>
       <SoftCard>
         {(events.data ?? []).length === 0 ? (
