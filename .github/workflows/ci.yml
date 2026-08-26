@@ -374,6 +374,7 @@ jobs:
       BRAINS_E2E_BASE_URL: http://127.0.0.1:8810
       BRAINS_E2E_KEY: ci-e2e-key
       BRAINS_PREWARM_INDEX_ON_SESSION: "0"
+      BRAINS_UI_LABS: "1"
     steps:
       - uses: actions/checkout@v4
 

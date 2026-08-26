@@ -12,6 +12,7 @@ UP = ROOT / "sandbox" / "pivot" / "try" / "up.ps1"
 DOWN = ROOT / "sandbox" / "pivot" / "try" / "down.ps1"
 STACK = ROOT / "tests" / "e2e" / "fixtures" / "stack.ts"
 GLOBAL_SETUP = ROOT / "tests" / "e2e" / "fixtures" / "global-setup.ts"
+CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def _text(path: Path) -> str:
@@ -39,6 +40,13 @@ def test_windows_e2e_stack_uses_a_simulated_runtime() -> None:
     assert "UVICORN_" in script
     assert "WEB_CONCURRENCY" in script
     assert '"--workers", "1"' in script
+    assert '$env:BRAINS_UI_LABS = "1"' in script
+
+
+def test_ci_e2e_stack_enables_the_labs_routes_the_suite_exercises() -> None:
+    workflow = _text(CI)
+
+    assert 'BRAINS_UI_LABS: "1"' in workflow
 
 
 def test_windows_e2e_stack_guards_the_worktree() -> None:
