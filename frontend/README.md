@@ -40,18 +40,18 @@ The dev server proxies `/v1` to `http://127.0.0.1:8080`. That differs from the g
 |---|---|
 | `src/api` | Typed `/v1` fetch client and product types |
 | `src/realtime` | Multiplexed `/v1/ws` client, the wire contract in `protocol.ts` (server-derived topic map, cursor, duplicate window), and topic hooks |
-| `src/store` | Active Org, chat dock, and async state |
-| `src/components` | Shell, cards, board, dialogs, chat, approvals, navigation |
-| `src/screens` | Inbox, Sessions, Personas, Pods, Projects, Issues, Automation, Runtimes, Config, Settings, Onboarding |
+| `src/store` | Operator capability/Labs state, active Org for Access/Labs, and async state |
+| `src/components` | Workspace-first shell, operator primitives, dialogs, legacy Labs components, navigation |
+| `src/screens` | Command Center, Workspaces, Coordination, Governance, Operations, Act, plus explicitly gated Labs screens |
 | `src/styles` | Tokens and application styles |
 
 The complete route and client/server contract is in [Traceability](../docs/product/TRACEABILITY.md).
 
 ## Current limitations
 
-- Entity deep-route parameters are generally declared but not consumed by their screens; the generated traceability gate holds that list explicit rather than letting it drift.
+- Labs Session, Persona, and Runtime deep-route parameters remain declared but unconsumed; the generated traceability gate holds that list explicit.
 - Chat is not delivered to a shipped agent CLI, because none is launched with an open input channel.
-- Config is read-mostly and several sections are informational.
+- Host-level Operations actions remain disabled until typed preview/confirmation contracts exist.
 - Some request failures can appear as empty lists.
 
 Frontend work must map to Feature/Journey/AC IDs and follow [Quality Gates](../docs/QUALITY_GATES.md).

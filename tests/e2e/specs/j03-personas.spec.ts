@@ -36,7 +36,7 @@ async function selectSimulatedRuntime(page: Page) {
 }
 
 test('J3.1 (F2.1) New-persona form derives the Model dropdown from the chosen runtime', async ({ page }) => {
-  await page.goto('/app/personas');
+  await page.goto('/app/labs/personas');
   await page.getByRole('button', { name: /new persona|\+ new/i }).first().click();
 
   // Selecting a runtime must populate a real Model <select> (not a free-text input).
@@ -51,7 +51,7 @@ test('J3.2 (F2.4) A persona can be deleted/archived from the UI', async ({ page 
   // Self-contained: create a throwaway persona via the cascade, then delete it
   // (so the test is repeatable and never depletes seeded data).
   const name = `ephemeral-${Date.now()}`;
-  await page.goto('/app/personas');
+  await page.goto('/app/labs/personas');
   await page.getByRole('button', { name: /new persona|\+ new/i }).first().click();
   await page.getByLabel(/^name/i).fill(name);
   await selectSimulatedRuntime(page);

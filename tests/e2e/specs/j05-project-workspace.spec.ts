@@ -16,7 +16,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('J5.1 project creation persists the selected workspace', async ({ page }) => {
-  await page.goto('/app/projects');
+  await page.goto('/app/labs/projects');
   await page.getByRole('button', { name: /new project/i }).first().click();
 
   const name = `Workspace project ${Date.now()}`;
@@ -30,13 +30,13 @@ test('J5.1 project creation persists the selected workspace', async ({ page }) =
   const project = await response.json();
 
   await expect(page.getByText(name).first()).toBeVisible();
-  await page.goto(`/app/projects/${project.code}`);
+  await page.goto(`/app/labs/projects/${project.code}`);
   await expect(page.getByRole('heading', { name })).toBeVisible();
   await expect(page.locator('[data-testid="project-workspace"]')).toContainText('E2E Workspace');
 });
 
 test('J5.2 an unknown project deep link says not found', async ({ page, consoleGuard }) => {
-  await page.goto('/app/projects/PRJ-NOT-REAL');
+  await page.goto('/app/labs/projects/PRJ-NOT-REAL');
   await expect(page.locator('[data-testid="project-not-found"]')).toContainText('PRJ-NOT-REAL');
   consoleGuard.assertClean();
 });

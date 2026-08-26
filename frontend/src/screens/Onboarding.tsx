@@ -155,23 +155,16 @@ export function Onboarding() {
       });
     });
 
-  const runtimeConnected = () =>
+  const runtimeConnected = (runtime: Runtime) =>
     guarded("Connect machine", async () => {
       setConnectOpen(false);
       const list = await api.listRuntimes().catch(() => [] as Runtime[]);
       setRuntimes(list);
-      const online = list.find((r) => r.status === "online") ?? list[0];
-      if (!online) {
-        await record("runtime", {
-          status: "failed",
-          error: "No runtime registered yet — the daemon has not checked in.",
-        });
-        return;
-      }
+      setRuntimeId(String(runtime.id));
       await record("runtime", {
         status: "done",
-        runtime_id: Number(online.id),
-        entity_ref: online.slug,
+        runtime_id: Number(runtime.id),
+        entity_ref: runtime.slug,
       });
     });
 
@@ -235,7 +228,7 @@ export function Onboarding() {
   const leave = () =>
     guarded("Leave onboarding", async () => {
       if (attempt) await api.abandonOnboarding(attempt.attempt_id);
-      navigate("/issues");
+      navigate("/labs/issues");
     });
 
   const rail = STEP_RAIL[step] ?? STEP_RAIL.done;
@@ -280,7 +273,7 @@ export function Onboarding() {
                 className="btn primary"
                 onClick={() => {
                   refresh();
-                  navigate("/issues");
+                  navigate("/labs/issues");
                 }}
               >
                 Open the board ▷
@@ -353,7 +346,8 @@ export function Onboarding() {
             <ConnectMachineModal
               open={connectOpen}
               onClose={() => setConnectOpen(false)}
-              onConnected={() => void runtimeConnected()}
+              onConnected={(runtime) => void runtimeConnected(runtime)}
+              orgId={attempt.org_id ?? undefined}
             />
           </SoftCard>
         )}

@@ -1,7 +1,7 @@
 """Tests for ``brains wire`` — the agentic-tool auto-discovery layer.
 
 Everything is exercised against a synthetic ``home`` (tmp_path) with the
-three tier-1 tool dirs present, mimicking a clean-slate machine — the same
+four tier-1 tool dirs present, mimicking a clean-slate machine — the same
 shape the Docker sandbox uses — so no real config is ever touched.
 """
 
@@ -23,6 +23,7 @@ def home(tmp_path: Path) -> Path:
     (tmp_path / ".copilot").mkdir()
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".codex").mkdir()
+    (tmp_path / ".config" / "opencode").mkdir(parents=True)
     return tmp_path
 
 
@@ -59,12 +60,13 @@ def test_wirecontext_default_db_url_is_canonical_not_cwd_relative() -> None:
 # --- detection ------------------------------------------------------------
 
 
-def test_detects_all_three_on_clean_slate(home: Path) -> None:
+def test_detects_all_four_on_clean_slate(home: Path) -> None:
     report = wire.status(home)
     by = {t["tool"]: t for t in report["tools"]}
     assert by["copilot-cli"]["detected"] is True
     assert by["claude-code"]["detected"] is True
     assert by["codex"]["detected"] is True
+    assert by["opencode"]["detected"] is True
     # Nothing wired yet.
     assert all(not t["mcp_wired"] and not t["rule_wired"] for t in report["tools"])
 
@@ -106,6 +108,18 @@ def test_codex_sse_schema(home: Path) -> None:
     assert 'bearer_token = "TESTKEY"' in text
 
 
+def test_opencode_sse_schema(home: Path) -> None:
+    wire.wire(home, _sse_ctx(), rules=False)
+    data = json.loads((home / ".config" / "opencode" / "opencode.json").read_text())
+    entry = data["mcp"]["brains"]
+    assert entry["type"] == "remote"
+    assert entry["url"] == "http://127.0.0.1:9877/sse"
+    assert entry["headers"]["Authorization"] == "Bearer TESTKEY"
+    assert entry["oauth"] is False
+    assert entry["enabled"] is True
+    assert entry["_brains_managed"] is True
+
+
 def test_codex_sse_flags_experimental(home: Path) -> None:
     report = wire.wire(home, _sse_ctx(), tools=["codex"])
     codex = report["tools"][0]
@@ -140,6 +154,22 @@ def test_codex_stdio_schema(home: Path) -> None:
     assert 'BRAINS_DB_URL = "sqlite:////root/.brains/brains.db"' in text
 
 
+def test_opencode_stdio_schema(home: Path) -> None:
+    wire.wire(home, _stdio_ctx(), rules=False)
+    data = json.loads((home / ".config" / "opencode" / "opencode.json").read_text())
+    entry = data["mcp"]["brains"]
+    assert entry["type"] == "local"
+    assert entry["command"] == [
+        "/usr/bin/python3",
+        "-m",
+        "brains.mcp.server",
+        "--mode",
+        "stdio",
+    ]
+    assert entry["environment"]["BRAINS_DB_URL"] == "sqlite:////root/.brains/brains.db"
+    assert entry["enabled"] is True
+
+
 # --- rule injection -------------------------------------------------------
 
 
@@ -149,6 +179,7 @@ def test_rule_injected_into_instruction_files(home: Path) -> None:
         ".copilot/copilot-instructions.md",
         ".claude/CLAUDE.md",
         ".codex/AGENTS.md",
+        ".config/opencode/AGENTS.md",
     ):
         text = (home / rel).read_text()
         assert wire.MD_START in text and wire.MD_END in text
@@ -229,6 +260,24 @@ def test_claude_unmanaged_entry_preserves_other_keys(home: Path) -> None:
     assert data["mcpServers"]["brains"]["command"] == "mine"
 
 
+def test_opencode_unmanaged_entry_is_not_clobbered(home: Path) -> None:
+    cfg = home / ".config" / "opencode" / "opencode.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "theme": "system",
+                "mcp": {"brains": {"type": "local", "command": ["mine"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = wire.wire(home, _sse_ctx(), tools=["opencode"])
+    assert report["tools"][0]["mcp"]["action"] == "conflict"
+    data = json.loads(cfg.read_text())
+    assert data["theme"] == "system"
+    assert data["mcp"]["brains"]["command"] == ["mine"]
+
+
 def test_unwire_skips_unmanaged_json_entry(home: Path) -> None:
     cfg = home / ".copilot" / "mcp-config.json"
     cfg.write_text(json.dumps({"mcpServers": {"brains": {"command": "mine"}}}), encoding="utf-8")
@@ -252,7 +301,12 @@ def test_unparseable_json_is_not_truncated(home: Path) -> None:
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions only")
 def test_sse_configs_are_owner_only(home: Path) -> None:
     wire.wire(home, _sse_ctx(), rules=False)
-    for rel in (".copilot/mcp-config.json", ".claude.json", ".codex/config.toml"):
+    for rel in (
+        ".copilot/mcp-config.json",
+        ".claude.json",
+        ".codex/config.toml",
+        ".config/opencode/opencode.json",
+    ):
         mode = stat.S_IMODE((home / rel).stat().st_mode)
         assert mode == 0o600, f"{rel} is {oct(mode)}, expected 0o600"
 
@@ -268,6 +322,8 @@ def test_unwire_removes_everything(home: Path) -> None:
     # mcpServers key remains but without the brains entry.
     data = json.loads((home / ".claude.json").read_text())
     assert "brains" not in data.get("mcpServers", {})
+    opencode = json.loads((home / ".config" / "opencode" / "opencode.json").read_text())
+    assert "brains" not in opencode.get("mcp", {})
     # Codex sentinels are gone.
     assert wire.TOML_START not in (home / ".codex" / "config.toml").read_text()
 
@@ -292,3 +348,4 @@ def test_dry_run_writes_nothing(home: Path) -> None:
     wire.wire(home, _sse_ctx(), dry_run=True)
     assert not (home / ".copilot" / "mcp-config.json").exists()
     assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".config" / "opencode" / "opencode.json").exists()

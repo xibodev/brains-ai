@@ -13,7 +13,7 @@ from brains.storage.migrations import init_db
 from brains.storage.models import AgentTask, Workspace
 
 
-def _audit_actor(session_id: str | None) -> str:
+def _audit_actor(session_id: str | None, actor: str | None = None) -> str:
     """Map a session id to the audit-log ``actor`` field.
 
     Sessions identify themselves to brains via ``session_id``, so the
@@ -21,6 +21,8 @@ def _audit_actor(session_id: str | None) -> str:
     session (CLI verbs, the recurring-task scheduler) fall back to
     ``"system"`` so the audit log always has a non-empty actor.
     """
+    if actor:
+        return actor
     if session_id:
         return f"session:{session_id}"
     return "system"
@@ -61,6 +63,7 @@ def create_task(
     depends_on: str = "",
     tags: str = "",
     session_id: str | None = None,
+    actor: str | None = None,
 ) -> dict:
     if priority not in TASK_PRIORITIES:
         raise ValueError(f"priority must be one of {sorted(TASK_PRIORITIES)}")
@@ -94,7 +97,7 @@ def create_task(
         metadata={"code": code, "priority": priority},
     )
     audit_record(
-        actor=_audit_actor(session_id),
+        actor=_audit_actor(session_id, actor),
         action="task.create",
         workspace_id=workspace.id,
         payload={"code": code, "title": title, "priority": priority},
@@ -166,7 +169,7 @@ def list_tasks(
         return [_task_to_dict(row, workspace.slug) for row, workspace in rows]
 
 
-def claim_task(task_code: str, session_id: str) -> dict:
+def claim_task(task_code: str, session_id: str, actor: str | None = None) -> dict:
     now = utc_now()
     init_db()
     with SessionLocal() as session:
@@ -203,10 +206,21 @@ def claim_task(task_code: str, session_id: str) -> dict:
         session_id=session_id,
         metadata={"code": task_code},
     )
+    audit_record(
+        actor=_audit_actor(session_id, actor),
+        action="task.claim",
+        workspace_id=workspace_id,
+        payload={"code": task_code},
+    )
     return result
 
 
-def complete_task(task_code: str, session_id: str, summary: str = "") -> dict:
+def complete_task(
+    task_code: str,
+    session_id: str,
+    summary: str = "",
+    actor: str | None = None,
+) -> dict:
     now = utc_now()
     init_db()
     with SessionLocal() as session:
@@ -233,7 +247,7 @@ def complete_task(task_code: str, session_id: str, summary: str = "") -> dict:
         metadata={"code": task_code},
     )
     audit_record(
-        actor=_audit_actor(session_id),
+        actor=_audit_actor(session_id, actor),
         action="task.complete",
         workspace_id=workspace_id,
         payload={"code": task_code, "summary": summary},
@@ -241,7 +255,12 @@ def complete_task(task_code: str, session_id: str, summary: str = "") -> dict:
     return result
 
 
-def release_task(task_code: str, session_id: str, reason: str = "") -> dict:
+def release_task(
+    task_code: str,
+    session_id: str,
+    reason: str = "",
+    actor: str | None = None,
+) -> dict:
     init_db()
     with SessionLocal() as session:
         row = session.query(AgentTask).filter(AgentTask.code == task_code).one_or_none()
@@ -263,7 +282,7 @@ def release_task(task_code: str, session_id: str, reason: str = "") -> dict:
         metadata={"code": task_code, "reason": reason},
     )
     audit_record(
-        actor=_audit_actor(session_id),
+        actor=_audit_actor(session_id, actor),
         action="task.release",
         workspace_id=workspace_id,
         payload={"code": task_code, "reason": reason},

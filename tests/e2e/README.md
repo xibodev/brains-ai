@@ -6,7 +6,7 @@ verification_basis: candidate tree based on HEAD 7903eb55ce5fbe6e115169a90263d20
 
 # Brains browser journey contracts
 
-This Playwright suite exercises the modern `/app` console. Test files are contract presence (E2), not proof that the current SHA passed.
+This Playwright suite exercises the workspace-first `/app` console. Execution-model journeys use `/app/labs/*` and the isolated harness explicitly sets `BRAINS_UI_LABS=1`; that does not promote those screens into the normal product surface. Test files are contract presence (E2), not proof that the current SHA passed.
 
 ## Current spec coverage
 
@@ -41,9 +41,15 @@ Configuration:
 | `BRAINS_E2E_KEY` | `try-brains` | Sign-in key expected by fixtures |
 | `BRAINS_E2E_AUTO_STACK` | unset | When `1`, uses the Windows PowerShell global setup/teardown |
 | `BRAINS_E2E_STACK_NAME` | `trystack` | Lowercase slug for the owned temporary stack |
+| `BRAINS_E2E_SEED_CONTAINER` | unset | Docker container in which direct setup helpers run |
+| `BRAINS_E2E_SEED_STATE_DIR` | local temporary state | State path as seen inside that container |
 
 Auto-stack mode rejects non-loopback URLs and passes the configured port, key,
 and stack name to setup/teardown as one contract.
+
+When testing an already-running Docker stack, set both seed variables so setup
+helpers use the container's filesystem view. Do not open a bind-mounted SQLite
+WAL database from the host while the container is running.
 
 The repository's Windows auto-stack scripts:
 

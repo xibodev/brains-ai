@@ -783,16 +783,19 @@ def resolve_secret(raw_secret: str | None, *, touch: bool = True) -> CredentialR
     digest = hash_secret(raw_secret)
     if _negative_cached(digest):
         return None
-    record = _lookup(digest, touch=touch)
+    record = _lookup(digest, touch=False)
     if record is not None:
         return record
     # The secret may be one this process has not adopted yet (first request
     # after a key rotation, or a fresh operator key file). ``sync`` is itself
     # fingerprint-gated, so this is a no-op unless the sources actually moved.
-    if sync_local_credentials():
-        record = _lookup(digest, touch=touch)
-        if record is not None:
-            return record
+    # Always look again after synchronization. Another request may have won the
+    # sync lock and adopted this key while we waited; that request reports the
+    # change, while this one sees a no-op sync but must still observe the row.
+    sync_local_credentials()
+    record = _lookup(digest, touch=False)
+    if record is not None:
+        return record
     _remember_miss(digest)
     return None
 
@@ -804,11 +807,12 @@ def _lookup(digest: str, *, touch: bool) -> CredentialRecord | None:
         if row is None or not is_active(row):
             return None
         slug = _operator_slug(session, row.operator_id)
-        record = _to_record(row, slug)
-        if touch:
-            row.last_used_at = _utc_now()
-            session.commit()
-        return record
+        # Authentication is a read boundary. Synchronously updating
+        # last_used_at on every HTTP/SSE handshake made a valid credential
+        # acquire SQLite's single writer lock and could turn read traffic into
+        # a machine-wide outage. Keep the argument for API compatibility; usage
+        # telemetry must be sampled/batched outside credential resolution.
+        return _to_record(row, slug)
 
 
 def get_credential(credential_id: str) -> CredentialRecord | None:

@@ -68,19 +68,14 @@ def send_message(
             # Sending AS a session requires that session to be alive.
             require_live_session(session, from_session_id, action="send_message")
         if to_session_id:
-            recipient = (
-                session.query(AgentSession).filter(AgentSession.id == to_session_id).one_or_none()
-            )
-            ended = (
-                recipient is None
-                or recipient.ended_at is not None
-                or recipient.state
-                in (
-                    "completed",
-                    "failed",
+            try:
+                require_live_session(session, to_session_id, action="send_message")
+            except ValueError:
+                recipient = (
+                    session.query(AgentSession)
+                    .filter(AgentSession.id == to_session_id)
+                    .one_or_none()
                 )
-            )
-            if ended:
                 candidates: list[str] = []
                 if recipient is not None:
                     from brains.control.sessions import live_replacement_session_ids
@@ -157,6 +152,9 @@ def read_messages(
         # "empty inbox" and "dead handle".
         agent_session = require_live_session(session, session_id, action="read_messages")
         workspace_id = agent_session.workspace_id
+        from brains.control.sessions import predecessor_session_ids
+
+        recipient_ids = [session_id, *predecessor_session_ids(session, session_id)]
         # If the caller can't see the session's workspace, refuse the
         # read. We return an empty list rather than raising so callers
         # that poll for mail don't crash on a workspace they used to
@@ -167,10 +165,10 @@ def read_messages(
         if not include_read:
             query = query.filter(MailboxMessage.read_at.is_(None))
         if workspace_id is None:
-            query = query.filter(MailboxMessage.to_session_id == session_id)
+            query = query.filter(MailboxMessage.to_session_id.in_(recipient_ids))
         else:
             query = query.filter(
-                (MailboxMessage.to_session_id == session_id)
+                (MailboxMessage.to_session_id.in_(recipient_ids))
                 | (
                     MailboxMessage.to_session_id.is_(None)
                     & (MailboxMessage.workspace_id == workspace_id)
@@ -190,7 +188,7 @@ def read_messages(
             results.append(_message_to_dict(row, workspace_slugs[row.id]))
             if mark_read:
                 row.read_at = now
-        if mark_read and rows:
+        if session.dirty:
             session.commit()
     # Audit / adoption signal: every read_messages call emits a
     # ``message_read`` event tied to the caller session. Always emit (not
@@ -247,9 +245,14 @@ def inbox_wait(
         row = require_live_session(session, session_id, action="inbox_wait")
         workspace_id = row.workspace_id
         my_tool = row.tool
+        from brains.control.sessions import predecessor_session_ids
+
+        recipient_ids = [session_id, *predecessor_session_ids(session, session_id)]
         if workspace_id is not None:
             ws = session.query(Workspace).filter(Workspace.id == workspace_id).one_or_none()
             resolved_slug = ws.slug if ws else None
+        if session.dirty:
+            session.commit()
     from brains.control.memberships import visible_workspace_ids_for_current
 
     visible = visible_workspace_ids_for_current()
@@ -258,10 +261,10 @@ def inbox_wait(
         with SessionLocal() as session:
             q = session.query(MailboxMessage.id).filter(MailboxMessage.read_at.is_(None))
             if workspace_id is None:
-                q = q.filter(MailboxMessage.to_session_id == session_id)
+                q = q.filter(MailboxMessage.to_session_id.in_(recipient_ids))
             else:
                 q = q.filter(
-                    (MailboxMessage.to_session_id == session_id)
+                    (MailboxMessage.to_session_id.in_(recipient_ids))
                     | (
                         MailboxMessage.to_session_id.is_(None)
                         & (MailboxMessage.workspace_id == workspace_id)

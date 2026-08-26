@@ -285,13 +285,13 @@ verification_basis: working-tree candidate based on HEAD 51e039b61539c4d3e1ace39
 ## J8 - Ask, approve, steer, chat, and stop
 
 **Primary personas:** P1, P5, P7
-**Entry:** Inbox, Session detail, chat dock, bridge reply, or a gated action.
+**Entry:** Governance, a Workspace control room, a gated Labs Session detail, bridge reply, or a governed action.
 **Preconditions:** Active Session or open decision; authorized operator.
 
 **Actions**
 
 1. Agent files an Ask or governed action request.
-2. Inbox shows context, actor, Session, and proposed effect.
+2. Governance shows context, actor, Workspace/Session, and proposed effect or human question.
 3. Human answers, approves, edits, rejects, or defers.
 4. The decision is delivered exactly once.
 5. Optional chat reaches the running agent and is persisted.
@@ -315,7 +315,7 @@ verification_basis: working-tree candidate based on HEAD 51e039b61539c4d3e1ace39
 ## J9 - Configure providers and integrations
 
 **Primary personas:** P1, P2, P6
-**Entry:** Config screens, legacy admin, CLI feature/provider commands.
+**Entry:** Operations Configuration, legacy admin, CLI feature/provider commands.
 **Preconditions:** Authorized operator; required optional dependencies and external credentials are available when needed.
 
 **Actions**

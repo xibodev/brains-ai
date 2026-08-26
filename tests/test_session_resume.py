@@ -273,6 +273,13 @@ def test_append_event_without_session_id_skips_heartbeat(tmp_path):
     assert after == before
 
 
+def test_append_event_normalizes_blank_session_id_to_null() -> None:
+    row = append_event("blank_session", "legacy caller supplied blank id", session_id="  ")
+    with SessionLocal() as db:
+        persisted = db.get(type(row), row.id)
+        assert persisted.session_id is None
+
+
 def test_resume_packet_surfaces_last_activity(tmp_path):
     session = start_session(str(tmp_path), tool="pytest")
     sid = session["session_id"]

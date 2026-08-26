@@ -442,7 +442,10 @@ on every entry point and is the only startup path.
   without a migration fails at startup instead of at query time.
 - Migration `123_session_state` defaults all pre-existing rows to `running`; it does not derive terminal state from `ended_at` or terminal events. `brains-ai db repair` derives that state from recorded `session_end` / `session_reaped` events and reports the rest as ambiguous.
 - Migration `120_org_workspace` performs a one-time Workspace Org backfill; the generic Workspace registration path now also assigns the default Org, and `brains-ai db repair` backfills legacy Org-less rows.
-- SQLite sets WAL, `busy_timeout=5000`, and `synchronous=NORMAL`.
+- SQLite sets WAL, configurable `busy_timeout` (30 seconds by default via
+  `BRAINS_SQLITE_BUSY_TIMEOUT_MS`), and `synchronous=NORMAL`. The timeout is
+  installed before WAL negotiation on every connection so startup and ordinary
+  multi-agent writer bursts receive the same bounded wait.
 - SQLite foreign-key enforcement is off by default. Setting `BRAINS_SQLITE_ENFORCE_FOREIGN_KEYS=1` turns it on, and the connection hook then proves `PRAGMA foreign_key_check` is empty for that database before enabling it, raising instead of enforcing over a store that already violates its schema.
 
 Foreign-key enforcement is available but is not the default, because existing

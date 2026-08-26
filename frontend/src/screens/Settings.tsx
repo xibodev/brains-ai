@@ -29,7 +29,7 @@ export function Settings() {
       <MasterDetail
         items={SECTIONS}
         activeKey={section}
-        onSelect={(k) => navigate(`/settings/${k}`)}
+        onSelect={(k) => navigate(`/operations/access/${k}`)}
         railOnLeft
       >
         {section === "org" && <OrgSettings />}

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useOperator } from "../store/OperatorContext";
 
 interface Cmd {
   label: string;
@@ -8,24 +9,19 @@ interface Cmd {
 }
 
 const NAV_COMMANDS: Cmd[] = [
-  { label: "Inbox / Approvals", to: "/inbox", hint: "workspace" },
-  { label: "Sessions", to: "/sessions", hint: "workspace" },
-  { label: "Personas", to: "/personas", hint: "workspace" },
-  { label: "Pods", to: "/pods", hint: "workspace" },
-  { label: "Projects", to: "/projects", hint: "workspace" },
-  { label: "Issues board", to: "/issues", hint: "workspace" },
-  { label: "Runtimes", to: "/runtimes", hint: "configure" },
-  { label: "Config · Providers", to: "/config/providers", hint: "configure" },
-  { label: "Settings · Org", to: "/settings/org", hint: "configure" },
+  { label: "Command Center", to: "/command-center", hint: "view" },
+  { label: "Workspaces", to: "/workspaces", hint: "view" },
+  { label: "Coordination", to: "/coordination", hint: "view" },
+  { label: "Governance", to: "/governance", hint: "view" },
+  { label: "Operations", to: "/operations", hint: "view" },
 ];
 
-// ⌘K fuzzy nav across entities (WS4 §7). Nav-only for the static shell; entity
-// search slots in here once a search endpoint lands.
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const navigate = useNavigate();
+  const { catalog } = useOperator();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -42,11 +38,18 @@ export function CommandPalette() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return NAV_COMMANDS;
-    return NAV_COMMANDS.filter((c) => c.label.toLowerCase().includes(q));
-  }, [query]);
+  const commands = [
+    ...NAV_COMMANDS,
+    ...(catalog?.data ?? []).map((capability) => ({
+      label: capability.label,
+      to: `/act?capability=${encodeURIComponent(capability.key)}`,
+      hint: capability.enabled ? capability.scope : capability.transport.replace("_", " "),
+    })),
+  ];
+  const needle = query.trim().toLowerCase();
+  const results = needle
+    ? commands.filter((command) => command.label.toLowerCase().includes(needle))
+    : commands;
 
   if (!open) return null;
 
@@ -60,7 +63,7 @@ export function CommandPalette() {
       <div className="palette" onClick={(e) => e.stopPropagation()}>
         <input
           autoFocus
-          placeholder="Jump to…"
+          placeholder="Find a view or typed action"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, formatApiError } from "../api/client";
-import type { ConfigSummary, ReadinessReport, QueueHealthReport, RecoveryPolicyReport } from "../api/types";
+import type { ConfigSummary, EmailConfiguration, GeneralConfiguration, SecretConfiguration, ReadinessReport, QueueHealthReport, RecoveryPolicyReport } from "../api/types";
 import { useAsync } from "../store/useAsync";
 import { ScreenHead } from "./ScreenHead";
 import { MasterDetail, type RailItem } from "../components/MasterDetail";
@@ -9,6 +9,7 @@ import { SoftCard } from "../components/SoftCard";
 import { StatusPill } from "../components/StatusPill";
 import { AsyncBoundary } from "../components/EmptyState";
 import { useToast } from "../components/Toast";
+import { MaskedField, TextField, Toggle } from "../components/Field";
 
 // Config — real, read-mostly view of the gateway config (F7). Providers + gateway
 // posture come from GET /v1/config/summary; a provider's connectivity is probed
@@ -21,16 +22,18 @@ import { useToast } from "../components/Toast";
 // shows a secret and never claims readiness the backend did not report.
 
 const SECTIONS: RailItem[] = [
+  { key: "general", label: "Runtime overlay", section: "Config" },
   { key: "providers", label: "Providers", section: "Config" },
   { key: "models", label: "Models / Gateway", section: "Config" },
   { key: "mcp", label: "MCP servers", section: "Config" },
   { key: "integrations", label: "Integrations", section: "Config" },
   { key: "health", label: "Health & recovery", section: "Config" },
   { key: "secrets", label: "Secrets / Keys", section: "Config" },
+  { key: "email", label: "Email (SMTP / SES)", section: "Config" },
 ];
 
 export function Config() {
-  const { section = "providers" } = useParams();
+  const { section = "general" } = useParams();
   const navigate = useNavigate();
   const state = useAsync<ConfigSummary>(() => api.configSummary(), []);
 
@@ -40,11 +43,15 @@ export function Config() {
       <MasterDetail
         items={SECTIONS}
         activeKey={section}
-        onSelect={(k) => navigate(`/config/${k}`)}
+        onSelect={(k) => navigate(`/operations/config/${k}`)}
         railOnLeft
       >
-        {section === "health" ? (
+        {section === "general" ? (
+          <GeneralConfig />
+        ) : section === "health" ? (
           <Health />
+        ) : section === "email" ? (
+          <EmailConfig />
         ) : (
           <AsyncBoundary state={state} emptyTitle="No config" emptyBody="Config unavailable.">
             {(cfg) =>
@@ -53,7 +60,7 @@ export function Config() {
               ) : section === "models" ? (
                 <ModelsGateway cfg={cfg} />
               ) : section === "secrets" ? (
-                <Secrets cfg={cfg} />
+                <Secrets />
               ) : (
                 <SectionInfo section={section} cfg={cfg} />
               )
@@ -176,16 +183,244 @@ function ModelsGateway({ cfg }: { cfg: ConfigSummary }) {
   );
 }
 
-function Secrets({ cfg }: { cfg: ConfigSummary }) {
+function Secrets() {
+  const state = useAsync<SecretConfiguration>(() => api.secretConfiguration(), []);
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<Record<string, string>>({});
+
+  const save = async (name: string) => {
+    const value = (draft[name] ?? "").trim();
+    if (!value) return;
+    try {
+      await api.setSecretConfiguration(name, value);
+      setDraft((current) => ({ ...current, [name]: "" }));
+      toast(`${name} saved`);
+      state.refetch();
+    } catch (e) {
+      toast(formatApiError("Save secret", e));
+    }
+  };
+
+  const clear = async (name: string) => {
+    try {
+      await api.clearSecretConfiguration(name);
+      toast(`${name} cleared`);
+      state.refetch();
+    } catch (e) {
+      toast(formatApiError("Clear secret", e));
+    }
+  };
+
   return (
-    <SoftCard>
-      <div className="eyebrow"><span>Secrets / Keys</span></div>
-      <h2 style={{ margin: "8px 0 12px" }}>Secrets</h2>
-      <p className="meta">
-        {cfg.secrets_managed ??
-          "Secrets are managed in the secure environment and are not editable from the console for safety."}
-      </p>
-    </SoftCard>
+    <AsyncBoundary state={state} emptyTitle="No secret catalog" emptyBody="Secret configuration unavailable.">
+      {(data) => (
+        <div>
+          <div className="eyebrow"><span>Secrets / Keys</span></div>
+          <h2 style={{ margin: "8px 0 8px" }}>Encrypted integration credentials</h2>
+          <p className="meta" style={{ marginBottom: 16 }}>
+            Values are encrypted in the Brains database and never returned. Real process
+            environment variables take precedence over encrypted values.
+          </p>
+          <div className="card-list">
+            {Object.entries(data.settings).map(([name, status]) => (
+              <SoftCard key={name}>
+                <div className="row spread">
+                  <strong>{name}</strong>
+                  <StatusPill label={status.set ? status.source ?? "set" : "unset"} tone={status.set ? "positive" : undefined} />
+                </div>
+                <MaskedField
+                  label={name}
+                  value={draft[name] ?? ""}
+                  onChange={(value) => setDraft((current) => ({ ...current, [name]: value }))}
+                />
+                <div className="row" style={{ gap: 8 }}>
+                  <button className="btn small primary" disabled={!(draft[name] ?? "").trim()} onClick={() => void save(name)}>Save</button>
+                  {status.set && <button className="btn small" onClick={() => void clear(name)}>Clear</button>}
+                </div>
+              </SoftCard>
+            ))}
+          </div>
+        </div>
+      )}
+    </AsyncBoundary>
+  );
+}
+
+function GeneralConfig() {
+  const state = useAsync<GeneralConfiguration>(() => api.generalConfiguration(), []);
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<string>("");
+
+  const save = async () => {
+    try {
+      const updates = JSON.parse(draft || "{}") as Record<string, unknown>;
+      await api.setGeneralConfiguration(updates);
+      toast("Runtime overlay saved");
+      setDraft("");
+      state.refetch();
+    } catch (e) {
+      toast(formatApiError("Save runtime overlay", e));
+    }
+  };
+
+  return (
+    <AsyncBoundary state={state} emptyTitle="No runtime config" emptyBody="Configuration unavailable.">
+      {(data) => {
+        const text = draft || JSON.stringify(data.overlay, null, 2);
+        return (
+          <div>
+            <div className="eyebrow"><span>Runtime overlay</span></div>
+            <h2 style={{ margin: "8px 0 8px" }}>Non-secret configuration</h2>
+            <p className="meta" style={{ marginBottom: 12 }}>
+              Validated, allowlisted settings are stored at <code>{data.overlay_path}</code>.
+              Email credentials belong in the encrypted Email section, never in this JSON.
+            </p>
+            <textarea
+              className="mono"
+              style={{ width: "100%", minHeight: 420, padding: 14 }}
+              value={text}
+              onChange={(event) => setDraft(event.target.value)}
+              spellCheck={false}
+            />
+            <button className="btn primary" style={{ marginTop: 12 }} onClick={() => void save()}>
+              Validate & save overlay
+            </button>
+          </div>
+        );
+      }}
+    </AsyncBoundary>
+  );
+}
+
+const EMAIL_FIELDS = [
+  "smtp_host",
+  "smtp_port",
+  "smtp_username",
+  "smtp_password",
+  "smtp_from",
+  "smtp_use_starttls",
+  "smtp_timeout_seconds",
+  "operator_notify_email",
+] as const;
+
+type EmailField = (typeof EMAIL_FIELDS)[number];
+
+function EmailConfig() {
+  const state = useAsync<EmailConfiguration>(() => api.emailConfiguration(), []);
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<Record<EmailField, string>>({
+    smtp_host: "",
+    smtp_port: "587",
+    smtp_username: "",
+    smtp_password: "",
+    smtp_from: "",
+    smtp_use_starttls: "true",
+    smtp_timeout_seconds: "15",
+    operator_notify_email: "",
+  });
+  const [testTo, setTestTo] = useState("");
+
+  const set = (name: EmailField, value: string) =>
+    setDraft((current) => ({ ...current, [name]: value }));
+
+  const save = async (name: EmailField) => {
+    const value = draft[name].trim();
+    if (!value) return;
+    try {
+      await api.setEmailConfiguration(name, value);
+      set(name, "");
+      toast(`${name.replace(/_/g, " ")} saved`);
+      state.refetch();
+    } catch (e) {
+      toast(formatApiError("Save email setting", e));
+    }
+  };
+
+  const clear = async (name: EmailField) => {
+    try {
+      await api.clearEmailConfiguration(name);
+      toast(`${name.replace(/_/g, " ")} cleared`);
+      state.refetch();
+    } catch (e) {
+      toast(formatApiError("Clear email setting", e));
+    }
+  };
+
+  const test = async () => {
+    try {
+      await api.testEmailConfiguration(testTo);
+      toast(`Test email sent to ${testTo}`);
+    } catch (e) {
+      toast(formatApiError("Test email", e));
+    }
+  };
+
+  return (
+    <AsyncBoundary state={state} emptyTitle="No email config" emptyBody="Email configuration unavailable.">
+      {(data) => (
+        <div>
+          <div className="eyebrow"><span>SMTP / SES</span></div>
+          <h2 style={{ margin: "8px 0 8px" }}>Outbound email</h2>
+          <p className="meta" style={{ marginBottom: 16 }}>
+            Values are encrypted in the Brains database with AES-256-GCM using a key derived
+            from the admin key. Amazon SES works through its SMTP endpoint. Secret values are never returned.
+          </p>
+          <SoftCard>
+            <div className="row spread">
+              <strong>Mailer</strong>
+              <StatusPill label={data.mailer.enabled ? "configured" : "disabled"} tone={data.mailer.enabled ? "positive" : undefined} />
+            </div>
+            <div className="meta" style={{ marginTop: 8 }}>{data.secure.encrypted_store}</div>
+          </SoftCard>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 14, marginTop: 16 }}>
+            {EMAIL_FIELDS.map((name) => {
+              const status = data.secure.settings[name];
+              const label = name.replace(/_/g, " ");
+              const effective: Record<string, unknown> = {
+                smtp_host: data.mailer.smtp_host,
+                smtp_port: data.mailer.smtp_port,
+                smtp_from: data.mailer.from,
+                smtp_use_starttls: data.mailer.starttls,
+                smtp_timeout_seconds: data.mailer.smtp_timeout_seconds,
+                operator_notify_email: data.mailer.operator_notify_email,
+              };
+              return (
+                <SoftCard key={name}>
+                  <div className="row spread" style={{ marginBottom: 8 }}>
+                    <strong>{label}</strong>
+                    <StatusPill label={status?.set ? "set" : "unset"} tone={status?.set ? "positive" : undefined} />
+                  </div>
+                  {status?.source === "environment" && (
+                    <p className="meta">Environment override is active and takes precedence.</p>
+                  )}
+                  {!status?.secret && effective[name] !== undefined && effective[name] !== null && (
+                    <p className="meta">Current: <code>{String(effective[name])}</code></p>
+                  )}
+                  {name === "smtp_use_starttls" ? (
+                    <Toggle label="Use STARTTLS" checked={draft[name] === "true"} onChange={(v) => set(name, String(v))} />
+                  ) : status?.secret ? (
+                    <MaskedField label={label} value={draft[name]} onChange={(v) => set(name, v)} />
+                  ) : (
+                    <TextField label={label} value={draft[name]} onChange={(v) => set(name, v)} placeholder={name === "smtp_host" ? "email-smtp.region.amazonaws.com" : undefined} />
+                  )}
+                  <div className="row" style={{ gap: 8 }}>
+                    <button className="btn small primary" disabled={!draft[name].trim()} onClick={() => void save(name)}>Save</button>
+                    {status?.set && <button className="btn small" onClick={() => void clear(name)}>Clear</button>}
+                  </div>
+                </SoftCard>
+              );
+            })}
+          </div>
+
+          <SoftCard style={{ marginTop: 16 }}>
+            <strong>Send test</strong>
+            <TextField label="Recipient" value={testTo} onChange={setTestTo} placeholder="operator@example.com" />
+            <button className="btn primary" disabled={!testTo.includes("@")} onClick={() => void test()}>Send test email</button>
+          </SoftCard>
+        </div>
+      )}
+    </AsyncBoundary>
   );
 }
 

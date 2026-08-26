@@ -63,7 +63,7 @@ export function Issues() {
 
   const closeDetail = () => {
     setOpen(null);
-    if (routeCode) navigate("/issues");
+    if (routeCode) navigate("/labs/issues");
   };
 
   const move = async (issue: Issue, status: IssueStatus) => {
@@ -150,7 +150,7 @@ export function Issues() {
         <Board
           issues={state.data ?? []}
           columns={columns}
-          onOpen={(i) => navigate(`/issues/${i.code}`)}
+          onOpen={(i) => navigate(`/labs/issues/${i.code}`)}
           onMove={move}
         />
       )}

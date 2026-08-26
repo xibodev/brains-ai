@@ -35,22 +35,27 @@ structured evidence expectations for these same IDs are maintained in
    `AC-*` mappings. Supporting capability acceptance criteria additionally require an
    explicit system or operational validation mapping in
    [TRACEABILITY.md](TRACEABILITY.md).
+8. The normal `/app` console is Workspace-first: Command Center, Workspaces,
+   Coordination, Governance, Operations, and Act. Execution-model screens
+   (Runtimes, Personas, Pods, Projects, Issues, Sessions, Automation, and
+   onboarding) require the explicit `BRAINS_UI_LABS=1` opt-in and are not a
+   normal-install product claim.
 
 ## Core Brains features
 
 ### F0 - Console foundation and coherent product state
 
-**Promise:** The operator can enter one Brains console, retain an active Org, navigate stable product surfaces, receive actionable errors, and start a Persona-backed Session without a hidden compatibility workflow.
+**Promise:** The operator can enter one Brains console, inspect every visible Workspace, navigate stable operational surfaces, receive actionable errors, and launch only typed, truthfully available actions.
 
 | Acceptance criterion | Target contract | Current status |
 |---|---|---|
-| AC-F0-01 | `/app` provides a stable authenticated shell and redirects to a valid product start surface. | present (E1/E2 only); `/app` redirects to Inbox. |
-| AC-F0-02 | The active Org persists across reload and all scoped screens use it consistently. | present (E1/E2 only); authorization is not implied. |
+| AC-F0-01 | `/app` provides a stable authenticated shell and redirects to a valid product start surface. | present (E1/E2 only); `/app` redirects to Command Center. |
+| AC-F0-02 | The active scope persists across reload and all scoped screens use it consistently. | present/partial (E1/E2 only); Workspace deep links persist directly, while the active Org remains context for Access and Labs screens. Authorization is enforced independently. |
 | AC-F0-03 | API failures remain visible as actionable error states rather than empty data. | partial; typed errors exist, but some screens convert failures to empty arrays. |
-| AC-F0-04 | Persona Spawn creates an attributable Session and surfaces it in Sessions. | partial; route and tests exist, but Spawn with no Issue may create no daemon assignment. |
-| AC-F0-05 | Deep routes select the named entity or return a clear not-found state. | missing; declared entity params are generally ignored by screens. |
+| AC-F0-04 | Persona Spawn creates an attributable Session and surfaces it in Sessions. | partial/Labs-only; route and tests exist, but Spawn with no Issue may create no daemon assignment. |
+| AC-F0-05 | Deep routes select the named entity or return a clear not-found state. | partial; Workspace, Pod, Project, and Issue parameters are consumed, while gated Sessions, Personas, and Runtimes retain explicit parameter gaps. |
 
-**Exclusions:** Search across all product data is not promised by the current command palette.
+**Exclusions:** The Act palette searches views and typed capabilities, not arbitrary product data, and never executes shell or MCP commands.
 
 **Failure behavior:** Authentication failure must lead to sign-in or a structured API error. Unknown deep links must not silently show a different entity.
 
@@ -97,7 +102,7 @@ structured evidence expectations for these same IDs are maintained in
 | AC-F3-01 | Session events are durably stored and backfilled before realtime continuation. | present (E1/E2 only) for event storage/backfill; Session, Issue, approval and Runtime realtime events also commit to `realtime_events` before they are announced and are replayed by cursor on reconnect, while transcript chunks stay notification-only and are backfilled over REST. |
 | AC-F3-02 | Session state follows explicit spawning, running, blocked, completed, and failed transitions. | present (E1/E2 only); the daemon now runs a claimed assignment as the hub's Session rather than a second local one, reports its terminal state, and reconciles on startup what it can no longer prove it owns, so hub and Runtime no longer diverge silently. |
 | AC-F3-03 | Session actions can update linked Issue state and comments with attribution. | present (E1/E2 only) for current paths. |
-| AC-F3-04 | Asks and approvals appear in Inbox and can be resolved once with related Session context. | partial; persistence and resolution exist, but list shape and publish coverage are incomplete. |
+| AC-F3-04 | Asks and approvals appear in Governance and can be resolved once with related Workspace/Session context. | present/partial (E1/E2 only); the Workspace-scoped queue distinguishes human answers from approve/reject/defer decisions, while complete publish coverage remains incomplete. |
 | AC-F3-05 | Chat messages are durable, Org-authorized, delivered to the running agent, and recover after reload. | partial (E1/E2); a message is a `session_commands` row written before anything is announced, authorized by Org and Workspace, idempotent per operation key, ordered, claimed by exactly one consumer under a lease, and replayed after reload by `GET /v1/sessions/{id}/commands`. Delivery to the *running agent* is proven only for a tool launched with an open input channel: no shipped CLI is, so a message to `copilot`, `claude` or `codex` is settled `failed`/`unsupported` with the reason and the console blocks its composer instead of echoing a send. |
 | AC-F3-06 | Stop requests are authorized, persisted, delivered to the Runtime, and reflected in terminal state. | present (E1/E2 only); `POST /v1/sessions/{id}/stop` is authorized by Org and Workspace, durable, idempotent per Session while an attempt is open or after one stopped it, claimed by exactly the consumer its Session is bound to under a lease - the binding, not the machine recorded on the row, so a Session the hub spawned for a remote Runtime is that Runtime's to stop - and delivered to the exact process handle that consumer launched, never one matched by name. A stop that failed terminally while the Session kept running is retryable: the next press records a new attempt rather than returning the dead one, and the console offers that retry. Terminal state, `ended_at`, Workspace claim release, Task release and the linked Issue move together, and only when the process is proven gone; a stop racing a natural completion is a conditional stamp with one winner. The E4 browser journey is absent. |
 | AC-F3-07 | Realtime subscriptions are authorized by operator, Org, and entity. | present (E1/E2 only); topics are a closed grammar resolved by the server to a canonical name and an Org/Workspace scope, refusals are uniform so a subscription discloses no existence, Runtime credentials are refused the operator transports, and authorization is re-checked per message and on a timer. Live fan-out is per gateway process, and the E4 disconnect/reconnect browser journey is absent. |
@@ -145,7 +150,7 @@ structured evidence expectations for these same IDs are maintained in
 
 | Acceptance criterion | Target contract | Current status |
 |---|---|---|
-| AC-F6-01 | Fresh state automatically offers or routes to onboarding. | present (E1/E2 only); the shell guard reads durable server state. |
+| AC-F6-01 | Fresh state automatically offers or routes to onboarding. | missing from the normal console by design at current maturity; the durable flow remains available only at `/app/labs/onboarding` when `BRAINS_UI_LABS=1`. |
 | AC-F6-02 | The flow creates/selects an Org, connects or explicitly defers a machine, creates a Persona, creates work, and dispatches. | present (E1/E2 only); deferred Runtime setup leads to a named blocked state rather than false success. |
 | AC-F6-03 | Every step has loading, empty, error, retry, back, and safe-exit behavior. | partial (E1/E2 only); durable retry/resume and safe exit exist, while complete browser-state coverage is absent. |
 | AC-F6-04 | Completion lands on the attributable Session or a clear blocked state. | present (E1/E2 only); only a Session linked to the attempt's Issue can complete it. |
@@ -162,9 +167,9 @@ structured evidence expectations for these same IDs are maintained in
 | Acceptance criterion | Target contract | Current status |
 |---|---|---|
 | AC-F7-01 | Provider connectivity tests return explicit success/failure without leaking secrets. | present (E1/E2 only). |
-| AC-F7-02 | Effective provider, gateway, routing, MCP, integration, and secret-handling state is truthful and redacted. | present/partial (E1/E2 only); provider readiness and tier wiring are structured, while MCP/integration sections remain informational. |
-| AC-F7-03 | The UI clearly distinguishes read-only information from editable configuration. | present (E1/E2 only); the modern console declares a read-only contract. |
-| AC-F7-04 | Multi-process configuration reload semantics are documented and verified before writes are promised. | present (E1/E2 only); modern writes are excluded and legacy writes explicitly require every process to restart before the change is treated as active. |
+| AC-F7-02 | Effective provider, gateway, routing, MCP, integration, and secret-handling state is truthful and redacted. | present/partial (E1/E2 only); provider readiness and tier wiring are structured, encrypted email-secret status is boolean-only, while remaining MCP/integration sections are informational. |
+| AC-F7-03 | The UI clearly distinguishes read-only information from editable configuration. | present (E1/E2 only); provider/gateway inspection remains read-only, the Runtime Overlay editor performs validated non-secret writes, and Email/Secrets perform encrypted write-only secret changes without plaintext reads. |
+| AC-F7-04 | Multi-process configuration reload semantics are documented and verified before writes are promised. | partial (E1/E2 only); encrypted email writes reload the handling process and persist in the Brains DB, environment values remain higher precedence, and every other long-lived Brains process still requires restart before treating the change as active. |
 
 **Exclusions:** The modern SPA does not currently promise a general secret editor or full configuration mutation.
 
@@ -240,7 +245,7 @@ structured evidence expectations for these same IDs are maintained in
 - AC-B2-03: messages, handoffs, checkpoints, and resume data preserve continuity.
 - AC-B2-04: mutation tools are authenticated, scoped, and human-gated where required.
 
-**Status:** present/partial (E1/E2/E3). The surface is broad. MCP SSE now resolves the presented key to one principal, publishes it for the request so tool calls are attributed and scoped reads are filtered to that actor's Orgs and Workspaces, and refuses a Runtime-narrow credential outright. Approval resolution over MCP and CLI is separated from the requester: a Runtime credential can never resolve, the requesting Session can never resolve its own ASK, and the Persona identity behind it can never resolve it. `brains.control.queue_health` (BL-P1-12) now names every durable queue family's owner/scope/lifecycle/expiry policy in one place, reports live health (total/open/stale-or-expired) and bounded orphaned Session/Workspace references without deleting them, and offers a dry-run/apply repair over each family's existing fenced expiry helper - never deleting unresolved work. Stdio MCP still inherits the launching process's trust boundary, and per-tool destructive-action governance remains incomplete.
+**Status:** present/partial (E1/E2/E3). The surface is broad. MCP SSE resolves the presented key to one principal and refuses Runtime-narrow credentials. Topic boards, harness-qualified help, one `inbox_wait` long poll, recency-based live-agent discovery, explicit predecessor/successor handle links, and successor reads of unread predecessor mail cover the observed multi-session coordination loop without silently changing recipient identity. `/app/coordination`, `/app/workspaces/:slug`, and `/app/act` expose scoped reads and named HTTP mutations over the same controls. Approval resolution remains separated from the requester. Stdio MCP still inherits the launching process's trust boundary, and per-tool destructive-action governance remains incomplete.
 
 ### B3 - Context, knowledge, semantic retrieval, and code graph
 
@@ -285,7 +290,7 @@ structured evidence expectations for these same IDs are maintained in
 - AC-B6-03: service commands render and manage user-level services on supported operating systems.
 - AC-B6-04: help and docs do not advertise removed commands.
 
-**Status:** present/partial (E1/E2/E3). Legacy installers and the dev Docker entrypoint still reference the removed `brains` executable. The service pidfile (`<state>/sessions/service.pid`) and the Runtime daemon's own `daemon.pid` are now additive JSON identity records - PID, executable, command line, and (where the platform exposes it) process start time - rather than a bare integer (BL-P1-09). `brains.service.common.verify_pid` reports `verified`/`degraded`/`unverified`/`stale`/`absent` before any caller treats a recorded PID as proof of liveness; `service.status()` exposes this as `service_pid`, and Windows/macOS `service.stop()` and `brains-ai daemon stop` both refuse to tree-kill or signal a `stale` (reused) PID by number alone, removing the stale pidfile instead - never targeting a process by name.
+**Status:** present/partial (E1/E2/E3). Wiring has conflict-safe, idempotent status/unwire adapters for Copilot CLI, Claude Code, Codex, and OpenCode; each renderer uses the tool's native MCP schema, preserves unrelated settings, backs up edits, and marks only its own entry removable. Service installation uses and verifies the exact `sys.executable` that can import Brains rather than guessing a sibling `pythonw.exe`; install fails loud when the interpreter probe fails. `service.status()` reports PID identity plus bounded gateway/MCP listener probes and is healthy only when the installed service both owns a process and serves. PID verification additionally accepts an exact Brains `serve-all` command-line match when Windows start-time reporting is unavailable/inconsistent, while still refusing unrelated processes. Legacy installers remain outside the supported path.
 
 ### B7 - Webhooks and messaging bridges
 

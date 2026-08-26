@@ -29,8 +29,10 @@ from brains.service.common import (
     UnsupportedPlatform,
     current_platform,
     default_spec,
+    listener_status,
     read_pidfile_record,
     verify_pid,
+    verify_service_interpreter,
 )
 
 _BACKENDS = {
@@ -59,7 +61,18 @@ def supported() -> bool:
 
 def install(spec: ServiceSpec | None = None, *, dry_run: bool = False) -> dict:
     """Register (and, unless ``dry_run``, start) the autostart service."""
-    return _backend().install(spec or default_spec(), dry_run=dry_run)
+    resolved = spec or default_spec()
+    check = verify_service_interpreter(resolved.program)
+    if not check["ok"]:
+        return {
+            "ok": False,
+            "action": "refused",
+            "detail": "service interpreter cannot import brains",
+            "interpreter": check,
+        }
+    report = _backend().install(resolved, dry_run=dry_run)
+    report["interpreter"] = check
+    return report
 
 
 def uninstall(*, dry_run: bool = False) -> dict:
@@ -100,6 +113,10 @@ def status() -> dict:
     report = _backend().status()
     report["supported"] = True
     report["service_pid"] = verify_pid(read_pidfile_record())
+    report.update(listener_status())
+    report["healthy"] = bool(
+        report.get("installed") and report["service_pid"].get("running") and report["serving"]
+    )
     return report
 
 
@@ -122,6 +139,7 @@ __all__ = [
     "current_platform",
     "default_spec",
     "install",
+    "listener_status",
     "read_pidfile_record",
     "render_definition",
     "restart",
@@ -131,4 +149,5 @@ __all__ = [
     "supported",
     "uninstall",
     "verify_pid",
+    "verify_service_interpreter",
 ]

@@ -97,18 +97,32 @@ def ensure_admin_key(
     """
     from brains.config import settings
 
+    def apply_secure(key: str) -> None:
+        # This runs after config module initialization. During very early
+        # bootstrap (before the DB can open), leave defaults intact so repair
+        # commands remain available.
+        try:
+            from brains.control.secure_settings import apply_to_settings
+
+            apply_to_settings(settings, key)
+        except Exception:
+            pass
+
     if settings.api_key:
+        apply_secure(settings.api_key)
         return settings.api_key, False
 
     persisted = read_persisted_key()
     if persisted:
         settings.api_key = persisted
+        apply_secure(persisted)
         return persisted, False
 
     key = _generate_key()
     path = admin_key_path()
     _write_key_file(path, key)
     settings.api_key = key
+    apply_secure(key)
     if print_banner:
         print_first_run_banner(key=key, path=path, host=host, port=port)
     return key, True
@@ -129,8 +143,21 @@ def rotate_admin_key() -> str:
     """
     from brains.config import settings
 
+    if os.environ.get("BRAINS_API_KEY"):
+        raise RuntimeError(
+            "BRAINS_API_KEY is controlled by the process environment; rotate it in "
+            "that authoritative store, restart Brains, then use admin-key rotation "
+            "only for file-managed installs"
+        )
+
     superseded = settings.api_key or read_persisted_key()
     key = _generate_key()
+    if superseded:
+        # Ciphertext is keyed by the admin secret. Re-key before replacing the
+        # file so any failure leaves both the old key and old ciphertext usable.
+        from brains.control.secure_settings import rekey_all
+
+        rekey_all(superseded, key)
     _write_key_file(admin_key_path(), key)
     settings.api_key = key
     _supersede_admin_key(superseded, key)

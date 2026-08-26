@@ -15,7 +15,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openConnectModal(page: Page) {
-  await page.goto('/app/runtimes');
+  await page.goto('/app/labs/runtimes');
   await page
     .getByRole('button', { name: /connect a machine|\+ connect|add (a )?machine/i })
     .first()
@@ -23,7 +23,7 @@ async function openConnectModal(page: Page) {
 }
 
 test('J2.1 Runtimes screen offers a "Connect a machine" entry point', async ({ page, consoleGuard }) => {
-  await page.goto('/app/runtimes');
+  await page.goto('/app/labs/runtimes');
   await expect(
     page.getByRole('button', { name: /connect a machine|\+ connect|add (a )?machine/i }).first(),
   ).toBeVisible();

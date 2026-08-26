@@ -5,8 +5,10 @@ import json
 import os
 import platform
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+
+from sqlalchemy import func
 
 from brains.control.common import normalize_path, slug_from_path, unique_slug, utc_now
 from brains.control.events import append_event
@@ -268,8 +270,36 @@ def reap_zombie_sessions() -> list[str]:
     return reaped
 
 
+SESSION_LIVE_TTL_SECONDS = 60 * 60
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def _post_end_activity(row: AgentSession) -> bool:
+    activity = _aware(row.last_activity_at)
+    ended = _aware(row.ended_at)
+    return bool(activity and ended and activity > ended + timedelta(seconds=1))
+
+
+def _recent_activity(row: AgentSession, now: datetime | None = None) -> bool:
+    activity = _aware(row.last_activity_at or row.started_at)
+    current = now or utc_now()
+    return bool(activity and activity >= current - timedelta(seconds=SESSION_LIVE_TTL_SECONDS))
+
+
 def _terminal_or_ended(row: AgentSession) -> bool:
-    return row.ended_at is not None or getattr(row, "state", None) in _TERMINAL_SESSION_STATES
+    if row.ended_at is None:
+        return bool(
+            getattr(row, "state", None) in _TERMINAL_SESSION_STATES and not _recent_activity(row)
+        )
+    terminal = True
+    # Field-report recovery: demonstrable post-end activity invalidates a stale
+    # terminal flag. An ordinary end event at the same timestamp does not.
+    return bool(terminal and not (_post_end_activity(row) and _recent_activity(row)))
 
 
 def live_replacement_session_ids(
@@ -280,18 +310,15 @@ def live_replacement_session_ids(
     Surfaced in dead-handle errors so a caller can recover without the
     discovery dance — the single most expensive step in field report #2.
     """
-    q = (
-        session.query(AgentSession)
-        .filter(
-            AgentSession.ended_at.is_(None),
-            AgentSession.workspace_id == workspace_id,
-        )
-        .order_by(AgentSession.last_activity_at.desc().nullslast())
-        .limit(5)
+    cutoff = utc_now() - timedelta(seconds=SESSION_LIVE_TTL_SECONDS)
+    q = session.query(AgentSession).filter(
+        AgentSession.workspace_id == workspace_id,
+        func.coalesce(AgentSession.last_activity_at, AgentSession.started_at) >= cutoff,
     )
     if exclude_session_id:
         q = q.filter(AgentSession.id != exclude_session_id)
-    return [row.id for row in q.all()]
+    q = q.order_by(AgentSession.last_activity_at.desc().nullslast()).limit(5)
+    return [row.id for row in q.all() if not _terminal_or_ended(row)]
 
 
 def require_live_session(session, session_id: str | None, *, action: str) -> AgentSession:
@@ -310,6 +337,9 @@ def require_live_session(session, session_id: str | None, *, action: str) -> Age
     if row is None:
         raise ValueError(f"unknown session: {session_id} ({action})")
     if not _terminal_or_ended(row):
+        if row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES:
+            row.ended_at = None
+            row.state = "running"
         return row
     replacements = live_replacement_session_ids(session, row.workspace_id)
     reason = (row.summary or "").strip()
@@ -435,6 +465,7 @@ def start_session(
     pid: int | None = None,
     metadata: dict[str, Any] | None = None,
     operator: str | None = None,
+    predecessor_session_id: str | None = None,
 ) -> dict:
     workspace = register_workspace(workspace_path)
     # Resolve who owns this session before we open it so the row can be
@@ -462,12 +493,33 @@ def start_session(
             id=session_id,
             workspace_id=workspace.id,
             tool=tool,
-            pid=pid or os.getpid(),
+            # Only a caller that owns a durable process may bind its PID.
+            # Bare CLI/MCP registration runs in a short-lived helper process;
+            # recording that helper's PID makes an active agent look dead as
+            # soon as the command exits and lets the reaper destroy its claim,
+            # task ownership, and mailbox after one quiet interval.
+            pid=pid,
             machine_id=current_machine_id(),
             created_by_operator_id=operator_record["id"],
             metadata_json=json.dumps(metadata or {}),
         )
         db_session.add(row)
+        if predecessor_session_id:
+            predecessor = db_session.get(AgentSession, predecessor_session_id)
+            if predecessor is None:
+                raise ValueError(f"unknown predecessor session: {predecessor_session_id}")
+            if predecessor.workspace_id != workspace.id:
+                raise ValueError("predecessor and successor must belong to the same workspace")
+            if predecessor.id == session_id:
+                raise ValueError("a session cannot supersede itself")
+            from brains.storage.models import SessionSuccessor
+
+            link = db_session.get(SessionSuccessor, predecessor_session_id)
+            if link is None:
+                link = SessionSuccessor(predecessor_session_id=predecessor_session_id)
+                db_session.add(link)
+            link.successor_session_id = session_id
+            link.linked_at = utc_now()
         db_session.commit()
         db_session.refresh(row)
         active = (
@@ -540,7 +592,63 @@ def start_session(
         "operator": operator_record["slug"],
         "active_handoff": active_handoff,
         "welcome": welcome,
+        "predecessor_session_id": predecessor_session_id,
     }
+
+
+def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str, Any]:
+    """Explicitly link a predecessor handle to one same-workspace successor."""
+    if from_session_id == to_session_id:
+        raise ValueError("a session cannot supersede itself")
+    init_db()
+    with SessionLocal() as session:
+        predecessor = session.get(AgentSession, from_session_id)
+        successor = session.get(AgentSession, to_session_id)
+        if predecessor is None:
+            raise ValueError(f"unknown predecessor session: {from_session_id}")
+        if successor is None:
+            raise ValueError(f"unknown successor session: {to_session_id}")
+        if predecessor.workspace_id != successor.workspace_id:
+            raise ValueError("predecessor and successor must belong to the same workspace")
+        require_live_session(session, to_session_id, action="link_session_successor")
+        from brains.storage.models import SessionSuccessor
+
+        link = session.get(SessionSuccessor, from_session_id)
+        if link is None:
+            link = SessionSuccessor(predecessor_session_id=from_session_id)
+            session.add(link)
+        link.successor_session_id = successor.id
+        link.linked_at = utc_now()
+        session.commit()
+    append_event(
+        "session_superseded",
+        f"{from_session_id} -> {to_session_id}",
+        workspace_id=successor.workspace_id,
+        session_id=to_session_id,
+        metadata={"from_session_id": from_session_id, "to_session_id": to_session_id},
+    )
+    return {"from_session_id": from_session_id, "to_session_id": to_session_id, "linked": True}
+
+
+def predecessor_session_ids(session, session_id: str) -> list[str]:
+    """Transitive predecessor handles, bounded and cycle-safe."""
+    found: list[str] = []
+    frontier = [session_id]
+    while frontier and len(found) < 20:
+        current = frontier.pop(0)
+        from brains.storage.models import SessionSuccessor
+
+        rows = (
+            session.query(SessionSuccessor.predecessor_session_id)
+            .filter(SessionSuccessor.successor_session_id == current)
+            .all()
+        )
+        for (predecessor_id,) in rows:
+            if predecessor_id in found or predecessor_id == session_id:
+                continue
+            found.append(predecessor_id)
+            frontier.append(predecessor_id)
+    return found
 
 
 def _runtime_machine_id(session, runtime_id: int | None) -> str | None:

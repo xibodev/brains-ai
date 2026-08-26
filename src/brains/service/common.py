@@ -17,8 +17,9 @@ Two hard rules, learned the hard way, are encoded here:
 2. **Exec via ``<python> -m brains serve-all``.** This is the most portable
    launch form: it works from the same interpreter that has brains installed
    (the pipx/uv venv python running the ``install`` command) without relying
-   on the ``brains-ai`` console script being on ``PATH``. On Windows we use
-   ``pythonw.exe`` so no console window is ever shown.
+    on the ``brains-ai`` console script being on ``PATH``. Use the exact
+    ``sys.executable`` that passed the install command; sibling ``pythonw.exe``
+    launchers from some uv-created environments do not resolve the venv.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ SYSTEMD_UNIT = "brains-serve-all.service"
 
 SERVICE_DESCRIPTION = (
     "Brains control plane — supervises the gateway (127.0.0.1:8787), the "
-    "dashboard (127.0.0.1:9876), and the MCP SSE server (127.0.0.1:9877). "
+    "MCP SSE server (127.0.0.1:9877), and opt-in experimental children. "
     "Starts at login and restarts on failure."
 )
 
@@ -71,16 +72,43 @@ def state_dir() -> Path:
 def _service_python(executable: str | None = None) -> str:
     """The interpreter the service should launch.
 
-    Defaults to the interpreter running this process — i.e. the venv that has
-    brains installed. On Windows we prefer the sibling ``pythonw.exe`` so the
-    supervised stack runs without flashing a console window at every login.
+    Defaults to the exact interpreter running this process — i.e. the venv
+    that has brains installed. Never guess a sibling launcher.
     """
-    exe = Path(executable or sys.executable)
-    if current_platform() == "windows" and exe.name.lower() == "python.exe":
-        pythonw = exe.with_name("pythonw.exe")
-        if pythonw.exists():
-            return str(pythonw)
-    return str(exe)
+    return str(Path(executable or sys.executable))
+
+
+def verify_service_interpreter(program: str) -> dict[str, Any]:
+    """Prove the service interpreter imports this installed Brains package."""
+    rc, out, err = run_cmd(
+        [
+            program,
+            "-c",
+            "import brains,sys; print(sys.prefix); print(brains.__file__)",
+        ]
+    )
+    return {
+        "ok": rc == 0,
+        "program": program,
+        "detail": out or err,
+    }
+
+
+def listener_status(host: str = "127.0.0.1") -> dict[str, Any]:
+    """Bounded probes for the default supervised listeners."""
+    import socket
+
+    listeners: dict[str, bool] = {}
+    for name, port in (("gateway", 8787), ("mcp", 9877)):
+        try:
+            with socket.create_connection((host, port), timeout=0.4):
+                listeners[name] = True
+        except OSError:
+            listeners[name] = False
+    return {
+        "listeners": listeners,
+        "serving": all(listeners.values()),
+    }
 
 
 def current_user() -> str:
@@ -128,15 +156,20 @@ def default_spec(executable: str | None = None) -> ServiceSpec:
 def run_cmd(cmd: list[str], *, check: bool = False) -> tuple[int, str, str]:
     """Run ``cmd`` and return ``(returncode, stdout, stderr)``.
 
-    Never raises on a non-zero exit unless ``check`` is set; callers fold the
-    result into a structured report instead.
+    Never raises on a non-zero exit or a missing platform utility unless
+    ``check`` is set; callers fold the result into a structured report instead.
     """
-    proc = subprocess.run(  # noqa: S603 - args are constructed, never shell
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603 - args are constructed, never shell
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        if check:
+            raise RuntimeError(f"command could not start: {' '.join(cmd)}: {exc}") from exc
+        return 127, "", str(exc)
     if check and proc.returncode != 0:
         raise RuntimeError(
             f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr.strip()}"
@@ -272,12 +305,13 @@ def _windows_identity(pid: int) -> dict[str, Any] | None:
         return None
     exe: str | None = row[0] or None  # short image name, e.g. "python.exe"
     start_time: float | None = None
+    command_line: str | None = None
     # Prefer the supported CIM API through PowerShell. Windows PowerShell and
     # PowerShell 7 both expose Get-CimInstance on supported hosts.
     with contextlib.suppress(Exception):
         script = (
             f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId = {pid}';"
-            "if($p){$p|Select-Object ExecutablePath,"
+            "if($p){$p|Select-Object ExecutablePath,CommandLine,"
             "@{n='CreationDate';e={$_.CreationDate.ToUniversalTime().ToString('o')}}"
             "|ConvertTo-Json -Compress}"
         )
@@ -290,6 +324,9 @@ def _windows_identity(pid: int) -> dict[str, Any] | None:
                 path = data.get("ExecutablePath")
                 if isinstance(path, str) and path.strip():
                     exe = path.strip()
+                command = data.get("CommandLine")
+                if isinstance(command, str) and command.strip():
+                    command_line = command.strip()
                 created = data.get("CreationDate")
                 if isinstance(created, str) and created.strip():
                     with contextlib.suppress(ValueError):
@@ -319,7 +356,7 @@ def _windows_identity(pid: int) -> dict[str, Any] | None:
                             exe = value
                     elif stripped.startswith("CreationDate="):
                         start_time = _parse_wmi_datetime(stripped.split("=", 1)[1])
-    return {"exe": exe, "start_time": start_time}
+    return {"exe": exe, "start_time": start_time, "cmdline": command_line}
 
 
 def _read_process_identity(pid: int) -> dict[str, Any] | None:
@@ -480,6 +517,14 @@ def verify_pid(record: dict[str, Any] | int | None) -> dict[str, Any]:
     start_recorded = record.get("start_time")
     exe_live = live.get("exe")
     start_live = live.get("start_time")
+    cmdline_recorded = str(record.get("cmdline") or "").lower()
+    cmdline_live = str(live.get("cmdline") or "").lower()
+    service_cmdline_match = (
+        "brains" in cmdline_recorded
+        and "serve-all" in cmdline_recorded
+        and "brains" in cmdline_live
+        and "serve-all" in cmdline_live
+    )
     exe_checked = bool(exe_recorded and exe_live)
     start_checked = isinstance(start_recorded, int | float) and isinstance(start_live, int | float)
     if not exe_checked and not start_checked:
@@ -506,6 +551,15 @@ def verify_pid(record: dict[str, Any] | int | None) -> dict[str, Any]:
             "confidence": CONFIDENCE_VERIFIED,
             "reason": "pid and start time match the recorded service; executable matches "
             "when available",
+        }
+    if exe_match and service_cmdline_match:
+        return {
+            "pid": pid,
+            "running": True,
+            "identity_verified": True,
+            "confidence": CONFIDENCE_VERIFIED,
+            "reason": "pid, executable and Brains serve-all command line match; "
+            "platform start time was unavailable or inconsistent",
         }
     if not start_checked and exe_match:
         return {

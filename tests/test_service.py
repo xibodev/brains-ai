@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,12 +49,87 @@ def test_default_spec_execs_brains_module() -> None:
     assert s.args == ["-m", "brains", "serve-all"]
     assert s.program  # the running interpreter
     assert "-m brains serve-all" in s.command_line
+    assert Path(s.program).resolve() == Path(sys.executable).resolve()
+
+
+def test_install_refuses_interpreter_that_cannot_import_brains(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service,
+        "verify_service_interpreter",
+        lambda _program: {"ok": False, "detail": "No module named brains"},
+    )
+    report = service.install(ServiceSpec(program="bad-python"), dry_run=True)
+    assert report["ok"] is False
+    assert report["action"] == "refused"
+
+
+def test_service_status_requires_live_listeners(monkeypatch) -> None:
+    monkeypatch.setattr(service, "supported", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "_backend",
+        lambda: type(
+            "Backend",
+            (),
+            {"status": staticmethod(lambda: {"installed": True, "state": "Running"})},
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "verify_pid",
+        lambda _record: {"running": True, "confidence": "verified"},
+    )
+    monkeypatch.setattr(service, "read_pidfile_record", lambda: {"pid": 1})
+    monkeypatch.setattr(
+        service,
+        "listener_status",
+        lambda: {"listeners": {"gateway": True, "mcp": False}, "serving": False},
+    )
+    report = service.status()
+    assert report["healthy"] is False
+    assert report["listeners"]["mcp"] is False
+
+
+def test_pid_identity_accepts_exact_brains_command_when_start_time_drifts(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service_common,
+        "_read_process_identity",
+        lambda _pid: {
+            "exe": r"C:\venv\Scripts\python.exe",
+            "start_time": 999.0,
+            "cmdline": r"C:\venv\Scripts\python.exe -m brains serve-all",
+        },
+    )
+    result = verify_pid(
+        {
+            "format": 2,
+            "pid": 42,
+            "exe": r"C:\venv\Scripts\python.exe",
+            "start_time": 1.0,
+            "cmdline": r"C:\venv\Scripts\python.exe -m brains serve-all",
+        }
+    )
+    assert result["confidence"] == "verified"
+    assert result["identity_verified"] is True
 
 
 def test_current_platform_is_known_or_passthrough() -> None:
     assert current_platform() in {"windows", "macos", "linux"} or isinstance(
         current_platform(), str
     )
+
+
+def test_run_cmd_bounds_a_missing_platform_utility(monkeypatch) -> None:
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "systemctl")
+
+    monkeypatch.setattr(service_common.subprocess, "run", missing)
+
+    rc, out, err = service_common.run_cmd(["systemctl", "--user", "is-active"])
+
+    assert rc == 127
+    assert out == ""
+    assert "systemctl" in err
 
 
 def test_supported_matches_backend_table() -> None:

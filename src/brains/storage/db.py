@@ -25,7 +25,11 @@ _db_url = resolve_db_url(settings)
 # before checkout. SQLite is a local file and instead needs per-connection
 # PRAGMAs (applied via the ``connect`` listener below).
 _engine_kwargs: dict = {}
-if not _db_url.startswith("sqlite"):
+if _db_url.startswith("sqlite"):
+    _engine_kwargs["connect_args"] = {
+        "timeout": settings.sqlite_busy_timeout_ms / 1000,
+    }
+else:
     _engine_kwargs["pool_pre_ping"] = True
 
 engine = create_engine(_db_url, **_engine_kwargs)
@@ -59,8 +63,8 @@ if engine.dialect.name == "sqlite":
         """
         cursor = dbapi_connection.cursor()
         try:
+            cursor.execute(f"PRAGMA busy_timeout={settings.sqlite_busy_timeout_ms}")
             cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=5000")
             cursor.execute("PRAGMA synchronous=NORMAL")
             if settings.sqlite_enforce_foreign_keys:
                 _enforce_sqlite_foreign_keys(cursor)

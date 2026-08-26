@@ -16,6 +16,15 @@ function stateDir(): string {
 }
 
 function runSeed(script: string): Record<string, unknown> {
+  const container = process.env.BRAINS_E2E_SEED_CONTAINER;
+  if (container) {
+    const output = execFileSync('docker', ['exec', container, 'python', '-c', script], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    return JSON.parse(output.trim()) as Record<string, unknown>;
+  }
+
   const state = stateDir();
   mkdirSync(state, { recursive: true });
   const configPath = path.join(state, 'brains.yaml');
@@ -38,7 +47,9 @@ function runSeed(script: string): Record<string, unknown> {
 }
 
 export function seedWorkspace(): Record<string, unknown> {
-  const state = stateDir().replaceAll('\\', '/');
+  const state = (
+    process.env.BRAINS_E2E_SEED_STATE_DIR ?? stateDir()
+  ).replaceAll('\\', '/');
   return runSeed(`
 import json
 from brains.control.orgs import get_org

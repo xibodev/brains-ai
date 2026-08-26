@@ -31,6 +31,13 @@ class MailerError(RuntimeError):
     """Raised when sending fails. Never embeds credentials."""
 
 
+def _refresh_secure_settings() -> None:
+    """Apply encrypted settings for one-shot CLI/stdio processes."""
+    from brains.api.admin_key import ensure_admin_key
+
+    ensure_admin_key(print_banner=False)
+
+
 def _password() -> str:
     raw = settings.smtp_password or ""
     # Env-ref form ("${SECRET_NAME}") resolved like provider keys.
@@ -43,10 +50,12 @@ def _password() -> str:
 
 def mailer_status() -> dict[str, Any]:
     """Redacted configuration snapshot — booleans and host only."""
+    _refresh_secure_settings()
     return {
         "enabled": bool(settings.smtp_host),
         "smtp_host": settings.smtp_host or None,
         "smtp_port": settings.smtp_port,
+        "smtp_timeout_seconds": settings.smtp_timeout_seconds,
         "starttls": settings.smtp_use_starttls,
         "from": settings.smtp_from or None,
         "has_credentials": bool(settings.smtp_username),
@@ -71,6 +80,7 @@ def send_email(
         raise ValueError("to must be an email address")
     if not subject or not subject.strip():
         raise ValueError("subject is required")
+    _refresh_secure_settings()
     host = settings.smtp_host
     if not host:
         raise MailerError("mailer is disabled: set BRAINS_SMTP_HOST (+ port/user/password/from)")

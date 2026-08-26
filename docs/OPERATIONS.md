@@ -420,7 +420,7 @@ brains-ai wire --status
 brains-ai unwire
 ```
 
-Current adapters target detected agent configuration for Copilot CLI, Claude Code, and Codex. Wiring code is intended to preserve unmanaged configuration and maintain backups/conflict reporting.
+Current adapters target detected agent configuration for Copilot CLI, Claude Code, Codex, and OpenCode. OpenCode uses `~/.config/opencode/opencode.json` with its native `mcp.brains` local/remote schema; the other adapters retain their tool-specific JSON or TOML contracts. Wiring preserves unmanaged configuration, writes a managed ownership marker, and maintains backups/conflict reporting so `unwire` removes only Brains-owned entries.
 
 Current MCP public tool names use the `brains_` prefix. Internal compatibility for dotted names is not the documentation contract.
 
@@ -453,6 +453,12 @@ An explicit `BRAINS_MCP_TOOLS` allowlist does not bypass this gate — only the 
 
 - the model-serving surface: the OpenAI/Anthropic-compatible proxy routes (`/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages`, `/v1/models`, `/v1/count_tokens`) and the `brains-ai run <tool>` launcher. Disabled, those routes answer 404 with a pointer to this switch; model access is expected to come from each CLI's own provider logins. The native control-plane API (`/v1/sessions`, `/v1/admin/*`, coordination, webhooks) and the console are unaffected.
 
+`BRAINS_UI_LABS=1` enables the unfinished execution-model screens under
+`/app/labs`: onboarding, Runtimes, Personas, Pods, Projects, Issues, Sessions,
+and Automation. The normal console does not link to or serve those screens when
+the switch is off; old entity-first URLs redirect through the same fail-closed
+Labs gate.
+
 Optional pip extras (`telegram`, `slack`, `whatsapp`, `whatsapp_web`, `postgres`, `otel`, `litellm`) remain install-gated through `brains-ai features`, and their wizard labels carry `(experimental)` — enabling one is an explicit act already.
 
 ### Agent-to-agent comms
@@ -470,13 +476,23 @@ Topic posts are an append-only archive like knowledge entries — no unresolved-
 
 ### Outbound email
 
-Brains can send plain-text email over SMTP (stdlib only; Amazon SES works through its SMTP endpoint, so SES is configuration, not code). Disabled until `BRAINS_SMTP_HOST` is set; credentials may be `"${ENV_NAME}"` refs resolved from the environment / `secrets.env` and are never logged or echoed in errors.
+Brains can send plain-text email over SMTP (Amazon SES works through its SMTP endpoint, so SES is configuration, not a separate sender). Configure it in `/app/operations/config/email`. Persistent values are encrypted in the Brains database with AES-256-GCM; a per-row key is derived with Scrypt from the current admin key and a random salt. Admin-key rotation re-encrypts all rows before replacing the key. Secret plaintext is never returned by the API or UI.
+
+When `BRAINS_API_KEY` is process-environment managed, `brains-ai admin-key rotate` refuses: rotate the external secret in its authoritative store and restart Brains. File-managed installs re-key encrypted rows automatically during rotation.
+
+Process environment values (`BRAINS_SMTP_HOST`, `BRAINS_SMTP_PORT`, `BRAINS_SMTP_USERNAME`, `BRAINS_SMTP_PASSWORD`, `BRAINS_SMTP_FROM`, `BRAINS_SMTP_USE_STARTTLS`, `BRAINS_SMTP_TIMEOUT_SECONDS`, `BRAINS_OPERATOR_NOTIFY_EMAIL`) remain higher precedence than encrypted DB values. The write reloads the handling process; restart every other long-lived Brains process after changing configuration.
+
+`/app/operations/config/secrets` uses the same encrypted store for the existing provider and bridge credentials (GitHub Copilot OAuth, GitHub webhook, OpenAI-compatible, Telegram, Slack, WhatsApp and WhatsApp Web). The status API returns only `set`, `source` and `secret` metadata; plaintext is write-only. `/app/operations/config/general` edits the validated non-secret runtime overlay.
 
 - `mail_send` (MCP) / `brains-ai mail-send` — one mail; audited via the events ledger (`email_sent`, recipient + subject, never body).
 - `mail_status` (MCP) / `brains-ai mail-status` — redacted configuration snapshot.
 - ASKs are copied to `BRAINS_OPERATOR_NOTIFY_EMAIL` best-effort when the mailer is configured; an email outage never blocks or fails an ask (the durable row is authoritative).
 
 Enforcement truthfulness: sends are config-gated and audited but not yet routed through the governed-action approval contract — treat this as an operator-trusted surface until that lands.
+
+### Canonical operator console
+
+`/app` is Workspace-first. Command Center summarizes visible Workspaces and attention; Workspaces provides the scoped control room; Coordination presents shared task, claim, handoff, comms, and learning queues; Governance presents human decisions and audit evidence; Operations presents bounded install posture; Act launches named typed HTTP capabilities. The browser never invokes `brains-ai`, MCP, or a generic shell endpoint. The separate `/dashboard` process remains retired.
 
 ## Service operation
 
@@ -933,6 +949,19 @@ quiesced by hand. Passing an archive taken earlier with `--backup` is still
 supported and still refused if anything committed in between.
 Repair does not remove the need for the E4 backup, repair, restart, and restore
 drill on the exact candidate; that drill is still unperformed.
+
+SQLite contention policy:
+
+- every connection waits `BRAINS_SQLITE_BUSY_TIMEOUT_MS` milliseconds for the
+  single writer; the default is `30000` for multi-agent hosts;
+- `workspace-claims` is a pure read and filters expired leases in SQL. Physical
+  expiry runs only in claim mutations, explicit queue-health repair, or fenced
+  database repair;
+- a sustained `database is locked` after the bounded wait is an outage, not a
+  retry hint. Take an audited backup, stop the owned service tree, diagnose,
+  checkpoint WAL, repair behind the write-lock fence, then restart and recheck;
+- bare `session-start` records no PID because the CLI helper is short-lived.
+  Harnesses that own a durable process may pass `--pid <agent-pid>` explicitly.
 
 ## Governed actions and the audit chain
 

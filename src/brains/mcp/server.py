@@ -78,6 +78,7 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "explain_route": tools.explain_route,
     "get_state": tools.get_state_tool,
     "start_session": tools.start_session_tool,
+    "link_session_successor": tools.link_session_successor_tool,
     "end_session": tools.end_session_tool,
     "session_message": tools.session_message_tool,
     "session_stop": tools.session_stop_tool,
@@ -424,6 +425,10 @@ def _scheduler_loop(interval_seconds: int = 60):
 
 
 def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int = 60):
+    from brains.api.admin_key import ensure_admin_key
+
+    # Both transports need the persisted key to decrypt local secure settings.
+    ensure_admin_key(print_banner=mode == "sse")
     # Make sure the admin operator row exists before any tool can be
     # invoked over either transport. Idempotent and cheap.
     from brains.control.operators import ensure_admin_operator
@@ -435,10 +440,6 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
         # middleware's _valid_keys() can resolve it — parity with the
         # gateway's lifespan (brains.main:lifespan). Without this, every
         # authenticated SSE request 500s with "API key not configured".
-        from brains.api.admin_key import ensure_admin_key
-
-        ensure_admin_key(print_banner=True)
-
         sched_thread = threading.Thread(
             target=_scheduler_loop, args=(scheduler_interval,), daemon=True, name="brains-scheduler"
         )

@@ -30,6 +30,7 @@ activity.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -66,6 +67,18 @@ class AnswerBody(BaseModel):
     answer: str
     reasoning: str | None = None
     session_id: str | None = None
+
+
+class SecureSettingBody(BaseModel):
+    value: str = Field(min_length=1, max_length=4096)
+
+
+class MailTestBody(BaseModel):
+    to: str = Field(min_length=3, max_length=320)
+
+
+class GeneralConfigurationBody(BaseModel):
+    updates: dict[str, Any]
 
 
 def _bad_request(exc: Exception) -> HTTPException:
@@ -371,10 +384,10 @@ def config_summary(principal: Principal = Depends(require_operator_principal)) -
         "routes": dict(settings.routes),
         "integrations": integrations,
         "write_contract": {
-            "mode": "read_only",
+            "mode": "bounded_writes",
             "detail": (
-                "The modern console inspects effective configuration and runs bounded "
-                "provider probes. Configuration and secrets are changed outside this console."
+                "Provider/gateway configuration is read-only. The Email section performs "
+                "bounded encrypted writes and never returns secret plaintext."
             ),
             "reload": (
                 "Legacy overlay or environment writes reload only the process that handled "
@@ -383,9 +396,284 @@ def config_summary(principal: Principal = Depends(require_operator_principal)) -
         },
         "models_endpoint": "/v1/models",
         "secrets_managed": (
-            "Secrets are managed through the process environment or local admin state and "
-            "are not readable or editable from the modern console."
+            "Email secrets are encrypted in the Brains database and editable only through "
+            "the protected Email section. Process environment values remain higher priority."
         ),
+    }
+
+
+@router.get("/admin/configuration/email")
+def email_configuration(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("email configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.control.mailer import mailer_status
+    from brains.control.secure_settings import status
+
+    key, _ = ensure_admin_key(print_banner=False)
+    secure = status(key)
+    import os
+
+    for name, row in secure["settings"].items():
+        if f"BRAINS_{name.upper()}" in os.environ:
+            row["set"] = True
+            row["source"] = "environment"
+    return {"mailer": mailer_status(), "secure": secure}
+
+
+@router.get("/admin/configuration/secrets")
+def secret_configuration(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("secret configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.control.secure_settings import SECRET_NAMES, source_for, status
+
+    key, _ = ensure_admin_key(print_banner=False)
+    secure = status(key)
+    settings_rows = {name: row for name, row in secure["settings"].items() if name in SECRET_NAMES}
+    encrypted_names = {name for name, row in settings_rows.items() if row["source"] == "encrypted"}
+    for name, row in settings_rows.items():
+        row["source"] = source_for(name, encrypted_names)
+        row["set"] = row["source"] != "unset"
+    return {"encrypted_store": secure["encrypted_store"], "settings": settings_rows}
+
+
+@router.put("/admin/configuration/secrets/{name}")
+def set_secret_configuration(
+    name: str,
+    body: SecureSettingBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("secret configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.audit import required_effect
+    from brains.config import reload_settings
+    from brains.control.secure_settings import SECRET_NAMES, set_value
+
+    if name not in SECRET_NAMES:
+        raise _bad_request(ValueError(f"unsupported encrypted secret setting: {name}"))
+    key, _ = ensure_admin_key(print_banner=False)
+    with required_effect(
+        actor="admin", action="admin.secure_setting_write", payload={"name": name}
+    ):
+        result = set_value(name, body.value, admin_key=key)
+    reload_settings()
+    return result
+
+
+@router.delete("/admin/configuration/secrets/{name}")
+def clear_secret_configuration(
+    name: str,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("secret configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.audit import required_effect
+    from brains.config import reload_settings
+    from brains.control.secure_settings import SECRET_NAMES, clear_value
+
+    if name not in SECRET_NAMES:
+        raise _bad_request(ValueError(f"unsupported encrypted secret setting: {name}"))
+    ensure_admin_key(print_banner=False)
+    with required_effect(
+        actor="admin", action="admin.secure_setting_clear", payload={"name": name}
+    ):
+        result = clear_value(name)
+    reload_settings()
+    return result
+
+
+@router.get("/admin/configuration/general")
+def general_configuration(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("configuration is available to the bootstrap admin only")
+    from brains.admin.service import current_config_view, read_overlay
+    from brains.config import settings
+
+    overlay = dict(read_overlay())
+    # A literal legacy API key must not be echoed into the new editor. The
+    # encrypted Secrets section is the only supported browser write path.
+    overlay.pop("openai_compatible_api_key", None)
+    return {
+        "live": current_config_view(),
+        "overlay": overlay,
+        "overlay_path": settings.runtime_overlay,
+    }
+
+
+@router.put("/admin/configuration/general")
+def set_general_configuration(
+    body: GeneralConfigurationBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("configuration is available to the bootstrap admin only")
+    from brains.admin.service import (
+        current_config_view,
+        parse_control_payload,
+        parse_models_payload,
+        parse_router_payload,
+        parse_routes_payload,
+        parse_savings_payload,
+        write_overlay,
+    )
+    from brains.audit import required_effect
+
+    source = body.updates
+    try:
+        updates: dict[str, Any] = {}
+        if "models" in source:
+            updates["models"] = parse_models_payload(source["models"])
+        known_tiers = set((updates.get("models") or current_config_view()["models"]).keys())
+        if "routes" in source:
+            updates["routes"] = parse_routes_payload(source["routes"], known_tiers)
+        if "control" in source:
+            updates["control"] = parse_control_payload(source["control"])
+        if "router" in source:
+            updates["router"] = parse_router_payload(source["router"])
+        if "savings" in source:
+            updates["savings"] = parse_savings_payload(source["savings"])
+        for scalar in (
+            "subsystems",
+            "rate_limit_per_minute",
+            "ollama_base_url",
+            "ollama_timeout_seconds",
+            "openai_compatible_base_url",
+            "openai_compatible_timeout_seconds",
+            "litellm_timeout_seconds",
+            "source_allowlist",
+            "context_compression_enabled",
+            "savings_holdout_fraction",
+            "trace_max_payload_bytes",
+            "trace_retention_max_rows",
+            "provider_policies",
+            "github_copilot_use_gh_cli",
+            "github_copilot_cache_dir",
+            "github_copilot_timeout_seconds",
+            "github_copilot_editor_version",
+            "github_copilot_integration_id",
+            "allow_copilot_proxy",
+            "gateway_preamble",
+            "embed_model",
+        ):
+            if scalar in source:
+                updates[scalar] = source[scalar]
+        with required_effect(
+            actor="admin",
+            action="admin.overlay_write",
+            payload={"keys": sorted(updates)},
+        ):
+            overlay = write_overlay(updates)
+        return {"overlay": overlay, "live": current_config_view()}
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.put("/admin/configuration/email/{name}")
+def set_email_configuration(
+    name: str,
+    body: SecureSettingBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("email configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.audit import required_effect
+    from brains.config import reload_settings
+    from brains.control.secure_settings import set_value
+
+    key, _ = ensure_admin_key(print_banner=False)
+    try:
+        with required_effect(
+            actor="admin",
+            action="admin.secure_setting_write",
+            payload={"name": name},
+        ):
+            result = set_value(name, body.value, admin_key=key)
+        reload_settings()
+        return result
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.delete("/admin/configuration/email/{name}")
+def clear_email_configuration(
+    name: str,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("email configuration is available to the bootstrap admin only")
+    from brains.api.admin_key import ensure_admin_key
+    from brains.audit import required_effect
+    from brains.config import reload_settings
+    from brains.control.secure_settings import clear_value
+
+    key, _ = ensure_admin_key(print_banner=False)
+    try:
+        with required_effect(
+            actor="admin",
+            action="admin.secure_setting_clear",
+            payload={"name": name},
+        ):
+            result = clear_value(name)
+        reload_settings()
+        return result
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/admin/configuration/email/test")
+def test_email_configuration(
+    body: MailTestBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("email configuration is available to the bootstrap admin only")
+    from brains.control.mailer import MailerError, send_email
+
+    try:
+        return send_email(
+            body.to,
+            "Brains email configuration test",
+            "Your Brains SMTP/SES configuration is working.",
+        )
+    except (MailerError, ValueError) as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.get("/admin/coordination/overview")
+def coordination_overview(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("coordination overview is available to the bootstrap admin only")
+    from brains import service
+    from brains.control.claims import list_workspace_claims
+    from brains.control.handoffs import list_handoffs
+    from brains.control.knowledge import search_knowledge
+    from brains.control.patterns import list_patterns
+    from brains.control.sessions import list_workspaces
+    from brains.control.tasks import list_tasks
+    from brains.control.topics import list_topics, live_agent_sessions
+
+    return {
+        "live_agents": live_agent_sessions(),
+        "workspaces": list_workspaces(),
+        "claims": list_workspace_claims(),
+        "tasks": list_tasks(limit=100),
+        "handoffs": list_handoffs(active_only=True),
+        "topics": list_topics(limit=100),
+        "patterns": list_patterns(status="all", limit=100),
+        "knowledge": search_knowledge(status="active", limit=50),
+        "service": service.status(),
     }
 
 
@@ -511,80 +799,9 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
     if not principal.is_bootstrap_admin:
         raise policy.forbidden("operational readiness is available to the bootstrap admin only")
 
-    components: dict[str, dict] = {}
+    from brains.control.operations import readiness_report
 
-    try:
-        from brains.storage.migrations import migration_status
-
-        status = migration_status()
-        healthy = bool(status.get("healthy")) and bool(status.get("schema_verified"))
-        components["storage"] = {
-            "state": "ready" if healthy else "degraded",
-            "detail": {
-                "backend": status.get("backend"),
-                "healthy": status.get("healthy"),
-                "schema_verified": status.get("schema_verified"),
-                "pending": len(status.get("pending") or []),
-                "failed": len(status.get("failed") or []),
-            },
-        }
-    except Exception as exc:  # pragma: no cover - defensive; readiness must never 500
-        components["storage"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        from brains.control.queue_health import summarize as queue_summarize
-
-        queue = queue_summarize()
-        stale_total = sum(f["stale_or_expired"] for f in queue["families"].values())
-        components["queue"] = {
-            "state": "ready" if stale_total == 0 else "degraded",
-            "detail": {"stale_or_expired_total": stale_total, "families": len(queue["families"])},
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        components["queue"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        from brains.control.runtimes import count_stale, list_runtimes
-        from brains.mcp.server import _runtime_stale_ttl_seconds
-
-        ttl = _runtime_stale_ttl_seconds()
-        runtimes_list = list_runtimes()
-        stale = count_stale(ttl)
-        components["runtime_lifecycle"] = {
-            "state": "ready" if stale == 0 else "degraded",
-            "detail": {
-                "total": len(runtimes_list),
-                "online": len([r for r in runtimes_list if r.get("status") == "online"]),
-                "stale_pending_sweep": stale,
-                "stale_sweep_ttl_seconds": ttl,
-            },
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        components["runtime_lifecycle"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    try:
-        from brains.control.recovery_policy import recovery_readiness
-
-        recovery = recovery_readiness()
-        components["recovery_policy"] = {
-            "state": "ready" if recovery["ready"] else "degraded",
-            "detail": {
-                "complete": recovery["policy"]["complete"],
-                "missing_fields": recovery["policy"]["missing_fields"],
-                "reasons": recovery["reasons"],
-            },
-        }
-    except Exception as exc:  # pragma: no cover - defensive
-        components["recovery_policy"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    overall = "ready" if all(c["state"] == "ready" for c in components.values()) else "degraded"
-    return {"status": overall, "components": components}
+    return readiness_report()
 
 
 @router.get("/admin/queue-health")

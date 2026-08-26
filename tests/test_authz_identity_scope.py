@@ -17,6 +17,7 @@ Every test here asserts an *authorization* outcome, not a happy path:
 
 from __future__ import annotations
 
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -1658,6 +1659,7 @@ def test_an_enrolment_token_always_names_the_org_it_binds(client):
 def test_rotating_the_admin_key_revokes_the_old_one(client, monkeypatch):
     from brains.api.admin_key import rotate_admin_key
 
+    monkeypatch.delenv("BRAINS_API_KEY", raising=False)
     old_key = settings.api_key
     old_headers = _auth(old_key)
     assert client.get("/v1/orgs", headers=old_headers).status_code == 200
@@ -2197,6 +2199,20 @@ def test_minting_a_credential_clears_its_negative_entry(client):
     assert creds.resolve_secret(raw) is not None
 
 
+def test_resolving_a_credential_is_read_only(client):
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import ApiCredential
+
+    digest = creds.hash_secret(settings.api_key)
+    with SessionLocal() as session:
+        row = session.query(ApiCredential).filter_by(secret_hash=digest).one()
+        before = row.last_used_at
+    assert creds.resolve_secret(settings.api_key, touch=True) is not None
+    with SessionLocal() as session:
+        row = session.query(ApiCredential).filter_by(secret_hash=digest).one()
+        assert row.last_used_at == before
+
+
 def test_the_negative_cache_is_thread_safe(client):
     def hammer(index: int):
         creds.resolve_secret(f"parallel-{index % 50}")
@@ -2205,6 +2221,43 @@ def test_the_negative_cache_is_thread_safe(client):
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert all(pool.map(hammer, range(400)))
     assert len(creds._negative_cache) <= creds.NEGATIVE_CACHE_MAX_ENTRIES
+
+
+def test_concurrent_cold_start_requests_both_observe_adopted_key(client, monkeypatch):
+    raw = f"cold-start-{uuid.uuid4().hex}"
+    digest = creds.hash_secret(raw)
+    expected = {"credential_id": "adm_cold_start"}
+    initial_lookups = threading.Barrier(2)
+    lock = threading.Lock()
+    lookup_count = 0
+    sync_count = 0
+
+    def lookup(candidate: str, *, touch: bool):
+        nonlocal lookup_count
+        assert candidate == digest
+        assert touch is False
+        with lock:
+            lookup_count += 1
+            current = lookup_count
+        if current <= 2:
+            initial_lookups.wait(timeout=5)
+            return None
+        return expected
+
+    def sync() -> int:
+        nonlocal sync_count
+        with lock:
+            sync_count += 1
+            return 1 if sync_count == 1 else 0
+
+    monkeypatch.setattr(creds, "_lookup", lookup)
+    monkeypatch.setattr(creds, "sync_local_credentials", sync)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _index: creds.resolve_secret(raw), range(2)))
+
+    assert results == [expected, expected]
+    assert digest not in creds._negative_cache
 
 
 # --------------------------------------------------------------------------- #
@@ -2373,6 +2426,7 @@ def test_rotation_revokes_the_key_it_superseded_and_nothing_else(client, monkeyp
     """Rotation names the exact hash it retires, rather than diffing disk."""
     from brains.api.admin_key import rotate_admin_key
 
+    monkeypatch.delenv("BRAINS_API_KEY", raising=False)
     _record, operator_key, operator_headers = _operator(_slug("survivor"))
     old_key = settings.api_key
     old_credential = principal_for_secret(old_key).credential_id

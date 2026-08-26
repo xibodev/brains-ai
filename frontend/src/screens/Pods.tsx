@@ -50,7 +50,7 @@ export function Pods() {
 
   const close = () => {
     setSelected(null);
-    if (routeSlug) navigate("/pods");
+    if (routeSlug) navigate("/labs/pods");
   };
 
   const pods = state.data ?? [];
@@ -110,7 +110,7 @@ export function Pods() {
         <div className="grid">
           {pods.map((pod) => (
             <div key={String(pod.id)} data-testid="pod-card">
-              <SoftCard interactive onClick={() => navigate(`/pods/${pod.slug}`)}>
+              <SoftCard interactive onClick={() => navigate(`/labs/pods/${pod.slug}`)}>
                 <div className="row spread">
                   <strong>{pod.name}</strong>
                   <StatusPill label={pod.status ?? "active"} />

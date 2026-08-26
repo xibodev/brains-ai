@@ -40,6 +40,20 @@ import type {
   QueueHealthReport,
   QueueHealthRepairResult,
   RecoveryPolicyReport,
+  EmailConfiguration,
+  CoordinationOverview,
+  GeneralConfiguration,
+  SecretConfiguration,
+  OperatorCapabilityCatalog,
+  OperatorCoordination,
+  OperatorGovernance,
+  OperatorKnowledge,
+  OperatorOperations,
+  OperatorOverview,
+  OperatorTask,
+  OperatorTransitionResult,
+  OperatorWorkspace,
+  OperatorWorkspaceDetail,
 } from "./types";
 
 export class ApiError extends Error {
@@ -108,8 +122,12 @@ async function request<T>(
       body && typeof body === "object"
         ? (body as { error?: { message?: string; code?: string } }).error
         : undefined;
+    const detail =
+      body && typeof body === "object" && "detail" in body
+        ? String((body as { detail?: unknown }).detail ?? "")
+        : undefined;
     throw new ApiError(
-      errObj?.message ?? res.statusText ?? "Request failed",
+      errObj?.message ?? detail ?? res.statusText ?? "Request failed",
       res.status,
       errObj?.code,
     );
@@ -160,7 +178,7 @@ export const api = {
   getRuntime: (rt: string | number) => request<Runtime>(`/runtimes/${rt}`),
   patchRuntime: (rt: string | number, body: Partial<Runtime>) =>
     request<Runtime>(`/runtimes/${rt}`, { method: "PATCH", body: JSON.stringify(body) }),
-  enrolRuntime: (body: { label?: string }) =>
+  enrolRuntime: (body: { label?: string; org_id?: number }) =>
     request<EnrolResponse>("/runtimes/enrol", { method: "POST", body: JSON.stringify(body) }),
 
   // --- personas ---
@@ -341,6 +359,154 @@ export const api = {
       body: JSON.stringify({ apply }),
     }),
   recoveryPolicy: () => request<RecoveryPolicyReport>("/admin/recovery-policy"),
+  emailConfiguration: () => request<EmailConfiguration>("/admin/configuration/email"),
+  generalConfiguration: () =>
+    request<GeneralConfiguration>("/admin/configuration/general"),
+  setGeneralConfiguration: (updates: Record<string, unknown>) =>
+    request<GeneralConfiguration>("/admin/configuration/general", {
+      method: "PUT",
+      body: JSON.stringify({ updates }),
+    }),
+  secretConfiguration: () =>
+    request<SecretConfiguration>("/admin/configuration/secrets"),
+  setSecretConfiguration: (name: string, value: string) =>
+    request<{ name: string; set: boolean }>(`/admin/configuration/secrets/${name}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
+  clearSecretConfiguration: (name: string) =>
+    request<{ name: string; set: boolean; removed: boolean }>(
+      `/admin/configuration/secrets/${name}`,
+      { method: "DELETE" },
+    ),
+  setEmailConfiguration: (name: string, value: string) =>
+    request<{ name: string; set: boolean }>(`/admin/configuration/email/${name}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
+  clearEmailConfiguration: (name: string) =>
+    request<{ name: string; set: boolean; removed: boolean }>(
+      `/admin/configuration/email/${name}`,
+      { method: "DELETE" },
+    ),
+  testEmailConfiguration: (to: string) =>
+    request<{ sent: boolean; to: string; subject: string }>(
+      "/admin/configuration/email/test",
+      { method: "POST", body: JSON.stringify({ to }) },
+    ),
+  coordinationOverview: () =>
+    request<CoordinationOverview>("/admin/coordination/overview"),
+
+  // --- workspace-first operator console ---
+  operatorOverview: () => request<OperatorOverview>("/operator/overview"),
+  operatorWorkspaces: () =>
+    request<{ data: OperatorWorkspace[] }>("/operator/workspaces").then((body) => body.data),
+  operatorWorkspace: (slug: string) =>
+    request<OperatorWorkspaceDetail>(`/operator/workspaces/${encodeURIComponent(slug)}`),
+  operatorCoordination: () => request<OperatorCoordination>("/operator/coordination"),
+  operatorGovernance: () => request<OperatorGovernance>("/operator/governance"),
+  operatorOperations: () => request<OperatorOperations>("/operator/operations"),
+  operatorCapabilities: () =>
+    request<OperatorCapabilityCatalog>("/operator/capabilities"),
+  operatorCreateTask: (
+    workspace: string,
+    body: { title: string; body?: string; priority?: string; depends_on?: string; tags?: string },
+  ) =>
+    request<OperatorTask>(`/operator/workspaces/${encodeURIComponent(workspace)}/tasks`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  operatorClaimTask: (code: string, sessionId: string) =>
+    request<OperatorTask>(`/operator/tasks/${encodeURIComponent(code)}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+  operatorCompleteTask: (code: string, sessionId: string, summary: string) =>
+    request<OperatorTask>(`/operator/tasks/${encodeURIComponent(code)}/complete`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, summary }),
+    }),
+  operatorReleaseTask: (code: string, sessionId: string, reason: string) =>
+    request<OperatorTransitionResult>(`/operator/tasks/${encodeURIComponent(code)}/release`, {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId, reason }),
+    }),
+  operatorClaimWorkspace: (
+    workspace: string,
+    body: { session_id: string; scope?: string; duration_minutes?: number },
+  ) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/claims`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorReleaseWorkspace: (workspace: string, sessionId: string) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/claims/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+    ),
+  operatorSetHandoff: (
+    workspace: string,
+    body: { title: string; body?: string; session_id?: string },
+  ) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/handoffs`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorPickHandoff: (workspace: string, sessionId?: string) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/handoffs/pick`,
+      { method: "POST", body: JSON.stringify({ session_id: sessionId || null }) },
+    ),
+  operatorClearHandoff: (workspace: string, sessionId: string | undefined, reason: string) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/handoffs`,
+      {
+        method: "DELETE",
+        body: JSON.stringify({ session_id: sessionId || null, reason }),
+      },
+    ),
+  operatorSendMessage: (
+    workspace: string,
+    body: { subject: string; body?: string; kind?: string },
+  ) =>
+    request<Record<string, unknown>>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/messages`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorPostTopic: (body: {
+    workspace: string;
+    topic: string;
+    subject: string;
+    body?: string;
+    blast?: boolean;
+  }) =>
+    request<Record<string, unknown>>("/operator/topics", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  operatorAddKnowledge: (
+    workspace: string,
+    body: { type: string; title: string; body?: string; scope?: string },
+  ) =>
+    request<OperatorKnowledge>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/knowledge`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorResolveKnowledge: (code: string, status = "resolved") =>
+    request<OperatorTransitionResult>(`/operator/knowledge/${encodeURIComponent(code)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ status }),
+    }),
+  operatorDecidePattern: (name: string, approved: boolean) =>
+    request<Record<string, unknown>>(`/operator/patterns/${encodeURIComponent(name)}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ approved }),
+    }),
+  operatorVerifyTool: (name: string) =>
+    request<Record<string, unknown>>(`/operator/tools/${encodeURIComponent(name)}/verify`, {
+      method: "POST",
+    }),
+  operatorAuditVerify: () => request<Record<string, unknown>>("/operator/audit/verify"),
 
   // --- onboarding (F6) ---
   // The attempt is server state: the guard, the resume after a reload, and the

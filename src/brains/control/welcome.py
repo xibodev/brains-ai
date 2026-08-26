@@ -116,13 +116,16 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
 
     try:
         with SessionLocal() as session:
+            from brains.control.sessions import predecessor_session_ids
+
+            recipient_ids = [session_id, *predecessor_session_ids(session, session_id)]
             # Unread mail addressed to this session OR to the workspace.
             # NULL-workspace rows are deliberately NOT catch-all: they are
             # direct-delivery only (to_session_id set), never a cross-project
             # firehose.
             mail_q = session.query(MailboxMessage).filter(
                 MailboxMessage.read_at.is_(None),
-                (MailboxMessage.to_session_id == session_id)
+                (MailboxMessage.to_session_id.in_(recipient_ids))
                 | (
                     MailboxMessage.to_session_id.is_(None)
                     & (MailboxMessage.workspace_id == workspace.id)

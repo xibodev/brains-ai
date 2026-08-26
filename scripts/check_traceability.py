@@ -85,9 +85,9 @@ SPA_BASENAME = "/app"
 #: as a gap in the route's ``TRACEABILITY.md`` row. Removing the gap in code
 #: without removing the entry here fails the gate.
 UNCONSUMED_ROUTE_PARAMS: dict[str, tuple[str, ...]] = {
-    "/app/sessions/:id": ("id",),
-    "/app/personas/:slug": ("slug",),
-    "/app/runtimes/:slug": ("slug",),
+    "/app/labs/sessions/:id": ("id",),
+    "/app/labs/personas/:slug": ("slug",),
+    "/app/labs/runtimes/:slug": ("slug",),
 }
 
 #: Client calls whose literal path is intentionally not mounted by this server
@@ -120,6 +120,7 @@ SERVER_ROUTE_FAMILIES: tuple[tuple[str, str], ...] = (
     ("/relay/", "Relay"),
     ("/v1/ws", "Realtime"),
     ("/v1/events", "Realtime"),
+    ("/v1/operator", "Operator console"),
     ("/v1/runtimes", "Runtimes"),
     ("/v1/integrations/github", "GitHub"),
     ("/v1/models", "Model gateway"),

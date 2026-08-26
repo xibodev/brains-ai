@@ -16,6 +16,7 @@ from brains.experimental import (
     EXPERIMENTAL_ENV,
     GATEWAY_ENV,
     LEGACY_SURFACES_ENV,
+    UI_LABS_ENV,
     ExperimentalDisabledError,
     experimental_enabled,
     legacy_surfaces_enabled,
@@ -176,5 +177,6 @@ def test_experimental_gates_registry_documents_every_switch():
         EXPERIMENTAL_ENV,
         LEGACY_SURFACES_ENV,
         GATEWAY_ENV,
+        UI_LABS_ENV,
     }
     assert all(EXPERIMENTAL_GATES.values())

@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('J6 (F3.3) a comment posted on an issue appears on the issue', async ({ page, consoleGuard }) => {
-  await page.goto('/app/issues');
+  await page.goto('/app/labs/issues');
   // Open the first issue card.
   await page.locator('.issue-card').first().click();
 
@@ -26,7 +26,7 @@ test('J6 (F3.3) a comment posted on an issue appears on the issue', async ({ pag
 });
 
 test('J6 (F4) assign an issue to a persona and dispatch it', async ({ page }) => {
-  await page.goto('/app/issues');
+  await page.goto('/app/labs/issues');
   await page.locator('.issue-card').first().click();
 
   // Assign to the seeded bound persona 'Mason' via the tri-modal picker.
@@ -38,6 +38,6 @@ test('J6 (F4) assign an issue to a persona and dispatch it', async ({ page }) =>
   ]);
   expect(resp.ok(), `dispatch failed: ${resp.status()}`).toBeTruthy();
 
-  await page.goto('/app/sessions');
+  await page.goto('/app/labs/sessions');
   await expect(page.getByText(/no sessions yet/i)).toHaveCount(0);
 });

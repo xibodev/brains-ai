@@ -12,6 +12,7 @@ from brains.api.issues import router as issues_router
 from brains.api.models import router as m
 from brains.api.onboarding import router as onboarding_router
 from brains.api.openai import router as o
+from brains.api.operator import router as operator_router
 from brains.api.orgs import router as orgs_router
 from brains.api.personas import router as personas_router
 from brains.api.projects import router as projects_router
@@ -77,6 +78,7 @@ app.include_router(projects_router)
 app.include_router(issues_router)
 app.include_router(onboarding_router)
 app.include_router(coordination_router)
+app.include_router(operator_router)
 app.include_router(ws_router)
 # Optional LLM I/O dump for investigation. No-op unless ``BRAINS_DUMP_DIR``
 # env var is set. See ``brains.observability.dump``.

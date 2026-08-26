@@ -48,7 +48,7 @@ export function Projects() {
 
   const close = () => {
     setSelected(null);
-    if (routeCode) navigate("/projects");
+    if (routeCode) navigate("/labs/projects");
   };
 
   return (
@@ -85,7 +85,7 @@ export function Projects() {
               <SoftCard
                 key={String(p.id)}
                 interactive
-                onClick={() => navigate(`/projects/${p.code}`)}
+                onClick={() => navigate(`/labs/projects/${p.code}`)}
               >
                 <div className="row spread">
                   <strong>{p.name}</strong>

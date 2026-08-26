@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('J10 (F10) create an autopilot', async ({ page, consoleGuard }) => {
-  await page.goto('/app/automation');
+  await page.goto('/app/labs/automation');
   await page.getByRole('button', { name: /new autopilot|\+ new autopilot/i }).first().click();
 
   const name = `nightly-${Date.now()}`;
@@ -26,7 +26,7 @@ test('J10 (F10) create an autopilot', async ({ page, consoleGuard }) => {
 });
 
 test('J10 (F10) create a skill', async ({ page, consoleGuard }) => {
-  await page.goto('/app/automation');
+  await page.goto('/app/labs/automation');
   await page.getByRole('button', { name: /new skill|\+ new skill/i }).first().click();
 
   const name = `Skill ${Date.now()}`;

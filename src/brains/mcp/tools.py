@@ -479,8 +479,23 @@ def get_state_tool(
     return get_state(workspace_path=workspace_path, session_id=session_id, limit=limit)
 
 
-def start_session_tool(workspace_path: str = ".", tool: str = "codex"):
-    return start_session(workspace_path, tool=tool)
+def start_session_tool(
+    workspace_path: str = ".",
+    tool: str = "codex",
+    predecessor_session_id: str | None = None,
+):
+    return start_session(
+        workspace_path,
+        tool=tool,
+        predecessor_session_id=predecessor_session_id,
+    )
+
+
+def link_session_successor_tool(from_session_id: str, to_session_id: str):
+    """Link one ended/replaced handle to its explicit same-workspace successor."""
+    from brains.control.sessions import link_session_successor
+
+    return link_session_successor(from_session_id, to_session_id)
 
 
 def end_session_tool(session_id: str, summary: str = ""):

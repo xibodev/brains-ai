@@ -112,7 +112,12 @@ HISTORICAL_LEDGER_IDS = (
 
 #: Deltas shipped in THIS generation that postdate the checksum regime: they
 #: must run for real everywhere, never adopted as legacy evidence.
-POST_CHECKSUM_DELTAS = ("139_agent_comms", "140_agent_comms_repair")
+POST_CHECKSUM_DELTAS = (
+    "139_agent_comms",
+    "140_agent_comms_repair",
+    "141_secure_settings",
+    "142_session_successor",
+)
 
 _LEGACY_LEDGER_DDL = """
 CREATE TABLE schema_versions (

@@ -257,6 +257,11 @@ class Settings(BaseSettings):
     # ``PRAGMA foreign_key_check`` is clean once per database and fails
     # loudly otherwise — see ``brains.storage.integrity``.
     sqlite_enforce_foreign_keys: bool = Field(default=False)
+    # One SQLite writer serves every gateway, MCP, CLI, and agent process.
+    # Wait through ordinary multi-session bursts instead of misreporting them
+    # as outages; a genuinely stuck transaction is still surfaced after the
+    # bounded wait and handled through the recovery tooling.
+    sqlite_busy_timeout_ms: int = Field(default=30_000, ge=0, le=300_000)
 
     @field_validator("db_url", mode="after")
     @classmethod
@@ -468,6 +473,17 @@ ADMIN_EDITABLE_KEYS = frozenset(
 # validators in ``brains.admin.service`` reject the syntax up front for
 # fields outside this set.
 ENV_REF_ALLOWED_FIELDS = frozenset({"openai_compatible_api_key"})
+
+_SECURE_SETTING_FIELDS = (
+    "smtp_host",
+    "smtp_port",
+    "smtp_username",
+    "smtp_password",
+    "smtp_from",
+    "smtp_use_starttls",
+    "smtp_timeout_seconds",
+    "operator_notify_email",
+)
 
 
 _ENV_REF_PATTERN = re.compile(r"^\$\{ENV:([A-Z][A-Z0-9_]*)\}$")

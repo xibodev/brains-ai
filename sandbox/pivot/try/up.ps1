@@ -177,6 +177,7 @@ try {
     $env:BRAINS_DB_URL = "sqlite:///$dbPath"
     $env:BRAINS_API_KEY = $Key
     $env:BRAINS_PREWARM_INDEX_ON_SESSION = "0"
+    $env:BRAINS_UI_LABS = "1"
 
     $hub = Start-Process `
       -FilePath $python `

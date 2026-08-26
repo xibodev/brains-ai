@@ -1,45 +1,44 @@
 import { useNavigate } from "react-router-dom";
-import { useOrg } from "../store/OrgContext";
-import { useDock } from "../store/DockContext";
-import { OrgSwitcher } from "./OrgSwitcher";
+import { useOperator } from "../store/OperatorContext";
+import type { ConnState } from "../realtime/client";
 
-export function TopBar({ onTheme }: { onTheme: () => void }) {
+const CONNECTION_LABEL: Record<ConnState, string> = {
+  connecting: "Brain connecting",
+  open: "Brain connected",
+  closed: "Brain reconnecting",
+  denied: "Access changed",
+};
+
+export function TopBar({ connection }: { connection: ConnState }) {
   const navigate = useNavigate();
-  const { activeOrg } = useOrg();
-  const { inboxCount } = useDock();
+  const { catalog } = useOperator();
 
   return (
-    <header className="topbar">
-      <div className="mark">◇ brains</div>
-      <OrgSwitcher />
+    <header className="control-topbar">
+      <div className="control-mobile-brand"><span className="control-brain-mark" />Brains</div>
+      <div className={`control-live-state ${connection}`}><span />{CONNECTION_LABEL[connection]}</div>
       <button
-        className="kbar"
+        className="control-search"
         onClick={() => {
-          // dispatch a synthetic ⌘K
           window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", metaKey: true }),
+            new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
           );
         }}
       >
-        ⌘K  search…
+        Search workspaces and actions <kbd>Ctrl K</kbd>
       </button>
-      <div className="spacer" />
+      <div className="control-spacer" />
       <button
-        className="bell"
-        aria-label="Approvals and asks"
-        title="Inbox"
-        onClick={() => navigate("/inbox")}
+        className="control-icon-button"
+        aria-label="Open governance queue"
+        title="Governance"
+        onClick={() => navigate("/governance")}
       >
-        🔔
-        {inboxCount > 0 && <span className="badge">{inboxCount}</span>}
+        !
       </button>
-      <button className="icon-btn" onClick={onTheme} aria-label="Toggle theme" title="Theme">
-        ◐
-      </button>
-      <div className="dropdown">
-        <button title="Operator">
-          ( {activeOrg ? "Operator" : "—"} ▾ )
-        </button>
+      <div className="control-operator">
+        <div className="control-avatar">O</div>
+        <span><strong>Operator</strong><small>{catalog?.install_admin ? "Install admin" : "Workspace member"}</small></span>
       </div>
     </header>
   );

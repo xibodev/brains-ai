@@ -21,6 +21,46 @@ export interface Skill {
   org_slug?: string;
 }
 
+export interface EmailConfiguration {
+  mailer: {
+    enabled: boolean;
+    smtp_host?: string | null;
+    smtp_port: number;
+    smtp_timeout_seconds: number;
+    starttls: boolean;
+    from?: string | null;
+    has_credentials: boolean;
+    operator_notify_email?: string | null;
+  };
+  secure: {
+    encrypted_store: string;
+    settings: Record<string, { set: boolean; secret: boolean; source?: string }>;
+  };
+}
+
+export interface GeneralConfiguration {
+  live: Record<string, unknown>;
+  overlay: Record<string, unknown>;
+  overlay_path: string;
+}
+
+export interface SecretConfiguration {
+  encrypted_store: string;
+  settings: Record<string, { set: boolean; secret: boolean; source?: string }>;
+}
+
+export interface CoordinationOverview {
+  live_agents: Array<Record<string, unknown>>;
+  workspaces: Workspace[];
+  claims: Array<Record<string, unknown>>;
+  tasks: Array<Record<string, unknown>>;
+  handoffs: Handoff[];
+  topics: Array<Record<string, unknown>>;
+  patterns: Array<Record<string, unknown>>;
+  knowledge: Array<Record<string, unknown>>;
+  service: Record<string, unknown>;
+}
+
 // BL-P1-08 (F10) — a Skill attached to a Persona or Project, with provenance.
 export interface SkillAttachment {
   id: number | string;
@@ -434,9 +474,11 @@ export interface Approval {
 
 export interface Handoff {
   id: number | string;
+  handoff_id?: number | string;
   code?: string;
   title?: string;
   status?: string;
+  workspace?: string;
   created_at?: string;
 }
 
@@ -613,4 +655,206 @@ export interface RecoveryPolicyReport {
     detail: string | null;
   };
   reasons: string[];
+}
+
+// --- workspace-first operator console ---
+
+export interface OperatorTask {
+  code: string;
+  workspace: string;
+  title: string;
+  body?: string | null;
+  priority: string;
+  status: string;
+  claimed_by_session_id?: string | null;
+  created_at?: string;
+}
+
+export interface OperatorClaim {
+  workspace: string;
+  session_id: string;
+  scope: string;
+  claimed_at?: string;
+  expires_at?: string;
+}
+
+export interface OperatorDecision {
+  code: string;
+  workspace: string;
+  workspace_id?: number;
+  session_id?: string | null;
+  title: string;
+  body?: string | null;
+  proposed_answer?: string | null;
+  status: string;
+  kind?: string | null;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface OperatorHandoff extends Handoff {
+  body?: string | null;
+  set_at?: string;
+}
+
+export interface OperatorEvent {
+  id: number | string;
+  kind: string;
+  message: string;
+  workspace_id?: number | null;
+  session_id?: string | null;
+  created_at: string;
+}
+
+export interface OperatorAgent {
+  session_id: string;
+  workspace?: string | null;
+  tool?: string | null;
+  state?: string | null;
+  started_at?: string;
+  last_activity_at?: string | null;
+  interactive_input?: boolean;
+}
+
+export interface OperatorKnowledge {
+  code: string;
+  type: string;
+  title: string;
+  body?: string | null;
+  status: string;
+  scope: string;
+  workspace?: string | null;
+  severity?: string;
+  created_at?: string;
+}
+
+export interface OperatorSignal {
+  type: string;
+  scope: string;
+  workspace?: string | null;
+  count: number;
+  last_at?: string | null;
+}
+
+export interface OperatorPattern {
+  name: string;
+  category: string;
+  description: string;
+  status: string;
+  usage_count?: number;
+}
+
+export interface OperatorWorkspace extends Workspace {
+  last_summary?: string | null;
+  live_agents: number;
+  claim?: OperatorClaim | null;
+  tasks: Record<string, number>;
+  open_decisions: number;
+  active_handoffs: number;
+  unread_messages: number;
+}
+
+export interface OperatorOverview {
+  generated_at: string;
+  situation: {
+    workspaces: number;
+    live_agents: number;
+    active_claims: number;
+    open_decisions: number;
+    active_handoffs: number;
+    blocked_tasks: number;
+  };
+  workspaces: OperatorWorkspace[];
+  attention: {
+    decisions: OperatorDecision[];
+    handoffs: OperatorHandoff[];
+  };
+  live_agents: OperatorAgent[];
+  recent_events: OperatorEvent[];
+  readiness: ReadinessReport | null;
+  audit: Record<string, unknown> | null;
+}
+
+export interface OperatorWorkspaceDetail {
+  workspace: Workspace & { last_summary?: string | null };
+  live_agents: OperatorAgent[];
+  sessions: Session[];
+  claims: OperatorClaim[];
+  tasks: OperatorTask[];
+  decisions: OperatorDecision[];
+  handoffs: OperatorHandoff[];
+  knowledge: OperatorKnowledge[];
+  signals: OperatorSignal[];
+  events: OperatorEvent[];
+}
+
+export interface OperatorCoordination {
+  tasks: OperatorTask[];
+  claims: OperatorClaim[];
+  handoffs: OperatorHandoff[];
+  topics: Array<{ topic: string; posts: number; last_post_at?: string | null }>;
+  topic_posts: Array<Record<string, unknown>>;
+  knowledge: OperatorKnowledge[];
+  signals: OperatorSignal[];
+  patterns: OperatorPattern[];
+  live_agents: OperatorAgent[];
+}
+
+export interface OperatorGovernance {
+  decisions: OperatorDecision[];
+  actions: Array<Record<string, unknown>>;
+  audit: Array<Record<string, unknown>>;
+  chain: Record<string, unknown> | null;
+}
+
+export interface OperatorTool {
+  name: string;
+  display_name: string;
+  is_available: boolean;
+  last_verified_at?: string | null;
+}
+
+export interface OperatorOperations {
+  readiness: ReadinessReport;
+  queue: {
+    summary: QueueHealthSummary;
+    diagnosis: QueueHealthDiagnosis;
+  };
+  recovery: RecoveryPolicyReport;
+  service: {
+    platform?: string;
+    state?: string;
+    installed?: boolean;
+    serving?: boolean;
+    healthy?: boolean;
+    listeners?: { gateway?: boolean; mcp?: boolean };
+    service_pid?: Record<string, unknown>;
+  };
+  runtimes: Runtime[];
+  tools: OperatorTool[];
+  operators: Array<Record<string, unknown>>;
+  labs_enabled: boolean;
+}
+
+export type OperatorTransport = "native_http" | "thin_adapter" | "host_contract";
+
+export interface OperatorCapability {
+  key: string;
+  label: string;
+  category: string;
+  scope: string;
+  transport: OperatorTransport;
+  enabled: boolean;
+  reason?: string;
+}
+
+export interface OperatorCapabilityCatalog {
+  data: OperatorCapability[];
+  labs_enabled: boolean;
+  install_admin: boolean;
+}
+
+export interface OperatorTransitionResult {
+  code: string;
+  status: string;
 }

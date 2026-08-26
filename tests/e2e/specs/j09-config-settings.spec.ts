@@ -13,7 +13,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('J9 (F7) Config Providers shows real providers + a working Test', async ({ page, consoleGuard }) => {
-  await page.goto('/app/config/providers');
+  await page.goto('/app/operations/config/providers');
   const providers = page.locator('[data-testid="config-providers"]');
   await expect(providers).toBeVisible();
   // No "wire me" stub text anywhere on the config surface.
@@ -28,7 +28,7 @@ test('J9 (F7) Config Providers shows real providers + a working Test', async ({ 
 });
 
 test('J9 (F9) Settings exposes a Usage dashboard', async ({ page, consoleGuard }) => {
-  await page.goto('/app/settings/usage');
+  await page.goto('/app/operations/access/usage');
   await expect(page.locator('[data-testid="usage-summary"]')).toBeVisible();
   consoleGuard.assertClean();
 });

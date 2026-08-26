@@ -19,10 +19,13 @@ def append_event(
 ) -> Event:
     init_db()
     now = datetime.now(UTC)
+    normalized_session_id = session_id.strip() if isinstance(session_id, str) else session_id
+    if not normalized_session_id:
+        normalized_session_id = None
     with SessionLocal() as session:
         row = Event(
             workspace_id=workspace_id,
-            session_id=session_id,
+            session_id=normalized_session_id,
             kind=kind,
             message=message,
             metadata_json=json.dumps(metadata or {}),
@@ -32,8 +35,8 @@ def append_event(
         # the reaper / resume UI can show how fresh it is, without
         # forcing every agent to call a dedicated heartbeat tool. Cheap
         # — same transaction as the event insert, single UPDATE by PK.
-        if session_id:
-            session.query(AgentSession).filter(AgentSession.id == session_id).update(
+        if normalized_session_id:
+            session.query(AgentSession).filter(AgentSession.id == normalized_session_id).update(
                 {"last_activity_at": now}, synchronize_session=False
             )
         session.commit()

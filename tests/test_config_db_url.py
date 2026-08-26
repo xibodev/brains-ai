@@ -65,3 +65,12 @@ def test_default_field_resolves_when_no_env(isolated_env):
     assert s.db_url == _canonical_default_db_url()
     assert s.db_url != DEFAULT_DB_URL
     assert s.db_url.startswith("sqlite:///")
+
+
+def test_sqlite_busy_timeout_defaults_to_multi_session_window(isolated_env):
+    assert Settings().sqlite_busy_timeout_ms == 30_000
+
+
+def test_sqlite_busy_timeout_honours_environment(isolated_env):
+    isolated_env.setenv("BRAINS_SQLITE_BUSY_TIMEOUT_MS", "45000")
+    assert Settings().sqlite_busy_timeout_ms == 45_000

@@ -20,7 +20,7 @@ test('J1.1 invalid credentials remain signed out and allow retry', async ({ page
 
 test('J1.2 onboarding persists real entities and completes with a session', async ({ page, consoleGuard }) => {
   await signIn(page);
-  await page.goto('/app/onboarding');
+  await page.goto('/app/labs/onboarding');
 
   await page.getByRole('button', { name: /use it/i }).click();
   await expect(page.getByRole('heading', { name: /connect a machine/i, level: 1 })).toBeVisible();

@@ -7,7 +7,7 @@ below E3, or an enforcement boundary is still cooperative. The default
 install **hides and refuses** these surfaces; an operator reaches them only
 through an explicit environment opt-in, and every refusal names that switch.
 
-Two independent gates:
+Independent gates:
 
 - ``BRAINS_MCP_EXPERIMENTAL=1``  — experimental MCP tools (semantic/graph
   retrieval, session chat delivery) and Autopilot *scheduled auto-fire*.
@@ -16,6 +16,9 @@ Two independent gates:
   (``/dashboard`` app + gateway-mounted ``/admin`` HTML pages). The JSON
   APIs under ``/admin/api/*`` stay available either way; only human-facing
   HTML retires.
+- ``BRAINS_UI_LABS=1`` — unfinished execution-model screens in the modern
+  console (Personas, Pods, Projects, Issues, Sessions, Runtimes, Automation,
+  and onboarding). They stay routable only behind this explicit UI opt-in.
 
 This module is deliberately dependency-free so any layer (MCP server,
 supervisor, CLI, FastAPI middleware) can import it cheaply.
@@ -28,6 +31,7 @@ import os
 EXPERIMENTAL_ENV = "BRAINS_MCP_EXPERIMENTAL"
 LEGACY_SURFACES_ENV = "BRAINS_LEGACY_SURFACES"
 GATEWAY_ENV = "BRAINS_EXPERIMENTAL_GATEWAY"
+UI_LABS_ENV = "BRAINS_UI_LABS"
 
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -92,6 +96,11 @@ def gateway_experimental_enabled() -> bool:
     return _env_flag(GATEWAY_ENV)
 
 
+def ui_labs_enabled() -> bool:
+    """True when unfinished modern-console execution screens are enabled."""
+    return _env_flag(UI_LABS_ENV)
+
+
 def require_experimental(label: str) -> None:
     """Raise :class:`ExperimentalDisabledError` unless the experimental gate
     is enabled. ``label`` names the surface in the refusal message."""
@@ -103,7 +112,7 @@ def require_experimental(label: str) -> None:
     )
 
 
-#: The three opt-in switches and what each unlocks. Single source of truth
+#: The opt-in switches and what each unlocks. Single source of truth
 #: for docs and operator-facing summaries.
 EXPERIMENTAL_GATES: dict[str, str] = {
     EXPERIMENTAL_ENV: (
@@ -118,5 +127,9 @@ EXPERIMENTAL_GATES: dict[str, str] = {
         "(/v1/chat/completions, /v1/messages, /v1/responses, /v1/models) and "
         "the `brains-ai run <tool>` launcher. Model access is expected to come "
         "from each CLI's own provider logins instead."
+    ),
+    UI_LABS_ENV: (
+        "unfinished execution-model screens in the modern console: Sessions, "
+        "Personas, Pods, Projects, Issues, Runtimes, Automation, and onboarding"
     ),
 }

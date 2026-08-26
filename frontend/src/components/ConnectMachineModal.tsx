@@ -19,10 +19,12 @@ export function ConnectMachineModal({
   open,
   onClose,
   onConnected,
+  orgId,
 }: {
   open: boolean;
   onClose: () => void;
-  onConnected: () => void;
+  onConnected: (runtime: Runtime) => void;
+  orgId?: number;
 }) {
   const { toast } = useToast();
   const [enrol, setEnrol] = useState<EnrolResponse | null>(null);
@@ -60,7 +62,7 @@ export function ConnectMachineModal({
       if (cancelled) return;
       baselineIds.current = new Set(rts.map((r) => String(r.machine_id ?? r.id)));
 
-      const result = await api.enrolRuntime({});
+      const result = await api.enrolRuntime(orgId === undefined ? {} : { org_id: orgId });
       if (cancelled) return;
       setEnrol(result);
       setStatus("waiting");
@@ -76,7 +78,7 @@ export function ConnectMachineModal({
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, orgId]);
 
   // Check the current runtime list for a new machine_id.
   const checkForArrival = useCallback(() => {
@@ -99,7 +101,7 @@ export function ConnectMachineModal({
           setNewRuntime(arrived);
           setNewCliCount(count);
           setStatus("connected");
-          onConnectedRef.current();
+          onConnectedRef.current(arrived);
         }
       })
       .catch(() => {

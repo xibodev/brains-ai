@@ -12,7 +12,7 @@ detected agentic CLI/IDE on the machine it idempotently injects:
 
 There is no universal discovery bus — each tool has its own config
 contract — so this is a maintained adapter registry. Tier-1 today:
-GitHub Copilot CLI, Claude Code, OpenAI Codex CLI.
+GitHub Copilot CLI, Claude Code, OpenAI Codex CLI, OpenCode.
 
 Every function is keyed on an explicit ``home`` directory so the whole
 surface is unit-testable and exercisable inside a clean-slate Docker
@@ -148,6 +148,23 @@ def _claude_entry(ctx: WireContext) -> dict[str, Any]:
     return {"type": "sse", "url": ctx.url, "headers": ctx.auth_headers()}
 
 
+def _opencode_entry(ctx: WireContext) -> dict[str, Any]:
+    if ctx.transport == "stdio":
+        return {
+            "type": "local",
+            "command": [ctx.python, *ctx.stdio_args()],
+            "environment": ctx.stdio_env(),
+            "enabled": True,
+        }
+    return {
+        "type": "remote",
+        "url": ctx.url,
+        "headers": ctx.auth_headers(),
+        "oauth": False,
+        "enabled": True,
+    }
+
+
 def _codex_block(ctx: WireContext) -> str:
     # Codex is TOML. stdio uses command/args + a nested env table; remote
     # uses url + bearer_token and the experimental rmcp client.
@@ -185,6 +202,7 @@ class ToolAdapter:
     _detect: Callable[[Path], bool]
     _json_entry: Callable[[WireContext], dict[str, Any]] | None = None
     _toml_block: Callable[[WireContext], str] | None = None
+    json_servers_key: str = "mcpServers"
     supports_sse: bool = True
     sse_experimental: bool = False
 
@@ -226,6 +244,16 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _detect=lambda h: (h / ".codex").is_dir(),
         _toml_block=_codex_block,
         sse_experimental=True,
+    ),
+    "opencode": ToolAdapter(
+        name="opencode",
+        display="OpenCode",
+        mcp_format="json",
+        _mcp_path=lambda h: h / ".config" / "opencode" / "opencode.json",
+        _instr_path=lambda h: h / ".config" / "opencode" / "AGENTS.md",
+        _detect=lambda h: (h / ".config" / "opencode").is_dir(),
+        _json_entry=_opencode_entry,
+        json_servers_key="mcp",
     ),
 }
 
@@ -334,7 +362,7 @@ def _wire_json(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
         return result
     assert adapter._json_entry is not None
 
-    servers = data.get("mcpServers")
+    servers = data.get(adapter.json_servers_key)
     if not isinstance(servers, dict):
         servers = {}
     existing = servers.get(SERVER_KEY)
@@ -349,7 +377,7 @@ def _wire_json(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
     entry["_brains_managed"] = True
     action = "update" if isinstance(existing, dict) else "create"
     servers[SERVER_KEY] = entry
-    data["mcpServers"] = servers
+    data[adapter.json_servers_key] = servers
 
     result["action"] = action
     if dry_run:
@@ -369,7 +397,7 @@ def _unwire_json(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
         result["action"] = "error"
         result["detail"] = "existing config is not valid JSON; left untouched"
         return result
-    servers = data.get("mcpServers")
+    servers = data.get(adapter.json_servers_key)
     existing = servers.get(SERVER_KEY) if isinstance(servers, dict) else None
     if not isinstance(existing, dict):
         result["action"] = "absent"
@@ -384,7 +412,7 @@ def _unwire_json(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
     result["backup"] = _backup(path)
     managed_servers = cast("dict[str, Any]", servers)
     del managed_servers[SERVER_KEY]
-    data["mcpServers"] = managed_servers
+    data[adapter.json_servers_key] = managed_servers
     _write(path, json.dumps(data, indent=2) + "\n")
     return result
 
@@ -560,7 +588,7 @@ def status(home: Path) -> dict[str, Any]:
         transport = None
         if adapter.mcp_format == "json":
             data = _load_json(mcp_path)
-            servers = data.get("mcpServers")
+            servers = data.get(adapter.json_servers_key)
             if isinstance(servers, dict) and isinstance(servers.get(SERVER_KEY), dict):
                 wired_mcp = True
                 transport = "stdio" if servers[SERVER_KEY].get("command") else "sse"

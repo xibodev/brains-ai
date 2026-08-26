@@ -385,7 +385,7 @@ def wire_cli(
     tool: list[str] = typer.Option(
         [],
         "--tool",
-        help="Limit to specific tool(s): copilot-cli, claude-code, codex. Repeatable.",
+        help="Limit to specific tool(s): copilot-cli, claude-code, codex, opencode. Repeatable.",
     ),
     url: str | None = typer.Option(
         None, "--url", help="SSE server URL (default http://127.0.0.1:<port>/sse)."
@@ -402,7 +402,7 @@ def wire_cli(
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change; write nothing."),
 ):
-    """Register brains into installed agentic tools (Copilot CLI, Claude Code, Codex).
+    """Register brains into installed agentic tools (Copilot CLI, Claude Code, Codex, OpenCode).
 
     Global by default — brains is a multi-session coordination tool, so it
     wires into the user-level config of every detected tool. Idempotent and
@@ -2010,8 +2010,35 @@ def state_cli(
 
 
 @app.command("session-start")
-def session_start_cli(workspace: str = ".", tool: str = "codex"):
-    _print_json(start_session(workspace, tool=tool))
+def session_start_cli(
+    workspace: str = ".",
+    tool: str = "codex",
+    pid: int | None = typer.Option(
+        None,
+        "--pid",
+        min=1,
+        help="PID of the durable agent process that owns this Session. Omit when unknown.",
+    ),
+    predecessor_session: str | None = typer.Option(None, "--predecessor-session"),
+):
+    _print_json(
+        start_session(
+            workspace,
+            tool=tool,
+            pid=pid,
+            predecessor_session_id=predecessor_session,
+        )
+    )
+
+
+@app.command("session-link-successor")
+def session_link_successor_cli(
+    from_session: str = typer.Option(..., "--from-session"),
+    to_session: str = typer.Option(..., "--to-session"),
+):
+    from brains.control.sessions import link_session_successor
+
+    _print_json(link_session_successor(from_session, to_session))
 
 
 @app.command("session-end")

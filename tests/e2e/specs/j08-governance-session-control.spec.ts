@@ -19,9 +19,9 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J8.1 a pending governed action is approved once from the Inbox', async ({ page, consoleGuard }) => {
-  await page.goto('/app/inbox');
-  const card = page.locator('.softcard', { hasText: approvalCode });
+test('J8.1 a pending governed action is approved once from Governance', async ({ page, consoleGuard }) => {
+  await page.goto('/app/governance');
+  const card = page.locator('.operator-decision-card', { hasText: approvalCode });
   await expect(card).toBeVisible();
   const [response] = await Promise.all([
     page.waitForResponse((resp) => resp.url().endsWith(`/approvals/${approvalCode}/resolve`)),
@@ -37,7 +37,7 @@ test('J8.1 a pending governed action is approved once from the Inbox', async ({ 
 });
 
 test('J8.2 unsupported chat is explicit and stop is durably idempotent', async ({ page }) => {
-  await page.goto('/app/personas');
+  await page.goto('/app/labs/personas');
   const mason = page.locator('[data-testid="persona-card"]', { hasText: /mason/i }).first();
   const [spawnResponse] = await Promise.all([
     page.waitForResponse((resp) => /\/personas\/.*\/spawn/.test(resp.url())),
@@ -46,7 +46,7 @@ test('J8.2 unsupported chat is explicit and stop is durably idempotent', async (
   const spawn = await spawnResponse.json();
   const sessionId = String(spawn.session_id);
 
-  await page.goto('/app/sessions');
+  await page.goto('/app/labs/sessions');
   await page.locator('.card-list .softcard').first().click();
   await page.getByRole('button', { name: /open in chat/i }).click();
   await expect(page.getByText(/messaging is unavailable/i)).toBeVisible();

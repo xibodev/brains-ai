@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from brains.control.common import utc_now
 from brains.control.events import append_event
-from brains.control.sessions import register_workspace
+from brains.control.sessions import get_workspace, register_workspace
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import Workspace, WorkspaceClaim
@@ -143,14 +143,16 @@ def list_workspace_claims(
     visible = visible_workspace_ids_for_current()
     init_db()
     with SessionLocal() as session:
-        if not include_expired:
-            _expire_claims(session)
-            session.commit()
         query = session.query(WorkspaceClaim, Workspace).join(
             Workspace, Workspace.id == WorkspaceClaim.workspace_id
         )
+        if not include_expired:
+            # A list operation must remain a read. Expired leases are hidden
+            # in SQL and are physically removed only by a claim mutation or
+            # the explicit queue-health repair path.
+            query = query.filter(WorkspaceClaim.expires_at >= utc_now())
         if workspace_path:
-            workspace = register_workspace(workspace_path)
+            workspace = get_workspace(path=workspace_path)
             query = query.filter(WorkspaceClaim.workspace_id == workspace.id)
         if visible is not None:
             query = query.filter(WorkspaceClaim.workspace_id.in_(visible))

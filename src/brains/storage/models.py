@@ -238,6 +238,23 @@ class AgentSession(Base):
     )
 
 
+class SessionSuccessor(Base):
+    """Explicit predecessor -> successor handle continuity.
+
+    Separate additive table: ``agent_sessions`` belongs to the frozen baseline
+    and must not gain post-freeze columns in place.
+    """
+
+    __tablename__ = "session_successors"
+    predecessor_session_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_sessions.id"), primary_key=True
+    )
+    successor_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (Index("ix_events_ws_created", "workspace_id", "created_at"),)
@@ -625,6 +642,25 @@ class HelpRequestConstraint(Base):
     __tablename__ = "help_request_constraints"
     request_code: Mapped[str] = mapped_column(ForeignKey("help_requests.code"), primary_key=True)
     required_tool: Mapped[str] = mapped_column(String(64))
+
+
+class SecureSetting(Base):
+    """Encrypted local configuration value.
+
+    Values are AES-GCM ciphertext. ``nonce`` and ``salt`` are public random
+    inputs; the encryption key is derived from the Brains admin key and never
+    stored. Only a small allowlisted configuration surface may use this table.
+    """
+
+    __tablename__ = "secure_settings"
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    salt: Mapped[bytes] = mapped_column(LargeBinary)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
 
 
 class TopicPost(Base):

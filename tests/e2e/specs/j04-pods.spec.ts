@@ -12,7 +12,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('J4 (F5) create a pod with a leader', async ({ page, consoleGuard }) => {
-  await page.goto('/app/pods');
+  await page.goto('/app/labs/pods');
   await page.getByRole('button', { name: /new pod|\+ new pod|\+ new/i }).first().click();
 
   const name = `pod-${Date.now()}`;

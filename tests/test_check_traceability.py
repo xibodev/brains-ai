@@ -105,9 +105,9 @@ def test_new_spa_route_without_documentation_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/inbox" element={<Inbox />} />',
-        '<Route path="/inbox" element={<Inbox />} />\n'
-        '                <Route path="/reports" element={<Inbox />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />\n'
+        '                  <Route path="/reports" element={<CommandCenter />} />',
     )
     errors = _errors(root)
     _assert_reports(
@@ -121,11 +121,11 @@ def test_documented_spa_route_that_no_longer_exists_fails(tmp_path: Path) -> Non
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/automation" element={<Automation />} />',
+        '<Route path="/labs/automation" element={<Automation />} />',
         "",
     )
     errors = _errors(root)
-    _assert_reports(errors, "documents route /app/automation, which is not declared")
+    _assert_reports(errors, "documents route /app/labs/automation, which is not declared")
 
 
 def test_duplicate_spa_route_fails(tmp_path: Path) -> None:
@@ -133,11 +133,11 @@ def test_duplicate_spa_route_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/inbox" element={<Inbox />} />',
-        '<Route path="/inbox" element={<Inbox />} />\n'
-        '                <Route path="/inbox" element={<Inbox />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />\n'
+        '                  <Route path="/command-center" element={<CommandCenter />} />',
     )
-    _assert_reports(_errors(root), "duplicate declared route /app/inbox")
+    _assert_reports(_errors(root), "duplicate declared route /app/command-center")
 
 
 def test_route_parameter_no_component_reads_fails(tmp_path: Path) -> None:
@@ -145,12 +145,12 @@ def test_route_parameter_no_component_reads_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/automation" element={<Automation />} />',
-        '<Route path="/automation/:tab" element={<Automation />} />',
+        '<Route path="/labs/automation" element={<Automation />} />',
+        '<Route path="/labs/automation/:tab" element={<Automation />} />',
     )
     _assert_reports(
         _errors(root),
-        "route /app/automation/:tab declares :tab, which Automation never reads",
+        "route /app/labs/automation/:tab declares :tab, which Automation never reads",
     )
 
 
@@ -167,7 +167,7 @@ def test_route_parameter_that_became_consumed_must_leave_the_allowlist(tmp_path:
     )
     _assert_reports(
         _errors(root),
-        "route /app/personas/:slug now consumes :slug; remove it from UNCONSUMED_ROUTE_PARAMS",
+        "route /app/labs/personas/:slug now consumes :slug; remove it from UNCONSUMED_ROUTE_PARAMS",
     )
 
 
@@ -176,12 +176,12 @@ def test_unconsumed_parameter_without_a_documented_gap_fails(tmp_path: Path) -> 
     _edit(
         root,
         "docs/product/TRACEABILITY.md",
-        "| `/app/sessions/:id` | `Sessions` | F3, J7 | `:id` is not consumed to select the Session. |",
-        "| `/app/sessions/:id` | `Sessions` | F3, J7 | None. |",
+        "| `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | `:id` remains unconsumed by the legacy screen. |",
+        "| `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | None. |",
     )
     _assert_reports(
         _errors(root),
-        "route /app/sessions/:id has an unconsumed :id that docs/product/TRACEABILITY.md "
+        "route /app/labs/sessions/:id has an unconsumed :id that docs/product/TRACEABILITY.md "
         "does not record as a gap",
     )
 
@@ -191,7 +191,7 @@ def test_redirect_to_an_undeclared_route_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route index element={<Navigate to="/inbox" replace />} />',
+        '<Route index element={<Navigate to="/command-center" replace />} />',
         '<Route index element={<Navigate to="/dashboard" replace />} />',
     )
     _assert_reports(_errors(root), "redirects to /app/dashboard, which is not declared")
@@ -202,8 +202,8 @@ def test_route_component_that_is_not_imported_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/inbox" element={<Inbox />} />',
-        '<Route path="/inbox" element={<Mailbox />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
+        '<Route path="/command-center" element={<Mailbox />} />',
     )
     _assert_reports(_errors(root), "names unimported component Mailbox")
 
@@ -213,18 +213,21 @@ def test_route_component_module_that_does_not_exist_fails(tmp_path: Path) -> Non
     _edit(
         root,
         "frontend/src/App.tsx",
-        'import { Inbox } from "./screens/Inbox";',
-        'import { Inbox } from "./screens/InboxScreen";',
+        'import { CommandCenter } from "./screens/CommandCenter";',
+        'import { CommandCenter } from "./screens/CommandCenterScreen";',
     )
-    _assert_reports(_errors(root), "component Inbox for route /app/inbox resolves to no module")
+    _assert_reports(
+        _errors(root),
+        "component CommandCenter for route /app/command-center resolves to no module",
+    )
 
 
 def test_check_docs_route_list_drift_fails(tmp_path: Path) -> None:
     root = _fixture_root(tmp_path)
-    _edit(root, "scripts/check_docs.py", '    "/app/automation",\n', "")
+    _edit(root, "scripts/check_docs.py", '    "/app/labs/automation",\n', "")
     _assert_reports(
         _errors(root),
-        "declared route /app/automation is missing from check_docs REQUIRED_SPA_ROUTES",
+        "declared route /app/labs/automation is missing from check_docs REQUIRED_SPA_ROUTES",
     )
 
 
@@ -237,7 +240,10 @@ def test_stale_unconsumed_parameter_allowlist_entry_fails() -> None:
         {"Inbox": "./screens/Inbox"},
         {},
     )
-    _assert_reports(errors, "UNCONSUMED_ROUTE_PARAMS lists undeclared route /app/sessions/:id")
+    _assert_reports(
+        errors,
+        "UNCONSUMED_ROUTE_PARAMS lists undeclared route /app/labs/sessions/:id",
+    )
 
 
 # --------------------------------------------------------------------------

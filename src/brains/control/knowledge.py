@@ -119,6 +119,7 @@ def add_knowledge_entry(
     valid_until: datetime | str | None = None,
     promoted_from: str | None = None,
     session_id: str | None = None,
+    operator_id: int | None = None,
     metadata: dict | None = None,
 ) -> dict:
     """Record a knowledge entry against ``workspace_path``.
@@ -135,7 +136,7 @@ def add_knowledge_entry(
         raise ValueError(f"provenance must be one of {sorted(ENTRY_PROVENANCE)}")
     parsed_valid_until = _parse_valid_until(valid_until)
     workspace = register_workspace(workspace_path)
-    operator_id = _resolve_operator_id()
+    resolved_operator_id = operator_id if operator_id is not None else _resolve_operator_id()
     init_db()
     holder: dict = {}
 
@@ -166,7 +167,7 @@ def add_knowledge_entry(
             valid_until=parsed_valid_until,
             promoted_from=promoted_from_id,
             evidence=evidence,
-            created_by_operator_id=operator_id,
+            created_by_operator_id=resolved_operator_id,
             created_by_session_id=session_id,
             metadata_json=json.dumps(metadata or {}),
         )

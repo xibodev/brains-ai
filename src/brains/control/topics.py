@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import func
@@ -36,6 +36,7 @@ from brains.storage.models import AgentSession, TopicPost, Workspace
 _TOPIC_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 DEFAULT_BLAST_TTL_SECONDS = 900
+DEFAULT_AGENT_LIVE_TTL_SECONDS = 3600
 
 #: Per-harness wake capability: can an orchestrator deliver a message into a
 #: *running* instance of this CLI? Today no shipped agent CLI is launched
@@ -86,7 +87,7 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
     discover every other live agent regardless of where it runs. Freshness
     uses the opportunistic heartbeat, so no dedicated presence ping exists.
     """
-    ttl = ttl_seconds if ttl_seconds is not None else _blast_ttl_seconds()
+    ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_AGENT_LIVE_TTL_SECONDS
     cutoff = _freshness_cutoff(utc_now(), max(1, int(ttl)))
     init_db()
     with SessionLocal() as session:
@@ -94,7 +95,6 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
             session.query(AgentSession, Workspace)
             .outerjoin(Workspace, Workspace.id == AgentSession.workspace_id)
             .filter(
-                AgentSession.ended_at.is_(None),
                 func.coalesce(AgentSession.last_activity_at, AgentSession.started_at) >= cutoff,
             )
             .order_by(func.coalesce(AgentSession.last_activity_at, AgentSession.started_at).desc())
@@ -103,6 +103,13 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
         for agent, workspace in rows:
             last = agent.last_activity_at or agent.started_at
+            if agent.ended_at is not None:
+                ended = (
+                    agent.ended_at if agent.ended_at.tzinfo else agent.ended_at.replace(tzinfo=UTC)
+                )
+                activity = last if last.tzinfo else last.replace(tzinfo=UTC)
+                if activity <= ended + timedelta(seconds=1):
+                    continue
             out.append(
                 {
                     "session_id": agent.id,
@@ -122,16 +129,23 @@ def _live_workspace_ids(exclude_workspace_id: int | None, ttl_seconds: int) -> l
     cutoff = _freshness_cutoff(utc_now(), max(1, int(ttl_seconds)))
     with SessionLocal() as session:
         rows = (
-            session.query(AgentSession.workspace_id)
+            session.query(AgentSession)
             .filter(
-                AgentSession.ended_at.is_(None),
                 AgentSession.workspace_id.isnot(None),
                 func.coalesce(AgentSession.last_activity_at, AgentSession.started_at) >= cutoff,
             )
-            .distinct()
             .all()
         )
-        ids = [row[0] for row in rows if row[0] is not None]
+        ids: list[int] = []
+        for row in rows:
+            last = row.last_activity_at or row.started_at
+            if row.ended_at is not None:
+                ended = row.ended_at if row.ended_at.tzinfo else row.ended_at.replace(tzinfo=UTC)
+                activity = last if last.tzinfo else last.replace(tzinfo=UTC)
+                if activity <= ended + timedelta(seconds=1):
+                    continue
+            if row.workspace_id is not None and row.workspace_id not in ids:
+                ids.append(row.workspace_id)
     if exclude_workspace_id is not None:
         ids = [wid for wid in ids if wid != exclude_workspace_id]
     return ids

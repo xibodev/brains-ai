@@ -616,7 +616,7 @@ def test_f7_config_summary_is_real_not_stub(client):
     echo = next(provider for provider in body["providers"] if provider["name"] == "echo")
     assert echo["status"] == "simulated"
     assert echo["configured"] is False
-    assert body["write_contract"]["mode"] == "read_only"
+    assert body["write_contract"]["mode"] == "bounded_writes"
     assert "restart every Brains process" in body["write_contract"]["reload"]
     assert any(route["simulated"] for route in body["models"])
     assert isinstance(body["integrations"]["github"]["configured"], bool)

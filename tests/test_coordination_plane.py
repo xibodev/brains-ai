@@ -76,6 +76,16 @@ def test_workspace_claim_conflict_release_and_expiry(tmp_path):
     claim_workspace(workspace, first["session_id"], duration_minutes=-1)
     assert list_workspace_claims(workspace) == []
 
+    # Listing is now strictly read-only: it hides an expired lease but leaves
+    # physical cleanup to a claim mutation or queue-health repair.
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import WorkspaceClaim
+
+    with SessionLocal() as db_session:
+        assert (
+            db_session.query(WorkspaceClaim).filter_by(session_id=first["session_id"]).count() == 1
+        )
+
 
 def test_workspace_claim_concurrent_insert_degrades_gracefully(tmp_path, monkeypatch):
     """A claim that loses a true TOCTOU race must surface the same graceful
@@ -121,6 +131,18 @@ def test_workspace_claim_concurrent_insert_degrades_gracefully(tmp_path, monkeyp
     claims = list_workspace_claims(workspace)
     assert len(claims) == 1
     assert claims[0]["session_id"] == winner["session_id"]
+
+
+def test_workspace_claim_listing_never_registers_an_unknown_workspace(tmp_path):
+    from brains.control.sessions import WorkspaceNotFoundError
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import Workspace
+
+    unknown = str(tmp_path / "unknown")
+    with pytest.raises(WorkspaceNotFoundError):
+        list_workspace_claims(unknown)
+    with SessionLocal() as session:
+        assert session.query(Workspace).filter(Workspace.path == unknown).count() == 0
 
 
 def test_mailbox_send_read_and_mark_read(tmp_path):

@@ -1,60 +1,62 @@
-import { NavLink } from "react-router-dom";
-import { EyebrowLabel } from "./EyebrowLabel";
-import { useDock } from "../store/DockContext";
+import { NavLink, useNavigate } from "react-router-dom";
+import { useOperator } from "../store/OperatorContext";
 
 interface Item {
   to: string;
   label: string;
   glyph: string;
-  countKey?: "inbox";
 }
 
-const WORKSPACE: Item[] = [
-  { to: "/inbox", label: "Inbox", glyph: "◍", countKey: "inbox" },
-  { to: "/sessions", label: "Sessions", glyph: "▸" },
-  { to: "/personas", label: "Personas", glyph: "▸" },
-  { to: "/pods", label: "Pods", glyph: "▸" },
-  { to: "/projects", label: "Projects", glyph: "▸" },
-  { to: "/issues", label: "Issues", glyph: "▸" },
-  { to: "/automation", label: "Automation", glyph: "▸" },
-];
-const CONFIGURE: Item[] = [
-  { to: "/runtimes", label: "Runtimes", glyph: "▸" },
-  { to: "/config/providers", label: "Config", glyph: "▸" },
-  { to: "/settings/org", label: "Settings", glyph: "▸" },
-  { to: "/onboarding", label: "Setup", glyph: "▸" },
+const NAVIGATION: Item[] = [
+  { to: "/command-center", label: "Command Center", glyph: "CC" },
+  { to: "/workspaces", label: "Workspaces", glyph: "WS" },
+  { to: "/coordination", label: "Coordination", glyph: "CO" },
+  { to: "/governance", label: "Governance", glyph: "GV" },
+  { to: "/operations", label: "Operations", glyph: "OP" },
 ];
 
-// In /config/* the app sidebar narrows to icons so the providers rail can be
-// promoted into the left column (DESIGN-SYNTHESIS lock). `mini` drives that.
-export function Sidebar({ mini }: { mini?: boolean }) {
-  const { inboxCount } = useDock();
+export function Sidebar() {
+  const navigate = useNavigate();
+  const { catalog } = useOperator();
 
   const renderItem = (it: Item) => (
     <NavLink
       key={it.to}
       to={it.to}
-      className={({ isActive }) => `nav-item ${isActive ? "active" : ""}`}
+      className={({ isActive }) => `control-nav-item ${isActive ? "active" : ""}`}
       title={it.label}
     >
-      <span aria-hidden>{it.glyph}</span>
-      <span className="label">{it.label}</span>
-      {it.countKey === "inbox" && inboxCount > 0 && (
-        <span className="count">{inboxCount}</span>
-      )}
+      <span className="control-nav-glyph" aria-hidden>{it.glyph}</span>
+      <span>{it.label}</span>
     </NavLink>
   );
 
   return (
-    <nav className={`sidebar ${mini ? "mini" : ""}`}>
-      <div className="nav-group">
-        <EyebrowLabel>Workspace</EyebrowLabel>
-        {WORKSPACE.map(renderItem)}
-      </div>
-      <div className="nav-group">
-        <EyebrowLabel>Configure</EyebrowLabel>
-        {CONFIGURE.map(renderItem)}
-      </div>
-    </nav>
+    <>
+      <aside className="control-sidebar">
+        <div className="control-brand"><span className="control-brain-mark" />Brains</div>
+        <div className="control-scope">
+          <span>Viewing</span>
+          <strong>All visible workspaces</strong>
+          <small>Local coordination brain</small>
+        </div>
+        <div className="control-section-label">Operate</div>
+        <nav className="control-nav">{NAVIGATION.map(renderItem)}</nav>
+        <div className="control-sidebar-bottom">
+          <button className="control-act-button" onClick={() => navigate("/act")}>
+            <span>Act</span><kbd>Ctrl K</kbd>
+          </button>
+          <div className="control-labs-note">
+            <strong>Labs {catalog?.labs_enabled ? "on" : "off"}.</strong>
+            <span>Execution-model screens stay outside the normal operator surface.</span>
+            {catalog?.labs_enabled && <NavLink to="/labs">Open Labs</NavLink>}
+          </div>
+        </div>
+      </aside>
+      <nav className="control-mobile-nav">
+        {NAVIGATION.map(renderItem)}
+      </nav>
+      <button className="control-mobile-act" onClick={() => navigate("/act")}>Act</button>
+    </>
   );
 }

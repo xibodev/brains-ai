@@ -10,14 +10,14 @@ import { test, expect, signIn } from '../fixtures/console.js';
 
 const ROUTES = [
   '/app',
-  '/app/runtimes',
-  '/app/personas',
-  '/app/projects',
-  '/app/issues',
-  '/app/sessions',
-  '/app/inbox',
-  '/app/config',
-  '/app/settings',
+  '/app/command-center',
+  '/app/workspaces',
+  '/app/coordination',
+  '/app/governance',
+  '/app/operations',
+  '/app/act',
+  '/app/operations/config/email',
+  '/app/operations/access/org',
 ];
 
 test.beforeEach(async ({ page }) => {
@@ -34,15 +34,62 @@ for (const route of ROUTES) {
   });
 }
 
-test('J11 (F0.2) active org persists across a full reload', async ({ page }) => {
-  await page.goto('/app/issues');
+test('J11 (F0.2) the canonical command center persists across a full reload', async ({ page }) => {
+  await page.goto('/app/command-center');
   await page.waitForLoadState('networkidle').catch(() => {});
-  const orgBefore = await page.locator('[data-testid="active-org"]').first().innerText();
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page.locator('.dock')).toHaveCount(0);
 
   await page.reload();
   await page.waitForLoadState('networkidle').catch(() => {});
-  const orgAfter = await page.locator('[data-testid="active-org"]').first().innerText();
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+});
 
-  expect(orgAfter).toBe(orgBefore);
-  await expect(page.getByText(/^\s*no org\s*$/i)).toHaveCount(0);
+test('J11 workspace-first shell is responsive and Labs fails closed', async ({ page, consoleGuard }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/app/command-center');
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page.locator('.control-sidebar')).toBeHidden();
+  await expect(page.locator('.control-mobile-nav')).toBeVisible();
+  await expect(page.locator('.control-mobile-act')).toBeVisible();
+  await expect(page.getByText('Reading durable state')).toHaveCount(0, { timeout: 30_000 });
+
+  const capabilities = await page.request.get('/v1/operator/capabilities');
+  expect(capabilities.ok()).toBeTruthy();
+  const body = await capabilities.json() as {
+    labs_enabled: boolean;
+    data: Array<Record<string, unknown>>;
+  };
+  expect(body.labs_enabled).toBe(false);
+  expect(body.data.every((row) => !('command' in row) && !('argv' in row))).toBe(true);
+
+  await page.goto('/app/labs');
+  await expect(page).toHaveURL(/\/app\/command-center$/);
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  consoleGuard.assertClean();
+});
+
+test('J11 Act uses typed HTTP and leaves host actions disabled', async ({ page, consoleGuard }) => {
+  const title = `Typed browser task ${Date.now()}`;
+  await page.goto('/app/act?capability=task.create&workspace=demo-workspace');
+  const sheet = page.locator('.operator-action-sheet');
+  await expect(sheet.getByRole('heading', { name: 'Create task' })).toBeVisible();
+  await sheet.getByLabel('Title').fill(title);
+  const [created] = await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes('/v1/operator/workspaces/demo-workspace/tasks') &&
+      response.request().method() === 'POST',
+    ),
+    sheet.getByRole('button', { name: 'Create task', exact: true }).click(),
+  ]);
+  expect(created.ok(), `typed task create failed: ${created.status()}`).toBeTruthy();
+
+  await page.goto('/app/coordination');
+  await expect(page.getByText(title)).toBeVisible();
+
+  await page.goto('/app/act?capability=service.restart');
+  await expect(page.locator('.operator-action-sheet').getByRole('button', {
+    name: 'HTTP adapter required',
+  })).toBeDisabled();
+  consoleGuard.assertClean();
 });
