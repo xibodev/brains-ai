@@ -38,6 +38,10 @@ from brains.storage.models import (
     AgentSession,
     ApprovalRequest,
     ApprovalRouting,
+    AuditLogEntry,
+    FeedbackEnrichment,
+    FeedbackPromotion,
+    FeedbackReport,
     Handoff,
     HelpRequest,
     MailboxMessage,
@@ -113,6 +117,13 @@ FAMILIES: tuple[QueueFamily, ...] = (
             "past-deadline open/claimed rows flip to expired via "
             "brains.control.help._expire_due"
         ),
+    ),
+    QueueFamily(
+        name="feedback",
+        owner="human triage after agent reporting and enrichment",
+        scope="Workspace-scoped canonical report with linked enrichments",
+        lifecycle="open -> triaged -> planned|resolved|rejected",
+        expiry_policy="indefinite while unresolved; no automatic roadmap or release decision",
     ),
     QueueFamily(
         name="workspace_claims",
@@ -310,6 +321,12 @@ def summarize() -> dict[str, Any]:
         help_open = (
             session.query(HelpRequest).filter(HelpRequest.status.in_(("open", "claimed"))).count()
         )
+        feedback_total = session.query(FeedbackReport).count()
+        feedback_open = (
+            session.query(FeedbackReport)
+            .filter(FeedbackReport.status.in_(("open", "triaged")))
+            .count()
+        )
         claims_total = session.query(WorkspaceClaim).count()
         session_leases_total = session.query(SessionLease).count()
         session_leases_open = (
@@ -355,6 +372,12 @@ def summarize() -> dict[str, Any]:
             "open": help_open,
             "stale_or_expired": _predict_expired_help_requests(),
             **_family_metadata("help_requests"),
+        },
+        "feedback": {
+            "total": feedback_total,
+            "open": feedback_open,
+            "stale_or_expired": 0,
+            **_family_metadata("feedback"),
         },
         "workspace_claims": {
             "total": claims_total,
@@ -464,12 +487,15 @@ def diagnose() -> dict[str, Any]:
         live_sessions = session.query(AgentSession.id)
         live_workspaces = session.query(Workspace.id)
         live_topic_posts = session.query(TopicPost.id)
+        live_feedback = session.query(FeedbackReport.id)
         session_ref_checks: tuple[tuple[str, Any, Any], ...] = (
             ("approvals", ApprovalRequest, ApprovalRequest.session_id),
             ("handoffs", Handoff, Handoff.set_by_session_id),
             ("handoffs", Handoff, Handoff.picked_up_by_session_id),
             ("help_requests", HelpRequest, HelpRequest.from_session_id),
             ("help_requests", HelpRequest, HelpRequest.claimed_by_session_id),
+            ("feedback", FeedbackReport, FeedbackReport.reporter_session_id),
+            ("feedback", FeedbackEnrichment, FeedbackEnrichment.reporter_session_id),
             ("workspace_claims", WorkspaceClaim, WorkspaceClaim.session_id),
             ("session_leases", SessionLease, SessionLease.session_id),
             ("topic_delivery", TopicSubscription, TopicSubscription.session_id),
@@ -510,12 +536,49 @@ def diagnose() -> dict[str, Any]:
         )
         issues.extend(issue for issue in approval_routing_checks if issue is not None)
 
+        feedback_checks = (
+            _orphan_check(
+                session,
+                "feedback",
+                FeedbackEnrichment,
+                FeedbackEnrichment.feedback_report_id,
+                live_feedback,
+                referenced="feedback report",
+            ),
+            _orphan_check(
+                session,
+                "feedback",
+                FeedbackPromotion,
+                FeedbackPromotion.feedback_report_id,
+                live_feedback,
+                referenced="feedback report",
+            ),
+            _orphan_check(
+                session,
+                "feedback",
+                FeedbackPromotion,
+                FeedbackPromotion.audit_entry_id,
+                session.query(AuditLogEntry.id),
+                referenced="audit entry",
+            ),
+            _orphan_check(
+                session,
+                "feedback",
+                FeedbackPromotion,
+                FeedbackPromotion.promoted_by_operator_id,
+                session.query(Operator.id),
+                referenced="operator",
+            ),
+        )
+        issues.extend(issue for issue in feedback_checks if issue is not None)
+
         workspace_ref_checks: tuple[tuple[str, Any, Any], ...] = (
             ("approvals", ApprovalRequest, ApprovalRequest.workspace_id),
             ("handoffs", Handoff, Handoff.workspace_id),
             ("workspace_claims", WorkspaceClaim, WorkspaceClaim.workspace_id),
             ("mailbox", MailboxMessage, MailboxMessage.workspace_id),
             ("help_requests", HelpRequest, HelpRequest.from_workspace_id),
+            ("feedback", FeedbackReport, FeedbackReport.workspace_id),
             ("session_commands", SessionCommand, SessionCommand.workspace_id),
             ("checkpoints", Snapshot, Snapshot.workspace_id),
             (

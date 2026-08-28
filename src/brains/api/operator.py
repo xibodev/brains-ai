@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from brains.authz import policy
-from brains.authz.deps import require_operator_principal
+from brains.authz.deps import require_console_principal, require_operator_principal
 from brains.authz.principal import CAP_ORG_READ, CAP_ORG_WRITE, Principal
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
@@ -99,6 +99,37 @@ class KnowledgeResolveBody(BaseModel):
 
 class PatternDecisionBody(BaseModel):
     approved: bool = True
+
+
+class FeedbackReportBody(BaseModel):
+    category: str
+    severity: str
+    summary: str = Field(min_length=1, max_length=500)
+    evidence: str = ""
+    reproduction: str = ""
+    affected_version: str | None = Field(default=None, max_length=64)
+    surface: str | None = Field(default=None, max_length=128)
+    reporter_session_id: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FeedbackEnrichmentBody(BaseModel):
+    reporter_session_id: str
+    kind: str = "enrichment"
+    note: str = ""
+    evidence: str = ""
+    reproduction: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class FeedbackTriageBody(BaseModel):
+    status: str
+    note: str = ""
+
+
+class FeedbackPromotionBody(BaseModel):
+    target_kind: str
+    backlog_ref: str | None = None
 
 
 def _bad_request(exc: Exception) -> HTTPException:
@@ -871,6 +902,143 @@ def resolve_knowledge(
             payload={"code": code, "status": body.status},
         )
         return result
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.get("/feedback")
+def feedback_list(
+    workspace: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.feedback import list_feedback
+
+    workspace_path = None
+    if workspace:
+        workspace_path = _workspace(principal, workspace, CAP_ORG_READ)["path"]
+    return {
+        "data": list_feedback(
+            workspace_path,
+            status=status,
+            category=category,
+            limit=limit,
+        )
+    }
+
+
+@router.get("/feedback/{code}")
+def feedback_get(
+    code: str,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.feedback import get_feedback
+
+    result = get_feedback(code)
+    if result is None:
+        raise policy.not_found("feedback", code)
+    _workspace(principal, result["workspace"], CAP_ORG_READ)
+    return result
+
+
+@router.post("/workspaces/{slug}/feedback")
+def feedback_report(
+    slug: str,
+    body: FeedbackReportBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.feedback import file_feedback
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    if body.reporter_session_id:
+        _session_in_workspace(principal, body.reporter_session_id, workspace["id"])
+    try:
+        return file_feedback(
+            workspace["path"],
+            body.category,
+            body.severity,
+            body.summary,
+            evidence=body.evidence,
+            reproduction=body.reproduction,
+            affected_version=body.affected_version,
+            surface=body.surface,
+            reporter_session_id=body.reporter_session_id,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/feedback/{code}/enrich")
+def feedback_enrich(
+    code: str,
+    body: FeedbackEnrichmentBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.feedback import enrich_feedback, get_feedback
+
+    report = get_feedback(code)
+    if report is None:
+        raise policy.not_found("feedback", code)
+    workspace = _workspace(principal, report["workspace"], CAP_ORG_WRITE)
+    _session_in_workspace(principal, body.reporter_session_id, workspace["id"])
+    try:
+        return enrich_feedback(
+            code,
+            reporter_session_id=body.reporter_session_id,
+            kind=body.kind,
+            note=body.note,
+            evidence=body.evidence,
+            reproduction=body.reproduction,
+            metadata=body.metadata,
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/feedback/{code}/triage")
+def feedback_triage(
+    code: str,
+    body: FeedbackTriageBody,
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.feedback import get_feedback, triage_feedback
+
+    report = get_feedback(code)
+    if report is None:
+        raise policy.not_found("feedback", code)
+    _workspace(principal, report["workspace"], CAP_ORG_WRITE)
+    try:
+        return triage_feedback(code, body.status, note=body.note, principal=principal)
+    except PermissionError as exc:
+        raise policy.forbidden(str(exc)) from exc
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/feedback/{code}/promote")
+def feedback_promote(
+    code: str,
+    body: FeedbackPromotionBody,
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.feedback import get_feedback, promote_feedback
+
+    report = get_feedback(code)
+    if report is None:
+        raise policy.not_found("feedback", code)
+    _workspace(principal, report["workspace"], CAP_ORG_WRITE)
+    try:
+        return promote_feedback(
+            code,
+            body.target_kind,
+            backlog_ref=body.backlog_ref,
+            principal=principal,
+        )
+    except PermissionError as exc:
+        raise policy.forbidden(str(exc)) from exc
     except ValueError as exc:
         raise _bad_request(exc) from exc
 

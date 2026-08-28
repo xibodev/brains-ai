@@ -242,10 +242,11 @@ durable Session control
 ### BL-P1-15 - Add a governed agent-experience feedback inbox
 
 - **Maps to:** F3, B2, B4, B8; J7, J8, J11; AC-F3-03, AC-B2-03, AC-B4-02..04, AC-B8-03.
-- **Current gap:** Agents can improvise Topics, Tasks, or knowledge caveats, but Brains has no typed feedback record for product defects, friction, feature requests, environment evidence, affected versions, reproduction steps, duplicates, triage status, or promotion into owned work. Ad-hoc field reports are easy to strand and impossible to measure consistently.
+- **Landed in the candidate:** Migration 146 adds canonical Workspace-scoped `feedback_reports`, append-only deduplicated `feedback_enrichments`, and one `feedback_promotions` row per report. Agent-facing CLI/MCP/HTTP paths require a live reporter Session in that Workspace; typed report and enrichment inputs are redacted before fingerprinting or persistence. Same-Workspace category/summary/version/surface fingerprints link duplicates to one canonical report while preserving new evidence. Human-only browser/local triage and exactly-once Task/knowledge/existing-backlog-reference promotion commit with audit correlation; backlog promotion links a `BL-PN-NN` ID and never edits roadmap text. Queue health and integrity include the new family.
+- **Current gap:** E4 two-agent report/enrichment plus human browser triage/promotion evidence is absent. Deterministic redaction removes credential-shaped data, but free-form text cannot guarantee removal of identifiers that do not look like credentials; operators remain responsible for excluding customer data.
 - **Dependencies:** BL-P0-01, BL-P0-04, BL-P1-12.
 - **Definition of Done:** CLI/MCP/HTTP accept a Workspace-scoped feedback report with category, severity, summary, evidence, reproduction, version/surface, reporter Session, and privacy-safe metadata; reports deduplicate/link, remain human-triaged, and can be promoted exactly once into a Task/knowledge/backlog reference with audit correlation. Agents may propose and enrich feedback but cannot self-approve roadmap or release changes.
-- **Evidence required:** E3 authorization, redaction, dedupe, lifecycle, promotion-idempotency, audit, and cross-Org tests; E4 two-agent report/enrichment plus human triage/promotion in Governance or Coordination.
+- **Evidence required:** E3 authorization, redaction, dedupe, lifecycle, promotion-idempotency, audit, and cross-Org tests (`tests/test_feedback_inbox.py`); E4 two-agent report/enrichment plus human triage/promotion in Governance or Coordination.
 
 ### BL-P1-13 - Make Runtime enrollment and lifecycle operational
 

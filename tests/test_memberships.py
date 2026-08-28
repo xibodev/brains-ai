@@ -476,6 +476,42 @@ def test_topic_subscription_refuses_nonmember_private_session(
         subscribe_topic("private-topic", private_session["session_id"])
 
 
+def test_feedback_hides_private_workspace_from_nonmember(
+    isolated_brains: Path, tmp_path, monkeypatch
+) -> None:
+    import brains.control.feedback as feedback_module
+    from brains.control.feedback import file_feedback, get_feedback, list_feedback
+    from brains.control.operators import add_operator, ensure_admin_operator
+    from brains.control.sessions import start_session
+
+    monkeypatch.setattr(feedback_module, "SessionLocal", db_module.SessionLocal)
+    ensure_admin_operator()
+    add_operator("alice")
+    _join_default_org("alice")
+    ws_private = tmp_path / "ws-private-feedback"
+    _make_workspace(ws_private, "ws-private-feedback", visibility="private")
+    reporter = start_session(str(ws_private), tool="pytest")
+    report = file_feedback(
+        str(ws_private),
+        "defect",
+        "medium",
+        "private report",
+        reporter_session_id=reporter["session_id"],
+    )
+
+    _set_current_operator(monkeypatch, "alice")
+    assert get_feedback(report["code"]) is None
+    assert list_feedback(str(ws_private)) == []
+    with pytest.raises(ValueError, match="unavailable"):
+        file_feedback(
+            str(ws_private),
+            "defect",
+            "medium",
+            "blocked report",
+            reporter_session_id=reporter["session_id"],
+        )
+
+
 def test_list_tasks_filters_private_workspaces(
     isolated_brains: Path, tmp_path, monkeypatch
 ) -> None:

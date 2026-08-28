@@ -977,6 +977,86 @@ class KnowledgeEntry(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class FeedbackReport(Base):
+    """Canonical, redacted agent-experience report for one Workspace."""
+
+    __tablename__ = "feedback_reports"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_feedback_workspace_fingerprint"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    reporter_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(16), index=True)
+    summary: Mapped[str] = mapped_column(String(500))
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    reproduction: Mapped[str] = mapped_column(Text, default="")
+    affected_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    surface: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    triage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triaged_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True, index=True
+    )
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        index=True,
+    )
+
+
+class FeedbackEnrichment(Base):
+    """Append-only evidence or context linked to a canonical feedback report."""
+
+    __tablename__ = "feedback_enrichments"
+    __table_args__ = (
+        UniqueConstraint("feedback_report_id", "fingerprint", name="uq_feedback_enrichment"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    feedback_report_id: Mapped[int] = mapped_column(ForeignKey("feedback_reports.id"), index=True)
+    reporter_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), default="enrichment", index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    reproduction: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class FeedbackPromotion(Base):
+    """Exactly-once promotion of feedback into owned work or a backlog reference."""
+
+    __tablename__ = "feedback_promotions"
+    feedback_report_id: Mapped[int] = mapped_column(
+        ForeignKey("feedback_reports.id"), primary_key=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(16), index=True)
+    target_ref: Mapped[str] = mapped_column(String(128), index=True)
+    promoted_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True
+    )
+    audit_entry_id: Mapped[int] = mapped_column(ForeignKey("audit_log.id"), unique=True)
+    promoted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
 class Squad(Base):
     """A named group of operators with a designated leader, scoped to a workspace.
 

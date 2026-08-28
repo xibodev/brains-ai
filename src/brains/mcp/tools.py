@@ -29,6 +29,7 @@ from brains.control.decisions import (
     route_decision,
 )
 from brains.control.events import append_event
+from brains.control.feedback import enrich_feedback, file_feedback, get_feedback, list_feedback
 from brains.control.handoffs import (
     clear_handoff,
     list_handoffs,
@@ -1347,6 +1348,74 @@ def list_open_help_requests_tool(
         to_workspace=to_workspace,
         to_session_id=to_session_id,
         include_answered=include_answered,
+        limit=limit,
+    )
+
+
+def feedback_report_tool(
+    workspace_path: str,
+    category: str,
+    severity: str,
+    summary: str,
+    reporter_session_id: str,
+    evidence: str = "",
+    reproduction: str = "",
+    affected_version: str | None = None,
+    surface: str | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    """File a redacted Workspace-scoped agent-experience report."""
+    return file_feedback(
+        workspace_path,
+        category,
+        severity,
+        summary,
+        evidence=evidence,
+        reproduction=reproduction,
+        affected_version=affected_version,
+        surface=surface,
+        reporter_session_id=reporter_session_id,
+        metadata=metadata,
+    )
+
+
+def feedback_enrich_tool(
+    code: str,
+    reporter_session_id: str,
+    kind: str = "enrichment",
+    note: str = "",
+    evidence: str = "",
+    reproduction: str = "",
+    metadata: dict[str, Any] | None = None,
+):
+    """Add redacted evidence from a live Session in the report's Workspace."""
+    return enrich_feedback(
+        code,
+        reporter_session_id=reporter_session_id,
+        kind=kind,
+        note=note,
+        evidence=evidence,
+        reproduction=reproduction,
+        metadata=metadata,
+    )
+
+
+def feedback_get_tool(code: str):
+    """Read one visible feedback report with enrichments and promotion."""
+    return get_feedback(code)
+
+
+def feedback_list_tool(
+    workspace_path: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    limit: int = 100,
+):
+    """List visible feedback reports."""
+    return list_feedback(
+        workspace_path,
+        status=status,
+        category=category,
         limit=limit,
     )
 

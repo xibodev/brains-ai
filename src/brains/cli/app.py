@@ -2180,6 +2180,139 @@ def help_list_cli(
     )
 
 
+def _feedback_metadata(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("metadata must be a JSON object") from exc
+    if not isinstance(value, dict):
+        raise typer.BadParameter("metadata must be a JSON object")
+    return value
+
+
+@app.command("feedback-report")
+def feedback_report_cli(
+    category: str = typer.Option(..., "--category"),
+    severity: str = typer.Option(..., "--severity"),
+    summary: str = typer.Option(..., "--summary"),
+    workspace: str = typer.Option(".", "--workspace"),
+    evidence: str = typer.Option("", "--evidence"),
+    reproduction: str = typer.Option("", "--reproduction"),
+    affected_version: str | None = typer.Option(None, "--affected-version"),
+    surface: str | None = typer.Option(None, "--surface"),
+    session: str = typer.Option(..., "--session"),
+    metadata: str = typer.Option("", "--metadata"),
+):
+    """File a redacted Workspace-scoped agent-experience report."""
+    from brains.control.feedback import file_feedback
+
+    _print_json(
+        file_feedback(
+            workspace,
+            category,
+            severity,
+            summary,
+            evidence=evidence,
+            reproduction=reproduction,
+            affected_version=affected_version,
+            surface=surface,
+            reporter_session_id=session,
+            metadata=_feedback_metadata(metadata),
+        )
+    )
+
+
+@app.command("feedback-enrich")
+def feedback_enrich_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+    kind: str = typer.Option("enrichment", "--kind"),
+    note: str = typer.Option("", "--note"),
+    evidence: str = typer.Option("", "--evidence"),
+    reproduction: str = typer.Option("", "--reproduction"),
+    metadata: str = typer.Option("", "--metadata"),
+):
+    """Add redacted evidence from a live Session in the report's Workspace."""
+    from brains.control.feedback import enrich_feedback
+
+    _print_json(
+        enrich_feedback(
+            code,
+            reporter_session_id=session,
+            kind=kind,
+            note=note,
+            evidence=evidence,
+            reproduction=reproduction,
+            metadata=_feedback_metadata(metadata),
+        )
+    )
+
+
+@app.command("feedback-get")
+def feedback_get_cli(code: str):
+    """Read one visible feedback report."""
+    from brains.control.feedback import get_feedback
+
+    _print_json(get_feedback(code))
+
+
+@app.command("feedback-list")
+def feedback_list_cli(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    status: str | None = typer.Option(None, "--status"),
+    category: str | None = typer.Option(None, "--category"),
+    limit: int = typer.Option(100, "--limit"),
+):
+    """List visible feedback reports."""
+    from brains.control.feedback import list_feedback
+
+    _print_json(list_feedback(workspace, status=status, category=category, limit=limit))
+
+
+@app.command("feedback-triage")
+def feedback_triage_cli(
+    code: str,
+    status: str = typer.Option(..., "--status"),
+    note: str = typer.Option("", "--note"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Human-only feedback lifecycle transition."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.feedback import triage_feedback
+
+    _print_json(
+        triage_feedback(
+            code,
+            status,
+            note=note,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
+@app.command("feedback-promote")
+def feedback_promote_cli(
+    code: str,
+    target: str = typer.Option(..., "--target"),
+    backlog_ref: str | None = typer.Option(None, "--backlog-ref"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Human-only exactly-once promotion to Task, knowledge, or backlog reference."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.feedback import promote_feedback
+
+    _print_json(
+        promote_feedback(
+            code,
+            target,
+            backlog_ref=backlog_ref,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
 @app.command("check-source")
 def check_source_cli(source: str):
     _print_json(check_source(source))
