@@ -37,9 +37,11 @@ from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentSession,
     ApprovalRequest,
+    ApprovalRouting,
     Handoff,
     HelpRequest,
     MailboxMessage,
+    Operator,
     SessionCommand,
     SessionLease,
     Snapshot,
@@ -73,12 +75,12 @@ class QueueFamily:
 FAMILIES: tuple[QueueFamily, ...] = (
     QueueFamily(
         name="approvals",
-        owner="the human resolver separated from the requester (brains.control.decisions)",
+        owner="the assigned human resolver, or the visible human queue when unassigned",
         scope="Workspace-scoped ASK, resolved through the console, CLI, or MCP",
-        lifecycle="open -> resolved|rejected|deferred -> consumed",
+        lifecycle="open -> assigned/escalated -> resolved|rejected|deferred -> consumed",
         expiry_policy=(
-            "indefinite while open by design - an open ASK blocks the Session that "
-            "filed it until a human resolves it; there is no automatic expiry"
+            "indefinite while open by design; optional due_at makes overdue work visible "
+            "but never auto-resolves a human decision"
         ),
     ),
     QueueFamily(
@@ -292,6 +294,12 @@ def summarize() -> dict[str, Any]:
         approvals_open = (
             session.query(ApprovalRequest).filter(ApprovalRequest.status == "open").count()
         )
+        approvals_overdue = (
+            session.query(ApprovalRouting)
+            .join(ApprovalRequest, ApprovalRequest.id == ApprovalRouting.approval_request_id)
+            .filter(ApprovalRequest.status == "open", ApprovalRouting.due_at < utc_now())
+            .count()
+        )
         handoffs_total = session.query(Handoff).count()
         handoffs_active = session.query(Handoff).filter(Handoff.status == "active").count()
         mailbox_total = session.query(MailboxMessage).count()
@@ -327,7 +335,7 @@ def summarize() -> dict[str, Any]:
         "approvals": {
             "total": approvals_total,
             "open": approvals_open,
-            "stale_or_expired": 0,
+            "stale_or_expired": approvals_overdue,
             **_family_metadata("approvals"),
         },
         "handoffs": {
@@ -473,6 +481,34 @@ def diagnose() -> dict[str, Any]:
             issue = _orphan_check(session, family, model, column, live_sessions)
             if issue is not None:
                 issues.append(issue)
+
+        approval_routing_checks = (
+            _orphan_check(
+                session,
+                "approvals",
+                ApprovalRouting,
+                ApprovalRouting.approval_request_id,
+                session.query(ApprovalRequest.id),
+                referenced="approval request",
+            ),
+            _orphan_check(
+                session,
+                "approvals",
+                ApprovalRouting,
+                ApprovalRouting.assigned_operator_id,
+                session.query(Operator.id),
+                referenced="operator",
+            ),
+            _orphan_check(
+                session,
+                "approvals",
+                ApprovalRouting,
+                ApprovalRouting.updated_by_operator_id,
+                session.query(Operator.id),
+                referenced="operator",
+            ),
+        )
+        issues.extend(issue for issue in approval_routing_checks if issue is not None)
 
         workspace_ref_checks: tuple[tuple[str, Any, Any], ...] = (
             ("approvals", ApprovalRequest, ApprovalRequest.workspace_id),

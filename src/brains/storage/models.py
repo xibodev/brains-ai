@@ -305,6 +305,30 @@ class ApprovalRequest(Base):
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class ApprovalRouting(Base):
+    """Human-owned assignment and escalation metadata for an approval."""
+
+    __tablename__ = "approval_routing"
+    approval_request_id: Mapped[int] = mapped_column(
+        ForeignKey("approval_requests.id"), primary_key=True
+    )
+    assigned_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True, index=True
+    )
+    priority: Mapped[str] = mapped_column(String(16), default="p2", index=True)
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    escalation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
 class ApprovalDecision(Base):
     __tablename__ = "approval_decisions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
