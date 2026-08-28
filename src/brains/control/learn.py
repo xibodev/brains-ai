@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import brains.storage.db as _db_module
-from brains.control.common import normalize_path
 from brains.control.knowledge import add_knowledge_entry
+from brains.control.sessions import get_workspace
 from brains.storage.migrations import init_db
 from brains.storage.models import AgentTask, Event, KnowledgeEntry, Workspace
 
@@ -47,9 +47,9 @@ def _visible_filter(query, column, visible: set[int] | None):
 def _workspace_filter(session, workspace_path: str | None) -> int | None:
     if workspace_path is None:
         return None
-    normalized = normalize_path(workspace_path)
-    workspace = session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
-    if workspace is None:
+    try:
+        workspace = get_workspace(path=workspace_path)
+    except ValueError:
         return -1
     return workspace.id
 

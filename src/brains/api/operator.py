@@ -271,7 +271,7 @@ def _workspace_rows(principal: Principal) -> list[dict[str, Any]]:
     visible = _visible_workspace_ids(principal)
     init_db()
     with SessionLocal() as session:
-        query = session.query(Workspace)
+        query = session.query(Workspace).filter(Workspace.status == "active")
         if visible is not None:
             query = query.filter(Workspace.id.in_(visible))
         workspaces = query.order_by(Workspace.name, Workspace.slug).all()

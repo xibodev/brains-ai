@@ -953,10 +953,18 @@ brains-ai db fk-check
   connection hook refuses to enable it while violations exist. `db diagnose` and
   `db fk-check` open the database file directly and keep working while that
   refusal is active; unset the variable to run `db repair --apply`.
-- `workspaces prune` and `workspaces doctor --prune-missing` delete a Workspace
-  together with the rows that cannot exist without it, and clear the optional
-  references held by records that can (Projects, Issues, Personas, knowledge).
-  Both remain dry-run until `--apply`.
+- Workspace registration records every normalized path in `workspace_aliases`.
+  Linked Git worktrees share the repository's local Git common directory as
+  their identity, so registering another worktree resolves to the oldest
+  Workspace in that Org and archives a previously registered duplicate row.
+  The duplicate's historical rows remain under its archived identity; new
+  path-based work converges on the canonical Workspace. Cross-Org aliases are
+  refused rather than merged.
+- `workspaces doctor --archive-missing` is the safe cleanup path. It archives
+  active Workspace roots absent from disk without deleting history. `workspaces
+  prune` and `workspaces doctor --prune-missing` remain explicit destructive
+  tools that use the schema-derived cascade. Every mode is dry-run until
+  `--apply`.
 
 Operating order for an existing store: `db migrations` -> `db migrate` ->
 `db diagnose` -> `backup` -> `db verify-backup` -> `db repair --apply` ->

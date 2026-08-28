@@ -35,9 +35,25 @@ def _clean_doctor_rows():
         # belt + braces.
         session.execute(
             text(
+                "DELETE FROM event_contexts WHERE event_id IN ("
+                "SELECT id FROM events WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ") OR message LIKE '%doctor-%'"
+                ")"
+            )
+        )
+        session.execute(
+            text(
                 "DELETE FROM events WHERE workspace_id IN ("
                 "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
                 ") OR message LIKE '%doctor-%'"
+            )
+        )
+        session.execute(
+            text(
+                "DELETE FROM workspace_aliases WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ")"
             )
         )
         session.execute(text("DELETE FROM workspaces WHERE slug LIKE 'doctor-%'"))
@@ -46,9 +62,25 @@ def _clean_doctor_rows():
     with SessionLocal() as session:
         session.execute(
             text(
+                "DELETE FROM event_contexts WHERE event_id IN ("
+                "SELECT id FROM events WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ") OR message LIKE '%doctor-%'"
+                ")"
+            )
+        )
+        session.execute(
+            text(
                 "DELETE FROM events WHERE workspace_id IN ("
                 "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
                 ") OR message LIKE '%doctor-%'"
+            )
+        )
+        session.execute(
+            text(
+                "DELETE FROM workspace_aliases WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ")"
             )
         )
         session.execute(text("DELETE FROM workspaces WHERE slug LIKE 'doctor-%'"))
@@ -220,3 +252,54 @@ def test_doctor_does_not_prune_no_marker_rows(tmp_path):
             .all()
         )
         assert len(rows) == 1, "no_marker row must not be pruned by --prune-missing"
+
+
+def test_doctor_archives_missing_without_deleting_history(tmp_path):
+    missing_path = tmp_path / "doctor-archive-gone"
+    workspace_id = _seed("doctor-archive-missing", str(missing_path))
+    with SessionLocal() as session:
+        session.execute(
+            text(
+                "INSERT INTO events (workspace_id, kind, message, created_at) "
+                "VALUES (:workspace_id, 'workspace_archived_probe', 'kept', CURRENT_TIMESTAMP)"
+            ),
+            {"workspace_id": workspace_id},
+        )
+        session.commit()
+
+    result = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--apply"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["archived_missing"]["archived"] >= 1
+    with SessionLocal() as session:
+        workspace = session.get(Workspace, workspace_id)
+        assert workspace is not None
+        assert workspace.status == "archived"
+        assert (
+            session.execute(
+                text("SELECT COUNT(*) FROM events WHERE workspace_id = :workspace_id"),
+                {"workspace_id": workspace_id},
+            ).scalar_one()
+            == 1
+        )
+
+    repeated = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--apply"],
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert "doctor-archive-missing" not in {
+        row["slug"] for row in json.loads(repeated.stdout)["missing"]
+    }
+
+
+def test_doctor_refuses_archive_and_prune_together():
+    result = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--prune-missing"],
+    )
+    assert result.exit_code == 2
+    assert "choose --archive-missing or --prune-missing" in (result.stderr or result.output)

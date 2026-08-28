@@ -122,6 +122,7 @@ POST_CHECKSUM_DELTAS = (
     "145_approval_routing",
     "146_feedback_inbox",
     "147_event_contexts",
+    "148_workspace_aliases",
 )
 
 _LEGACY_LEDGER_DDL = """

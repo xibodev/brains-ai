@@ -91,7 +91,9 @@ def _resolve_workspace(session, identifier: str) -> Workspace:
     row = session.query(Workspace).filter(Workspace.slug == identifier).one_or_none()
     if row is not None:
         return row
-    row = session.query(Workspace).filter(Workspace.path == identifier).one_or_none()
+    from brains.control.sessions import _resolve_workspace_path
+
+    row = _resolve_workspace_path(session, identifier)
     if row is None:
         raise WorkspaceLookupError(
             f"workspace {identifier!r} not found (looked up by slug and by path)"

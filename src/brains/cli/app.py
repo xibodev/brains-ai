@@ -2985,6 +2985,11 @@ def workspaces_doctor_cli(
         "--apply",
         help="Required with --prune-missing to actually delete. Without it, --prune-missing is a dry-run.",
     ),
+    archive_missing: bool = typer.Option(
+        False,
+        "--archive-missing",
+        help="Archive missing workspace identities without deleting their durable history.",
+    ),
 ) -> None:
     """Audit the workspaces table for fishy rows.
 
@@ -2994,8 +2999,10 @@ def workspaces_doctor_cli(
         pyproject.toml, package.json, Cargo.toml, go.mod, etc.). Usually an
         umbrella parent folder that an agent registered by accident.
 
-    Read-only by default. Pass ``--prune-missing --apply`` to delete the
-    ``missing`` rows (uses the same cascade as ``workspaces prune``).
+    Read-only by default. Prefer ``--archive-missing --apply`` to remove stale
+    paths from active views while preserving Sessions, events, handoffs, and
+    governance history. ``--prune-missing --apply`` remains the explicit
+    destructive cleanup path.
     """
     import os as _os
 
@@ -3004,10 +3011,18 @@ def workspaces_doctor_cli(
     from brains.storage.migrations import init_db
     from brains.storage.models import Workspace
 
+    if archive_missing and prune_missing:
+        typer.echo(
+            "error: choose --archive-missing or --prune-missing, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
     init_db()
     with SessionLocal() as session:
         rows = (
             session.query(Workspace.id, Workspace.slug, Workspace.path)
+            .filter(Workspace.status == "active")
             .order_by(Workspace.slug.asc())
             .all()
         )
@@ -3030,7 +3045,29 @@ def workspaces_doctor_cli(
             "missing": missing,
             "no_marker": no_marker,
             "pruned_missing": None,
+            "archived_missing": None,
         }
+
+        if archive_missing and missing:
+            if not apply:
+                typer.echo(
+                    f"DRY-RUN: would archive {len(missing)} missing-on-disk workspaces. "
+                    "Pass --apply to commit.",
+                    err=True,
+                )
+                report["archived_missing"] = {
+                    "dry_run": True,
+                    "would_archive": len(missing),
+                }
+                _print_json(report)
+                return
+            archived = (
+                session.query(Workspace)
+                .filter(Workspace.id.in_([m["id"] for m in missing]))
+                .update({Workspace.status: "archived"}, synchronize_session=False)
+            )
+            session.commit()
+            report["archived_missing"] = {"dry_run": False, "archived": archived}
 
         if prune_missing and missing:
             if not apply:
