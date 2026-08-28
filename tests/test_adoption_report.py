@@ -341,6 +341,7 @@ def test_emitter_emits_message_read_event(tmp_path):
     target, _ = _make_workspace(tmp_path, "adopt-emit-read")
     s = start_session(str(target), tool="pytest")
     sid = s["session_id"]
+    send_message("read me", to_session_id=sid)
     read_messages(sid)
     with SessionLocal() as db:
         ev = (
@@ -348,7 +349,7 @@ def test_emitter_emits_message_read_event(tmp_path):
             .filter(Event.kind == "message_read", Event.session_id == sid)
             .one_or_none()
         )
-        assert ev is not None, "read_messages must emit a message_read event"
+        assert ev is not None, "a non-empty read_messages call must emit message_read"
 
 
 def test_emitter_emits_memory_retrieved_event(tmp_path):

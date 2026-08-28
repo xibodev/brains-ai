@@ -7,8 +7,8 @@
 * Harness-matched help (scenario 6): a Copilot session can file an ask no
   Copilot may claim; a Claude peer claims and answers it without either
   side sharing context.
-* Topic boards (scenarios 3/5): posting blasts one inbox notification per
-  other live workspace (never the poster's), the board is the archive,
+* Topic boards (scenarios 3/5): posting creates one durable announcement,
+  subscribed Sessions wake without mailbox copies, the board is the archive,
   and replies thread via ``reply_to``.
 """
 
@@ -38,6 +38,7 @@ from brains.control.topics import (  # noqa: E402
     live_agent_sessions,
     post_topic,
     read_topic,
+    subscribe_topic,
 )
 
 
@@ -59,7 +60,7 @@ def _run_ask_in_thread(*args, **kwargs):
 def start_tracked_session():
     """``start_session`` that always ends what it started on teardown.
 
-    Live-agent discovery and topic blasts read real liveness, so leaked
+    Live-agent discovery and topic delivery read real liveness, so leaked
     sessions from an earlier test would legitimately appear as peers.
     """
     created: list[str] = []
@@ -205,14 +206,15 @@ def test_exact_harness_ask_refuses_the_wrong_claimer(tmp_path, start_tracked_ses
     assert box["result"]["status"] == "answered"
 
 
-# --- scenarios 3/5: topic boards blast other live workspaces' inboxes ------
+# --- scenarios 3/5: interest-scoped topic delivery -------------------------
 
 
-def test_topic_post_blasts_other_live_workspaces_only(tmp_path, start_tracked_session):
+def test_topic_post_wakes_other_subscribed_sessions_only(tmp_path, start_tracked_session):
     ses_a = start_tracked_session(str(tmp_path / "alpha"), tool="copilot")
     ses_b = start_tracked_session(str(tmp_path / "beta"), tool="claude")
     ws_alpha = register_workspace(str(tmp_path / "alpha"))
     ws_beta = register_workspace(str(tmp_path / "beta"))
+    subscribe_topic("review-queue", ses_b["session_id"])
 
     posted = post_topic(
         "review-queue",
@@ -222,25 +224,24 @@ def test_topic_post_blasts_other_live_workspaces_only(tmp_path, start_tracked_se
         workspace_path=str(tmp_path / "alpha"),
     )
     assert posted["topic"] == "review-queue"
-    assert ws_beta.slug in posted["notified_workspaces"], "the other live workspace must be blasted"
+    assert ses_b["session_id"] in posted["notified_sessions"]
+    assert ws_beta.slug in posted["notified_workspaces"]
     assert ws_alpha.slug not in posted["notified_workspaces"], (
-        "blast must never notify the poster's own workspace"
+        "delivery must never notify the poster's own workspace"
     )
 
-    beta_mail = read_messages(ses_b["session_id"])
-    hits = [
-        m
-        for m in beta_mail
-        if m["kind"] == "topic" and m["subject"].startswith("[topic:review-queue]")
-    ]
-    assert hits, "the beta session never saw the topic notification in its inbox"
-    assert f"#{posted['id']}" in (hits[0]["body"] or "")
+    # Topic delivery no longer creates one mailbox row per Workspace.
+    assert read_messages(ses_b["session_id"]) == []
+    wake = inbox_wait(ses_b["session_id"], timeout_ms=250)
+    assert wake["wakeup"] == "topic"
+    assert wake["posts"][0]["id"] == posted["id"]
 
     # The poster's own workspace stays quiet.
     assert read_messages(ses_a["session_id"]) == []
 
-    board = read_topic("review-queue")
+    board = read_topic("review-queue", session_id=ses_b["session_id"])
     assert [row["id"] for row in board] == [posted["id"]]
+    assert inbox_wait(ses_b["session_id"], timeout_ms=100)["wakeup"] is None
     topics = {row["topic"]: row for row in list_topics()}
     assert topics["review-queue"]["posts"] == 1
 

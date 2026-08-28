@@ -400,6 +400,14 @@ def test_tool_registry_every_value_is_callable() -> None:
         assert callable(fn), f"TOOL_REGISTRY[{name!r}] is not callable"
 
 
+def test_topic_subscription_tools_are_registered() -> None:
+    assert {
+        "topic_subscribe",
+        "topic_unsubscribe",
+        "topic_subscriptions",
+    } <= set(mcp_server.TOOL_REGISTRY)
+
+
 def test_call_tool_normalizes_brains_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

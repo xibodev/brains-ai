@@ -678,10 +678,8 @@ class TopicPost(Base):
     """One post on a named agent topic (message board, comms slice 1).
 
     Topics are install-wide and flat: any live session may post, replies
-    reference their parent via ``reply_to_id``, and delivery to busy agents
-    happens through the mailbox — posting blasts one notification per other
-    workspace with live sessions (see ``brains.control.topics``), so an
-    agent only ever polls its own inbox.
+    reference their parent via ``reply_to_id``, and one optional announcement
+    row wakes Sessions whose durable subscription cursor is behind the post.
     """
 
     __tablename__ = "topic_posts"
@@ -701,6 +699,37 @@ class TopicPost(Base):
     required_tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class TopicAnnouncement(Base):
+    """One topic post that should wake interested live subscribers."""
+
+    __tablename__ = "topic_announcements"
+    post_id: Mapped[int] = mapped_column(ForeignKey("topic_posts.id"), primary_key=True)
+    excluded_workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class TopicSubscription(Base):
+    """Per-Session topic interest and durable announcement cursor."""
+
+    __tablename__ = "topic_subscriptions"
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), primary_key=True)
+    topic: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    last_seen_post_id: Mapped[int] = mapped_column(Integer, default=0)
+    subscribed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        index=True,
     )
 
 

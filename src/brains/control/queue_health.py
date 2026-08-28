@@ -43,6 +43,9 @@ from brains.storage.models import (
     SessionCommand,
     SessionLease,
     Snapshot,
+    TopicAnnouncement,
+    TopicPost,
+    TopicSubscription,
     Workspace,
     WorkspaceClaim,
 )
@@ -144,6 +147,16 @@ FAMILIES: tuple[QueueFamily, ...] = (
         ),
     ),
     QueueFamily(
+        name="topic_delivery",
+        owner="each live Session that explicitly subscribed to the topic",
+        scope="Session/topic cursor over one install-wide board",
+        lifecycle="subscribed -> announcement pending -> cursor advanced|unsubscribed",
+        expiry_policy=(
+            "announcements follow their durable topic post; subscriptions persist until "
+            "unsubscribe or Session cleanup, with no per-recipient mailbox copy"
+        ),
+    ),
+    QueueFamily(
         name="checkpoints",
         owner="the Workspace it snapshots",
         scope="Workspace-scoped",
@@ -239,6 +252,27 @@ def _predict_expirable_session_command_leases() -> int:
     return count
 
 
+def _pending_topic_deliveries(session) -> int:
+    return (
+        session.query(TopicAnnouncement.post_id)
+        .join(TopicPost, TopicPost.id == TopicAnnouncement.post_id)
+        .join(
+            TopicSubscription,
+            (TopicSubscription.topic == TopicPost.topic)
+            & (TopicPost.id > TopicSubscription.last_seen_post_id),
+        )
+        .join(AgentSession, AgentSession.id == TopicSubscription.session_id)
+        .filter(
+            AgentSession.ended_at.is_(None),
+            AgentSession.state != "dormant",
+            (TopicAnnouncement.excluded_workspace_id.is_(None))
+            | (TopicAnnouncement.excluded_workspace_id != AgentSession.workspace_id),
+        )
+        .distinct()
+        .count()
+    )
+
+
 # --------------------------------------------------------------------------- #
 # summary
 # --------------------------------------------------------------------------- #
@@ -285,6 +319,8 @@ def summarize() -> dict[str, Any]:
         session_commands_open = (
             session.query(SessionCommand).filter(SessionCommand.status.in_(OPEN_STATUSES)).count()
         )
+        topic_announcements_total = session.query(TopicAnnouncement).count()
+        topic_deliveries_pending = _pending_topic_deliveries(session)
         checkpoints_total = session.query(Snapshot).count()
 
     families = {
@@ -330,6 +366,12 @@ def summarize() -> dict[str, Any]:
             "stale_or_expired": _predict_expirable_session_command_leases(),
             **_family_metadata("session_commands"),
         },
+        "topic_delivery": {
+            "total": topic_announcements_total,
+            "open": topic_deliveries_pending,
+            "stale_or_expired": 0,
+            **_family_metadata("topic_delivery"),
+        },
         "checkpoints": {
             "total": checkpoints_total,
             "open": checkpoints_total,
@@ -345,7 +387,15 @@ def summarize() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
-def _orphan_check(session, family: str, model: Any, column: Any, valid_ids: Any) -> dict | None:
+def _orphan_check(
+    session,
+    family: str,
+    model: Any,
+    column: Any,
+    valid_ids: Any,
+    *,
+    referenced: str | None = None,
+) -> dict | None:
     query = session.query(model).filter(column.isnot(None)).filter(~column.in_(valid_ids))
     count = query.count()
     if not count:
@@ -355,15 +405,13 @@ def _orphan_check(session, family: str, model: Any, column: Any, valid_ids: Any)
         {"id": getattr(row, "id", None), field: getattr(row, field, None)}
         for row in query.limit(_SAMPLE_LIMIT).all()
     ]
-    referenced = "session" if "session" in field else "workspace"
+    parent = referenced or ("session" if "session" in field else "workspace")
     return {
         "code": "orphaned_reference",
         "family": family,
         "field": field,
         "count": count,
-        "detail": (
-            f"{family}.{field}: {count} row(s) reference a {referenced} that no longer exists"
-        ),
+        "detail": (f"{family}.{field}: {count} row(s) reference a {parent} that no longer exists"),
         "sample": sample,
     }
 
@@ -407,6 +455,7 @@ def diagnose() -> dict[str, Any]:
     with SessionLocal() as session:
         live_sessions = session.query(AgentSession.id)
         live_workspaces = session.query(Workspace.id)
+        live_topic_posts = session.query(TopicPost.id)
         session_ref_checks: tuple[tuple[str, Any, Any], ...] = (
             ("approvals", ApprovalRequest, ApprovalRequest.session_id),
             ("handoffs", Handoff, Handoff.set_by_session_id),
@@ -415,6 +464,7 @@ def diagnose() -> dict[str, Any]:
             ("help_requests", HelpRequest, HelpRequest.claimed_by_session_id),
             ("workspace_claims", WorkspaceClaim, WorkspaceClaim.session_id),
             ("session_leases", SessionLease, SessionLease.session_id),
+            ("topic_delivery", TopicSubscription, TopicSubscription.session_id),
             ("session_commands", SessionCommand, SessionCommand.session_id),
             ("mailbox", MailboxMessage, MailboxMessage.to_session_id),
             ("mailbox", MailboxMessage, MailboxMessage.from_session_id),
@@ -432,11 +482,26 @@ def diagnose() -> dict[str, Any]:
             ("help_requests", HelpRequest, HelpRequest.from_workspace_id),
             ("session_commands", SessionCommand, SessionCommand.workspace_id),
             ("checkpoints", Snapshot, Snapshot.workspace_id),
+            (
+                "topic_delivery",
+                TopicAnnouncement,
+                TopicAnnouncement.excluded_workspace_id,
+            ),
         )
         for family, model, column in workspace_ref_checks:
             issue = _orphan_check(session, family, model, column, live_workspaces)
             if issue is not None:
                 issues.append(issue)
+        topic_post_issue = _orphan_check(
+            session,
+            "topic_delivery",
+            TopicAnnouncement,
+            TopicAnnouncement.post_id,
+            live_topic_posts,
+            referenced="topic post",
+        )
+        if topic_post_issue is not None:
+            issues.append(topic_post_issue)
         for issue in (
             _orphan_text_check(
                 session,

@@ -92,7 +92,15 @@ from brains.control.tool_registry import (
     register_tool,
     verify_tool,
 )
-from brains.control.topics import list_topics, live_agent_sessions, post_topic, read_topic
+from brains.control.topics import (
+    list_topic_subscriptions,
+    list_topics,
+    live_agent_sessions,
+    post_topic,
+    read_topic,
+    subscribe_topic,
+    unsubscribe_topic,
+)
 from brains.control.views import refresh_views
 from brains.control.webhooks import (
     create_webhook_trigger,
@@ -840,22 +848,32 @@ def read_messages_tool(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = None,
 ):
     return read_messages(
         session_id,
         mark_read=mark_read,
         include_read=include_read,
         limit=limit,
+        after_id=after_id,
     )
 
 
-def inbox_wait_tool(session_id: str, timeout_ms: int = 25000):
-    """Block until this session has unread mail OR a claimable peer request.
+def inbox_wait_tool(
+    session_id: str,
+    timeout_ms: int = 25000,
+    after_message_id: int | None = None,
+):
+    """Block until mail, subscribed-topic work, or a peer request arrives.
 
     The single long-poll an agent loops on instead of sleep-polling two
-    surfaces. Returns ``{"wakeup": "mail" | "peer_request" | None}``.
+    surfaces. ``after_message_id`` is a client-held mailbox high-water mark.
     """
-    return inbox_wait(session_id, timeout_ms=timeout_ms)
+    return inbox_wait(
+        session_id,
+        timeout_ms=timeout_ms,
+        after_message_id=after_message_id,
+    )
 
 
 def mail_send_tool(to: str, subject: str, body: str = "", session_id: str | None = None):
@@ -894,8 +912,8 @@ def topic_post_tool(
 ):
     """Post to a named topic board (message board / pub-sub).
 
-    Blasts one inbox notification per other workspace with live sessions,
-    so agents only ever poll their own mailbox. ``required_tool`` is an
+    Creates one durable announcement read only by live subscribed Sessions;
+    no per-Workspace mailbox rows are synthesized. ``required_tool`` is an
     advisory harness hint ("claude" or "not:copilot").
     """
     return post_topic(
@@ -910,9 +928,40 @@ def topic_post_tool(
     )
 
 
-def topic_read_tool(topic: str | None = None, limit: int = 50, reply_to: int | None = None):
-    """Read a topic board (or all boards) — newest posts first."""
-    return read_topic(topic, limit=limit, reply_to=reply_to)
+def topic_read_tool(
+    topic: str | None = None,
+    limit: int = 50,
+    reply_to: int | None = None,
+    session_id: str | None = None,
+    after_post_id: int | None = None,
+):
+    """Read a board and advance its subscription cursor when Session-scoped."""
+    return read_topic(
+        topic,
+        limit=limit,
+        reply_to=reply_to,
+        session_id=session_id,
+        after_post_id=after_post_id,
+    )
+
+
+def topic_subscribe_tool(
+    topic: str,
+    session_id: str,
+    include_existing: bool = False,
+):
+    """Subscribe a live Session; new posts wake its unified inbox wait."""
+    return subscribe_topic(topic, session_id, include_existing=include_existing)
+
+
+def topic_unsubscribe_tool(topic: str, session_id: str):
+    """Stop one live Session receiving wakeups for a topic."""
+    return unsubscribe_topic(topic, session_id)
+
+
+def topic_subscriptions_tool(session_id: str):
+    """List a Session's topics, cursors, and pending announcement counts."""
+    return list_topic_subscriptions(session_id)
 
 
 def topic_list_tool(limit: int = 100):

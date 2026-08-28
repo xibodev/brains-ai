@@ -21,6 +21,7 @@ from brains.storage.models import (
     Org,
     SessionLease,
     SessionSuccessor,
+    TopicSubscription,
     Workspace,
     WorkspaceClaim,
 )
@@ -310,11 +311,25 @@ def _supersede_coordination_handle(
         and predecessor.issue_id is None
         and predecessor.persona_id is None
     )
-    if (
-        predecessor.ended_at is not None
-        or not coordination_handle
-        or session.get(SessionLease, predecessor.id) is None
+    if not coordination_handle or session.get(SessionLease, predecessor.id) is None:
+        return
+    for subscription in (
+        session.query(TopicSubscription)
+        .filter(TopicSubscription.session_id == predecessor.id)
+        .all()
     ):
+        existing = session.get(TopicSubscription, (successor.id, subscription.topic))
+        if existing is None:
+            subscription.session_id = successor.id
+        else:
+            existing.last_seen_post_id = max(
+                existing.last_seen_post_id,
+                subscription.last_seen_post_id,
+            )
+            existing.subscribed_at = min(existing.subscribed_at, subscription.subscribed_at)
+            existing.updated_at = max(existing.updated_at, subscription.updated_at)
+            session.delete(subscription)
+    if predecessor.ended_at is not None:
         return
     predecessor.state = DORMANT_SESSION_STATE
     session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == predecessor.id).update(

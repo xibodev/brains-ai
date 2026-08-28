@@ -62,6 +62,7 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
         "workspace_claims",
         "session_leases",
         "session_commands",
+        "topic_delivery",
         "checkpoints",
     }
     handoffs = result["families"]["handoffs"]
