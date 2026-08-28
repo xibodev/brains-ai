@@ -50,7 +50,7 @@ structured evidence expectations for these same IDs are maintained in
 | Acceptance criterion | Target contract | Current status |
 |---|---|---|
 | AC-F0-01 | `/app` provides a stable authenticated shell and redirects to a valid product start surface. | present (E1/E2 only); `/app` redirects to Command Center. |
-| AC-F0-02 | The active scope persists across reload and all scoped screens use it consistently. | present/partial (E1/E2 only); Workspace deep links persist directly, while the active Org remains context for Access and Labs screens. Authorization is enforced independently. |
+| AC-F0-02 | The active scope persists across reload and all scoped screens use it consistently. | present/partial (E1/E2 only); Workspace deep links persist directly, while migration 148 makes normalized paths durable aliases and converges linked Git worktrees on the oldest Workspace identity inside one Org. Historical duplicate rows are archived rather than erased. The active Org remains context for Access and Labs screens, and authorization is enforced independently. |
 | AC-F0-03 | API failures remain visible as actionable error states rather than empty data. | partial; typed errors exist, but some screens convert failures to empty arrays. |
 | AC-F0-04 | Persona Spawn creates an attributable Session and surfaces it in Sessions. | partial/Labs-only; route and tests exist, but Spawn with no Issue may create no daemon assignment. |
 | AC-F0-05 | Deep routes select the named entity or return a clear not-found state. | partial; Workspace, Pod, Project, and Issue parameters are consumed, while gated Sessions, Personas, and Runtimes retain explicit parameter gaps. |

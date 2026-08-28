@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import platform
+import subprocess
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -23,6 +24,7 @@ from brains.storage.models import (
     SessionSuccessor,
     TopicSubscription,
     Workspace,
+    WorkspaceAlias,
     WorkspaceClaim,
 )
 
@@ -111,6 +113,69 @@ def has_project_marker(path: str) -> bool:
         if lowered.endswith((".csproj", ".sln", ".fsproj", ".vbproj")):
             return True
     return False
+
+
+def workspace_identity(path: str) -> str:
+    """Return a stable local identity shared by linked Git worktrees."""
+    normalized = normalize_path(path)
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                normalized,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        common_dir = result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        common_dir = ""
+    if common_dir:
+        return f"git:{os.path.normcase(normalize_path(common_dir))}"
+    return f"path:{os.path.normcase(normalized)}"
+
+
+def _git_worktree_paths(path: str) -> tuple[str, ...]:
+    """Return the linked worktree roots Git reports for ``path``."""
+    normalized = normalize_path(path)
+    try:
+        result = subprocess.run(
+            ["git", "-C", normalized, "worktree", "list", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    return tuple(
+        normalize_path(line.removeprefix("worktree "))
+        for line in result.stdout.splitlines()
+        if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
+    )
+
+
+def _record_workspace_alias(session, workspace: Workspace, path: str, identity_key: str) -> None:
+    alias = session.query(WorkspaceAlias).filter(WorkspaceAlias.path == path).one_or_none()
+    if alias is None:
+        session.add(WorkspaceAlias(workspace_id=workspace.id, path=path, identity_key=identity_key))
+    else:
+        alias.workspace_id = workspace.id
+        alias.identity_key = identity_key
+
+
+def _resolve_workspace_path(session, path: str) -> Workspace | None:
+    normalized = normalize_path(path)
+    alias = session.query(WorkspaceAlias).filter(WorkspaceAlias.path == normalized).one_or_none()
+    if alias is not None:
+        return session.get(Workspace, alias.workspace_id)
+    return session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -537,9 +602,72 @@ def register_workspace(
 ) -> Workspace:
     init_db()
     normalized = normalize_path(path)
+    identity_key = workspace_identity(normalized)
+    archived_duplicate_ids: list[int] = []
     with SessionLocal() as session:
-        existing = session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
-        if existing:
+        aliases = (
+            session.query(WorkspaceAlias, Workspace)
+            .join(Workspace, Workspace.id == WorkspaceAlias.workspace_id)
+            .filter(WorkspaceAlias.identity_key == identity_key)
+            .order_by(Workspace.created_at.asc(), Workspace.id.asc())
+            .all()
+        )
+        candidates = [workspace for _alias, workspace in aliases]
+        if identity_key.startswith("git:"):
+            worktree_paths = _git_worktree_paths(normalized)
+            if worktree_paths:
+                linked = (
+                    session.query(Workspace)
+                    .filter(Workspace.path.in_(worktree_paths))
+                    .order_by(Workspace.created_at.asc(), Workspace.id.asc())
+                    .all()
+                )
+                for candidate in linked:
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+        exact = _resolve_workspace_path(session, normalized)
+        if exact is not None and exact not in candidates:
+            candidates.append(exact)
+        if identity_key.startswith("git:") and not aliases:
+            for candidate in session.query(Workspace).order_by(Workspace.id.asc()).all():
+                if candidate in candidates or not os.path.isdir(candidate.path):
+                    continue
+                if workspace_identity(candidate.path) == identity_key:
+                    candidates.append(candidate)
+        if candidates:
+            org_ids = {candidate.org_id for candidate in candidates}
+            if len(org_ids) > 1:
+                raise ValueError("repository paths are registered to multiple organizations")
+            existing = min(candidates, key=lambda row: (row.created_at, row.id))
+            if org_id is not None and existing.org_id != org_id:
+                raise ValueError("repository is already registered to another organization")
+            if os.path.isdir(normalized):
+                existing.status = "active"
+            _record_workspace_alias(session, existing, existing.path, identity_key)
+            _record_workspace_alias(session, existing, normalized, identity_key)
+            for duplicate in candidates:
+                if duplicate.id != existing.id:
+                    session.query(WorkspaceAlias).filter(
+                        WorkspaceAlias.workspace_id == duplicate.id
+                    ).update(
+                        {
+                            WorkspaceAlias.workspace_id: existing.id,
+                            WorkspaceAlias.identity_key: identity_key,
+                        },
+                        synchronize_session=False,
+                    )
+                    if duplicate.status != "archived":
+                        duplicate.status = "archived"
+                        archived_duplicate_ids.append(duplicate.id)
+            session.commit()
+            session.refresh(existing)
+            if archived_duplicate_ids:
+                append_event(
+                    "workspace_alias_converged",
+                    f"workspace aliases converged on {existing.slug}",
+                    workspace_id=existing.id,
+                    metadata={"archived_workspace_ids": archived_duplicate_ids},
+                )
             return existing
         all_slugs = {row.slug for row in session.query(Workspace.slug).all()}
         final_slug = slug or unique_slug(slug_from_path(normalized), all_slugs)
@@ -563,6 +691,8 @@ def register_workspace(
             org_id=resolved_org_id,
         )
         session.add(workspace)
+        session.flush()
+        _record_workspace_alias(session, workspace, normalized, identity_key)
         session.commit()
         session.refresh(workspace)
     has_marker = has_project_marker(normalized)
@@ -582,7 +712,7 @@ def register_workspace(
             (
                 f"workspace registered without project marker: {final_slug} "
                 f"({normalized}) — looks like an umbrella folder or empty "
-                "directory; consider pruning with `brains-ai workspaces prune`."
+                "directory; inspect it with `brains-ai workspaces doctor`."
             ),
             workspace_id=workspace.id,
             metadata={"path": normalized},
@@ -601,7 +731,7 @@ def get_workspace(
         elif slug is not None:
             row = query.filter(Workspace.slug == slug).one_or_none()
         elif path is not None:
-            row = query.filter(Workspace.path == normalize_path(path)).one_or_none()
+            row = _resolve_workspace_path(session, path)
         else:
             row = None
         if row is None:
@@ -1502,7 +1632,10 @@ def list_sessions(workspace_path: str | None = None, limit: int = 50) -> list[di
             Workspace, Workspace.id == AgentSession.workspace_id
         )
         if workspace_path:
-            query = query.filter(Workspace.path == normalize_path(workspace_path))
+            workspace = _resolve_workspace_path(session, workspace_path)
+            if workspace is None:
+                return []
+            query = query.filter(AgentSession.workspace_id == workspace.id)
         if visible is not None:
             query = query.filter(AgentSession.workspace_id.in_(visible))
         rows = (

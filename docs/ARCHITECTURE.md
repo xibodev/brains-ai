@@ -528,9 +528,17 @@ a destroyed record. `audit_log` is deliberately not named: its rows are links in
 hash chain, so deleting the newest one would leave a head the log no longer
 matches and every later governed append would be refused.
 
-Workspace deletion in `brains-ai workspaces prune` and `workspaces doctor` uses that
-cascade, so a new model with a Workspace or Session foreign key is swept without
-editing a list.
+Migration `148_workspace_aliases` separates path spelling from durable Workspace
+identity. Registration stores normalized paths as aliases and uses Git's local
+common directory to converge linked worktrees inside one Org. Existing duplicate
+Workspace rows are archived, not rewritten or deleted, so their historical rows
+remain attributable; the alias moves future path-based calls to the oldest
+canonical Workspace. A common identity spanning Orgs is refused.
+
+Workspace deletion in explicit `brains-ai workspaces prune` and `workspaces doctor
+--prune-missing` uses that cascade. The preferred `workspaces doctor
+--archive-missing` path only changes active Workspace status and preserves every
+dependent row.
 
 ## Realtime architecture
 
