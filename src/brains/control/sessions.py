@@ -4,9 +4,9 @@ import contextlib
 import json
 import os
 import platform
-import subprocess
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import func
@@ -119,46 +119,52 @@ def workspace_identity(path: str) -> str:
     """Return a stable local identity shared by linked Git worktrees."""
     normalized = normalize_path(path)
     try:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                normalized,
-                "rev-parse",
-                "--path-format=absolute",
-                "--git-common-dir",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        common_dir = result.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        common_dir = ""
-    if common_dir:
-        return f"git:{os.path.normcase(normalize_path(common_dir))}"
+        git_entry = Path(normalized, ".git")
+        if git_entry.is_dir():
+            common_dir = git_entry
+        elif git_entry.is_file():
+            marker = git_entry.read_text(encoding="utf-8").strip()
+            if not marker.startswith("gitdir:"):
+                raise ValueError("invalid .git pointer")
+            git_dir = Path(marker.removeprefix("gitdir:").strip())
+            if not git_dir.is_absolute():
+                git_dir = git_entry.parent / git_dir
+            git_dir = git_dir.resolve()
+            common_marker = git_dir / "commondir"
+            if common_marker.is_file():
+                common_dir = (git_dir / common_marker.read_text(encoding="utf-8").strip()).resolve()
+            else:
+                common_dir = git_dir
+        else:
+            common_dir = None
+    except (OSError, UnicodeError, ValueError):
+        common_dir = None
+    if common_dir is not None:
+        return f"git:{os.path.normcase(str(common_dir.resolve()))}"
     return f"path:{os.path.normcase(normalized)}"
 
 
 def _git_worktree_paths(path: str) -> tuple[str, ...]:
-    """Return the linked worktree roots Git reports for ``path``."""
-    normalized = normalize_path(path)
-    try:
-        result = subprocess.run(
-            ["git", "-C", normalized, "worktree", "list", "--porcelain"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
+    """Return linked worktree roots from Git's local metadata."""
+    identity = workspace_identity(path)
+    if not identity.startswith("git:"):
         return ()
-    return tuple(
-        normalize_path(line.removeprefix("worktree "))
-        for line in result.stdout.splitlines()
-        if line.startswith("worktree ") and line.removeprefix("worktree ").strip()
-    )
+    common_dir = Path(identity.removeprefix("git:"))
+    roots: set[str] = set()
+    try:
+        if common_dir.name == ".git":
+            roots.add(normalize_path(str(common_dir.parent)))
+        worktrees_dir = common_dir / "worktrees"
+        if worktrees_dir.is_dir():
+            for entry in worktrees_dir.iterdir():
+                gitdir_file = entry / "gitdir"
+                if not gitdir_file.is_file():
+                    continue
+                git_entry = Path(gitdir_file.read_text(encoding="utf-8").strip())
+                roots.add(normalize_path(str(git_entry.parent)))
+    except (OSError, UnicodeError, ValueError):
+        return ()
+    return tuple(sorted(roots))
 
 
 def _record_workspace_alias(session, workspace: Workspace, path: str, identity_key: str) -> None:
@@ -628,12 +634,6 @@ def register_workspace(
         exact = _resolve_workspace_path(session, normalized)
         if exact is not None and exact not in candidates:
             candidates.append(exact)
-        if identity_key.startswith("git:") and not aliases:
-            for candidate in session.query(Workspace).order_by(Workspace.id.asc()).all():
-                if candidate in candidates or not os.path.isdir(candidate.path):
-                    continue
-                if workspace_identity(candidate.path) == identity_key:
-                    candidates.append(candidate)
         if candidates:
             org_ids = {candidate.org_id for candidate in candidates}
             if len(org_ids) > 1:
