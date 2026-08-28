@@ -121,6 +121,7 @@ POST_CHECKSUM_DELTAS = (
     "144_topic_subscriptions",
     "145_approval_routing",
     "146_feedback_inbox",
+    "147_event_contexts",
 )
 
 _LEGACY_LEDGER_DDL = """

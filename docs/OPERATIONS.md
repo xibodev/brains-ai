@@ -636,6 +636,7 @@ policy (or explicit indefinite policy), and reports its health:
 | `mailbox` | the addressed Session or Workspace broadcast | indefinite - a message is marked read, never expired or deleted |
 | `help_requests` | the peer Session/Workspace it targets | per-request `expires_at` (its `timeout_ms`), swept by `_expire_due` |
 | `feedback` | human triage after agent reporting/enrichment | indefinite while unresolved; no automatic roadmap or release decision |
+| `event_contexts` | the event producer; bootstrap operator for unresolved scope | one context per event, following event retention; unresolved scope is operational debt, not silently global |
 | `workspace_claims` | the Session holding the claim | `expires_at` (its `duration_minutes`); expired rows are deleted (released), not merely marked |
 | `session_commands` | the Runtime/local consumer bound to the Session | `BRAINS_SESSION_COMMAND_LEASE_SECONDS` per attempt, requeued or failed by `expire_leases` |
 | `checkpoints` (`snapshots`) | the Workspace it snapshots | indefinite by design - kept until the owning Workspace is pruned |
@@ -643,6 +644,8 @@ policy (or explicit indefinite policy), and reports its health:
 Approval routing is organizational metadata, not authorization. `brains-ai decision-route` and `decision-escalate` (plus matching MCP and `POST /v1/approvals/{code}/route|escalate`) require a browser/local human with Workspace write access. An assignee must be `admin` or an explicit member of the approval's Org. Routing records priority, optional due time, and a monotonic reasoned escalation level in `approval_routing`; it never resolves, rejects, defers, expires, consumes, or approves an action.
 
 The feedback inbox uses `feedback-report|enrich|get|list` across CLI/MCP/HTTP. Reports require a live reporter Session in the Workspace and redact credential-shaped data before hashing or persistence; duplicates link to one canonical report and preserve new evidence as deduplicated enrichments. `feedback-triage` and `feedback-promote` are local-human CLI operations with browser-cookie HTTP equivalents and are intentionally absent from MCP. Promotion is exactly once into a Task, knowledge entry, or existing `BL-PN-NN` reference and commits with its audit row. It never edits backlog text or self-approves roadmap/release changes.
+
+Every new durable event has an `event_contexts` row with taxonomy category, `workspace`/`global`/`unresolved` scope, and scope source. `append_event` prefers explicit Workspace scope, then infers from its Session or known entity metadata. Core install-wide categories are global; unknown extension kinds require explicit/Session/entity scope or remain unresolved. `brains-ai event-scope`, MCP `event_scope_report`, and protected `GET /v1/admin/event-scope` report counts plus a bounded unresolved sample. Non-admin event listings never expose unresolved rows.
 
 `GET /v1/admin/queue-health` (bootstrap-admin only) / `brains-ai queue-health
 status` returns the family summary above (with live total/open/stale-or-

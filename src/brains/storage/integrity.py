@@ -86,6 +86,7 @@ TERMINAL_SESSION_STATES = ("completed", "failed")
 # operator when it does not.
 LEASE_TABLES = (
     "approval_routing",
+    "event_contexts",
     "session_leases",
     "topic_announcements",
     "topic_subscriptions",

@@ -512,6 +512,19 @@ def test_feedback_hides_private_workspace_from_nonmember(
         )
 
 
+def test_unresolved_events_are_hidden_from_non_admin(isolated_brains: Path, monkeypatch) -> None:
+    from brains.control.events import append_event, list_events
+    from brains.control.operators import add_operator, ensure_admin_operator
+
+    ensure_admin_operator()
+    add_operator("alice")
+    _join_default_org("alice")
+    unresolved = append_event("custom.unresolved", "no trustworthy scope")
+
+    _set_current_operator(monkeypatch, "alice")
+    assert unresolved.id not in {row.id for row in list_events(limit=500)}
+
+
 def test_list_tasks_filters_private_workspaces(
     isolated_brains: Path, tmp_path, monkeypatch
 ) -> None:

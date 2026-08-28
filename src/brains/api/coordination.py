@@ -834,6 +834,16 @@ def queue_health_status(principal: Principal = Depends(require_operator_principa
     return {"summary": summarize(), "diagnosis": diagnose()}
 
 
+@router.get("/admin/event-scope")
+def event_scope_status(principal: Principal = Depends(require_operator_principal)) -> dict:
+    """Bootstrap-admin event taxonomy and unresolved-scope posture."""
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("event scope is available to the bootstrap admin only")
+    from brains.control.events import event_scope_report
+
+    return event_scope_report()
+
+
 @router.post("/admin/queue-health/repair")
 def queue_health_repair(
     body: QueueHealthRepairBody = Body(default_factory=QueueHealthRepairBody),

@@ -2478,6 +2478,22 @@ def events_cli(limit: int = 100):
     )
 
 
+@app.command("event-context")
+def event_context_cli(event_id: int):
+    """Show one event's taxonomy and scope provenance."""
+    from brains.control.events import get_event_context
+
+    _print_json(get_event_context(event_id))
+
+
+@app.command("event-scope")
+def event_scope_cli():
+    """Show typed/global/unresolved event-scope posture."""
+    from brains.control.events import event_scope_report
+
+    _print_json(event_scope_report())
+
+
 @app.command("learn")
 def learn_cli(
     workspace: str | None = None,
