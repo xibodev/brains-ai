@@ -164,3 +164,23 @@ def test_migration_backfills_existing_workspace_paths(tmp_path):
         ).fetchall() == [(7, "/repo/example", "path:/repo/example")]
     finally:
         connection.close()
+
+
+def test_linked_worktree_metadata_has_one_identity_and_lists_both_roots(tmp_path):
+    common = tmp_path / "repo" / ".git"
+    canonical = common.parent
+    linked = tmp_path / "linked"
+    worktree_meta = common / "worktrees" / "linked"
+    worktree_meta.mkdir(parents=True)
+    linked.mkdir()
+    (linked / ".git").write_text(f"gitdir: {worktree_meta}\n", encoding="utf-8")
+    (worktree_meta / "commondir").write_text("../..\n", encoding="utf-8")
+    (worktree_meta / "gitdir").write_text(str(linked / ".git") + "\n", encoding="utf-8")
+
+    assert sessions_ctl.workspace_identity(str(canonical)) == sessions_ctl.workspace_identity(
+        str(linked)
+    )
+    assert set(sessions_ctl._git_worktree_paths(str(linked))) == {
+        str(canonical.resolve()),
+        str(linked.resolve()),
+    }
