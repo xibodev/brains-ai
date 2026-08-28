@@ -27,7 +27,7 @@ self-join cannot tie the action back to the session that was offered the cue.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func
 
@@ -44,6 +44,10 @@ SURFACES: list[tuple[str, str]] = [
     ("tools_missing", "tool_verified"),
     ("tools_unverified", "tool_verified"),
 ]
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def adoption_report(
@@ -94,6 +98,7 @@ def adoption_report(
     now = utc_now()
     cutoff = now - timedelta(days=since_days)
     window = timedelta(minutes=window_minutes)
+    eligible_before = now - window
 
     with SessionLocal() as session:
         workspace_id: int | None = None
@@ -110,14 +115,18 @@ def adoption_report(
         if workspace_id is not None:
             starts_q = starts_q.filter(Event.workspace_id == workspace_id)
         starts = starts_q.all()
-        sessions_started = len(starts)
+        sessions_observed = len(starts)
+        eligible_starts = [
+            event for event in starts if _as_utc(event.created_at) <= eligible_before
+        ]
+        sessions_excluded_incomplete_window = sessions_observed - len(eligible_starts)
 
         # Per surface, collect (session_id, start_at). A session can theoretically
         # appear more than once if start_session is called twice for the same id
         # (we do not do this today, but the dedup below is defensive: keep the
         # earliest start, so the action window is conservative).
         offered_by_surface: dict[str, dict[str, datetime]] = {key: {} for key, _ in SURFACES}
-        for ev in starts:
+        for ev in eligible_starts:
             if not ev.session_id or not ev.metadata_json:
                 continue
             try:
@@ -131,9 +140,10 @@ def adoption_report(
                 except (TypeError, ValueError):
                     value = 0
                 if value > 0:
+                    start_at = _as_utc(ev.created_at)
                     existing = offered_by_surface[key].get(ev.session_id)
-                    if existing is None or ev.created_at < existing:
-                        offered_by_surface[key][ev.session_id] = ev.created_at
+                    if existing is None or start_at < existing:
+                        offered_by_surface[key][ev.session_id] = start_at
 
         surface_results: dict[str, dict] = {}
         for key, follow_kind in SURFACES:
@@ -159,10 +169,13 @@ def adoption_report(
             )
             acted: set[str] = set()
             for sid, follow_at in follows:
-                start_at = start_by_session.get(sid)
-                if start_at is None:
+                if sid is None or follow_at is None:
                     continue
-                if start_at <= follow_at <= start_at + window:
+                offered_at = start_by_session.get(sid)
+                if offered_at is None:
+                    continue
+                normalized_follow = _as_utc(follow_at)
+                if offered_at <= normalized_follow <= offered_at + window:
                     acted.add(sid)
             acted_count = len(acted)
             surface_results[key] = {
@@ -188,7 +201,22 @@ def adoption_report(
         "window_minutes": window_minutes,
         "since_days": since_days,
         "workspace": workspace,
-        "sessions_started": sessions_started,
+        "observed_at": now.isoformat(),
+        "observation_started_at": cutoff.isoformat(),
+        "eligible_before": eligible_before.isoformat(),
+        "sessions_started": sessions_observed,
+        "sessions_eligible": len(eligible_starts),
+        "sessions_excluded_incomplete_window": sessions_excluded_incomplete_window,
+        "interpretation": {
+            "unit": "session_start event",
+            "rate": "sessions with a matching follow-up event divided by eligible sessions offered the surface",
+            "not_measured": [
+                "task success",
+                "user value",
+                "causal impact",
+                "actions outside the configured follow-up window",
+            ],
+        },
         "surfaces": surface_results,
         "totals_by_kind": totals,
     }

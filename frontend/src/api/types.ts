@@ -832,6 +832,27 @@ export interface OperatorOperations {
   };
   runtimes: Runtime[];
   tools: OperatorTool[];
+  adoption: {
+    window_minutes: number;
+    since_days: number;
+    observed_at: string;
+    observation_started_at: string;
+    eligible_before: string;
+    sessions_started: number;
+    sessions_eligible: number;
+    sessions_excluded_incomplete_window: number;
+    interpretation: {
+      unit: string;
+      rate: string;
+      not_measured: string[];
+    };
+    surfaces: Record<string, {
+      follow_kind: string;
+      offered: number;
+      acted: number;
+      rate: number | null;
+    }>;
+  };
   operators: Array<Record<string, unknown>>;
   labs_enabled: boolean;
 }

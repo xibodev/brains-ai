@@ -249,6 +249,11 @@ structured evidence expectations for these same IDs are maintained in
 
 Migration 146 adds the governed feedback inbox required by BL-P1-15. Live Workspace Sessions can report and enrich redacted canonical records through CLI/MCP/HTTP. Triage and exactly-once promotion into a Task, knowledge entry, or existing backlog reference require a browser/local human and are deliberately absent from MCP; promotion commits with its audit entry and never edits roadmap text or authorizes a release.
 
+Operations exposes welcome follow-through as observational telemetry with explicit
+observation/action windows, eligible and right-censored Session denominators, and
+per-surface `acted / offered` rates. It explicitly does not claim task success,
+user value, or causal impact.
+
 ### B3 - Context, knowledge, semantic retrieval, and code graph
 
 **Promise:** Agents can index approved sources, retrieve relevant context, inspect freshness, and query a code graph without treating generated context as authority.

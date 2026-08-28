@@ -164,6 +164,16 @@ def test_operations_is_install_admin_only(client, auth_headers):
     assert client.get("/v1/operator/operations", headers=auth_headers).status_code == 200
 
 
+def test_operations_exposes_bounded_adoption_denominators(client, auth_headers):
+    body = client.get("/v1/operator/operations", headers=auth_headers).json()
+    adoption = body["adoption"]
+    assert adoption["sessions_started"] >= adoption["sessions_eligible"]
+    assert adoption["sessions_excluded_incomplete_window"] == (
+        adoption["sessions_started"] - adoption["sessions_eligible"]
+    )
+    assert "causal impact" in adoption["interpretation"]["not_measured"]
+
+
 def test_capability_catalog_never_presents_shell_execution(client, auth_headers):
     response = client.get("/v1/operator/capabilities", headers=auth_headers)
     assert response.status_code == 200
