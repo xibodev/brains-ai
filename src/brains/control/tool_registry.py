@@ -85,14 +85,26 @@ def register_tool(
 
 
 def list_registered_tools(verify_now: bool = False) -> list[dict]:
+    """List tools, optionally persisting a fresh control-plane PATH probe.
+
+    ``registered_tools`` is the local control-plane registry. Remote machine
+    readiness lives on ``runtimes`` and must not be overwritten from this
+    process's PATH.
+    """
     init_db()
     with SessionLocal() as session:
         rows = session.query(RegisteredTool).order_by(RegisteredTool.name.asc()).all()
+        availability: dict[str, bool] = {}
+        if verify_now:
+            now = utc_now()
+            for row in rows:
+                available = _is_available(row.cli_command)
+                availability[row.name] = available
+                row.last_verified_at = now
+                row.is_available = 1 if available else 0
+            session.commit()
         return [
-            _tool_to_dict(
-                row,
-                on_path_now=_is_available(row.cli_command) if verify_now else None,
-            )
+            _tool_to_dict(row, on_path_now=availability.get(row.name) if verify_now else None)
             for row in rows
         ]
 

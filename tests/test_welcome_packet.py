@@ -155,6 +155,57 @@ def test_welcome_tool_status_counts(tmp_path, monkeypatch):
     assert welcome["tool_status"]["missing"] >= 1
 
 
+def test_welcome_auto_verifies_local_session_tool(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "brains.control.tool_registry.shutil.which",
+        lambda command: "/bin/local-tool" if command == "local-tool" else None,
+    )
+    register_tool("local-tool", "Local Tool", "local-tool", verify=False)
+    started = start_session(str(tmp_path), tool="local-tool")
+    status = started["welcome"]["tool_status"]
+    assert status["verification_scope"] == "control_plane"
+    assert status["session_ready"] is True
+    assert status["unverified"] == 0
+
+
+def test_welcome_uses_bound_runtime_readiness_not_hub_path(tmp_path, monkeypatch):
+    from brains.control.sessions import current_machine_id
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import AgentSession, Runtime
+
+    monkeypatch.setattr(
+        "brains.control.tool_registry.shutil.which",
+        lambda _command: None,
+    )
+    register_tool("remote-tool", "Remote Tool", "remote-tool", verify=False)
+    workspace = register_workspace(str(tmp_path))
+    with SessionLocal() as session:
+        runtime = Runtime(
+            slug=f"remote-runtime-{uuid.uuid4().hex[:8]}",
+            machine_id=f"remote-{current_machine_id()}",
+            tool="remote-tool",
+            status="online",
+            health="healthy",
+        )
+        session.add(runtime)
+        session.flush()
+        agent = AgentSession(
+            id=f"ses_{uuid.uuid4().hex[:12]}",
+            workspace_id=workspace.id,
+            tool="remote-tool",
+            machine_id=runtime.machine_id,
+            runtime_id=runtime.id,
+        )
+        session.add(agent)
+        session.commit()
+        session_id = agent.id
+
+    status = build_welcome(workspace, session_id)["tool_status"]
+    assert status["verification_scope"] == "runtime"
+    assert status["session_ready"] is True
+    assert status["unverified"] >= 1
+
+
 # ------------------------------------------------------- adoption telemetry
 #
 # The ``session_start`` event must carry a snapshot of the welcome

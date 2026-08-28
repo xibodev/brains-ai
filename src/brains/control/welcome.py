@@ -12,7 +12,9 @@ representative names, never the full bodies. Agents that want to act
 follow up with the targeted tool (``read_messages``, ``use_pattern``,
 ``retrieve_memory``, ``list_sources``, etc).
 
-Nothing here mutates state. Mailbox messages are *not* marked read.
+Mailbox messages are *not* marked read. The only mutation is a bounded local
+PATH readiness refresh for registered tools; it resolves executables without
+starting them and never overwrites remote Runtime evidence.
 """
 
 from __future__ import annotations
@@ -24,10 +26,12 @@ from brains import __version__
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
+    AgentSession,
     KnowledgePattern,
     MailboxMessage,
     Memory,
     RegisteredTool,
+    Runtime,
     Source,
     Workspace,
 )
@@ -77,8 +81,8 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
     * ``relevant_memories``: list of stored memory ``key``s whose key
       contains the workspace slug. Values are not inlined — agents call
       ``retrieve_memory`` for the body.
-    * ``tool_status``: ``{"registered": int, "available": int,
-      "missing": int, "unverified": int}``.
+    * ``tool_status``: aggregate registry counts plus readiness for this
+      Session's local PATH or bound Runtime.
     * ``index_status``: ``{"sources": int, "indexed": int}`` for this
       workspace's RAG / repo-indexer state. Lets the agent notice the
       indexer is empty before it goes hunting blindly.
@@ -215,6 +219,22 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
         pass
 
     try:
+        from brains.control.sessions import current_machine_id
+        from brains.control.tool_registry import list_registered_tools
+
+        with SessionLocal() as session:
+            agent = session.get(AgentSession, session_id)
+            bound_runtime = (
+                session.get(Runtime, agent.runtime_id)
+                if agent is not None and agent.runtime_id is not None
+                else None
+            )
+        local_session = agent is None or (
+            bound_runtime is None
+            and (agent.machine_id is None or agent.machine_id == current_machine_id())
+        )
+        if local_session:
+            list_registered_tools(verify_now=True)
         with SessionLocal() as session:
             tool_rows = session.query(RegisteredTool).all()
             registered = len(tool_rows)
@@ -228,14 +248,23 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
                 "available": available,
                 "missing": missing,
                 "unverified": unverified,
+                "session_tool": agent.tool if agent else None,
+                "verification_scope": "runtime" if bound_runtime else "control_plane",
+                "session_ready": (
+                    bound_runtime.status == "online" and bound_runtime.health == "healthy"
+                    if bound_runtime
+                    else any(row.name == agent.tool and bool(row.is_available) for row in tool_rows)
+                    if agent
+                    else None
+                ),
             }
             if registered and missing:
                 payload["hints"].append(
                     f"{missing} registered tool(s) currently missing on PATH — see list_registered_tools"
                 )
-            if registered and unverified:
+            if registered and unverified and not local_session:
                 payload["hints"].append(
-                    f"{unverified} registered tool(s) never verified — call verify_tool"
+                    f"{unverified} control-plane tool(s) have no local PATH verification"
                 )
     except Exception:
         pass
