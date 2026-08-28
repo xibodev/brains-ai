@@ -6,8 +6,8 @@ test here pins the fix for one of them:
 1. Liveness: a session with fresh heartbeat activity is NEVER reaped for a
    dead PID alone (the recorded pid is often the brains stdio child, not
    the agent); quiet + pid-dead is what gets reaped.
-2. Broadcasts: cross-workspace broadcast is topics + inbox blast; workspace
-   mail is workspace-local. NULL-workspace rows are direct-delivery only —
+2. Broadcasts: cross-workspace broadcast is interest-scoped topic delivery;
+   workspace mail is local. NULL-workspace rows are direct-delivery only,
    never a cross-project firehose.
 3. Evidence vs expiry: claiming stops the expiry clock (bounded by a claim
    grace), so gathering real evidence can't get the answer discarded.
@@ -38,7 +38,7 @@ from brains.control.sessions import (  # noqa: E402
     register_workspace,
     start_session,
 )
-from brains.control.topics import post_topic  # noqa: E402
+from brains.control.topics import post_topic, read_topic, subscribe_topic  # noqa: E402
 from brains.storage.db import SessionLocal  # noqa: E402
 from brains.storage.models import AgentSession  # noqa: E402
 
@@ -125,7 +125,7 @@ def test_null_workspace_message_is_direct_delivery_only(tmp_path, tracked_sessio
     assert read_messages(stranger["session_id"]) == []
 
 
-def test_workspace_mail_stays_local_broadcast_goes_through_topics(tmp_path, tracked_session):
+def test_workspace_mail_stays_local_broadcast_goes_to_topic_subscribers(tmp_path, tracked_session):
     ses_a = tracked_session(str(tmp_path / "alpha"), "copilot")
     ses_b = tracked_session(str(tmp_path / "beta"), "claude")
 
@@ -136,16 +136,18 @@ def test_workspace_mail_stays_local_broadcast_goes_through_topics(tmp_path, trac
     # ...but never leaks into another workspace's inbox.
     assert all(m["subject"] != "alpha-local" for m in read_messages(ses_b["session_id"]))
 
-    # Cross-workspace broadcast is the topic blast path: every OTHER live
-    # workspace's session sees it in its inbox.
+    # Cross-workspace broadcast is interest-scoped and does not create mailbox rows.
+    subscribe_topic("field-report", ses_b["session_id"])
     posted = post_topic(
         "field-report",
         "broadcast check",
         from_session_id=ses_a["session_id"],
         workspace_path=str(tmp_path / "alpha"),
     )
-    beta_subjects = [m["subject"] for m in read_messages(ses_b["session_id"])]
-    assert any(f"[topic:{posted['topic']}]" in s for s in beta_subjects)
+    assert read_messages(ses_b["session_id"]) == []
+    assert [row["id"] for row in read_topic(posted["topic"], session_id=ses_b["session_id"])] == [
+        posted["id"]
+    ]
 
 
 # --- issue 4: polling a dead handle is loud ---------------------------------

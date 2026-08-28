@@ -118,6 +118,7 @@ POST_CHECKSUM_DELTAS = (
     "141_secure_settings",
     "142_session_successor",
     "143_session_leases",
+    "144_topic_subscriptions",
 )
 
 _LEGACY_LEDGER_DDL = """

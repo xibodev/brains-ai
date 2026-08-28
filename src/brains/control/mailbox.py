@@ -144,6 +144,7 @@ def read_messages(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = None,
 ) -> list[dict]:
     # Layer 2 visibility filter — see ``brains.control.memberships``.
     # ``read_messages`` is session-scoped, so the workspace context is
@@ -172,6 +173,8 @@ def read_messages(
         if visible is not None and workspace_id is not None and workspace_id not in visible:
             return []
         query = session.query(MailboxMessage)
+        if after_id is not None:
+            query = query.filter(MailboxMessage.id > max(0, int(after_id)))
         if not include_read:
             query = query.filter(MailboxMessage.read_at.is_(None))
         if workspace_id is None:
@@ -184,7 +187,7 @@ def read_messages(
                     & (MailboxMessage.workspace_id == workspace_id)
                 )
             )
-        rows = query.order_by(MailboxMessage.created_at.asc()).limit(limit).all()
+        rows = query.order_by(MailboxMessage.id.asc()).limit(limit).all()
         results = []
         workspace_slugs = {
             row.id: (
@@ -198,44 +201,45 @@ def read_messages(
             results.append(_message_to_dict(row, workspace_slugs[row.id]))
             if mark_read:
                 row.read_at = now
-        if session.dirty:
-            session.commit()
-    # Audit / adoption signal: every read_messages call emits a
-    # ``message_read`` event tied to the caller session. Always emit (not
-    # just on non-empty), so the adoption query can ask "of sessions
-    # where welcome offered unread mail, what fraction even checked?"
-    # without the polling-vs-result-count confound.
-    append_event(
-        "message_read",
-        f"{len(results)} message(s) read",
-        workspace_id=workspace_id,
-        session_id=session_id,
-        metadata={
-            "count": len(results),
-            "marked_read": bool(mark_read),
-            "include_read": bool(include_read),
-        },
-    )
+        session.commit()
+    # An adoption event means a message was actually returned. Empty polling
+    # attempts are not user movement and previously dominated the event log.
+    if results:
+        append_event(
+            "message_read",
+            f"{len(results)} message(s) read",
+            workspace_id=workspace_id,
+            session_id=session_id,
+            metadata={
+                "count": len(results),
+                "marked_read": bool(mark_read),
+                "include_read": bool(include_read),
+                "after_id": after_id,
+                "cursor": max(row["id"] for row in results),
+            },
+        )
     return results
 
 
 def inbox_wait(
     session_id: str,
     timeout_ms: int = 25000,
+    after_message_id: int | None = None,
 ) -> dict:
     """Block until this session has something worth waking for, or timeout.
 
-    The one poll primitive (comms slice 2): collapses the two loops an agent
-    otherwise runs — periodic ``read_messages`` and ``wait_for_request`` —
-    into a single long-poll that returns when EITHER arrives:
+    The one poll primitive collapses periodic mailbox, topic, and peer-help
+    checks into a single long-poll that returns when work arrives:
 
     * ``{"wakeup": "mail", ...}``          — unread inbox traffic exists;
+    * ``{"wakeup": "topic", ...}``         — a subscribed topic advanced;
     * ``{"wakeup": "peer_request", ...}``  — a claimable peer-help request
       matches this session/workspace/harness;
     * ``{"wakeup": None}``                 — quiet for the whole timeout.
 
-    Cadence stays the agent's policy; this only makes each tick cheap and
-    latency-bounded instead of a sleep-poll guess.
+    ``after_message_id`` lets a client exclude its already-processed mailbox
+    prefix. A topic wake repeats until ``read_topic(..., session_id=...)``
+    advances that subscription cursor, so delivery is acknowledged explicitly.
     """
     import time as _time
 
@@ -261,8 +265,7 @@ def inbox_wait(
         if workspace_id is not None:
             ws = session.query(Workspace).filter(Workspace.id == workspace_id).one_or_none()
             resolved_slug = ws.slug if ws else None
-        if session.dirty:
-            session.commit()
+        session.commit()
     from brains.control.memberships import visible_workspace_ids_for_current
 
     visible = visible_workspace_ids_for_current()
@@ -270,6 +273,8 @@ def inbox_wait(
     def _unread_exists() -> bool:
         with SessionLocal() as session:
             q = session.query(MailboxMessage.id).filter(MailboxMessage.read_at.is_(None))
+            if after_message_id is not None:
+                q = q.filter(MailboxMessage.id > max(0, int(after_message_id)))
             if workspace_id is None:
                 q = q.filter(MailboxMessage.to_session_id.in_(recipient_ids))
             else:
@@ -281,6 +286,11 @@ def inbox_wait(
                     )
                 )
             return session.query(q.exists()).scalar()
+
+    def _topic_updates() -> list[dict]:
+        from brains.control.topics import pending_topic_updates
+
+        return pending_topic_updates(session_id, limit=5)
 
     def _claimable_request() -> dict | None:
         with SessionLocal() as session:
@@ -328,6 +338,19 @@ def inbox_wait(
                 metadata={"wakeup": "mail"},
             )
             return {"wakeup": "mail"}
+        topic_updates = _topic_updates()
+        if topic_updates:
+            append_event(
+                "inbox_wait",
+                f"wake: topic {topic_updates[0]['topic']}",
+                session_id=session_id,
+                metadata={
+                    "wakeup": "topic",
+                    "topics": list(dict.fromkeys(row["topic"] for row in topic_updates)),
+                    "latest_post_id": max(row["id"] for row in topic_updates),
+                },
+            )
+            return {"wakeup": "topic", "posts": topic_updates}
         if _time.monotonic() >= deadline:
             return {"wakeup": None, "timeout": True}
         _time.sleep(_help_poll())

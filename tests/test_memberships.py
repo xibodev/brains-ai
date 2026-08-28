@@ -72,6 +72,7 @@ def isolated_brains(tmp_path, monkeypatch):
     import brains.control.sessions as sessions_module
     import brains.control.snapshots as snapshots_module
     import brains.control.tasks as tasks_module
+    import brains.control.topics as topics_module
     import brains.control.views as views_module
     import brains.control.welcome as welcome_module
 
@@ -85,6 +86,7 @@ def isolated_brains(tmp_path, monkeypatch):
         recurring_module,
         mailbox_module,
         help_module,
+        topics_module,
         views_module,
         welcome_module,
         snapshots_module,
@@ -453,6 +455,25 @@ def test_list_sessions_membership_restores_private_access(
     _set_current_operator(monkeypatch, "alice")
     rows = list_sessions(limit=100)
     assert any(row["workspace"] == "ws-private" for row in rows)
+
+
+def test_topic_subscription_refuses_nonmember_private_session(
+    isolated_brains: Path, tmp_path, monkeypatch
+) -> None:
+    from brains.control.operators import add_operator, ensure_admin_operator
+    from brains.control.sessions import start_session
+    from brains.control.topics import subscribe_topic
+
+    ensure_admin_operator()
+    add_operator("alice")
+    _join_default_org("alice")
+    ws_private = tmp_path / "ws-private-topic"
+    _make_workspace(ws_private, "ws-private-topic", visibility="private")
+    private_session = start_session(str(ws_private), tool="pytest")
+
+    _set_current_operator(monkeypatch, "alice")
+    with pytest.raises(ValueError, match="unavailable"):
+        subscribe_topic("private-topic", private_session["session_id"])
 
 
 def test_list_tasks_filters_private_workspaces(

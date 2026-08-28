@@ -1931,7 +1931,7 @@ def topic_post_cli(
     reply_to: int | None = typer.Option(None, "--reply-to"),
     no_blast: bool = typer.Option(False, "--no-blast"),
 ):
-    """Post to a topic board; notifies other live workspaces via their inbox."""
+    """Post to a topic board; wakes interested live subscribers."""
     from brains.control.topics import post_topic
 
     _print_json(
@@ -1953,11 +1953,21 @@ def topic_read_cli(
     topic: str | None = typer.Argument(None),
     limit: int = typer.Option(50, "--limit"),
     reply_to: int | None = typer.Option(None, "--reply-to"),
+    session: str | None = typer.Option(None, "--session"),
+    after_post_id: int | None = typer.Option(None, "--after-post-id"),
 ):
-    """Read a topic board (or every board) — newest posts first."""
+    """Read a board; a Session-scoped read advances its subscription cursor."""
     from brains.control.topics import read_topic
 
-    _print_json(read_topic(topic, limit=limit, reply_to=reply_to))
+    _print_json(
+        read_topic(
+            topic,
+            limit=limit,
+            reply_to=reply_to,
+            session_id=session,
+            after_post_id=after_post_id,
+        )
+    )
 
 
 @app.command("topic-list")
@@ -1966,6 +1976,34 @@ def topic_list_cli(limit: int = typer.Option(100, "--limit")):
     from brains.control.topics import list_topics
 
     _print_json(list_topics(limit=limit))
+
+
+@app.command("topic-subscribe")
+def topic_subscribe_cli(
+    topic: str,
+    session: str = typer.Option(..., "--session"),
+    include_existing: bool = typer.Option(False, "--include-existing"),
+):
+    """Subscribe a Session to topic wakeups."""
+    from brains.control.topics import subscribe_topic
+
+    _print_json(subscribe_topic(topic, session, include_existing=include_existing))
+
+
+@app.command("topic-unsubscribe")
+def topic_unsubscribe_cli(topic: str, session: str = typer.Option(..., "--session")):
+    """Remove a Session's topic subscription."""
+    from brains.control.topics import unsubscribe_topic
+
+    _print_json(unsubscribe_topic(topic, session))
+
+
+@app.command("topic-subscriptions")
+def topic_subscriptions_cli(session: str = typer.Option(..., "--session")):
+    """List one Session's topic cursors and pending counts."""
+    from brains.control.topics import list_topic_subscriptions
+
+    _print_json(list_topic_subscriptions(session))
 
 
 @app.command("mail-send")
@@ -1997,11 +2035,18 @@ def mail_status_cli():
 def inbox_wait_cli(
     session: str = typer.Option(...),
     timeout_ms: int = typer.Option(25000, "--timeout-ms"),
+    after_message_id: int | None = typer.Option(None, "--after-message-id"),
 ):
-    """Block until unread mail or a claimable peer request arrives (long-poll)."""
+    """Block until mail, a subscribed topic, or a peer request arrives."""
     from brains.control.mailbox import inbox_wait
 
-    _print_json(inbox_wait(session, timeout_ms=timeout_ms))
+    _print_json(
+        inbox_wait(
+            session,
+            timeout_ms=timeout_ms,
+            after_message_id=after_message_id,
+        )
+    )
 
 
 @app.command("check-source")
@@ -2710,6 +2755,7 @@ def message_read_cli(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = typer.Option(None, "--after-id"),
 ):
     _print_json(
         read_messages(
@@ -2717,6 +2763,7 @@ def message_read_cli(
             mark_read=mark_read,
             include_read=include_read,
             limit=limit,
+            after_id=after_id,
         )
     )
 
