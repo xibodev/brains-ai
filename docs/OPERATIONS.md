@@ -432,6 +432,16 @@ Tool selection:
 
 For shared or exposed environments, prefer the smallest allowlist that supports the operator workflow.
 
+Tool readiness is machine-scoped. `tool-list --verify-now`, MCP
+`list_registered_tools(verify_now=true)`, and the legacy Tools verify action
+persist a fresh control-plane PATH check using executable resolution only; they
+do not start the tool or run `--version`. A local Session welcome packet performs
+the same cheap refresh automatically and reports `verification_scope:
+control_plane`. A Session bound to a remote Runtime instead reports
+`verification_scope: runtime` and derives readiness from that Runtime's
+heartbeated `status`/`health`; the hub never marks a remote CLI missing merely
+because it is absent from the hub's PATH.
+
 ### Experimental gate
 
 Some surfaces are real but not yet mature (unproven end to end, evidence below E3, or a cooperative enforcement boundary). The normal install hides and refuses them; an explicit environment flag is the only opt-in, and every refusal names its switch. The registry lives in `brains.experimental`.

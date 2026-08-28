@@ -66,7 +66,7 @@ structured evidence expectations for these same IDs are maintained in
 | Acceptance criterion | Target contract | Current status |
 |---|---|---|
 | AC-F1-01 | Enrollment returns a complete command that identifies the hub and one-time token. | present (E1/E2 only). |
-| AC-F1-02 | Redemption registers one Runtime for each detected supported CLI and stores capabilities. | present (E1/E2 only). |
+| AC-F1-02 | Redemption registers one Runtime for each detected supported CLI and stores capabilities. | present (E1/E2 only). Local Session welcome automatically persists a cheap executable-resolution check without spawning tools; remote Session readiness is derived from its bound Runtime's heartbeat state, never from the hub's PATH. |
 | AC-F1-03 | Enrollment tokens are hash-only, expiring, and single-use under concurrency. | present (E1/E2 only); redemption is one conditional `UPDATE ... WHERE redeemed_at IS NULL`, and a concurrent-redeem test asserts exactly one winner. |
 | AC-F1-04 | The console moves through enrolling, waiting, connected, expired, and error states. | present (E1/E2 only); browser evidence simulates redemption. |
 | AC-F1-05 | Runtime credentials authorize only Runtime operations in the intended Org. | present (E1/E2 only); redemption mints an Org-bound, machine-bound, expiring, revocable credential limited to register/heartbeat/status/claim/execute, an allow/deny matrix asserts it is refused on every operator, admin and console surface, and registration cannot move an already-claimed machine into another Org nor leave an Org-less Runtime behind when it is refused. |
