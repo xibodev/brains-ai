@@ -33,6 +33,7 @@ from brains.service.common import (
     read_pidfile_record,
     verify_pid,
     verify_service_interpreter,
+    write_service_config,
 )
 
 _BACKENDS = {
@@ -59,9 +60,23 @@ def supported() -> bool:
     return current_platform() in _BACKENDS
 
 
-def install(spec: ServiceSpec | None = None, *, dry_run: bool = False) -> dict:
+def install(
+    spec: ServiceSpec | None = None,
+    *,
+    dry_run: bool = False,
+    gateway_host: str = "127.0.0.1",
+    gateway_port: int | None = None,
+    mcp_port: int | None = None,
+) -> dict:
     """Register (and, unless ``dry_run``, start) the autostart service."""
-    resolved = spec or default_spec()
+    try:
+        resolved = spec or default_spec(
+            gateway_host=gateway_host,
+            gateway_port=gateway_port,
+            mcp_port=mcp_port,
+        )
+    except ValueError as exc:
+        return {"ok": False, "action": "refused", "detail": str(exc)}
     check = verify_service_interpreter(resolved.program)
     if not check["ok"]:
         return {
@@ -72,6 +87,12 @@ def install(spec: ServiceSpec | None = None, *, dry_run: bool = False) -> dict:
         }
     report = _backend().install(resolved, dry_run=dry_run)
     report["interpreter"] = check
+    report["endpoints"] = {
+        "console": f"http://{resolved.gateway_host}:{resolved.gateway_port}/app",
+        "mcp": f"http://{resolved.gateway_host}:{resolved.mcp_port}/sse",
+    }
+    if not dry_run and report.get("ok"):
+        report["config"] = str(write_service_config(resolved))
     return report
 
 

@@ -46,7 +46,15 @@ def spec() -> ServiceSpec:
 
 def test_default_spec_execs_brains_module() -> None:
     s = default_spec()
-    assert s.args == ["-m", "brains", "serve-all"]
+    assert s.args[:3] == ["-m", "brains", "serve-all"]
+    assert s.args[-6:] == [
+        "--gateway-host",
+        "127.0.0.1",
+        "--gateway-port",
+        str(s.gateway_port),
+        "--mcp-port",
+        "9877",
+    ]
     assert s.program  # the running interpreter
     assert "-m brains serve-all" in s.command_line
     assert Path(s.program).resolve() == Path(sys.executable).resolve()
@@ -88,6 +96,56 @@ def test_service_status_requires_live_listeners(monkeypatch) -> None:
     report = service.status()
     assert report["healthy"] is False
     assert report["listeners"]["mcp"] is False
+
+
+def test_default_service_port_falls_back_and_is_persisted(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        service_common,
+        "probe_listener_port",
+        lambda _host, port: {"available": port == 8878},
+    )
+    spec = default_spec()
+    assert spec.gateway_port == 8878
+
+    service_common.write_service_config(spec)
+    assert default_spec().gateway_port == 8878
+    assert service_common.read_service_config()["gateway_port"] == 8878
+
+
+def test_explicit_unavailable_service_port_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(
+        service_common,
+        "probe_listener_port",
+        lambda _host, _port: {"available": False},
+    )
+    report = service.install(gateway_port=8877, dry_run=True)
+    assert report["ok"] is False
+    assert report["action"] == "refused"
+    assert "8877" in report["detail"]
+
+
+def test_listener_status_uses_persisted_service_ports(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    spec = ServiceSpec(program="python", gateway_port=8877, mcp_port=9988)
+    service_common.write_service_config(spec)
+    attempted: list[tuple[str, int]] = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def connect(target, timeout):
+        attempted.append(target)
+        return Connection()
+
+    monkeypatch.setattr(service_common.socket, "create_connection", connect)
+    report = service_common.listener_status()
+    assert attempted == [("127.0.0.1", 8877), ("127.0.0.1", 9988)]
+    assert report["endpoints"]["console"] == "http://127.0.0.1:8877/app"
 
 
 def test_pid_identity_accepts_exact_brains_command_when_start_time_drifts(monkeypatch) -> None:
