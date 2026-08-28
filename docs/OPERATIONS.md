@@ -33,7 +33,7 @@ Source-defined launch commands:
 | `brains-ai dashboard` | Run the retired legacy dashboard/admin process (refuses without `BRAINS_LEGACY_SURFACES=1`). | Source present; not run. |
 | `brains-ai mcp` | Run the MCP server. | Source present; not run. |
 | `brains-ai daemon start` | Start the Runtime daemon path. | Source/tests present; not run. |
-| `brains-ai service install|start|stop|restart|status|logs|uninstall` | Manage a user-level OS service. | Renderer/command tests present; installed state unverified. |
+| `brains-ai service install|start|stop|restart|status|logs|uninstall` | Manage a user-level OS service. `install` accepts `--gateway-port` / `--mcp-port`; omitting the gateway port reuses the persisted endpoint or selects a bindable loopback fallback when the default is unavailable. | Renderer/command tests present; installed state unverified. |
 
 Do not use the removed `brains` executable. Legacy install helpers and the dev Dockerfile still reference it and are not supported operating paths at this HEAD.
 
@@ -49,7 +49,7 @@ For a file-backed SQLite URL, storage bootstrap creates the database's missing p
 
 | Process/surface | Default bind/port | Primary routes | Notes |
 |---|---|---|---|
-| Gateway | `127.0.0.1:8787` | `/health`, `/v1/*`, `/app*`, `/admin*`, `/hooks/*`, `/relay/*` | Modern Brains surface and model gateway; legacy `/admin` HTML redirects to `/app` unless `BRAINS_LEGACY_SURFACES=1`. |
+| Gateway | `127.0.0.1:8787` by default; installed services may persist a bindable fallback | `/health`, `/v1/*`, `/app*`, `/admin*`, `/hooks/*`, `/relay/*` | Modern Brains surface and model gateway; `brains-ai service status` reports the effective console URL. Legacy `/admin` HTML redirects to `/app` unless `BRAINS_LEGACY_SURFACES=1`. |
 | Legacy dashboard | `127.0.0.1:9876` | `/dashboard*`, `/admin*` | Separate retired process; started only via `serve-all --dashboard` or `BRAINS_LEGACY_SURFACES=1`. |
 | MCP SSE | port `9877`; bind controlled by MCP settings | `/sse` transport | Public bind requires explicit opt-in and still requires auth. |
 | wa-web sidecar | `8788` by default | `/health`, `/send` | Separate Node service. |
@@ -501,6 +501,15 @@ The service module renders user-level service definitions for:
 - Windows Task Scheduler;
 - macOS launchd;
 - Linux systemd user services.
+
+`brains-ai service install` preflights the requested loopback gateway port. An
+explicit unavailable port is refused. When no port is supplied and the default
+cannot be bound, the installer selects a bindable fallback, writes it into the
+OS service definition, and persists the non-secret endpoint contract under the
+Brains service state directory. `service status` probes those persisted ports
+and returns the effective gateway, console, and MCP URLs. The supervisor also
+preflights its gateway bind and exits once on a permanent conflict instead of
+starting an unbounded child restart loop.
 
 The supervisor writes:
 

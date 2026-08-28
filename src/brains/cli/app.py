@@ -490,6 +490,20 @@ def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
 
 @service_app.command("install")
 def service_install_cli(
+    gateway_port: int | None = typer.Option(
+        None,
+        "--gateway-port",
+        min=1,
+        max=65535,
+        help="Gateway port. Omit to reuse the persisted port or select a safe local default.",
+    ),
+    mcp_port: int | None = typer.Option(
+        None,
+        "--mcp-port",
+        min=1,
+        max=65535,
+        help="MCP SSE port. Omit to reuse the persisted port or default to 9877.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show the unit definition + commands; write nothing."
     ),
@@ -507,7 +521,13 @@ def service_install_cli(
             f"No service backend for platform {service_mod.current_platform()!r} "
             "(supported: windows, macos, linux)."
         )
-    _print_json(service_mod.install(dry_run=dry_run))
+    _print_json(
+        service_mod.install(
+            dry_run=dry_run,
+            gateway_port=gateway_port,
+            mcp_port=mcp_port,
+        )
+    )
 
 
 @service_app.command("uninstall")

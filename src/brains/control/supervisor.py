@@ -39,6 +39,7 @@ import logging
 import logging.handlers
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -237,6 +238,19 @@ def _build_children(args: argparse.Namespace) -> list[Child]:
     return children
 
 
+def _port_bindable(host: str, port: int) -> bool:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 def _write_pidfile() -> None:
     from brains.service.common import write_pidfile
 
@@ -295,6 +309,14 @@ def run(argv: list[str] | None = None) -> int:
         _state_dir(),
         os.getpid(),
     )
+
+    if not args.no_gateway and not _port_bindable(args.gateway_host, args.gateway_port):
+        logger.error(
+            "gateway port %s:%s is unavailable; refusing a permanent restart loop",
+            args.gateway_host,
+            args.gateway_port,
+        )
+        return 3
 
     children = _build_children(args)
     if not children:

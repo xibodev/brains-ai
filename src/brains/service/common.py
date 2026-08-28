@@ -29,6 +29,7 @@ import csv
 import getpass
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -43,10 +44,22 @@ WINDOWS_TASK_NAME = "BrainsServeAll"
 LAUNCHD_LABEL = "com.brains.serve-all"
 SYSTEMD_UNIT = "brains-serve-all.service"
 
-SERVICE_DESCRIPTION = (
-    "Brains control plane — supervises the gateway (127.0.0.1:8787), the "
-    "MCP SSE server (127.0.0.1:9877), and opt-in experimental children. "
-    "Starts at login and restarts on failure."
+DEFAULT_GATEWAY_HOST = "127.0.0.1"
+DEFAULT_GATEWAY_PORT = 8787
+DEFAULT_MCP_PORT = 9877
+GATEWAY_FALLBACK_PORTS = range(8877, 8978)
+
+
+def _service_description(gateway_host: str, gateway_port: int, mcp_port: int) -> str:
+    return (
+        f"Brains control plane — supervises the gateway ({gateway_host}:{gateway_port}), "
+        f"the MCP SSE server ({gateway_host}:{mcp_port}), and opt-in experimental children. "
+        "Starts at login and restarts on failure."
+    )
+
+
+SERVICE_DESCRIPTION = _service_description(
+    DEFAULT_GATEWAY_HOST, DEFAULT_GATEWAY_PORT, DEFAULT_MCP_PORT
 )
 
 
@@ -94,21 +107,122 @@ def verify_service_interpreter(program: str) -> dict[str, Any]:
     }
 
 
-def listener_status(host: str = "127.0.0.1") -> dict[str, Any]:
-    """Bounded probes for the default supervised listeners."""
-    import socket
+def service_config_path() -> Path:
+    """Non-secret endpoint configuration used by service status probes."""
+    return state_dir() / "service" / "endpoints.json"
 
+
+def read_service_config() -> dict[str, Any]:
+    defaults: dict[str, Any] = {
+        "gateway_host": DEFAULT_GATEWAY_HOST,
+        "gateway_port": DEFAULT_GATEWAY_PORT,
+        "mcp_port": DEFAULT_MCP_PORT,
+    }
+    try:
+        raw = json.loads(service_config_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return defaults
+    if not isinstance(raw, dict):
+        return defaults
+    try:
+        host = str(raw.get("gateway_host") or DEFAULT_GATEWAY_HOST)
+        gateway_port = _valid_port(raw.get("gateway_port"), "gateway_port")
+        mcp_port = _valid_port(raw.get("mcp_port"), "mcp_port")
+    except ValueError:
+        return defaults
+    return {"gateway_host": host, "gateway_port": gateway_port, "mcp_port": mcp_port}
+
+
+def write_service_config(spec: ServiceSpec) -> Path:
+    path = service_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "gateway_host": spec.gateway_host,
+        "gateway_port": spec.gateway_port,
+        "mcp_port": spec.mcp_port,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def listener_status(
+    host: str | None = None,
+    gateway_port: int | None = None,
+    mcp_port: int | None = None,
+) -> dict[str, Any]:
+    """Bounded probes for the configured supervised listeners."""
+    configured = read_service_config()
+    resolved_host = host or str(configured["gateway_host"])
+    resolved_gateway_port = gateway_port or int(configured["gateway_port"])
+    resolved_mcp_port = mcp_port or int(configured["mcp_port"])
     listeners: dict[str, bool] = {}
-    for name, port in (("gateway", 8787), ("mcp", 9877)):
+    for name, port in (("gateway", resolved_gateway_port), ("mcp", resolved_mcp_port)):
         try:
-            with socket.create_connection((host, port), timeout=0.4):
+            with socket.create_connection((resolved_host, port), timeout=0.4):
                 listeners[name] = True
         except OSError:
             listeners[name] = False
     return {
         "listeners": listeners,
         "serving": all(listeners.values()),
+        "endpoints": {
+            "gateway": f"http://{resolved_host}:{resolved_gateway_port}",
+            "console": f"http://{resolved_host}:{resolved_gateway_port}/app",
+            "mcp": f"http://{resolved_host}:{resolved_mcp_port}/sse",
+        },
     }
+
+
+def _valid_port(value: object, name: str) -> int:
+    try:
+        port = int(cast(Any, value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer TCP port") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError(f"{name} must be between 1 and 65535")
+    return port
+
+
+def probe_listener_port(host: str, port: int) -> dict[str, Any]:
+    """Try the bind the child will need without starting a service process."""
+    resolved_port = _valid_port(port, "port")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        sock.bind((host, resolved_port))
+    except OSError as exc:
+        return {
+            "available": False,
+            "host": host,
+            "port": resolved_port,
+            "error_code": getattr(exc, "winerror", None) or exc.errno,
+            "reason": "the address cannot be bound",
+        }
+    finally:
+        sock.close()
+    return {"available": True, "host": host, "port": resolved_port}
+
+
+def select_gateway_port(
+    host: str,
+    requested: int | None = None,
+    *,
+    allow_fallback: bool | None = None,
+) -> tuple[int, bool]:
+    """Resolve a service gateway port, falling back only for the default."""
+    explicit = requested is not None
+    fallback_allowed = not explicit if allow_fallback is None else allow_fallback
+    candidate = _valid_port(requested if explicit else DEFAULT_GATEWAY_PORT, "gateway_port")
+    if probe_listener_port(host, candidate)["available"]:
+        return candidate, False
+    if not fallback_allowed:
+        raise ValueError(f"gateway port {candidate} is unavailable on {host}")
+    for fallback in GATEWAY_FALLBACK_PORTS:
+        if probe_listener_port(host, fallback)["available"]:
+            return fallback, True
+    raise ValueError("no available gateway port in the default fallback range")
 
 
 def current_user() -> str:
@@ -136,6 +250,13 @@ class ServiceSpec:
     label: str = SERVICE_LABEL
     description: str = SERVICE_DESCRIPTION
     state_dir: str = field(default_factory=lambda: str(state_dir()))
+    gateway_host: str = DEFAULT_GATEWAY_HOST
+    gateway_port: int = DEFAULT_GATEWAY_PORT
+    mcp_port: int = DEFAULT_MCP_PORT
+
+    def __post_init__(self) -> None:
+        self.gateway_port = _valid_port(self.gateway_port, "gateway_port")
+        self.mcp_port = _valid_port(self.mcp_port, "mcp_port")
 
     @property
     def command_line(self) -> str:
@@ -148,9 +269,53 @@ def _quote(token: str) -> str:
     return f'"{token}"' if (" " in token and not token.startswith('"')) else token
 
 
-def default_spec(executable: str | None = None) -> ServiceSpec:
+def default_spec(
+    executable: str | None = None,
+    *,
+    gateway_host: str = DEFAULT_GATEWAY_HOST,
+    gateway_port: int | None = None,
+    mcp_port: int | None = None,
+) -> ServiceSpec:
     """Build a :class:`ServiceSpec` from the live interpreter + environment."""
-    return ServiceSpec(program=_service_python(executable))
+    persisted = read_service_config()
+    if gateway_port is None and service_config_path().is_file():
+        resolved_gateway_port = int(persisted["gateway_port"])
+        used_fallback = resolved_gateway_port != DEFAULT_GATEWAY_PORT
+    elif gateway_port is None:
+        resolved_gateway_port, used_fallback = select_gateway_port(
+            gateway_host,
+            allow_fallback=True,
+        )
+    else:
+        resolved_gateway_port, used_fallback = select_gateway_port(
+            gateway_host,
+            gateway_port,
+            allow_fallback=False,
+        )
+    resolved_mcp_port = _valid_port(
+        mcp_port if mcp_port is not None else persisted["mcp_port"], "mcp_port"
+    )
+    description = _service_description(gateway_host, resolved_gateway_port, resolved_mcp_port)
+    if used_fallback:
+        description += " The gateway port was selected because the default was unavailable."
+    return ServiceSpec(
+        program=_service_python(executable),
+        args=[
+            "-m",
+            "brains",
+            "serve-all",
+            "--gateway-host",
+            gateway_host,
+            "--gateway-port",
+            str(resolved_gateway_port),
+            "--mcp-port",
+            str(resolved_mcp_port),
+        ],
+        gateway_host=gateway_host,
+        gateway_port=resolved_gateway_port,
+        mcp_port=resolved_mcp_port,
+        description=description,
+    )
 
 
 def run_cmd(cmd: list[str], *, check: bool = False) -> tuple[int, str, str]:

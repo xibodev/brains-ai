@@ -135,3 +135,14 @@ def test_run_returns_2_when_all_children_disabled(tmp_path, monkeypatch) -> None
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
     rc = supervisor.run(["--no-gateway", "--no-dashboard", "--no-mcp"])
     assert rc == 2
+
+
+def test_run_refuses_unavailable_gateway_before_starting_children(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor, "_port_bindable", lambda _host, _port: False)
+    monkeypatch.setattr(
+        supervisor,
+        "_build_children",
+        lambda _args: (_ for _ in ()).throw(AssertionError("children must not start")),
+    )
+    assert supervisor.run([]) == 3
