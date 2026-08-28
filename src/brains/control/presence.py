@@ -93,7 +93,7 @@ def list_other_operators_active() -> list[OperatorPresence]:
                 func.max(AgentSession.started_at).label("max_started"),
             )
             .join(AgentSession, AgentSession.created_by_operator_id == Operator.id)
-            .filter(AgentSession.ended_at.is_(None))
+            .filter(AgentSession.ended_at.is_(None), AgentSession.state != "dormant")
             .group_by(Operator.id, Operator.slug, Operator.display_name)
             .all()
         )

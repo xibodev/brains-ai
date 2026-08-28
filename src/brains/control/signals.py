@@ -123,6 +123,7 @@ def list_signals(workspace_path: str | None = None, limit: int = 50) -> list[dic
             .join(Workspace, Workspace.id == AgentSession.workspace_id)
             .filter(
                 AgentSession.ended_at.is_(None),
+                AgentSession.state != "dormant",
                 AgentSession.last_activity_at >= cutoff,
             )
         )

@@ -78,6 +78,7 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "explain_route": tools.explain_route,
     "get_state": tools.get_state_tool,
     "start_session": tools.start_session_tool,
+    "heartbeat_session": tools.heartbeat_session_tool,
     "link_session_successor": tools.link_session_successor_tool,
     "end_session": tools.end_session_tool,
     "session_message": tools.session_message_tool,
@@ -182,6 +183,7 @@ TOOL_PREFIX = "brains_"
 LEAN_TOOLS = frozenset(
     {
         "start_session",
+        "heartbeat_session",
         "end_session",
         "append_event",
         "set_handoff",
@@ -363,6 +365,20 @@ def _sweep_governed_actions() -> int:
     return swept
 
 
+def _sweep_stale_sessions() -> int:
+    """Expire PID-less coordination leases without ending their history."""
+    try:
+        from brains.control.sessions import sweep_stale_session_leases
+
+        dormant = sweep_stale_session_leases()
+    except Exception as exc:  # noqa: BLE001 - maintenance never gates a fire
+        log.error("scheduler: session lease sweep failed: %s", exc)
+        return 0
+    if dormant:
+        log.info("scheduler: made %d stale coordination Session(s) dormant", len(dormant))
+    return len(dormant)
+
+
 def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     """Evaluate every enabled recurring task and fire those that are due.
 
@@ -386,6 +402,7 @@ def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(UTC)
     _sweep_governed_actions()
     _sweep_stale_runtimes()
+    _sweep_stale_sessions()
     if not experimental_enabled():
         return []
     fired: list[dict] = []

@@ -41,6 +41,7 @@ from brains.storage.models import (
     HelpRequest,
     MailboxMessage,
     SessionCommand,
+    SessionLease,
     Snapshot,
     Workspace,
     WorkspaceClaim,
@@ -121,6 +122,17 @@ FAMILIES: tuple[QueueFamily, ...] = (
         ),
     ),
     QueueFamily(
+        name="session_leases",
+        owner="the PID-less coordination Session named by session_id",
+        scope="Session-scoped",
+        lifecycle="current -> renewed|dormant",
+        expiry_policy=(
+            "lease_expires_at (BRAINS_SESSION_LEASE_SECONDS, default 1h); the MCP "
+            "scheduler or an explicit repair marks an expired Session dormant and "
+            "releases its Workspace claim and in-progress Tasks"
+        ),
+    ),
+    QueueFamily(
         name="session_commands",
         owner="the Runtime or local consumer bound to the command's Session",
         scope="Session-scoped",
@@ -175,6 +187,21 @@ def _predict_expired_claims() -> int:
     now = utc_now()
     with SessionLocal() as session:
         return session.query(WorkspaceClaim).filter(WorkspaceClaim.expires_at < now).count()
+
+
+def _predict_expired_session_leases() -> int:
+    now = utc_now()
+    with SessionLocal() as session:
+        return (
+            session.query(SessionLease)
+            .join(AgentSession, AgentSession.id == SessionLease.session_id)
+            .filter(
+                SessionLease.lease_expires_at < now,
+                AgentSession.ended_at.is_(None),
+                AgentSession.state != "dormant",
+            )
+            .count()
+        )
 
 
 def _predict_expired_help_requests() -> int:
@@ -242,6 +269,16 @@ def summarize() -> dict[str, Any]:
             session.query(HelpRequest).filter(HelpRequest.status.in_(("open", "claimed"))).count()
         )
         claims_total = session.query(WorkspaceClaim).count()
+        session_leases_total = session.query(SessionLease).count()
+        session_leases_open = (
+            session.query(SessionLease)
+            .join(AgentSession, AgentSession.id == SessionLease.session_id)
+            .filter(
+                AgentSession.ended_at.is_(None),
+                AgentSession.state != "dormant",
+            )
+            .count()
+        )
         session_commands_total = session.query(SessionCommand).count()
         from brains.control.session_commands import OPEN_STATUSES
 
@@ -280,6 +317,12 @@ def summarize() -> dict[str, Any]:
             "open": claims_total,
             "stale_or_expired": _predict_expired_claims(),
             **_family_metadata("workspace_claims"),
+        },
+        "session_leases": {
+            "total": session_leases_total,
+            "open": session_leases_open,
+            "stale_or_expired": _predict_expired_session_leases(),
+            **_family_metadata("session_leases"),
         },
         "session_commands": {
             "total": session_commands_total,
@@ -371,6 +414,7 @@ def diagnose() -> dict[str, Any]:
             ("help_requests", HelpRequest, HelpRequest.from_session_id),
             ("help_requests", HelpRequest, HelpRequest.claimed_by_session_id),
             ("workspace_claims", WorkspaceClaim, WorkspaceClaim.session_id),
+            ("session_leases", SessionLease, SessionLease.session_id),
             ("session_commands", SessionCommand, SessionCommand.session_id),
             ("mailbox", MailboxMessage, MailboxMessage.to_session_id),
             ("mailbox", MailboxMessage, MailboxMessage.from_session_id),
@@ -433,6 +477,7 @@ def diagnose() -> dict[str, Any]:
 SAFE_REPAIRS: tuple[str, ...] = (
     "stale_handoffs",
     "expired_workspace_claims",
+    "expired_session_leases",
     "expired_help_requests",
     "expired_session_command_leases",
 )
@@ -455,6 +500,15 @@ def plan_repair() -> dict[str, Any]:
                 "family": "workspace_claims",
                 "description": "release workspace claims past their expiry",
                 "would_affect_rows": _predict_expired_claims(),
+            },
+            {
+                "code": "expired_session_leases",
+                "family": "session_leases",
+                "description": (
+                    "mark coordination Sessions with expired liveness leases dormant "
+                    "and release their ownership"
+                ),
+                "would_affect_rows": _predict_expired_session_leases(),
             },
             {
                 "code": "expired_help_requests",
@@ -490,6 +544,7 @@ def apply_repair() -> dict[str, Any]:
     from brains.control.handoffs import mark_stale_handoffs
     from brains.control.help import _expire_due
     from brains.control.session_commands import expire_leases
+    from brains.control.sessions import sweep_stale_session_leases
 
     stale_handoffs = mark_stale_handoffs()
 
@@ -502,6 +557,7 @@ def apply_repair() -> dict[str, Any]:
         session.commit()
 
     requeued_or_failed = expire_leases()
+    dormant_sessions = sweep_stale_session_leases()
 
     return {
         "applied_at": utc_now().isoformat(),
@@ -521,6 +577,11 @@ def apply_repair() -> dict[str, Any]:
                 "code": "expired_session_command_leases",
                 "family": "session_commands",
                 "applied_rows": len(requeued_or_failed),
+            },
+            {
+                "code": "expired_session_leases",
+                "family": "session_leases",
+                "applied_rows": len(dormant_sessions),
             },
         ],
         "unresolved_work_preserved": True,

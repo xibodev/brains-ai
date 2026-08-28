@@ -31,7 +31,7 @@ from brains.control.help import normalize_required_tool
 from brains.control.mailbox import send_message
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
-from brains.storage.models import AgentSession, TopicPost, Workspace
+from brains.storage.models import AgentSession, SessionLease, TopicPost, Workspace
 
 _TOPIC_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
@@ -101,7 +101,10 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
             .all()
         )
         out: list[dict[str, Any]] = []
+        from brains.control.session_liveness import lease_is_current
+
         for agent, workspace in rows:
+            lease = None
             last = agent.last_activity_at or agent.started_at
             if agent.ended_at is not None:
                 ended = (
@@ -109,6 +112,12 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
                 )
                 activity = last if last.tzinfo else last.replace(tzinfo=UTC)
                 if activity <= ended + timedelta(seconds=1):
+                    continue
+            if agent.state == "dormant":
+                continue
+            if agent.pid is None:
+                lease = session.get(SessionLease, agent.id)
+                if lease is not None and not lease_is_current(lease):
                     continue
             out.append(
                 {
@@ -118,6 +127,11 @@ def live_agent_sessions(ttl_seconds: int | None = None) -> list[dict[str, Any]]:
                     "state": agent.state,
                     "started_at": agent.started_at.isoformat(),
                     "last_activity_at": last.isoformat() if last else None,
+                    "lease_expires_at": (
+                        lease.lease_expires_at.isoformat()
+                        if agent.pid is None and lease is not None
+                        else None
+                    ),
                     "interactive_input": _interactive_input(agent.tool),
                 }
             )
@@ -137,12 +151,20 @@ def _live_workspace_ids(exclude_workspace_id: int | None, ttl_seconds: int) -> l
             .all()
         )
         ids: list[int] = []
+        from brains.control.session_liveness import lease_is_current
+
         for row in rows:
             last = row.last_activity_at or row.started_at
             if row.ended_at is not None:
                 ended = row.ended_at if row.ended_at.tzinfo else row.ended_at.replace(tzinfo=UTC)
                 activity = last if last.tzinfo else last.replace(tzinfo=UTC)
                 if activity <= ended + timedelta(seconds=1):
+                    continue
+            if row.state == "dormant":
+                continue
+            if row.pid is None:
+                lease = session.get(SessionLease, row.id)
+                if lease is not None and not lease_is_current(lease):
                     continue
             if row.workspace_id is not None and row.workspace_id not in ids:
                 ids.append(row.workspace_id)

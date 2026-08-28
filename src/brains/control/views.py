@@ -74,7 +74,11 @@ def _write_state(session, out_dir: Path, workspace_id: int) -> None:
     workspace = session.query(Workspace).filter(Workspace.id == workspace_id).one()
     active_sessions = (
         session.query(AgentSession)
-        .filter(AgentSession.workspace_id == workspace_id, AgentSession.ended_at.is_(None))
+        .filter(
+            AgentSession.workspace_id == workspace_id,
+            AgentSession.ended_at.is_(None),
+            AgentSession.state != "dormant",
+        )
         .all()
     )
     open_decisions = (

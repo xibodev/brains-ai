@@ -75,7 +75,7 @@ from brains.control.resume import (
     resume_brain_session,
 )
 from brains.control.retrieve import retrieve_original
-from brains.control.sessions import end_session, start_session
+from brains.control.sessions import end_session, heartbeat_session, start_session
 from brains.control.signals import list_signals
 from brains.control.snapshots import capture_snapshot, latest_snapshot
 from brains.control.state import get_state
@@ -488,7 +488,14 @@ def start_session_tool(
         workspace_path,
         tool=tool,
         predecessor_session_id=predecessor_session_id,
+        reuse_existing=True,
+        auto_link_predecessor=True,
     )
+
+
+def heartbeat_session_tool(session_id: str):
+    """Renew a PID-less coordination Session lease without journal noise."""
+    return heartbeat_session(session_id)
 
 
 def link_session_successor_tool(from_session_id: str, to_session_id: str):
