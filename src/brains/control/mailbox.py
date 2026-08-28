@@ -69,7 +69,12 @@ def send_message(
             require_live_session(session, from_session_id, action="send_message")
         if to_session_id:
             try:
-                require_live_session(session, to_session_id, action="send_message")
+                require_live_session(
+                    session,
+                    to_session_id,
+                    action="send_message",
+                    renew_lease=False,
+                )
             except ValueError:
                 recipient = (
                     session.query(AgentSession)
@@ -87,7 +92,12 @@ def send_message(
                 else:
                     from brains.control.sessions import require_live_session as _rls
 
-                    _rls(session, to_session_id, action="send_message")
+                    _rls(
+                        session,
+                        to_session_id,
+                        action="send_message",
+                        renew_lease=False,
+                    )
         if workspace_id is None:
             workspace_id = _workspace_id_for_session(session, from_session_id)
             if workspace_id is not None:

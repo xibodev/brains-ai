@@ -117,6 +117,7 @@ POST_CHECKSUM_DELTAS = (
     "140_agent_comms_repair",
     "141_secure_settings",
     "142_session_successor",
+    "143_session_leases",
 )
 
 _LEGACY_LEDGER_DDL = """

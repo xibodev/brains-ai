@@ -84,17 +84,18 @@ def test_start_session_stamps_machine_id_and_current_is_stable(
         assert row.pid == _dead_pid()
 
 
-def test_start_session_without_owner_pid_is_not_reaper_eligible(
+def test_start_session_without_owner_pid_uses_a_lease_instead_of_terminal_reaping(
     isolated_brains: Path, tmp_path
 ) -> None:
     from brains.control.sessions import start_session
-    from brains.storage.models import AgentSession
+    from brains.storage.models import AgentSession, SessionLease
 
     result = start_session(str(tmp_path / "cli-session"), tool="codex")
     with db_module.SessionLocal() as session:
         row = session.get(AgentSession, result["session_id"])
         assert row is not None
         assert row.pid is None
+        assert session.get(SessionLease, row.id) is not None
 
 
 def test_reaper_uses_ttl_for_foreign_sessions_and_pid_for_own_machine(

@@ -16,6 +16,7 @@ def append_event(
     workspace_id: int | None = None,
     session_id: str | None = None,
     metadata: dict[str, Any] | None = None,
+    renew_session: bool = True,
 ) -> Event:
     init_db()
     now = datetime.now(UTC)
@@ -35,10 +36,14 @@ def append_event(
         # the reaper / resume UI can show how fresh it is, without
         # forcing every agent to call a dedicated heartbeat tool. Cheap
         # — same transaction as the event insert, single UPDATE by PK.
-        if normalized_session_id:
-            session.query(AgentSession).filter(AgentSession.id == normalized_session_id).update(
-                {"last_activity_at": now}, synchronize_session=False
-            )
+        if normalized_session_id and renew_session:
+            agent = session.get(AgentSession, normalized_session_id)
+            if agent is not None:
+                from brains.control.session_liveness import renew_session_lease
+
+                lease = renew_session_lease(session, agent, now=now, reactivate=False)
+                if lease is None and agent.state != "dormant":
+                    agent.last_activity_at = now
         session.commit()
         session.refresh(row)
         return row

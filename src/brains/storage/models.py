@@ -213,7 +213,7 @@ class AgentSession(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # F3.2 explicit lifecycle: spawning -> running -> blocked | completed | failed.
+    # F3.2 lifecycle: spawning -> running -> dormant | blocked | completed | failed.
     # Defaults to ``running`` so pre-F3.2 rows (and create_all on fresh DBs) keep
     # the prior implied semantics; the 123 disk migration patches existing SQLite.
     state: Mapped[str] = mapped_column(String(16), default="running", index=True)
@@ -251,6 +251,17 @@ class SessionSuccessor(Base):
     )
     successor_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
     linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class SessionLease(Base):
+    """Renewable liveness for coordination Sessions without an owned PID."""
+
+    __tablename__ = "session_leases"
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), primary_key=True)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    renewed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
 

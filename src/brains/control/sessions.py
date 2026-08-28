@@ -6,7 +6,7 @@ import os
 import platform
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import func
 
@@ -19,9 +19,14 @@ from brains.storage.models import (
     AgentTask,
     Handoff,
     Org,
+    SessionLease,
+    SessionSuccessor,
     Workspace,
     WorkspaceClaim,
 )
+
+if TYPE_CHECKING:
+    from brains.control.operators import OperatorRecord
 
 
 class WorkspaceNotFoundError(ValueError):
@@ -55,6 +60,7 @@ WORKSPACE_PROJECT_MARKERS: tuple[str, ...] = (
 )
 
 STALE_SESSION_TTL_SECONDS = 30 * 60
+DORMANT_SESSION_STATE = "dormant"
 
 
 def _fallback_machine_id() -> str:
@@ -202,6 +208,15 @@ def reap_zombie_sessions() -> list[str]:
         for row in live_rows:
             pid = row.pid
             note: str
+            if (
+                pid is None
+                and row.runtime_id is None
+                and row.issue_id is None
+                and row.persona_id is None
+            ):
+                # Coordination handles use renewable leases and become dormant;
+                # only process-bound execution Sessions are terminally reaped.
+                continue
             if row.machine_id and row.machine_id != machine_id:
                 last_activity = row.last_activity_at
                 if last_activity is None:
@@ -270,6 +285,111 @@ def reap_zombie_sessions() -> list[str]:
     return reaped
 
 
+def _release_session_ownership(session, session_id: str) -> None:
+    session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == session_id).delete(
+        synchronize_session=False
+    )
+    session.query(AgentTask).filter(
+        AgentTask.claimed_by_session_id == session_id,
+        AgentTask.status == "in_progress",
+    ).update(
+        {"status": "available", "claimed_by_session_id": None, "claimed_at": None},
+        synchronize_session=False,
+    )
+
+
+def _supersede_coordination_handle(
+    session,
+    predecessor: AgentSession,
+    successor: AgentSession,
+) -> None:
+    """Move one active coordination handle's ownership to its successor."""
+    coordination_handle = (
+        predecessor.pid is None
+        and predecessor.runtime_id is None
+        and predecessor.issue_id is None
+        and predecessor.persona_id is None
+    )
+    if (
+        predecessor.ended_at is not None
+        or not coordination_handle
+        or session.get(SessionLease, predecessor.id) is None
+    ):
+        return
+    predecessor.state = DORMANT_SESSION_STATE
+    session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == predecessor.id).update(
+        {"session_id": successor.id}, synchronize_session=False
+    )
+    session.query(AgentTask).filter(
+        AgentTask.claimed_by_session_id == predecessor.id,
+        AgentTask.status == "in_progress",
+    ).update({"claimed_by_session_id": successor.id}, synchronize_session=False)
+
+
+def sweep_stale_session_leases() -> list[str]:
+    """Make expired PID-less coordination Sessions dormant and release ownership."""
+    init_db()
+    now = utc_now()
+    dormant: list[tuple[str, int]] = []
+    with SessionLocal() as session:
+        rows = (
+            session.query(AgentSession.id, AgentSession.workspace_id)
+            .join(SessionLease, SessionLease.session_id == AgentSession.id)
+            .filter(
+                AgentSession.ended_at.is_(None),
+                AgentSession.pid.is_(None),
+                AgentSession.runtime_id.is_(None),
+                AgentSession.issue_id.is_(None),
+                AgentSession.persona_id.is_(None),
+                AgentSession.state != DORMANT_SESSION_STATE,
+                SessionLease.lease_expires_at < now,
+            )
+            .all()
+        )
+        lease_is_still_expired = (
+            session.query(SessionLease)
+            .filter(
+                SessionLease.session_id == AgentSession.id,
+                SessionLease.lease_expires_at < now,
+            )
+            .exists()
+        )
+        for session_id, workspace_id in rows:
+            updated = (
+                session.query(AgentSession)
+                .filter(
+                    AgentSession.id == session_id,
+                    AgentSession.ended_at.is_(None),
+                    AgentSession.state != DORMANT_SESSION_STATE,
+                    lease_is_still_expired,
+                )
+                .update(
+                    {"state": DORMANT_SESSION_STATE},
+                    synchronize_session=False,
+                )
+            )
+            if not updated:
+                continue
+            _release_session_ownership(session, session_id)
+            dormant.append((session_id, workspace_id))
+        if dormant:
+            session.commit()
+    for session_id, workspace_id in dormant:
+        append_event(
+            "session_dormant",
+            "coordination session lease expired",
+            workspace_id=workspace_id,
+            session_id=session_id,
+            renew_session=False,
+        )
+        _cancel_open_commands(
+            session_id,
+            reason="the coordination Session lease expired before the command was delivered",
+            result="session_dormant",
+        )
+    return [session_id for session_id, _workspace_id in dormant]
+
+
 SESSION_LIVE_TTL_SECONDS = 60 * 60
 
 
@@ -318,10 +438,27 @@ def live_replacement_session_ids(
     if exclude_session_id:
         q = q.filter(AgentSession.id != exclude_session_id)
     q = q.order_by(AgentSession.last_activity_at.desc().nullslast()).limit(5)
-    return [row.id for row in q.all() if not _terminal_or_ended(row)]
+    from brains.control.session_liveness import lease_is_current
+
+    out: list[str] = []
+    for row in q.all():
+        if _terminal_or_ended(row) or row.state == DORMANT_SESSION_STATE:
+            continue
+        if row.pid is None:
+            lease = session.get(SessionLease, row.id)
+            if lease is not None and not lease_is_current(lease):
+                continue
+        out.append(row.id)
+    return out
 
 
-def require_live_session(session, session_id: str | None, *, action: str) -> AgentSession:
+def require_live_session(
+    session,
+    session_id: str | None,
+    *,
+    action: str,
+    renew_lease: bool = True,
+) -> AgentSession:
     """Raise a loud, actionable error unless ``session_id`` names a live session.
 
     Every agent-facing surface that takes a session handle as *attribution*
@@ -337,6 +474,30 @@ def require_live_session(session, session_id: str | None, *, action: str) -> Age
     if row is None:
         raise ValueError(f"unknown session: {session_id} ({action})")
     if not _terminal_or_ended(row):
+        if row.pid is None:
+            from brains.control.session_liveness import lease_is_current, renew_session_lease
+
+            lease = session.get(SessionLease, row.id)
+            if row.state == DORMANT_SESSION_STATE or (
+                lease is not None and not lease_is_current(lease)
+            ):
+                successor = session.get(SessionSuccessor, row.id)
+                replacements = live_replacement_session_ids(
+                    session, row.workspace_id, exclude_session_id=row.id
+                )
+                successor_note = (
+                    f"; explicit successor: {successor.successor_session_id}"
+                    if successor is not None
+                    else ""
+                )
+                raise ValueError(
+                    f"session {session_id} is dormant or expired; refusing {action} against a "
+                    "stale handle. "
+                    f"live replacement candidates in the same workspace: "
+                    f"{replacements if replacements else '[]'}{successor_note}"
+                )
+            if renew_lease:
+                renew_session_lease(session, row)
         if row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES:
             row.ended_at = None
             row.state = "running"
@@ -466,6 +627,9 @@ def start_session(
     metadata: dict[str, Any] | None = None,
     operator: str | None = None,
     predecessor_session_id: str | None = None,
+    reuse_existing: bool = False,
+    auto_link_predecessor: bool = False,
+    lease_session: bool = True,
 ) -> dict:
     workspace = register_workspace(workspace_path)
     # Resolve who owns this session before we open it so the row can be
@@ -478,6 +642,7 @@ def start_session(
     # Sweep zombies before opening a new session so the new agent inherits
     # a clean view of workspace claims and task locks.
     reap_zombie_sessions()
+    sweep_stale_session_leases()
     # Decay stale handoffs so the welcome packet never advertises an
     # ancient "active" handoff as something the new session should pick.
     try:
@@ -486,9 +651,119 @@ def start_session(
         mark_stale_handoffs()
     except Exception:
         pass
+    if reuse_existing and predecessor_session_id is None and pid is None:
+        from brains.control.session_liveness import lease_is_current, renew_session_lease
+
+        with SessionLocal() as db_session:
+            has_successor = (
+                db_session.query(SessionSuccessor)
+                .filter(SessionSuccessor.predecessor_session_id == AgentSession.id)
+                .exists()
+            )
+            has_lease = (
+                db_session.query(SessionLease)
+                .filter(SessionLease.session_id == AgentSession.id)
+                .exists()
+            )
+            candidates = (
+                db_session.query(AgentSession)
+                .filter(
+                    AgentSession.workspace_id == workspace.id,
+                    AgentSession.tool == tool,
+                    AgentSession.created_by_operator_id == operator_record["id"],
+                    AgentSession.pid.is_(None),
+                    AgentSession.runtime_id.is_(None),
+                    AgentSession.issue_id.is_(None),
+                    AgentSession.persona_id.is_(None),
+                    AgentSession.ended_at.is_(None),
+                    ~has_successor,
+                    has_lease,
+                )
+                .order_by(
+                    AgentSession.last_activity_at.desc().nullslast(),
+                    AgentSession.started_at.desc(),
+                )
+                .all()
+            )
+            current = [
+                row
+                for row in candidates
+                if row.state != DORMANT_SESSION_STATE
+                and lease_is_current(db_session.get(SessionLease, row.id))
+            ]
+            if len(current) > 1:
+                raise ValueError(
+                    "multiple live coordination sessions match this workspace/tool/operator: "
+                    f"{[row.id for row in current]}; resume one explicitly"
+                )
+            reusable = current[0] if current else (candidates[0] if candidates else None)
+            if reusable is not None:
+                renew_session_lease(db_session, reusable)
+                db_session.commit()
+                return _session_registration_result(
+                    workspace,
+                    reusable.id,
+                    tool,
+                    operator_record,
+                    predecessor_session_id=None,
+                    reused=True,
+                )
+
     session_id = f"ses_{uuid.uuid4().hex[:12]}"
     init_db()
     with SessionLocal() as db_session:
+        if auto_link_predecessor and predecessor_session_id is None:
+            has_successor = (
+                db_session.query(SessionSuccessor)
+                .filter(SessionSuccessor.predecessor_session_id == AgentSession.id)
+                .exists()
+            )
+            has_lease = (
+                db_session.query(SessionLease)
+                .filter(SessionLease.session_id == AgentSession.id)
+                .exists()
+            )
+            predecessors = (
+                db_session.query(AgentSession)
+                .filter(
+                    AgentSession.workspace_id == workspace.id,
+                    AgentSession.tool == tool,
+                    AgentSession.created_by_operator_id == operator_record["id"],
+                    AgentSession.pid.is_(None),
+                    AgentSession.runtime_id.is_(None),
+                    AgentSession.issue_id.is_(None),
+                    AgentSession.persona_id.is_(None),
+                    AgentSession.id != session_id,
+                    ~has_successor,
+                    has_lease,
+                )
+                .order_by(
+                    AgentSession.last_activity_at.desc().nullslast(),
+                    AgentSession.started_at.desc(),
+                )
+                .all()
+            )
+            from brains.control.session_liveness import lease_is_current
+
+            current_predecessors = [
+                candidate
+                for candidate in predecessors
+                if candidate.ended_at is None
+                and candidate.state != DORMANT_SESSION_STATE
+                and lease_is_current(db_session.get(SessionLease, candidate.id))
+            ]
+            if len(current_predecessors) > 1:
+                raise ValueError(
+                    "multiple live coordination sessions match this workspace/tool/operator: "
+                    f"{[candidate.id for candidate in current_predecessors]}; "
+                    "resume or end one explicitly"
+                )
+            predecessor = (
+                current_predecessors[0]
+                if current_predecessors
+                else (predecessors[0] if predecessors else None)
+            )
+            predecessor_session_id = predecessor.id if predecessor is not None else None
         row = AgentSession(
             id=session_id,
             workspace_id=workspace.id,
@@ -504,6 +779,11 @@ def start_session(
             metadata_json=json.dumps(metadata or {}),
         )
         db_session.add(row)
+        db_session.flush()
+        from brains.control.session_liveness import renew_session_lease
+
+        if lease_session:
+            renew_session_lease(db_session, row, create=True)
         if predecessor_session_id:
             predecessor = db_session.get(AgentSession, predecessor_session_id)
             if predecessor is None:
@@ -512,8 +792,7 @@ def start_session(
                 raise ValueError("predecessor and successor must belong to the same workspace")
             if predecessor.id == session_id:
                 raise ValueError("a session cannot supersede itself")
-            from brains.storage.models import SessionSuccessor
-
+            _supersede_coordination_handle(db_session, predecessor, row)
             link = db_session.get(SessionSuccessor, predecessor_session_id)
             if link is None:
                 link = SessionSuccessor(predecessor_session_id=predecessor_session_id)
@@ -522,6 +801,32 @@ def start_session(
             link.linked_at = utc_now()
         db_session.commit()
         db_session.refresh(row)
+    if predecessor_session_id:
+        _cancel_open_commands(
+            predecessor_session_id,
+            reason=f"the Session was superseded by {session_id}",
+            result="superseded",
+        )
+    return _session_registration_result(
+        workspace,
+        session_id,
+        tool,
+        operator_record,
+        predecessor_session_id=predecessor_session_id,
+        reused=False,
+    )
+
+
+def _session_registration_result(
+    workspace: Workspace,
+    session_id: str,
+    tool: str,
+    operator_record: OperatorRecord,
+    *,
+    predecessor_session_id: str | None,
+    reused: bool,
+) -> dict[str, Any]:
+    with SessionLocal() as db_session:
         active = (
             db_session.query(Handoff)
             .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
@@ -538,6 +843,8 @@ def start_session(
             if active
             else None
         )
+        lease = db_session.get(SessionLease, session_id)
+        lease_expires_at = lease.lease_expires_at.isoformat() if lease else None
     # Build the discoverability welcome packet so the agent sees unread
     # mail, applicable patterns, workspace memory keys, registered-tool
     # status and indexed-source status without having to call five tools.
@@ -572,18 +879,30 @@ def start_session(
             "hints": len(welcome.get("hints") or []),
         }
     append_event(
-        "session_start",
-        f"{tool} session started",
+        "session_reused" if reused else "session_start",
+        f"{tool} session {'reused' if reused else 'started'}",
         workspace_id=workspace.id,
         session_id=session_id,
         metadata=welcome_metadata,
     )
+    if predecessor_session_id and not reused:
+        append_event(
+            "session_superseded",
+            f"{predecessor_session_id} -> {session_id}",
+            workspace_id=workspace.id,
+            session_id=session_id,
+            metadata={
+                "from_session_id": predecessor_session_id,
+                "to_session_id": session_id,
+                "automatic": True,
+            },
+        )
     # Best-effort: warm the code graph + embeddings in the background so the first
     # retrieval call this session makes is instant. Never blocks session start.
     try:
         from brains.context.prewarm import schedule_prewarm
 
-        schedule_prewarm(workspace_path)
+        schedule_prewarm(workspace.path)
     except Exception:
         pass
     return {
@@ -593,7 +912,33 @@ def start_session(
         "active_handoff": active_handoff,
         "welcome": welcome,
         "predecessor_session_id": predecessor_session_id,
+        "lease_expires_at": lease_expires_at,
+        "reused": reused,
     }
+
+
+def heartbeat_session(session_id: str, *, allow_ended: bool = False) -> dict[str, Any]:
+    """Renew a PID-less coordination Session without writing a journal event."""
+    from brains.control.session_liveness import renew_session_lease
+
+    init_db()
+    with SessionLocal() as session:
+        row = session.get(AgentSession, session_id)
+        if row is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        if row.ended_at is not None and not allow_ended:
+            raise ValueError(f"session already ended: {session_id}")
+        lease = session.get(SessionLease, row.id)
+        if row.ended_at is None:
+            lease = renew_session_lease(session, row)
+        if row.ended_at is None and lease is None:
+            row.last_activity_at = utc_now()
+        session.commit()
+        return {
+            "session_id": row.id,
+            "state": row.state,
+            "lease_expires_at": lease.lease_expires_at.isoformat() if lease else None,
+        }
 
 
 def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str, Any]:
@@ -611,8 +956,7 @@ def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str
         if predecessor.workspace_id != successor.workspace_id:
             raise ValueError("predecessor and successor must belong to the same workspace")
         require_live_session(session, to_session_id, action="link_session_successor")
-        from brains.storage.models import SessionSuccessor
-
+        _supersede_coordination_handle(session, predecessor, successor)
         link = session.get(SessionSuccessor, from_session_id)
         if link is None:
             link = SessionSuccessor(predecessor_session_id=from_session_id)
@@ -620,6 +964,11 @@ def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str
         link.successor_session_id = successor.id
         link.linked_at = utc_now()
         session.commit()
+    _cancel_open_commands(
+        from_session_id,
+        reason=f"the Session was superseded by {to_session_id}",
+        result="superseded",
+    )
     append_event(
         "session_superseded",
         f"{from_session_id} -> {to_session_id}",
@@ -735,8 +1084,13 @@ def _agent_session_to_dict(row: AgentSession) -> dict:
         duration_seconds = max(0.0, (ended - started).total_seconds())
     return {
         "id": row.id,
-        "status": "ended" if row.ended_at is not None else "running",
-        # F3.2 explicit lifecycle (spawning/running/blocked/completed/failed).
+        "status": (
+            "ended"
+            if row.ended_at is not None
+            else (DORMANT_SESSION_STATE if row.state == DORMANT_SESSION_STATE else "running")
+        ),
+        # F3.2 explicit lifecycle
+        # (spawning/running/dormant/blocked/completed/failed).
         "state": getattr(row, "state", None) or ("completed" if ended else "running"),
         "tool": row.tool,
         "workspace_id": row.workspace_id,
@@ -767,8 +1121,15 @@ def _message_capability(tool: str | None) -> dict:
         return {"supported": False, "reason": "the message capability could not be determined"}
 
 
-# Terminal session states stamp ``ended_at`` + a duration.
-SESSION_STATES = {"spawning", "running", "blocked", "completed", "failed"}
+# Public execution states. ``dormant`` is maintained by the coordination
+# lease/successor lifecycle rather than accepted as an arbitrary state update.
+SESSION_STATES = {
+    "spawning",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+}
 _TERMINAL_SESSION_STATES = {"completed", "failed"}
 
 
@@ -836,7 +1197,12 @@ def list_agent_sessions(
         if machine_id is not None:
             query = query.filter(AgentSession.machine_id == machine_id)
         if status == "running":
-            query = query.filter(AgentSession.ended_at.is_(None))
+            query = query.filter(
+                AgentSession.ended_at.is_(None),
+                AgentSession.state != DORMANT_SESSION_STATE,
+            )
+        elif status == DORMANT_SESSION_STATE:
+            query = query.filter(AgentSession.state == DORMANT_SESSION_STATE)
         elif status == "ended":
             query = query.filter(AgentSession.ended_at.isnot(None))
         rows = (
@@ -1134,8 +1500,12 @@ def list_sessions(workspace_path: str | None = None, limit: int = 50) -> list[di
                 "id": row.id,
                 "workspace": workspace.slug,
                 "tool": row.tool,
+                "state": row.state,
                 "started_at": row.started_at.isoformat(),
                 "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+                "last_activity_at": (
+                    row.last_activity_at.isoformat() if row.last_activity_at else None
+                ),
                 "summary": row.summary,
             }
             for row, workspace in rows

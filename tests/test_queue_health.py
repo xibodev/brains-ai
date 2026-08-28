@@ -25,7 +25,7 @@ from brains.control.handoffs import set_handoff
 from brains.control.mailbox import send_message
 from brains.control.sessions import start_session
 from brains.storage.db import SessionLocal
-from brains.storage.models import AgentSession, Handoff, HelpRequest, WorkspaceClaim
+from brains.storage.models import AgentSession, Handoff, HelpRequest, SessionLease, WorkspaceClaim
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +60,7 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
         "mailbox",
         "help_requests",
         "workspace_claims",
+        "session_leases",
         "session_commands",
         "checkpoints",
     }
@@ -245,6 +246,25 @@ def test_apply_repair_releases_expired_workspace_claim(tmp_path):
             .count()
             == 0
         )
+
+
+def test_apply_repair_makes_expired_coordination_session_dormant(tmp_path):
+    started = start_session(str(tmp_path / "lease"), tool="pytest")
+    with SessionLocal() as session:
+        lease = session.get(SessionLease, started["session_id"])
+        assert lease is not None
+        lease.lease_expires_at = utc_now() - timedelta(seconds=1)
+        session.commit()
+
+    plan = queue_health.plan_repair()
+    action = next(a for a in plan["actions"] if a["code"] == "expired_session_leases")
+    assert action["would_affect_rows"] >= 1
+
+    applied = queue_health.apply_repair()
+    action = next(a for a in applied["actions"] if a["code"] == "expired_session_leases")
+    assert action["applied_rows"] >= 1
+    with SessionLocal() as session:
+        assert session.get(AgentSession, started["session_id"]).state == "dormant"
 
 
 def test_apply_repair_expires_a_past_deadline_help_request(tmp_path):

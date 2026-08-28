@@ -166,7 +166,12 @@ def run_session(
         try:
             from brains.control.sessions import start_session
 
-            started = start_session(workspace_path, tool=tool, operator=operator)
+            started = start_session(
+                workspace_path,
+                tool=tool,
+                operator=operator,
+                lease_session=False,
+            )
             session_id = started.get("session_id")
         except Exception:
             session_id = None
@@ -403,7 +408,12 @@ def start_streamed_session(
         try:
             from brains.control.sessions import start_session
 
-            started = start_session(workspace_path, tool=tool, operator=operator)
+            started = start_session(
+                workspace_path,
+                tool=tool,
+                operator=operator,
+                lease_session=False,
+            )
             session_id = started.get("session_id")
         except Exception:
             session_id = None

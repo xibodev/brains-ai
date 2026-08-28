@@ -2040,6 +2040,11 @@ def session_start_cli(
         help="PID of the durable agent process that owns this Session. Omit when unknown.",
     ),
     predecessor_session: str | None = typer.Option(None, "--predecessor-session"),
+    new: bool = typer.Option(
+        False,
+        "--new",
+        help="Create a distinct handle instead of reusing this workspace/tool/operator Session.",
+    ),
 ):
     _print_json(
         start_session(
@@ -2047,8 +2052,17 @@ def session_start_cli(
             tool=tool,
             pid=pid,
             predecessor_session_id=predecessor_session,
+            reuse_existing=not new,
+            auto_link_predecessor=True,
         )
     )
+
+
+@app.command("session-heartbeat")
+def session_heartbeat_cli(session: str = typer.Option(...)):
+    from brains.control.sessions import heartbeat_session
+
+    _print_json(heartbeat_session(session))
 
 
 @app.command("session-link-successor")

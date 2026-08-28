@@ -220,6 +220,18 @@ def test_scheduler_tick_calls_the_runtime_staleness_sweep(
     assert calls == [1]
 
 
+def test_scheduler_tick_calls_the_session_lease_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "list_recurring_tasks", lambda **_kw: [])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_sweep_stale_sessions",
+        lambda: calls.append(1) or 0,
+    )
+    mcp_server._scheduler_tick(now=_now())
+    assert calls == [1]
+
+
 def test_scheduler_tick_runs_the_runtime_sweep_even_when_fire_list_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

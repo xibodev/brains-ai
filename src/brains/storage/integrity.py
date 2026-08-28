@@ -87,7 +87,7 @@ TERMINAL_SESSION_STATES = ("completed", "failed")
 # checkpoints, audit entries) are never deleted by repair - their dangling
 # references are nulled when the schema allows it, and reported for the
 # operator when it does not.
-LEASE_TABLES = ("workspace_claims",)
+LEASE_TABLES = ("session_leases", "workspace_claims")
 
 # Direct children of ``workspaces`` whose *optional* Workspace reference means
 # ownership: activity rows that have no meaning outside the Workspace they

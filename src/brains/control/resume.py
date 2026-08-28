@@ -35,6 +35,7 @@ from brains.control.handoffs import list_handoffs, mark_stale_handoffs
 from brains.control.mailbox import read_messages
 from brains.control.sessions import (
     AgentSessionNotFoundError,
+    heartbeat_session,
     reap_zombie_sessions,
 )
 from brains.control.tasks import list_tasks
@@ -43,6 +44,7 @@ from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentSession,
     SessionCheckpoint,
+    SessionLease,
     ToolSessionLink,
     Workspace,
     WorkspaceClaim,
@@ -94,6 +96,7 @@ def link_tool_session(
     if linked_by not in ("auto", "operator"):
         raise ValueError("linked_by must be 'auto' or 'operator'")
     init_db()
+    heartbeat_session(brain_session_id, allow_ended=True)
     with SessionLocal() as session:
         agent = (
             session.query(AgentSession).filter(AgentSession.id == brain_session_id).one_or_none()
@@ -321,6 +324,9 @@ def resume_brain_session(
     except Exception:
         pass
     init_db()
+    # Resuming is the explicit operation that may reactivate an expired
+    # coordination lease. It also refuses a handle that already has a successor.
+    heartbeat_session(brain_session_id)
     # Auto-link the fresh tool-side id if provided. We do this BEFORE
     # building the packet so list_tool_session_links includes it.
     if tool and tool_session_id:
@@ -352,11 +358,13 @@ def resume_brain_session(
             }
             for c in active_claims
         ]
+        lease = session.get(SessionLease, agent.id) if agent.pid is None else None
         brain_session_dict = {
             "id": agent.id,
             "workspace": workspace.slug,
             "workspace_path": workspace.path,
             "tool": agent.tool,
+            "state": agent.state,
             "pid": agent.pid,
             "started_at": agent.started_at.isoformat(),
             "ended_at": agent.ended_at.isoformat() if agent.ended_at else None,
@@ -364,6 +372,7 @@ def resume_brain_session(
                 agent.last_activity_at.isoformat() if agent.last_activity_at else None
             ),
             "summary": agent.summary,
+            "lease_expires_at": lease.lease_expires_at.isoformat() if lease else None,
         }
 
     last = latest_checkpoint(brain_session_id)
