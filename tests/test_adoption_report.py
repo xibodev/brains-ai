@@ -35,6 +35,25 @@ def _make_workspace(tmp_path, prefix: str):
     return target, register_workspace(str(target))
 
 
+def _make_session_eligible(session_id: str, minutes: int = 3) -> None:
+    with SessionLocal() as db:
+        event = (
+            db.query(Event)
+            .filter(Event.session_id == session_id, Event.kind == "session_start")
+            .one()
+        )
+        shift = timedelta(minutes=minutes)
+        event.created_at = event.created_at - shift
+        follows = (
+            db.query(Event)
+            .filter(Event.session_id == session_id, Event.kind != "session_start")
+            .all()
+        )
+        for follow in follows:
+            follow.created_at = follow.created_at - shift
+        db.commit()
+
+
 def test_report_shape_is_stable():
     """Even on an empty workspace the report shape must be the contract."""
     report = adoption_report(window_minutes=1, since_days=1, workspace=None)
@@ -42,7 +61,13 @@ def test_report_shape_is_stable():
         "window_minutes",
         "since_days",
         "workspace",
+        "observed_at",
+        "observation_started_at",
+        "eligible_before",
         "sessions_started",
+        "sessions_eligible",
+        "sessions_excluded_incomplete_window",
+        "interpretation",
         "surfaces",
         "totals_by_kind",
     }
@@ -55,6 +80,30 @@ def test_report_shape_is_stable():
         assert "acted" in bucket
         assert "rate" in bucket
     assert isinstance(report["totals_by_kind"], list)
+    assert "task success" in report["interpretation"]["not_measured"]
+
+
+def test_recent_session_is_excluded_until_full_action_window(tmp_path):
+    target, workspace = _make_workspace(tmp_path, "adopt-censored")
+    send_message(subject="offer", workspace_path=str(target))
+    started = start_session(str(target), tool="pytest")
+    report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
+
+    assert report["sessions_started"] >= 1
+    assert report["sessions_excluded_incomplete_window"] >= 1
+    assert report["surfaces"]["unread_messages"]["offered"] == 0
+
+    with SessionLocal() as db:
+        event = (
+            db.query(Event)
+            .filter(Event.session_id == started["session_id"], Event.kind == "session_start")
+            .one()
+        )
+        event.created_at = utc_now() - timedelta(minutes=3)
+        db.commit()
+    eligible = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
+    assert eligible["sessions_eligible"] >= 1
+    assert eligible["surfaces"]["unread_messages"]["offered"] >= 1
 
 
 def test_invalid_window_minutes_raises():
@@ -92,6 +141,7 @@ def test_unread_mail_offered_but_not_acted(tmp_path):
     )
     silent = start_session(str(target), tool="pytest")
     sid = silent["session_id"]
+    _make_session_eligible(sid)
     welcome = silent.get("welcome") or {}
     assert (welcome.get("unread_messages") or {}).get("count", 0) >= 1, (
         "test precondition: session must see the broadcast mail"
@@ -125,6 +175,7 @@ def test_unread_mail_offered_and_acted_in_window(tmp_path):
     assert (welcome.get("unread_messages") or {}).get("count", 0) >= 1
     # Follow-up call.
     read_messages(aid)
+    _make_session_eligible(aid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["unread_messages"]
     assert bucket["offered"] >= 1
@@ -152,6 +203,7 @@ def test_pattern_offered_and_acted(tmp_path):
     # The agent uses the pattern, threading session_id through (the
     # whole point of the threading change is this join works).
     use_pattern(name, session_id=sid)
+    _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["applicable_patterns"]
     assert bucket["offered"] >= 1
@@ -169,6 +221,7 @@ def test_memory_offered_and_acted(tmp_path):
     assert len(welcome.get("relevant_memories") or []) >= 1
     # Follow-up: agent fetches the memory and attributes to its session.
     retrieve_memory(key, session_id=sid)
+    _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["relevant_memories"]
     assert bucket["offered"] >= 1
@@ -191,6 +244,7 @@ def test_tools_missing_offered_and_acted(tmp_path):
     assert int(ts.get("missing", 0)) >= 1
     # Follow-up: agent re-verifies the tool, attributes to its session.
     verify_tool(tool_name, session_id=sid)
+    _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["tools_missing"]
     assert bucket["offered"] >= 1
@@ -222,10 +276,14 @@ def test_followup_outside_window_does_not_count(tmp_path):
             .one_or_none()
         )
         assert start_ev is not None
-        start_ev.created_at = utc_now() - timedelta(hours=1)
+        start_ev.created_at = utc_now() - timedelta(hours=3)
         db.commit()
     # Now the follow-up.
     read_messages(aid)
+    with SessionLocal() as db:
+        follow = db.query(Event).filter(Event.session_id == aid, Event.kind == "message_read").one()
+        follow.created_at = utc_now() - timedelta(hours=2)
+        db.commit()
     # Tight 1-minute window: session_start is 1h old, message_read is
     # ~now → 60 minutes apart → outside the window.
     report = adoption_report(window_minutes=1, since_days=1, workspace=workspace.slug)
@@ -257,6 +315,7 @@ def test_workspace_filter_isolates_scope(tmp_path):
     )
     actor = start_session(str(target_a), tool="pytest")
     read_messages(actor["session_id"])
+    _make_session_eligible(actor["session_id"])
     # No activity in B.
     report_a = adoption_report(window_minutes=2, since_days=1, workspace=ws_a.slug)
     report_b = adoption_report(window_minutes=2, since_days=1, workspace=ws_b.slug)
@@ -277,6 +336,7 @@ def test_totals_by_kind_is_ordered_and_includes_session_start(tmp_path):
         workspace_path=str(target),
     )
     read_messages(s["session_id"])
+    _make_session_eligible(s["session_id"])
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     totals = report["totals_by_kind"]
     assert totals, "expected at least one event kind"

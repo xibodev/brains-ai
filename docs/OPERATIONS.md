@@ -657,6 +657,13 @@ The feedback inbox uses `feedback-report|enrich|get|list` across CLI/MCP/HTTP. R
 
 Every new durable event has an `event_contexts` row with taxonomy category, `workspace`/`global`/`unresolved` scope, and scope source. `append_event` prefers explicit Workspace scope, then infers from its Session or known entity metadata. Core install-wide categories are global; unknown extension kinds require explicit/Session/entity scope or remain unresolved. `brains-ai event-scope`, MCP `event_scope_report`, and protected `GET /v1/admin/event-scope` report counts plus a bounded unresolved sample. Non-admin event listings never expose unresolved rows.
 
+The bootstrap-admin Operations screen includes bounded welcome follow-through
+telemetry from `adoption_report`. It reports observation timestamps, action
+window, total Session starts, eligible starts, and recent starts excluded until
+their complete window closes. Each surface rate is `acted / offered` only among
+eligible Sessions. It measures matching recorded follow-up events, not task
+success, user value, causal impact, or activity outside the configured window.
+
 `GET /v1/admin/queue-health` (bootstrap-admin only) / `brains-ai queue-health
 status` returns the family summary above (with live total/open/stale-or-
 expired counts) plus a bounded, non-destructive orphan-reference diagnosis:
