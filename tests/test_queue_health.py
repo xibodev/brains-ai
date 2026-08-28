@@ -59,6 +59,7 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
         "handoffs",
         "mailbox",
         "help_requests",
+        "feedback",
         "workspace_claims",
         "session_leases",
         "session_commands",
