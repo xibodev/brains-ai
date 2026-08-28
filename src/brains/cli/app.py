@@ -2049,6 +2049,137 @@ def inbox_wait_cli(
     )
 
 
+@app.command("help-file")
+def help_file_cli(
+    subject: str = typer.Option(..., "--subject"),
+    question: str = typer.Option(..., "--question"),
+    from_session: str | None = typer.Option(None, "--from-session"),
+    to_workspace: str | None = typer.Option(None, "--to-workspace"),
+    to_session: str | None = typer.Option(None, "--to-session"),
+    context: str = typer.Option("", "--context"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+    required_tool: str | None = typer.Option(None, "--required-tool"),
+):
+    """File durable peer help and return immediately."""
+    from brains.control.help import file_help_request
+
+    _print_json(
+        file_help_request(
+            subject,
+            question,
+            from_session_id=from_session,
+            to_workspace=to_workspace,
+            to_session_id=to_session,
+            context=context,
+            timeout_ms=timeout_ms,
+            required_tool=required_tool,
+        )
+    )
+
+
+@app.command("help-get")
+def help_get_cli(
+    code: str,
+    session: str | None = typer.Option(None, "--session"),
+):
+    """Read one peer-help request without blocking."""
+    from brains.control.help import get_help_request
+
+    _print_json(get_help_request(code, session_id=session))
+
+
+@app.command("help-wait")
+def help_wait_cli(
+    code: str,
+    session: str | None = typer.Option(None, "--session"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+):
+    """Wait briefly for one request without expiring it on timeout."""
+    from brains.control.help import wait_help_request
+
+    _print_json(wait_help_request(code, session_id=session, timeout_ms=timeout_ms))
+
+
+@app.command("help-claim")
+def help_claim_cli(
+    session: str = typer.Option(..., "--session"),
+    workspace: str | None = typer.Option(None, "--workspace"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+):
+    """Wait for and claim peer help routed to this Session or Workspace."""
+    from brains.control.help import wait_for_request
+
+    _print_json(
+        wait_for_request(
+            session_id=session,
+            workspace_slug=workspace,
+            timeout_ms=timeout_ms,
+        )
+    )
+
+
+@app.command("help-answer")
+def help_answer_cli(
+    code: str,
+    answer: str = typer.Option(..., "--answer"),
+    evidence: str = typer.Option(..., "--evidence"),
+    session: str = typer.Option(..., "--session"),
+):
+    """Answer help claimed by this Session with required evidence."""
+    from brains.control.help import answer_request
+
+    _print_json(answer_request(code, answer, evidence, session_id=session))
+
+
+@app.command("help-cancel")
+def help_cancel_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+):
+    """Cancel help as the Session that filed it."""
+    from brains.control.help import cancel_help_request
+
+    _print_json(cancel_help_request(code, session_id=session))
+
+
+@app.command("help-release")
+def help_release_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+    retry_timeout_ms: int = typer.Option(30000, "--retry-timeout-ms"),
+):
+    """Release claimed help back to the open queue."""
+    from brains.control.help import release_help_request
+
+    _print_json(
+        release_help_request(
+            code,
+            session_id=session,
+            retry_timeout_ms=retry_timeout_ms,
+        )
+    )
+
+
+@app.command("help-list")
+def help_list_cli(
+    to_workspace: str | None = typer.Option(None, "--to-workspace"),
+    to_session: str | None = typer.Option(None, "--to-session"),
+    include_answered: bool = typer.Option(False, "--include-answered"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    """List visible peer-help requests."""
+    from brains.control.help import list_open_help_requests
+
+    _print_json(
+        list_open_help_requests(
+            to_workspace=to_workspace,
+            to_session_id=to_session,
+            include_answered=include_answered,
+            limit=limit,
+        )
+    )
+
+
 @app.command("check-source")
 def check_source_cli(source: str):
     _print_json(check_source(source))

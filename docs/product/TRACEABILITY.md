@@ -157,7 +157,7 @@ All native product routers are mounted on the gateway process. Router prefixes m
 |---|---|---|---|
 | Plan/retrieve | plan, context pack, repo/semantic search, graph, freshness, memory | plan, repo/docs index/search, orient, graph, check-source | B3 |
 | Session/state | start/heartbeat/end, state, event, snapshot, checkpoint/resume, session message/stop/commands | session-start/session-heartbeat/session-end, sessions, state, event-append/events, snapshot, session-message/session-stop/session-commands | B2, F3 |
-| Work coordination | tasks, claims, handoffs, messages, help, presence, topic post/read/subscribe/unsubscribe/list | task, workspace-claim, handoff, message and topic post/read/subscribe/unsubscribe/list commands | B2, F4 |
+| Work coordination | tasks, claims, handoffs, messages, help file/get/wait/claim/answer/cancel/release/list, presence, topic post/read/subscribe/unsubscribe/list | task, workspace-claim, handoff, message, help lifecycle, and topic post/read/subscribe/unsubscribe/list commands | B2, F4 |
 | Knowledge/patterns/tools | knowledge, learn, patterns, tool registry/adoption | learn, pattern, tool, views commands | B2, B3 |
 | Automation/webhooks | recurring and webhook tools | recurring and jobs commands | F10, B7 |
 | Governance/recovery | decisions, audit, governed actions, backup/restore | decision, audit, governed-list, governed-sweep, audit-adopt, backup/restore, `db` migration + integrity family, exec-session | F3, B4, B5 |

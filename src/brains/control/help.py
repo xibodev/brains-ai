@@ -1,10 +1,10 @@
-"""Cross-session peer help — long-poll RPC over SQLite.
+"""Cross-session peer help — durable lifecycle plus bounded waits over SQLite.
 
 This module backs the ``ask_peer`` / ``wait_for_request`` /
-``answer_request`` MCP tools. The protocol lets one agent session ask a
-question that targets another workspace (or session), and lets a peer
-that's polling for work pick it up and answer — all blocking with a
-configurable timeout so the asker can simply ``await`` the answer.
+``answer_request`` MCP tools. The protocol lets one agent Session file a
+question that targets another Workspace (or Session), continue working, and
+return later by code. A compatibility wrapper still supports one blocking
+call, while the durable lifecycle exposes file/get/wait/cancel/release.
 
 Why polling and not SQLite ``LISTEN/NOTIFY``? SQLite doesn't have it.
 We approximate with short-sleep DB polls; the poll interval is small
@@ -14,7 +14,7 @@ never wedges anyone forever.
 
 Safety rules baked into this module:
 
-* ``ask_peer`` requires both ``subject`` and ``question``.
+* Filing requires both ``subject`` and ``question``.
 * ``answer_request`` refuses an empty ``evidence`` string — answers must
   cite *something* (file paths, log refs, URLs) so the asker can verify.
 * ``ask_depth`` defaults to 1 and is capped at 2. If a peer that is
@@ -222,7 +222,7 @@ def _expire_due(session) -> int:
     return open_count + claimed_count
 
 
-def ask_peer(
+def file_help_request(
     subject: str,
     question: str,
     *,
@@ -233,21 +233,16 @@ def ask_peer(
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
 ) -> dict[str, Any]:
-    """File a help request and block until a peer answers or it expires.
+    """File a durable peer-help request and return without waiting.
 
     ``required_tool`` constrains which harness may claim the request —
     an exact tool name (``"claude"``) or ``not:<tool>`` (``"not:copilot"``,
     "any harness except this one"). This is how a session asks a *different*
     CLI to validate its work without either side sharing context.
 
-    Returns the request dict; ``status`` will be one of:
-
-    * ``"answered"`` — peer answered. ``answer`` + ``evidence`` populated.
-    * ``"expired"`` — server-side timeout reached without an answer.
-    * ``"cancelled"`` — asker withdrew (not currently exposed via MCP).
-
-    Raises ``ValueError`` for missing required fields and
-    ``HelpDeadlockError`` for over-deep ask chains.
+    The returned request is ``open``. Call :func:`wait_help_request` or
+    :func:`get_help_request` later; the request remains independently claimable
+    while the filing caller continues other work or exits.
     """
     if not subject or not subject.strip():
         raise ValueError("subject is required")
@@ -297,7 +292,7 @@ def ask_peer(
             session.add(HelpRequestConstraint(request_code=code, required_tool=required_tool_norm))
         session.commit()
         session.refresh(row)
-        request_id = row.id
+        result = _row_to_dict(session, row)
 
     append_event(
         "help_asked",
@@ -312,6 +307,39 @@ def ask_peer(
             "depth": depth,
         },
     )
+
+    return result
+
+
+def ask_peer(
+    subject: str,
+    question: str,
+    *,
+    from_session_id: str | None = None,
+    to_workspace: str | None = None,
+    to_session_id: str | None = None,
+    context: str = "",
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    required_tool: str | None = None,
+) -> dict[str, Any]:
+    """Compatibility wrapper: file a request and block for its outcome."""
+    timeout_ms = max(100, int(timeout_ms))
+    filed = file_help_request(
+        subject,
+        question,
+        from_session_id=from_session_id,
+        to_workspace=to_workspace,
+        to_session_id=to_session_id,
+        context=context,
+        timeout_ms=timeout_ms,
+        required_tool=required_tool,
+    )
+    code = filed["code"]
+    workspace_id = filed["from_workspace_id"]
+    with SessionLocal() as session:
+        request_id = session.query(HelpRequest.id).filter(HelpRequest.code == code).scalar()
+    if request_id is None:  # pragma: no cover - the filing transaction just committed
+        return {"code": code, "status": "cancelled"}
 
     # Long-poll for an answer. We sleep in small slices so the asker
     # observes the answer within ~poll_interval after it lands.
@@ -366,12 +394,172 @@ def ask_peer(
             break
         time.sleep(poll)
 
+    if final_status == "expired":
+        append_event(
+            "help_expired",
+            f"{code}: expired",
+            workspace_id=workspace_id,
+            session_id=from_session_id,
+            metadata={"code": code, "status": final_status},
+        )
+    return result
+
+
+def _request_visible(row: HelpRequest) -> bool:
+    from brains.control.memberships import visible_workspace_ids_for_current
+
+    visible = visible_workspace_ids_for_current()
+    return visible is None or row.from_workspace_id is None or row.from_workspace_id in visible
+
+
+def get_help_request(code: str, *, session_id: str | None = None) -> dict[str, Any] | None:
+    """Return one visible request, applying expiry without blocking."""
+    if not code:
+        raise ValueError("code is required")
+    init_db()
+    with SessionLocal() as session:
+        _expire_due(session)
+        if session_id:
+            from brains.control.sessions import require_live_session
+
+            require_live_session(session, session_id, action="get_help_request")
+        row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
+        session.commit()
+        if row is None or not _request_visible(row):
+            return None
+        return _row_to_dict(session, row)
+
+
+def wait_help_request(
+    code: str,
+    *,
+    session_id: str | None = None,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, Any]:
+    """Wait a bounded interval for one request to become terminal.
+
+    A wait timeout never expires the durable request. It returns the current
+    row with ``wait_timed_out=True`` so a caller can continue other work and
+    wait again later.
+    """
+    timeout_ms = max(100, int(timeout_ms))
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    while True:
+        result = get_help_request(code, session_id=session_id)
+        if result is None:
+            raise ValueError(f"unknown or unavailable help request: {code}")
+        if result["status"] in {"answered", "expired", "cancelled"}:
+            return result
+        if time.monotonic() >= deadline:
+            return {**result, "wait_timed_out": True}
+        time.sleep(_poll_interval_seconds())
+
+
+def cancel_help_request(code: str, *, session_id: str) -> dict[str, Any]:
+    """Cancel an open/claimed request as the Session that filed it."""
+    if not code:
+        raise ValueError("code is required")
+    if not session_id:
+        raise ValueError("cancel_help_request requires session_id")
+    init_db()
+    with SessionLocal() as session:
+        from brains.control.sessions import require_live_session
+
+        require_live_session(session, session_id, action="cancel_help_request")
+        _expire_due(session)
+        row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
+        session.commit()
+        if row is None or not _request_visible(row):
+            raise ValueError(f"unknown or unavailable help request: {code}")
+        if row.from_session_id != session_id:
+            raise ValueError(f"help request {code} was filed by another session")
+        if row.status == "cancelled":
+            return {**_row_to_dict(session, row), "duplicate": True}
+        if row.status not in {"open", "claimed"}:
+            raise ValueError(f"help request {code} is {row.status}, not cancellable")
+        updated = (
+            session.query(HelpRequest)
+            .filter(
+                HelpRequest.id == row.id,
+                HelpRequest.from_session_id == session_id,
+                HelpRequest.status.in_(("open", "claimed")),
+            )
+            .update({"status": "cancelled"}, synchronize_session=False)
+        )
+        session.commit()
+        if not updated:
+            session.refresh(row)
+            raise ValueError(f"help request {code} changed state before cancellation")
+        session.refresh(row)
+        result = {**_row_to_dict(session, row), "duplicate": False}
+        workspace_id = row.from_workspace_id
     append_event(
-        f"help_{final_status}",
-        f"{code}: {final_status}",
+        "help_cancelled",
+        f"{code}: cancelled by requester",
         workspace_id=workspace_id,
-        session_id=from_session_id,
-        metadata={"code": code, "status": final_status},
+        session_id=session_id,
+        metadata={"code": code},
+    )
+    return result
+
+
+def release_help_request(
+    code: str,
+    *,
+    session_id: str,
+    retry_timeout_ms: int = DEFAULT_TIMEOUT_MS,
+) -> dict[str, Any]:
+    """Release a claimed request back to the open queue as its claimant."""
+    if not code:
+        raise ValueError("code is required")
+    if not session_id:
+        raise ValueError("release_help_request requires session_id")
+    retry_timeout_ms = max(100, int(retry_timeout_ms))
+    init_db()
+    now = utc_now()
+    with SessionLocal() as session:
+        from brains.control.sessions import require_live_session
+
+        require_live_session(session, session_id, action="release_help_request")
+        _expire_due(session)
+        row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
+        session.commit()
+        if row is None or not _request_visible(row):
+            raise ValueError(f"unknown or unavailable help request: {code}")
+        if row.status != "claimed":
+            raise ValueError(f"help request {code} is {row.status}, not claimed")
+        if row.claimed_by_session_id != session_id:
+            raise ValueError(f"help request claimed by another session: {code}")
+        updated = (
+            session.query(HelpRequest)
+            .filter(
+                HelpRequest.id == row.id,
+                HelpRequest.status == "claimed",
+                HelpRequest.claimed_by_session_id == session_id,
+            )
+            .update(
+                {
+                    "status": "open",
+                    "claimed_by_session_id": None,
+                    "claimed_at": None,
+                    "expires_at": now + timedelta(milliseconds=retry_timeout_ms),
+                },
+                synchronize_session=False,
+            )
+        )
+        session.commit()
+        if not updated:
+            session.refresh(row)
+            raise ValueError(f"help request {code} changed state before release")
+        session.refresh(row)
+        result = _row_to_dict(session, row)
+        workspace_id = row.from_workspace_id
+    append_event(
+        "help_released",
+        f"{code}: released by {session_id}",
+        workspace_id=workspace_id,
+        session_id=session_id,
+        metadata={"code": code, "retry_timeout_ms": retry_timeout_ms},
     )
     return result
 
@@ -406,16 +594,14 @@ def wait_for_request(
     resolved_slug: str | None = workspace_slug
     my_tool: str | None = None
     with SessionLocal() as session:
-        row = (
-            session.query(AgentSession, Workspace)
-            .outerjoin(Workspace, Workspace.id == AgentSession.workspace_id)
-            .filter(AgentSession.id == session_id)
-            .one_or_none()
-        )
-        if row is not None:
-            my_tool = row[0].tool
-            if resolved_slug is None:
-                resolved_slug = row[1].slug if row[1] is not None else None
+        from brains.control.sessions import require_live_session
+
+        agent = require_live_session(session, session_id, action="wait_for_request")
+        workspace = session.get(Workspace, agent.workspace_id)
+        my_tool = agent.tool
+        if resolved_slug is None:
+            resolved_slug = workspace.slug if workspace is not None else None
+        session.commit()
 
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     poll = _poll_interval_seconds()
@@ -458,6 +644,8 @@ def wait_for_request(
                     candidate = row
                     candidate_required_tool = required_tool
                     break
+            if candidate is None:
+                session.commit()
             if candidate is not None:
                 # Atomic claim: re-check the row is still open via a
                 # conditional update so two waiters can't both grab it.
@@ -528,8 +716,14 @@ def answer_request(
 
     init_db()
     with SessionLocal() as session:
-        _expire_due(session)
+        from brains.control.sessions import require_live_session
+
+        require_live_session(session, session_id, action="answer_request")
+        expired = _expire_due(session)
         row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
+        session.commit()
+        if expired and row is not None:
+            session.refresh(row)
         if row is None:
             raise ValueError(f"unknown help request: {code}")
         if row.status == "expired":
@@ -590,11 +784,18 @@ def list_open_help_requests(
                 | (HelpRequest.from_workspace_id.in_(visible))
             )
         rows = query.order_by(HelpRequest.created_at.asc()).limit(limit).all()
-        return [_row_to_dict(session, row) for row in rows]
+        result = [_row_to_dict(session, row) for row in rows]
+        session.commit()
+        return result
 
 
 __all__ = [
     "ask_peer",
+    "file_help_request",
+    "get_help_request",
+    "wait_help_request",
+    "cancel_help_request",
+    "release_help_request",
     "wait_for_request",
     "answer_request",
     "list_open_help_requests",
