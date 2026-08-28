@@ -69,6 +69,31 @@ def set_handoff(
     workspace = register_workspace(workspace_path)
     init_db()
     with SessionLocal() as session:
+        active = (
+            session.query(Handoff)
+            .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
+            .order_by(Handoff.set_at.desc(), Handoff.id.desc())
+            .first()
+        )
+        if active is not None and (
+            active.title,
+            active.body or "",
+            active.set_by_session_id,
+        ) == (title, body, session_id):
+            if session_id:
+                from brains.control.session_liveness import renew_session_lease
+                from brains.storage.models import AgentSession
+
+                agent = session.get(AgentSession, session_id)
+                if agent is not None:
+                    renew_session_lease(session, agent)
+                    session.commit()
+            return {
+                "handoff_id": active.id,
+                "status": "active",
+                "workspace": workspace.slug,
+                "duplicate": True,
+            }
         (
             session.query(Handoff)
             .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
@@ -97,7 +122,12 @@ def set_handoff(
         refresh_views(workspace.path)
     except Exception:
         pass
-    return {"handoff_id": row.id, "status": "active", "workspace": workspace.slug}
+    return {
+        "handoff_id": row.id,
+        "status": "active",
+        "workspace": workspace.slug,
+        "duplicate": False,
+    }
 
 
 def pick_handoff(workspace_path: str, session_id: str | None = None) -> dict:

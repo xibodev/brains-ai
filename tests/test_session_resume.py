@@ -132,6 +132,37 @@ def test_checkpoint_normalises_empty_fields_to_none(tmp_path):
     assert row["scratchpad_path"] is None
 
 
+def test_checkpoint_reuses_only_adjacent_exact_payload(tmp_path):
+    session = start_session(str(tmp_path), tool="pytest")
+    sid = session["session_id"]
+    payload = {
+        "summary": "stable cairn",
+        "next_action": "continue",
+        "metadata": {"b": 2, "a": 1},
+    }
+
+    first = checkpoint(sid, **payload)
+    retry = checkpoint(
+        sid,
+        summary=" stable cairn ",
+        next_action="continue ",
+        metadata={"a": 1, "b": 2},
+    )
+    checkpoint(sid, summary="something changed")
+    repeated_later = checkpoint(sid, **payload)
+
+    assert first["duplicate"] is False
+    assert retry["duplicate"] is True
+    assert retry["id"] == first["id"]
+    assert repeated_later["duplicate"] is False
+    assert repeated_later["id"] != first["id"]
+    with SessionLocal() as db:
+        from brains.storage.models import Event, SessionCheckpoint
+
+        assert db.query(SessionCheckpoint).filter_by(session_id=sid).count() == 3
+        assert db.query(Event).filter_by(session_id=sid, kind="checkpoint_written").count() == 3
+
+
 def test_list_checkpoints_returns_newest_first(tmp_path):
     session = start_session(str(tmp_path), tool="pytest")
     sid = session["session_id"]

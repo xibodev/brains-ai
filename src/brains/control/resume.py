@@ -214,28 +214,63 @@ def checkpoint(
         raise ValueError("session_id is required")
     if not summary or not summary.strip():
         raise ValueError("summary is required")
+    normalized_summary = summary.strip()
+    normalized_next_action = next_action.strip() or None
+    normalized_blockers = blockers.strip() or None
+    normalized_scratchpad = scratchpad_path.strip() or None
+    normalized_metadata = json.dumps(metadata, sort_keys=True) if metadata else None
     init_db()
     with SessionLocal() as session:
         agent = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
         if agent is None:
             raise AgentSessionNotFoundError(f"unknown brain session: {session_id}")
+        latest = (
+            session.query(SessionCheckpoint)
+            .filter(SessionCheckpoint.session_id == session_id)
+            .order_by(SessionCheckpoint.created_at.desc(), SessionCheckpoint.id.desc())
+            .first()
+        )
+        latest_metadata = None
+        if latest is not None and latest.metadata_json:
+            try:
+                latest_metadata = json.dumps(json.loads(latest.metadata_json), sort_keys=True)
+            except (TypeError, ValueError):
+                latest_metadata = latest.metadata_json
+        if latest is not None and (
+            latest.summary,
+            latest.next_action,
+            latest.blockers,
+            latest.scratchpad_path,
+            latest_metadata,
+        ) == (
+            normalized_summary,
+            normalized_next_action,
+            normalized_blockers,
+            normalized_scratchpad,
+            normalized_metadata,
+        ):
+            from brains.control.session_liveness import renew_session_lease
+
+            renew_session_lease(session, agent)
+            session.commit()
+            return {**_checkpoint_to_dict(latest), "duplicate": True}
         row = SessionCheckpoint(
             session_id=session_id,
             workspace_id=agent.workspace_id,
-            summary=summary.strip(),
-            next_action=next_action.strip() or None,
-            blockers=blockers.strip() or None,
-            scratchpad_path=scratchpad_path.strip() or None,
-            metadata_json=json.dumps(metadata) if metadata else None,
+            summary=normalized_summary,
+            next_action=normalized_next_action,
+            blockers=normalized_blockers,
+            scratchpad_path=normalized_scratchpad,
+            metadata_json=normalized_metadata,
         )
         session.add(row)
         session.commit()
         session.refresh(row)
         workspace_id = agent.workspace_id
-        result = _checkpoint_to_dict(row)
+        result = {**_checkpoint_to_dict(row), "duplicate": False}
     append_event(
         "checkpoint_written",
-        summary.strip()[:200],
+        normalized_summary[:200],
         workspace_id=workspace_id,
         session_id=session_id,
         metadata={
