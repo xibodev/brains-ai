@@ -39,8 +39,13 @@ from brains.control.help import (
 from brains.control.help import (
     answer_request,
     ask_peer,
+    cancel_help_request,
+    file_help_request,
+    get_help_request,
     list_open_help_requests,
+    release_help_request,
     wait_for_request,
+    wait_help_request,
 )
 from brains.control.knowledge import (
     add_knowledge_entry,
@@ -1187,6 +1192,61 @@ def ask_peer_tool(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
+    )
+
+
+def file_help_request_tool(
+    subject: str,
+    question: str,
+    from_session_id: str | None = None,
+    to_workspace: str | None = None,
+    to_session_id: str | None = None,
+    context: str = "",
+    timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+    required_tool: str | None = None,
+):
+    """File peer help and return immediately with its durable code."""
+    return file_help_request(
+        subject,
+        question,
+        from_session_id=from_session_id,
+        to_workspace=to_workspace,
+        to_session_id=to_session_id,
+        context=context,
+        timeout_ms=timeout_ms,
+        required_tool=required_tool,
+    )
+
+
+def get_help_request_tool(code: str, session_id: str | None = None):
+    """Read one visible peer-help request without blocking."""
+    return get_help_request(code, session_id=session_id)
+
+
+def wait_help_request_tool(
+    code: str,
+    session_id: str | None = None,
+    timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+):
+    """Wait briefly for one request; timeout leaves the durable request open."""
+    return wait_help_request(code, session_id=session_id, timeout_ms=timeout_ms)
+
+
+def cancel_help_request_tool(code: str, session_id: str):
+    """Cancel a request as the live Session that filed it."""
+    return cancel_help_request(code, session_id=session_id)
+
+
+def release_help_request_tool(
+    code: str,
+    session_id: str,
+    retry_timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+):
+    """Release claimed help back to the open queue as its claimant."""
+    return release_help_request(
+        code,
+        session_id=session_id,
+        retry_timeout_ms=retry_timeout_ms,
     )
 
 
