@@ -39,6 +39,8 @@ from brains.storage.models import (
     ApprovalRequest,
     ApprovalRouting,
     AuditLogEntry,
+    Event,
+    EventContext,
     FeedbackEnrichment,
     FeedbackPromotion,
     FeedbackReport,
@@ -124,6 +126,13 @@ FAMILIES: tuple[QueueFamily, ...] = (
         scope="Workspace-scoped canonical report with linked enrichments",
         lifecycle="open -> triaged -> planned|resolved|rejected",
         expiry_policy="indefinite while unresolved; no automatic roadmap or release decision",
+    ),
+    QueueFamily(
+        name="event_contexts",
+        owner="the event producer and bootstrap operator for unresolved scope",
+        scope="one typed category and scope-provenance row per durable event",
+        lifecycle="persisted with event; unresolved scope remains visible for repair",
+        expiry_policy="follows the owning event; no independent expiry",
     ),
     QueueFamily(
         name="workspace_claims",
@@ -327,6 +336,11 @@ def summarize() -> dict[str, Any]:
             .filter(FeedbackReport.status.in_(("open", "triaged")))
             .count()
         )
+        events_total = session.query(Event).count()
+        event_contexts_total = session.query(EventContext).count()
+        event_contexts_unresolved = (
+            session.query(EventContext).filter(EventContext.scope == "unresolved").count()
+        )
         claims_total = session.query(WorkspaceClaim).count()
         session_leases_total = session.query(SessionLease).count()
         session_leases_open = (
@@ -378,6 +392,12 @@ def summarize() -> dict[str, Any]:
             "open": feedback_open,
             "stale_or_expired": 0,
             **_family_metadata("feedback"),
+        },
+        "event_contexts": {
+            "total": events_total,
+            "open": max(0, events_total - event_contexts_total),
+            "stale_or_expired": event_contexts_unresolved,
+            **_family_metadata("event_contexts"),
         },
         "workspace_claims": {
             "total": claims_total,
@@ -571,6 +591,16 @@ def diagnose() -> dict[str, Any]:
             ),
         )
         issues.extend(issue for issue in feedback_checks if issue is not None)
+        event_context_issue = _orphan_check(
+            session,
+            "event_contexts",
+            EventContext,
+            EventContext.event_id,
+            session.query(Event.id),
+            referenced="event",
+        )
+        if event_context_issue is not None:
+            issues.append(event_context_issue)
 
         workspace_ref_checks: tuple[tuple[str, Any, Any], ...] = (
             ("approvals", ApprovalRequest, ApprovalRequest.workspace_id),

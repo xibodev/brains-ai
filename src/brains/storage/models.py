@@ -284,6 +284,17 @@ class Event(Base):
     )
 
 
+class EventContext(Base):
+    """Typed taxonomy and scope provenance for one durable event."""
+
+    __tablename__ = "event_contexts"
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    scope: Mapped[str] = mapped_column(String(16), index=True)
+    scope_source: Mapped[str] = mapped_column(String(64), index=True)
+    taxonomy_version: Mapped[int] = mapped_column(Integer, default=1)
+
+
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

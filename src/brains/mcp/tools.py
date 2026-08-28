@@ -28,7 +28,7 @@ from brains.control.decisions import (
     resolve_decision,
     route_decision,
 )
-from brains.control.events import append_event
+from brains.control.events import append_event, event_scope_report, get_event_context
 from brains.control.feedback import enrich_feedback, file_feedback, get_feedback, list_feedback
 from brains.control.handoffs import (
     clear_handoff,
@@ -568,9 +568,31 @@ def session_commands_tool(session_id: str, limit: int = 100):
     return commands_ctl.list_for_session(session_id, limit=limit)
 
 
-def append_event_tool(kind: str, message: str, session_id: str | None = None):
-    row = append_event(kind, message, session_id=session_id)
-    return {"id": row.id, "kind": row.kind}
+def append_event_tool(
+    kind: str,
+    message: str,
+    session_id: str | None = None,
+    workspace_id: int | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    row = append_event(
+        kind,
+        message,
+        session_id=session_id,
+        workspace_id=workspace_id,
+        metadata=metadata,
+    )
+    return {"id": row.id, "kind": row.kind, "workspace_id": row.workspace_id}
+
+
+def event_context_tool(event_id: int):
+    """Return taxonomy category, scope, and scope provenance for one event."""
+    return get_event_context(event_id)
+
+
+def event_scope_report_tool():
+    """Bounded counts and unresolved samples for the durable event ledger."""
+    return event_scope_report()
 
 
 def file_decision_request_tool(
