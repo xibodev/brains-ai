@@ -631,13 +631,15 @@ policy (or explicit indefinite policy), and reports its health:
 
 | Family | Owner | Expiry policy |
 |---|---|---|
-| `approvals` | the human resolver separated from the requester | indefinite while open by design - no automatic expiry |
+| `approvals` | the assigned human resolver, or the visible human queue when unassigned | indefinite while open; optional `due_at` makes overdue work visible but never auto-resolves it |
 | `handoffs` | the Session that set it | `BRAINS_HANDOFF_STALE_HOURS` (default 24h), swept opportunistically by `mark_stale_handoffs` |
 | `mailbox` | the addressed Session or Workspace broadcast | indefinite - a message is marked read, never expired or deleted |
 | `help_requests` | the peer Session/Workspace it targets | per-request `expires_at` (its `timeout_ms`), swept by `_expire_due` |
 | `workspace_claims` | the Session holding the claim | `expires_at` (its `duration_minutes`); expired rows are deleted (released), not merely marked |
 | `session_commands` | the Runtime/local consumer bound to the Session | `BRAINS_SESSION_COMMAND_LEASE_SECONDS` per attempt, requeued or failed by `expire_leases` |
 | `checkpoints` (`snapshots`) | the Workspace it snapshots | indefinite by design - kept until the owning Workspace is pruned |
+
+Approval routing is organizational metadata, not authorization. `brains-ai decision-route` and `decision-escalate` (plus matching MCP and `POST /v1/approvals/{code}/route|escalate`) require a browser/local human with Workspace write access. An assignee must be `admin` or an explicit member of the approval's Org. Routing records priority, optional due time, and a monotonic reasoned escalation level in `approval_routing`; it never resolves, rejects, defers, expires, consumes, or approves an action.
 
 `GET /v1/admin/queue-health` (bootstrap-admin only) / `brains-ai queue-health
 status` returns the family summary above (with live total/open/stale-or-

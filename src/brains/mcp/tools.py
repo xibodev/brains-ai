@@ -22,9 +22,11 @@ from brains.control.claims import (
     release_workspace,
 )
 from brains.control.decisions import (
+    escalate_decision,
     file_decision_request,
     list_open_decisions,
     resolve_decision,
+    route_decision,
 )
 from brains.control.events import append_event
 from brains.control.handoffs import (
@@ -614,6 +616,52 @@ def resolve_decision_tool(
 
 def list_open_decisions_tool(workspace_path: str | None = None):
     return list_open_decisions(workspace_path)
+
+
+def route_decision_tool(
+    code: str,
+    assigned_operator: str | None = None,
+    clear_assignment: bool = False,
+    priority: str | None = None,
+    due_at: str | None = None,
+    clear_due: bool = False,
+    escalation_level: int | None = None,
+    escalation_reason: str = "",
+    operator: str | None = None,
+):
+    """Assign or escalate an open approval from a human-bound local principal."""
+    from brains.authz.resolver import resolve_local_principal
+
+    return route_decision(
+        code,
+        assigned_operator=assigned_operator,
+        clear_assignment=clear_assignment,
+        priority=priority,
+        due_at=due_at,
+        clear_due=clear_due,
+        escalation_level=escalation_level,
+        escalation_reason=escalation_reason,
+        principal=resolve_local_principal(operator=operator),
+    )
+
+
+def escalate_decision_tool(
+    code: str,
+    reason: str,
+    assigned_operator: str | None = None,
+    due_at: str | None = None,
+    operator: str | None = None,
+):
+    """Increment an open approval's escalation level as a local human."""
+    from brains.authz.resolver import resolve_local_principal
+
+    return escalate_decision(
+        code,
+        reason=reason,
+        assigned_operator=assigned_operator,
+        due_at=due_at,
+        principal=resolve_local_principal(operator=operator),
+    )
 
 
 def set_handoff_tool(

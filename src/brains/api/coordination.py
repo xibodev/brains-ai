@@ -30,6 +30,7 @@ activity.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -61,6 +62,22 @@ class ResolveBody(BaseModel):
     reasoning: str | None = None
     status: str | None = None
     session_id: str | None = None
+
+
+class ApprovalRouteBody(BaseModel):
+    assigned_operator: str | None = None
+    clear_assignment: bool = False
+    priority: str | None = None
+    due_at: datetime | None = None
+    clear_due: bool = False
+    escalation_level: int | None = Field(default=None, ge=0)
+    escalation_reason: str = ""
+
+
+class ApprovalEscalateBody(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    assigned_operator: str | None = None
+    due_at: datetime | None = None
 
 
 class AnswerBody(BaseModel):
@@ -873,6 +890,58 @@ def resolve_approval(
     result = _resolve_approval(principal, code, chosen, reasoning, status, body.session_id)
     publish_inbox(None, "approval.resolved", result)
     return result
+
+
+@router.post("/approvals/{code}/route")
+def route_approval(
+    code: str,
+    body: ApprovalRouteBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Assign, prioritize, deadline, or escalate one open approval."""
+    _authorized_approval(principal, code, CAP_ORG_WRITE)
+    try:
+        return decisions_ctl.route_decision(
+            code,
+            assigned_operator=body.assigned_operator,
+            clear_assignment=body.clear_assignment,
+            priority=body.priority,
+            due_at=body.due_at,
+            clear_due=body.clear_due,
+            escalation_level=body.escalation_level,
+            escalation_reason=body.escalation_reason,
+            principal=principal,
+        )
+    except decisions_ctl.ApprovalAuthorizationError as exc:
+        raise policy.forbidden(str(exc)) from exc
+    except ValueError as exc:
+        if "not open" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _bad_request(exc) from exc
+
+
+@router.post("/approvals/{code}/escalate")
+def escalate_approval(
+    code: str,
+    body: ApprovalEscalateBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Increment an open approval's escalation level with human attribution."""
+    _authorized_approval(principal, code, CAP_ORG_WRITE)
+    try:
+        return decisions_ctl.escalate_decision(
+            code,
+            reason=body.reason,
+            assigned_operator=body.assigned_operator,
+            due_at=body.due_at,
+            principal=principal,
+        )
+    except decisions_ctl.ApprovalAuthorizationError as exc:
+        raise policy.forbidden(str(exc)) from exc
+    except ValueError as exc:
+        if "not open" in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise _bad_request(exc) from exc
 
 
 # --------------------------------------------------------------------------- #

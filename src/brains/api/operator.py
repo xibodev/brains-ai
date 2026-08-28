@@ -7,7 +7,6 @@ it never launches ``brains-ai`` or exposes a generic shell/MCP-call endpoint.
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
@@ -22,7 +21,6 @@ from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentTask,
-    ApprovalRequest,
     MailboxMessage,
     Workspace,
 )
@@ -206,41 +204,12 @@ def _events(
 
 
 def _open_decisions(principal: Principal, *, workspace_id: int | None = None) -> list[dict]:
-    visible = _visible_workspace_ids(principal)
-    init_db()
-    with SessionLocal() as session:
-        query = (
-            session.query(ApprovalRequest, Workspace)
-            .join(Workspace, Workspace.id == ApprovalRequest.workspace_id)
-            .filter(ApprovalRequest.status == "open")
-        )
-        if workspace_id is not None:
-            query = query.filter(ApprovalRequest.workspace_id == workspace_id)
-        if visible is not None:
-            query = query.filter(ApprovalRequest.workspace_id.in_(visible))
-        rows = query.order_by(ApprovalRequest.created_at.desc()).limit(100).all()
-        out: list[dict] = []
-        for request, workspace in rows:
-            try:
-                metadata = json.loads(request.metadata_json or "{}")
-            except (json.JSONDecodeError, TypeError):
-                metadata = {}
-            out.append(
-                {
-                    "code": request.code,
-                    "workspace": workspace.slug,
-                    "workspace_id": workspace.id,
-                    "session_id": request.session_id,
-                    "title": request.title,
-                    "body": request.body,
-                    "proposed_answer": request.proposed_answer,
-                    "status": request.status,
-                    "kind": metadata.get("kind"),
-                    "metadata": metadata,
-                    "created_at": request.created_at.isoformat(),
-                }
-            )
-        return out
+    from brains.control.decisions import list_open_decisions
+
+    rows = list_open_decisions(limit=100)
+    if workspace_id is not None:
+        rows = [row for row in rows if row.get("workspace_id") == workspace_id]
+    return rows
 
 
 def _live_agents(principal: Principal, *, workspace_id: int | None = None) -> list[dict]:

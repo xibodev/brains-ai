@@ -2379,6 +2379,60 @@ def decision_list_cli(workspace: str = ".", limit: int = 50):
     _print_json(list_open_decisions(workspace, limit=limit))
 
 
+@app.command("decision-route")
+def decision_route_cli(
+    code: str = typer.Option(...),
+    assigned_operator: str | None = typer.Option(None, "--assigned-operator"),
+    clear_assignment: bool = typer.Option(False, "--clear-assignment"),
+    priority: str | None = typer.Option(None, "--priority"),
+    due_at: str | None = typer.Option(None, "--due-at"),
+    clear_due: bool = typer.Option(False, "--clear-due"),
+    escalation_level: int | None = typer.Option(None, "--escalation-level"),
+    escalation_reason: str = typer.Option("", "--escalation-reason"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Assign, prioritize, deadline, or escalate an open approval."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.decisions import route_decision
+
+    _print_json(
+        route_decision(
+            code,
+            assigned_operator=assigned_operator,
+            clear_assignment=clear_assignment,
+            priority=priority,
+            due_at=due_at,
+            clear_due=clear_due,
+            escalation_level=escalation_level,
+            escalation_reason=escalation_reason,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
+@app.command("decision-escalate")
+def decision_escalate_cli(
+    code: str = typer.Option(...),
+    reason: str = typer.Option(..., "--reason"),
+    assigned_operator: str | None = typer.Option(None, "--assigned-operator"),
+    due_at: str | None = typer.Option(None, "--due-at"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Increment an open approval's escalation level with a reason."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.decisions import escalate_decision
+
+    _print_json(
+        escalate_decision(
+            code,
+            reason=reason,
+            assigned_operator=assigned_operator,
+            due_at=due_at,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
 @app.command("decision-resolve")
 def decision_resolve_cli(
     code: str = typer.Option(...),

@@ -85,6 +85,7 @@ TERMINAL_SESSION_STATES = ("completed", "failed")
 # references are nulled when the schema allows it, and reported for the
 # operator when it does not.
 LEASE_TABLES = (
+    "approval_routing",
     "session_leases",
     "topic_announcements",
     "topic_subscriptions",
