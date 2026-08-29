@@ -255,8 +255,11 @@ interaction outside Brains and record only what can be truthfully observed.
 The only active experiments are:
 
 - agent feedback inbox (BL-P1-15);
-- adoption and outcome analytics (BL-P1-16);
-- ephemeral peer review (BL-P1-20).
+- adoption and outcome analytics (BL-P1-16).
+
+Ephemeral peer review (BL-P1-20) is implemented but not admitted: normal help currently
+defaults to auto-launch and remote execution still overlaps withdrawn Runtime surfaces.
+Do not field-observe it as an active experiment until both boundaries are corrected.
 
 Operate them only under the audience, privacy, observation, and stop rules in
 `docs/product/EXPERIMENTAL_BACKLOG.md`.

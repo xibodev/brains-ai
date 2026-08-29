@@ -77,11 +77,18 @@ analysis requires private content.
 exact-window, censoring, and privacy tests; E4 multi-harness reconciliation without
 reading harness-private transcripts.
 
-## Ephemeral Peer Review
+## Ephemeral Peer Review Admission Blocker
 
 **Owner:** BL-P1-20.
 
 **Feature mapping:** F3, B2, B4, B8; J7, J8, J11.
+**Lifecycle:** Implemented candidate, not an active experiment. MCP and CLI currently
+default exact-tool Workspace help to `execution_mode=auto`, so ordinary peer-help calls
+can launch it without independent opt-in. It cannot be field-observed as an admitted
+experiment until the normal default is `existing`, explicit `auto`/`ephemeral`
+activation is independently gated and disableable, and the worker transport no longer
+depends on withdrawn Runtime activation.
+
 **Hypothesis:** A fresh exact-tool reviewer operating on a disposable tracked snapshot
 can return useful evidence when no eligible live peer responds, without modifying the
 registered source.
@@ -103,9 +110,12 @@ review finding automatically.
 or credential leakage; tune routing and limits from evidence; withdraw automatic launch
 if isolation or answer quality cannot be trusted.
 
-**Evidence required:** Controlled real-provider and remote-Runtime E4 across supported
-harnesses, including unavailable CLI, timeout, mutation attempt, changed source,
-malformed answer, retry, and cleanup.
+**Evidence required:** First prove default existing-peer behavior and a bounded explicit
+experiment gate. Then run controlled real-provider E4 across supported local harness
+transports, including unavailable CLI, timeout, mutation attempt, changed source,
+malformed answer, retry, and cleanup. A separately admitted remote worker transport may
+be tested only after its boundary is distinct from withdrawn Runtime enrollment and
+execution.
 
 ## Admission Template
 

@@ -124,16 +124,24 @@ supported harness supplies its actual native Session ID and idempotently opens o
 its mailbox once; values
 such as `current`, model names, task labels, or guessed IDs are rejected. Existing
 invalid/ambiguous links are diagnosed and quarantined rather than fabricated into valid
-addresses. A native ID is an address component, not an authentication principal.
+addresses. A native ID is an address component, not an authentication principal. First
+registration persists the authenticated address owner and a non-exported reattachment
+binding established by the harness adapter. Every later find/attach must prove that
+binding as well as current Workspace authorization; knowing a detached mailbox address
+or native ID is never sufficient to attach an incarnation or read mail. Rotation,
+revocation, loss, and conflicting ownership fail closed and remain recoverable by an
+explicit local-human administrative flow.
 
 **Delivery and authorization:** A message commits directly to a registered durable
 mailbox, whether its agent is online or offline; current-Session resolution is used only
 for wakeup and read attribution. Unknown, retired, conflicting, or unauthorized
 addresses are rejected without enumeration. Cross-Workspace send, forward, phonebook,
-and mailbox inspection re-check the sender and reader against the message's originating
-Workspace. Broadcast is an explicit operation and never the accidental meaning of a
-null recipient. Local acceptance, agent notification, reading, and SMTP copy are
-separate states so a send/end race cannot fabricate delivery.
+and mailbox inspection authorize the sender/reader against the originating Workspace
+and every recipient or represented mailbox Workspace. A sender authorized only in
+Workspace A cannot address or discover a mailbox in Workspace B. Broadcast is an
+explicit operation and never the accidental meaning of a null recipient. Local
+acceptance, agent notification, reading, and SMTP copy are separate states so a
+send/end race cannot fabricate delivery.
 
 **Threads and browser:** Messages retain a durable sender mailbox, point-in-time sender
 Session, durable recipients, originating Workspace, `thread_id`, `in_reply_to`, and
@@ -145,14 +153,20 @@ attachments, HTML mail, drafts, spam, folders, rules, or a bespoke top-level mai
 **Operator and SMTP copy:** Every authenticated operator has a separate durable Brains
 mailbox at `operator:slug@brains`. Agents can address it within authorized scope.
 Ordinary members may discover addresses in Workspaces they can read but may open only
-their own mailbox; the install administrator or an Org owner/admin with visibility of
-the originating Workspace may inspect an agent mailbox. Optional SMTP is a one-way,
+their own agent-visible addresses. Operator-mailbox reads, configuration, and SMTP
+consent require a browser or local human-bound principal; a raw operator API key or
+agent channel is send-only to an operator address and cannot read that human inbox. The
+install administrator or an Org owner/admin using a human-bound channel and holding
+visibility of every represented Workspace may inspect an agent mailbox. Optional SMTP is a one-way,
 post-commit copy from the operator's local Brains inbox to the configured real email:
 local mail remains authoritative, SMTP uses a durable retryable outbox, copy failure
 does not change local delivery, and the external message directs the operator to reply
 inside Brains. SMTP notification-only content is the default; copying the full body is
-an explicit operator opt-in. There is no inbound email polling, webhook, reply parsing,
-or external-to-agent delivery.
+an explicit operator opt-in. The verified SMTP destination and body-copy consent bind
+to that specific operator mailbox; the existing install-wide notification address is
+not reused as another operator's destination. Until per-operator binding exists, SMTP
+copy is limited to the bootstrap administrator's mailbox. There is no inbound email
+polling, webhook, reply parsing, or external-to-agent delivery.
 
 **Other communications:** Default guidance uses asynchronous help: file returns
 immediately, waits leave requests open, fresh eligible peers claim/release/answer with

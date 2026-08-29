@@ -145,9 +145,9 @@ that containment work is active backlog item BL-P0-09.
 - **Maps to:** F3, B2, B8; J7, J8, J11.
 - **Requirement:** [Adoption and outcome analytics](EXPERIMENTAL_BACKLOG.md#adoption-and-outcome-analytics).
 
-### BL-P1-20 - Ephemeral peer-review field trial
+### BL-P1-20 - Ephemeral peer-review admission blocker
 - **Maps to:** F3, B2, B4, B8; J7, J8, J11.
-- **Requirement:** [Ephemeral peer review](EXPERIMENTAL_BACKLOG.md#ephemeral-peer-review).
+- **Requirement:** [Ephemeral peer review](EXPERIMENTAL_BACKLOG.md#ephemeral-peer-review-admission-blocker).
 
 ## Withdrawn Historical IDs
 

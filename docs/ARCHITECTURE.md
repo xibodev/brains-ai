@@ -226,12 +226,15 @@ gate cannot contain an external harness that bypasses it. Both limits remain exp
 
 ## Active experiments
 
-Only the experiments in `docs/product/EXPERIMENTAL_BACKLOG.md` are intentionally under
-field observation:
+Only these experiments in `docs/product/EXPERIMENTAL_BACKLOG.md` are intentionally
+under field observation:
 
 - agent feedback inbox;
-- adoption and outcome analytics;
-- ephemeral peer review.
+- adoption and outcome analytics.
+
+Ephemeral peer review is an implemented admission candidate, not an active experiment,
+until normal peer help defaults to existing peers and its worker transport is separated
+from withdrawn Runtime execution.
 
 Each trial has a hypothesis, bounded activation, privacy restrictions, a feedback path,
 disable/rollback behavior, and a continue/revise/withdraw rule. None may silently widen

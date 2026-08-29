@@ -172,6 +172,22 @@ def test_checker_rejects_required_contract_failures(tmp_path: Path) -> None:
     assert "missing end-to-end outcome O7" in _run(case).stdout
 
 
+def test_checker_requires_feature_backlogs_and_their_freshness(tmp_path: Path) -> None:
+    case = tmp_path / "feature-backlogs"
+    _valid_tree(case)
+    active = case / "docs/product/ACTIVE_BACKLOG.md"
+    active.unlink()
+    assert "missing canonical document: docs/product/ACTIVE_BACKLOG.md" in _run(case).stdout
+
+    _valid_tree(case)
+    experimental = case / "docs/product/EXPERIMENTAL_BACKLOG.md"
+    experimental.write_text("# missing freshness\n", encoding="utf-8")
+    assert (
+        "docs/product/EXPERIMENTAL_BACKLOG.md: missing HTML freshness header"
+        in _run(case).stdout
+    )
+
+
 def test_checker_accepts_normalized_and_reference_style_readme_links(tmp_path: Path) -> None:
     case = tmp_path / "links"
     _valid_tree(case)

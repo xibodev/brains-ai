@@ -102,9 +102,10 @@ inventory, not an authentication identity or user path.
 **Promise:** Workspace-scoped coordination Sessions preserve lifecycle, events, asks,
 decisions, ownership, and resume context. Unsupported execution steering is refused.
 
-**Lifecycle:** advertised/partial. BL-P1-15, BL-P1-16, and BL-P1-20 add bounded active
-experiments. Running-agent delivery, Runtime stop, and execution supervision are
-withdrawn.
+**Lifecycle:** advertised/partial. BL-P1-15 and BL-P1-16 add bounded active
+experiments. BL-P1-20 is an implemented candidate blocked from experimental admission
+until activation and worker transport are independently bounded. Running-agent
+delivery, Runtime stop, and execution supervision are withdrawn.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
