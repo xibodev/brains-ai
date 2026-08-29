@@ -1,14 +1,14 @@
 <!--
-last_verified: 2026-08-06T19:13:03.000-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: clean-state corrective candidate based on HEAD 96c2b66fe8adddd9ea29f59f2944e8e702453f27; source inspection and regression coverage for first-run SQLite state creation; public package/GHCR/GitHub publication pipeline verified; corrective publication and live deployment not verified
+last_verified: 2026-08-29T11:25:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static inspection of the normal console, CLI/MCP wiring, and approved capability lifecycle; withdrawal implementation not verified; deployment not verified
 -->
 
 # Brains
 
-Brains is a local-first operator control plane for coordinating AI coding agents across machines, tools, work, and human approvals.
+Brains is a local-first operator control plane for coordinating AI coding agents through shared Workspaces, durable work, and human approvals.
 
-Current maturity: Brains is an alpha release. Core local workflows are covered by blocking CI and sealed local UAT. Live deployment and external provider or bridge behavior depend on operator configuration and are not certified by repository evidence.
+Current maturity: Brains is an alpha release. The normal product is the Workspace-first coordination, governance, operations, access/configuration, GitHub-linkage, and local-lookup surface. Withdrawn implementations are not product claims even where containment removal from current source remains open. Live deployment and external provider behavior are not certified by repository evidence.
 
 Brains is the canonical product and repository identity. It is distributed as `brains-ai`, uses the `brains` Python namespace, `brains_` MCP prefix, `~/.brains` state directory, `brains-spa` frontend package, and Brains browser identity.
 
@@ -44,7 +44,9 @@ To start Brains automatically at login, use `brains-ai setup --path . --service`
 - [Architecture](docs/ARCHITECTURE.md)
 - [Operations](docs/OPERATIONS.md)
 - [Quality gates](docs/QUALITY_GATES.md)
-- [Current backlog](docs/product/BACKLOG.md)
+- [Backlog registry](docs/product/BACKLOG.md)
+- [Active feature backlog](docs/product/ACTIVE_BACKLOG.md)
+- [Experimental feature backlog](docs/product/EXPERIMENTAL_BACKLOG.md)
 
 ## Repository guidance
 

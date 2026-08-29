@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-04T08:00:00.000-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: candidate tree based on HEAD c21a15db3859e6b9f147260a38a7a0d6fe2533b2 plus the local blocking-quality-gates change; local Windows execution of scripts/check_docs.py, scripts/check_traceability.py, ruff check/format, mypy, the full SQLite pytest suite and the acceptance subset, npm ci, the SPA typecheck, the committed-bundle comparison, uv build, scripts/check_distribution.py, the runtime image build with its container health smoke, and the Playwright journey suite against an isolated local hub; a GitHub-hosted workflow run, live Postgres, and deployment not verified
+last_verified: 2026-08-29T11:26:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static reconciliation of staging-first delivery, advertised feature gates, active field trials, and withdrawn capability containment; current command execution not verified; deployment not verified
 -->
 
 # Brains Quality Gates
@@ -43,6 +43,8 @@ Current canonical feature status uses only E1 and E2 unless a newer evidence rec
 - Name the product outcome being changed.
 - Identify affected `F*` or `B*` feature IDs.
 - Identify affected `AC-*`, Persona, and `J*` journey IDs.
+- State whether each affected capability is advertised, an active experiment,
+  target-only, or withdrawn.
 - Identify security, data, operations, and recovery implications.
 - Update [TRACEABILITY.md](product/TRACEABILITY.md) when a route, component, API, model, migration, CLI, MCP tool family, or test family changes.
 
@@ -51,6 +53,8 @@ Current canonical feature status uses only E1 and E2 unless a newer evidence rec
 - Keep Brains product, package, namespace, CLI, MCP, state, and browser language consistent.
 - Do not bypass `require_api_key` or `require_console_auth` on protected `/v1/*` routes.
 - Do not add an execution, recurring, pattern, or tool-spawn path that evades required human control.
+- Do not add discovery, configuration, installation, or activation for a withdrawn
+  capability; persisted-data compatibility is not an activation contract.
 - Preserve SQLite as the default source of truth; generated Markdown views are optional projections.
 - Add migrations and rollback or compatibility behavior for persistent schema changes.
 - Keep failure behavior explicit and fail closed where the acceptance contract requires authorization or approval.
@@ -91,7 +95,10 @@ Current workflow facts at HEAD:
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
 - Failing jobs upload their diagnostics: pytest and migration JUnit XML plus coverage, the rebuilt SPA bundle, container logs, and the Playwright report and hub log.
-- A blocking gate is not an evidence claim. J1-J11 all have Playwright contracts, but simulated Runtime/provider paths remain distinct from real external execution and stay recorded as gaps in [TRACEABILITY.md](product/TRACEABILITY.md) and [BACKLOG.md](product/BACKLOG.md).
+- A blocking gate is not an evidence claim. J1-J11 retain Playwright files, but tests
+  that activate withdrawn Runtime, provider, execution-model, or automation paths are
+  source-compatibility evidence rather than product acceptance. BL-P0-09 must replace
+  those expectations with containment while preserving stable journey IDs.
 
 ### Local gate command
 
@@ -112,7 +119,9 @@ Candidate evidence must state the exact SHA, which gates ran, and on what platfo
 UAT must:
 
 - use an isolated HOME, state directory, database, ports, and credentials;
-- use simulated tool execution for browser journeys unless real Runtime behavior is explicitly under test;
+- keep coding-harness execution outside the UI harness unless a supported governed
+  boundary is explicitly under test; never require a withdrawn Runtime path for
+  advertised-product acceptance;
 - run against a disposable or read-only source tree and fail if the candidate worktree changes;
 - stop and verify the complete process tree created by the harness;
 - identify the exact SHA and built artifact;
@@ -128,7 +137,10 @@ No UAT result is implied by the presence of `sandbox/`, `sandbox/battle/`, or Pl
 Acceptance requires:
 
 - every in-scope AC has E3 or E4 evidence;
-- P0 backlog items affecting the candidate are closed or explicitly block acceptance;
+- P0 backlog items affecting the candidate are closed or explicitly block promotion;
+- withdrawn surfaces have no discovery or activation path in the supported candidate;
+- active experiments satisfy their bounded activation, privacy, disable, rollback, and
+  stop rules without widening normal-product readiness;
 - no unmatched frontend route remains;
 - no cross-Org authorization or realtime subscription escape is open;
 - backup and rollback have been rehearsed for the exact candidate;
@@ -163,7 +175,15 @@ A change is done only when:
 
 ## Branch policy
 
-`main` is the sole integration and truth branch for the product. Work may use short-lived branches, but documentation and acceptance decisions describe the candidate by exact SHA and must converge on `main`.
+`staging` is the integration branch. Every delivery slice starts from current `staging`
+on one short-lived feature branch, carries its code/tests/docs/traceability contract,
+passes the slice's required gates, and merges back to `staging` for integrated
+validation.
+
+`main` receives only promotion of an exact integrated staging candidate. Promotion must
+identify the exact staging SHA/artifact and preserve that candidate without assembling
+new feature work in the promotion change. Documentation and acceptance decisions always
+name the exact candidate; neither branch name is evidence by itself.
 
 Until an explicit first release decision is recorded outside these current-state docs:
 

@@ -28,6 +28,8 @@ CANONICAL_DOCS = (
     "docs/OPERATIONS.md",
     "docs/QUALITY_GATES.md",
     "docs/product/BACKLOG.md",
+    "docs/product/ACTIVE_BACKLOG.md",
+    "docs/product/EXPERIMENTAL_BACKLOG.md",
 )
 
 SUPPORTING_DOCS = (

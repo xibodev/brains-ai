@@ -1,307 +1,183 @@
 <!--
-last_verified: 2026-08-05T12:22:18.971-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: working-tree candidate based on HEAD 865794899901b7893759bb5b582f089b856a268f; static inspection and targeted tests for operational readiness, coordination queue health/continuity repair, recovery-policy declaration, and Runtime/service PID identity and periodic staleness sweep (BL-P1-09, BL-P1-12, BL-P1-13); full candidate gate not verified; external integration operation not verified; deployment not verified; UAT not verified
+last_verified: 2026-08-29T12:28:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus static reconciliation of active/experimental ownership and the approved durable mailbox contract; implementation not changed; deployment not verified
 -->
 
-# Brains Current Backlog
+# Brains Backlog Registry
+
+## Delivery Model
+
+This registry preserves stable backlog IDs and maps them to product outcomes. Full
+schedulable requirements live in two feature-oriented documents:
+
+- [Active backlog](ACTIVE_BACKLOG.md) contains normal-install features and
+  cross-cutting foundations eligible for feature-branch delivery into `staging`.
+- [Experimental backlog](EXPERIMENTAL_BACKLOG.md) contains implemented field trials
+  whose real behavior is intentionally under observation.
+
+Known-faulty withdrawn implementations appear in neither backlog. Their lifecycle,
+containment boundary, and re-entry rule are recorded in
+[FEATURE_CONTRACT.md](FEATURE_CONTRACT.md). Withdrawal does not claim that current
+source has already removed every route, command, tool, extra, or configuration key;
+that containment work is active backlog item BL-P0-09.
 
 ## Rules
 
-- This backlog contains only gaps observable at current HEAD.
-- Priority is product risk: P0 blocks trustworthy operation, P1 blocks the core promise or hard acceptance, P2 reduces maintainability/clarity, P3 improves completeness.
-- Every item maps to stable Feature, Journey, and acceptance criterion IDs.
-- An item closes only with the stated Definition of Done and evidence.
-- No branch, tag, version, screenshot, test count, or old run report changes an item's status.
-- Status vocabulary here is `open`, `blocked`, or `done`. All items below are `open` at this verification point. An item that lists landed behavior is still `open` until its full Definition of Done and evidence are met.
-
-## Dependency order
-
-```text
-HTTP identity/RBAC
-  -> realtime authorization
-  -> Session control, F4-F10 scope, and cross-Org UAT
-
-enforceable gate
-  -> governed automation
-  -> transactional audit expectations
-
-active-state backup and repair
-  -> reproducible migrations
-  -> enforceable integrity
-  -> operable deployment
-  -> recovery
-
-hard quality gate
-  -> generated documentation checks
-  -> isolated UAT acceptance
-
-durable Session control
-  -> queue health
-  -> trustworthy automation and human-response journeys
-```
-
-## P0 - Trust and operability blockers
-
-### BL-P0-01 - Bind HTTP identity and enforce RBAC
-
-- **Maps to:** F1, F9, B2, B9; J1-J11; AC-F1-05, AC-F9-02, AC-F9-03, AC-F9-05, AC-B2-04, AC-B9-02.
-- **Current gap:** closed for the API, browser, realtime, MCP and CLI surfaces; the remaining gap is evidence, not enforcement (see *Remaining for closure*).
-- **Landed at HEAD:** authentication is a lookup in a credential store rather than membership in a broad key set. Every accepted secret is one `api_credentials` row keyed by its sha256 hash - the raw secret is never persisted, so verification is a hash lookup and a leaked store yields no usable key - and the row names the credential kind (`admin`/`operator`/`runtime`), its operator, the Org and machine a Runtime credential is bound to, and its expiry and revocation state, both honoured on every request. Resolution yields exactly one `Principal` (actor kind, operator ID, credential kind, Org memberships and roles, optional Runtime identity), published for the request through one ASGI-level slot so the endpoint, its threadpool worker and every control-layer read it makes see the same actor. The keys an install already holds (`BRAINS_API_KEY`, the `BRAINS_API_KEYS` rotation list, and `~/.brains/operator-keys/*.key`) are adopted into the store on first use, so an existing install keeps working and still resolves to a named principal; an unknown, revoked or expired secret resolves to none and is refused with `401`. Authorization is deny-by-default against one resolved Org, using only the roles the contract already names: `member` reads and writes Org content, `admin` administers the Org (rename/archive, membership, automation enable/fire, Runtime lifecycle, enrollment minting), and only an `owner` may grant, revoke, or otherwise change `owner`, whichever spelling of the member id is used, so an `admin` cannot demote its way into the Org. An Org can never be left without an owner: the demotion and the removal are each one conditional statement whose `WHERE` counts the remaining owners, so concurrent writers cannot both pass a read-then-write check, and the API answers `409` unless an explicit local bootstrap recovery is used. Answers are uniform - `401` for no/unknown/revoked/expired credential, `403` for a principal that may see the Org but lacks the capability, `404` for anything in an Org it may not read - so an unauthorized Org, Project, Issue, Persona, Pod, Runtime, Session or approval is indistinguishable from one that does not exist, and cross-Org listing is filtered rather than refused. Workspace visibility is bounded by Org membership, so a `shared` Workspace in another Org is no longer visible; a Workspace, Pod, Persona, Runtime, parent Issue or Session named in a write must belong to the same Org as its target. Enrollment redemption is one conditional `UPDATE ... WHERE redeemed_at IS NULL`, so concurrent redemptions have exactly one winner, and it mints a Runtime-narrow credential instead of an operator key: Org-bound, machine-bound, expiring, revocable on its own, and limited to `runtime.register`/`heartbeat`/`status`/`claim`/`execute` for its own machine - refused on every operator and admin API, on the MCP tool surface, and on the operator realtime socket. The console cookie is signed by the key that minted it, so it resolves to that key's principal and to no other, and a revoked key's cookie stops working immediately. Browser and console surfaces refuse a Runtime credential and a principal with no Org role at all, and the `/admin/*` configuration surfaces - provider credentials, environment overrides, router policy - are install-level rather than Org-attributed, so they are restricted to the bootstrap admin and an Org `owner` is answered `403`; the login form applies the same rule before minting a cookie. WebSocket and SSE resolve the same principal and authorize each requested topic (`org/…`, `issue/…`, `session/…`), returning the denied set rather than silently subscribing. MCP SSE resolves the key to a principal, publishes it for the request, and refuses Runtime credentials; the CLI resolves an explicit actor (`--operator`), and `brains-ai credentials list/revoke/revoke-machine/doctor` inspects and revokes what an install accepts. Approval resolution is separated from the requester and does not depend on anything the caller declares: a Runtime credential can never resolve, an ASK filed by a Session may only be resolved through a channel bindable to a human (the console cookie or a local CLI/stdio invocation) so a shared operator key over HTTP is refused, the requesting Session can never resolve its own ASK - taken from the Sessions the server knows the credential is running, with a declared `session_id` able only to add a denial - and the Persona identity behind it (through `personas.operator_id`, or another Session of the same Persona) cannot either - the decision records the resolver and commits with its audit entry in one transaction, and a refusal appends `approval.self_resolution_denied`. Each mounted ASGI app binds its own principal slot - the gateway, the legacy dashboard and the MCP SSE transport - so no surface silently falls back to the bootstrap admin, and a request that authenticates with no credential resolves to a scopeless anonymous principal instead. A row that declares no Org claims none rather than belonging to everyone (a pre-Org `runtimes` row, or the `default` bucket a Workspace created on the fly lands in); where an Org *is* declared, a Runtime call may only name an Issue, Persona, assignment or Session inside it, a Session already bound to another Runtime is refused, and a spawn authorizes every identifier it is given rather than only the first. A machine belongs to exactly one Org: registration authorizes the Org that already owns the machine rather than the one the caller names, a mismatch is answered with the same non-disclosing `404` as an unknown machine, and the row and its claim commit as one transaction whose claim is verified from inside it, so two registrations racing from different Orgs cannot split one box and a refused registration leaves no Org-less Runtime behind (on PostgreSQL the race is serialized by a transaction-scoped advisory lock keyed by the machine id). A Runtime row that still declares no Org stays classified as unclaimed: it is not read as the `default` Org, only the install administrator can list or address it, and the daemon claims no work through it. Per-ID reads apply the same Workspace visibility as the listings, so a Session or approval in a `private` Workspace is `404` on detail, events, state and resolution rather than readable by id, and every Session listing applies that filter whichever entity it hangs off - `/v1/sessions`, `/v1/issues/{issue}/sessions` and `/v1/personas/{persona}/sessions` all scope through `policy.scope_sessions`. Each credential records its provenance, and retiring one is an explicit act: rotating the admin key or deleting an operator key file names the exact hash it supersedes - read before the file is overwritten or unlinked - so the old secret is refused on the next request, while passive reconciliation only ever adopts, because a process's view of the on-disk keys can be narrower than the install's (a different `BRAINS_API_KEY`, an unmounted state directory, an unreadable key directory) and a revocation derived from it would deny credentials install-wide that it never issued; an unreadable source is reported by `brains-ai credentials doctor` rather than read as "no keys", a Runtime or manually issued credential is never touched, and a revoked credential is not reinstated by restoring its file. A bad token costs neither a directory scan nor unbounded memory, because the on-disk sources are `stat`-cached and misses are remembered as digests in a bounded, short-lived negative cache that minting and revocation invalidate explicitly. Migration `129_api_credentials` provisions the store on both backends, `131_api_credential_source` records that provenance, and `130_org_member_backfill` turns the previously implicit grant into rows (every pre-existing operator joins the `default` Org as `member`, `admin` as `owner`), deliberately excluding `daemon-*` operators minted by pre-BL-P0-01 enrollment: they keep authenticating, see nothing, and are reported by `brains-ai credentials doctor` rather than promoted.
-- **Dependencies:** none.
-- **Definition of Done:** Every protected route resolves one principal, applies explicit Org/Workspace policy, logs attribution, and returns non-enumerating 403 behavior.  Daemon credentials are Runtime-narrow.
-- **Evidence required:** E3 two-operator/two-Org allow/deny matrix across API and browser; E4 isolated adversarial UAT.
-- **Remaining for closure:** the two-operator/two-Org matrix is asserted for the native API, the realtime transports, the console cookie and the Runtime credential in `tests/test_authz_identity_scope.py`, but browser-session evidence and the E4 isolated adversarial UAT are absent. Two enforcement limits are stated rather than implied: gateway usage totals and provider configuration are install-wide and are restricted to the bootstrap admin instead of being Org-attributed (AC-F9-04); and a human and an agent sharing one browser session or one local shell are indistinguishable, which is why an ASK filed by a Session may only be resolved from those channels and why Personas are bound to their own operator identity. Realtime topics are now server-derived and persist-before-publish, with the residual per-process fan-out limit owned by BL-P0-02.
-
-### BL-P0-02 - Authorize realtime and persist-before-publish
-
-- **Maps to:** F3, F9, B8; J7, J8, J11; AC-F3-01, AC-F3-07, AC-F9-03, AC-B8-03.
-- **Current gap:** live fan-out is still per gateway process, so an event published by the MCP or dashboard process reaches another process's socket only when that client resumes by cursor.
-- **Landed at HEAD:** realtime topics are a closed, server-derived grammar (`brains.events.topics`) rather than strings a client invents. Five families carry scope - `org/{org_id|slug|default}/{channel}` over a fixed channel list, `issue/{code}`, `session/{id}/{stdout|chat|state}`, `machine/{id}/{assignments|control}`, `runtime/{id}/{assignments|status}` - and a wildcard (`*`, `#`, `?`, `%`), a traversal (`..`), an unknown family or channel, a malformed segment, an over-long topic and a non-string are all outside it. `brains.authz.policy.resolve_topic` resolves the entity the topic names against the store and returns the *canonical* topic plus the Org/Workspace it carries, so `org/acme/issues` and `org/default/issues` both become `org/{id}/issues`, two spellings subscribe once, and the ack reports the derived name and its alias. Refusals are uniform: a malformed topic, a wildcard, an unknown Issue code or Session id, another Org's entity and a Session in a `private` Workspace all return the same answer - the topic echoed in `denied` on WebSocket, a `403` naming no topic on SSE - so a subscription cannot be used to discover that something exists. Reading a topic is not permission to write to it: `chat.send` is accepted only on a Session's own `chat` stream, so an Org channel cannot be used to inject a forged frame into every subscriber's console. A Runtime credential is refused both operator transports outright, and where it is authorized at the policy layer it reaches only its own machine, Runtime, Session and assignment streams inside its own Org - Org-wide channels have no Runtime audience - while a credential minted for another Org's machine authorizes nothing even though the machine binding matches. Authorization is re-checked rather than assumed for the life of the connection: every client message re-resolves the credential, and a revalidation loop (`BRAINS_REALTIME_REVALIDATE_SECONDS`) does the same on a timer, so a revoked, expired or unbound credential is sent `realtime.revoked` and closed with `4401`, and a membership removed mid-connection drops exactly the topics it granted (`scope_revoked`). A re-authorization that cannot be *performed* fails closed on the same rule: a store read that raises is not evidence that the credential still holds, so the connection is sent `revalidation_failed`, closed, and its tasks are cancelled and awaited rather than left re-checking a socket that is gone - and because that reason is distinct from a revocation, the console reconnects into a fresh check instead of giving up. Credential resolution, topic derivation, the Org/Workspace visibility set and replay reads all run off the event loop on connection setup as much as on revalidation, so one connection's slow store read cannot stall every other socket the process serves. Behind topic authorization, each connection carries the Org/Workspace scope its principal resolved to and an envelope whose recorded scope falls outside it is dropped even though its topic matched, so a publisher that put one Org's payload on another Org's topic still cannot reach that Org's subscriber. Durability is separated from notification: `realtime_events` (migration 132, both backends) is the record, and Session, Issue, approval and Runtime events commit there *before* the in-process bus announces anything (`brains.events.store.publish_durable`), so nothing that failed to commit is ever broadcast; publishers resolve the Org from the store instead of falling back to `org_id or "default"`, which previously put one Org's Session on the default Org's topic. `dedupe_key` is unique, so a publisher that supplies one - on a retry, or from two processes reacting to one mutation, including under concurrency - writes one row, keeps one `event_id` and is delivered once, and a busy SQLite writer is retried rather than dropped; the Session lifecycle, Issue, approval and Runtime publishers have no stable operation id to derive a key from, so their delivery is at-least-once; the Session *command* publisher added by BL-P0-05 does supply one and is therefore deduped, which is a property of that publisher rather than of this one. `event_id` is assigned by the store, so it is monotonic across processes and restarts: a client resumes with the highest id it applied (`cursor` on WS `subscribe`/`resync`, `cursor` or `Last-Event-ID` on SSE) and receives a bounded replay (`BRAINS_REALTIME_REPLAY_LIMIT`). The cursor follows delivery rather than intent: the ack precedes the catch-up frames and so never reports a cursor past them, the frames advance it one applied event at a time, and a trailing `replay_complete` - written after the last frame of the batch, carried in the SSE `id:` field - confirms the rest, so a client that drops mid-replay resumes from the last event it applied and is handed the remainder instead of skipping it - and where a batch read only some of the topics a connection holds, the usual shape of an incremental `subscribe`, it hands over no cursor at all (`covers_connection: false` on the ack, `cursor: null` plus a reporting-only `batch_cursor` on the receipt), because the console keeps one cursor for the whole socket and the live frames it is still owed on the topics that batch never read are queued behind it with lower ids. A cursor that cannot be honoured is answered with an explicit `realtime.reset` - `cursor_expired` after pruning, `cursor_ahead` for a rebuilt or foreign store, `replay_truncated` for a backlog past the bound - never with a silently short stream, and retention is by row count (`BRAINS_REALTIME_RETENTION_ROWS`). That cursor rule needs the frames to arrive in cursor order, and a connection's subscription is registered before its replay snapshot is read - which is what stops a concurrent publish being missed by both paths - so live fan-out and the batch are in flight together; delivery is therefore serialised per connection, a batch is written whole, the live frames it overlapped follow its receipt, a live copy of an event the batch already carried is dropped rather than sent twice, a frame queued for a topic that has since been unsubscribed or lost with a membership is dropped, and one publish commits and announces inside a single critical section so two concurrent publishers cannot announce in the opposite order to the ids the store gave them. Replay and live delivery still overlap across batches - a `resync` re-sends what a client already holds - so the console applies each event at most once by `event_id`: `frontend/src/realtime/protocol.ts` holds the cursor, the bounded duplicate window and the requested-to-derived topic map, and the client resubscribes with its cursor on reconnect, routes frames arriving under the derived name back to the handler that asked for the original, forwards a reset to the affected subscribers as "resynchronise from REST", and stops reconnecting on a revocation instead of retrying a credential the server just refused.
-- **Dependencies:** BL-P0-01.
-- **Definition of Done:** WS/SSE topics are derived or authorized from the principal and entity scope; durable state is committed before publish; reconnect backfill is scoped; cross-process behavior is explicit.
-- **Evidence required:** E3 cross-Org subscription denial, reconnect/backfill tests, and multi-process publisher test; E4 disconnect/reconnect journey.
-- **Remaining for closure:** cross-process *live* fan-out. The durable log is shared and a reconnecting or resyncing client sees events from any process, and that limit is now stated in `docs/ARCHITECTURE.md` rather than implied, but a socket attached to the gateway is still not pushed an event published in the MCP or dashboard process, so the multi-process publisher test asserts catch-up rather than push. Transcript chunks (`session/{id}/stdout`), the `chat.send` echo and `runtime.heartbeat` remain notification-only: transcript chunks are backfilled from the `events` rows over REST, the `chat.send` echo is a live mirror rather than a record, and the durable operator message it shadows is the `session_commands` row BL-P0-05 added, which the console backfills over REST, and the heartbeat is a liveness tick whose durable counterpart is the `runtime.status` transition. The Session lifecycle, Issue, approval and Runtime publishers supply no `dedupe_key`, so their delivery is at-least-once (the Session command publisher does, and is deduped); the store-level idempotency the unique key provides is asserted, the publisher-level key is not implemented. Retention and gap detection are install-wide rather than per topic, so a busy install can hand a long-disconnected console a reset for a quiet topic. The E4 disconnect/reconnect browser journey is absent: the console's cursor, alias routing, reset handling and survivable-scope-revocation behaviour are asserted as unit behaviour (`frontend/src/realtime/protocol.test.ts`, run from `tests/test_frontend_realtime.py`), not through a browser.
-
-### BL-P0-03 - Replace the cooperative action gate with an enforceable boundary
-
-- **Maps to:** F3, F10, B4; J8, J10, J11; AC-F3-04, AC-F10-04, AC-B4-01, AC-B4-02.
-- **Current gap:** Enforcement is in-process and cooperative. A third-party agent CLI that invokes an absolute path itself, rewrites `PATH` to drop the shim directory, opens a raw socket, or uses an in-process HTTP client is never seen by the gate, and outbound bridge/provider network calls are not routed through it.
-- **Landed at HEAD:** every process Brains itself launches on the *agent-execution* path goes through one in-process boundary (`brains.exec.guard` -> `brains.govern`), including recurring/autopilot spawn, so those paths reach an operating-system exec only with a committed decision and record. Classification normalises absolute paths, Windows paths and executable suffixes, wrapper commands (`env`/`sudo`/`timeout`/`xargs`/...) including flags that take values, shell and interpreter inline code, `-m` module runs, and remote-code runners; a wrapper whose payload cannot be identified is gated rather than guessed; shapes that cannot be classified (`shell=True`, a string command line) are denied; shim resolution can no longer recurse into itself; a `PATH` rewrite that drops the shim directory is recorded as `gate.path_mutation`; and Windows hosts get `.cmd` shims, without which the shim installed nothing there. Fetch-and-execute shapes are classified consistently however they are spelled: `pip install`, the remote runners (`npx`/`uvx`/`pipx`), and `uv`'s multiplexed equivalents (`uv pip install`, `uv tool install`, `uv tool run`, `uv run`, `uv add`/`remove`/`sync`/`build`, `uv python install`, `uv self update`) are gated, while read-only `uv` commands (`uv pip list`, `uv tool list`, `uv python list`, `uv tree`) stay local.
-- **Dependencies:** none.
-- **Definition of Done:** Agent execution occurs inside a process/network boundary that routes governed effects through one approval path and fails closed when approval/audit is unavailable.
-- **Evidence required:** E3 bypass suite covering absolute paths, interpreters, raw sockets, PATH replacement, Windows, and recurring work; E4 denied/approved outward-action UAT.
-- **Remaining for closure:** the process/network isolation itself - raw sockets and out-of-band execution by a third-party CLI cannot be intercepted in-process; operator-invoked paths that still exec directly (`control/supervisor`, `cli/run`, `cli/app` self-update `git pull`/`pip install`, `auth/copilot` `gh` login, `backup` `pg_dump`/`psql`, `install`, `service/common`, `context/freshness`, `daemon/detect`), which a test now pins as acknowledged rather than undiscovered; and E4 denied/approved outward-action UAT.
-
-### BL-P0-04 - Make audit and database integrity enforceable
-
-- **Maps to:** B4, B5, F10; J8, J10, J11; AC-B4-03, AC-B4-04, AC-B5-01, AC-B5-02, AC-B5-03, AC-F10-03.
-- **Current gap:** SQLite foreign keys are opt-in (`BRAINS_SQLITE_ENFORCE_FOREIGN_KEYS`) rather than the default, because no existing store is proven clean until it is diagnosed and repaired, and SQLite/Postgres convergence still rests on the frozen baseline plus one executed delta rather than a proven live-Postgres upgrade matrix.
-- **Landed at HEAD:** one governed-action contract (`brains.govern`) carries approvals, direct CLI/API/MCP commands, recurring/autopilot fire, and every subprocess Brains launches on the agent-execution path; the request, the decision and the outcome each commit with their audit entry in a single transaction, so a governed mutation whose record cannot be written is refused before any effect. `audit_log` appends claim a single `audit_chain_head` row first - a write on SQLite, `SELECT ... FOR UPDATE` on Postgres - so the predecessor read is serialised across processes rather than only across threads, and an append over a head that no longer matches the newest stored entry, or whose signature does not match its contents, is refused. The head triple is HMAC-signed with the audit key, so a truncation that also moves the head is still reported, and an unsigned head over a non-empty log is itself a divergence that refuses every append: the store's commitment to signed heads persists in `audit_chain_head.adopted_version`, the log carries an `audit.chain.initialized` genesis marker or an `audit.chain.adopted` entry, and a genuine pre-signature store is adopted once by `brains-ai audit-adopt`, which verifies every entry, the head triple and the append count before it signs and marks in one transaction. `chain_status()` reports `head_signed`, `adopted_version` and `adoption_required`. `verify_chain`/`brains-ai audit-verify` fail closed on mutation, deletion, insertion, truncation, a forged head, a missing head, and a head count that disagrees with the stored rows, and the Workspace prune cascade no longer deletes audit entries (it clears their reference), because deleting the newest one would refuse every later append. An approval is spendable once (conditional consume plus `UNIQUE(governed_actions.approval_code)`), only while unexpired (`BRAINS_APPROVAL_TTL_SECONDS`), and only for the exact action, tool, target and normalised-argument digest it was granted for; a repeated `idempotency_key` replays the recorded outcome instead of re-executing or re-deciding, an abandoned attempt is settled and recorded before the key is reusable, and one abandoned mid-effect is refused rather than retried because whether its effect happened is unknown. Records carry actor, Org/Workspace/Issue/Session target, action/tool, argument digest, tier, decision, approval, attempt, attempt start, result, error and timestamps, with redaction applied canonically at the request boundary (`brains.govern.redaction`): URL credentials, secret-named `NAME=VALUE` pairs whatever their prefix, `curl -u`/`--user`, `Authorization`/`Cookie`/`X-Api-Key` header values, credential fields inside a request body, known provider token shapes, JWTs and high-confidence opaque tokens never reach the digest, the stored summary, the chain, the ASK body or a bridge message, while ordinary arguments survive so the digest can still tell two commands apart. The abandoned-attempt lease is measured per attempt (`governed_actions.attempt_started_at`, migration 127) and refreshed atomically when an attempt is reset or starts executing, an executing attempt is kept alive by an execution heartbeat instead of by a runtime budget (`governed_actions.heartbeat_at`, migration 128; renewal is one conditional update on action, `executing` status and attempt, appends nothing to the chain, cannot overwrite a terminal row and cannot renew the attempt that replaced it; `run_governed` and the gate's observable Windows child hold the lease through a daemon beater that stops before the outcome is recorded, and a storage failure is counted and logged rather than reported as health), so a long-running governed session or deploy is no longer settled `failed` as "abandoned while executing" while it is still running, while an owner that crashed stops renewing and is settled after `BRAINS_EXECUTION_LEASE_SECONDS` of silence; concurrent retries settle the old attempt through one conditional update so exactly one opens the new attempt and the rest are refused or replay, and `govern.run_maintenance()` runs on every recurring scheduler tick and from `brains-ai governed-sweep`, settling only rows whose status and attempt are still the ones it read. Verification reads the log and the head from one consistent snapshot (a Postgres `REPEATABLE READ` transaction, an explicit SQLite read transaction), so a concurrent append can no longer make an intact chain report as truncated, while a real tamper still fails and appends are never blocked by the verifier. A released action is settled by the process that released it on both tiers: where the outcome is observable (a Windows child, an in-process effect) it is recorded as `succeeded`/`failed`, and where the process is replaced by the real binary (`os.execv`) the row is settled `released` before the handoff - terminal, so the stale sweep cannot rewrite a correct handoff as "abandoned while executing", and not a claim that the command succeeded - with a failed `execv` recorded as a failure. Recurring auto-spawn no longer calls `Popen`; ungovernable shapes (`shell=True`, string command lines) and outward actions with no attributable Workspace are denied rather than allowed or crashed. Admin config writes, backup, restore and repair use the raising append instead of the best-effort one, and in the two-phase ordering that a non-transactional effect needs: `<action>.attempted` commits before the overlay/env write, the archive, the restore or the repair's write lock, and `<action>` or `<action>.failed` is appended after it, so an effect whose attempt cannot be recorded does not run and a success entry never precedes the thing it names (`restore` writes its attempt into the store it then replaces, which is stated rather than hidden). Network-fetcher locality is an address test rather than a string test: a target is local only when it parses as a loopback literal (`127.0.0.0/8`, `::1`, brackets, credentials and ports handled) or is `localhost`/`*.localhost`, so `127.0.0.1.attacker.com`, `0.0.0.0`, `host.docker.internal` and an obfuscated numeric spelling (`2130706433`, `0x7f000001`, `127.1`) are outward. Every endpoint an invocation names is judged, not only its URL: `--flag=value` targets, connection-redirecting values (`-x`/`--proxy`, `--proxy1.0`, `--socks4`/`--socks5`/`--socks5-hostname`, `--preproxy`, `--doh-url`, `--dns-servers`, `wget -e http_proxy=...`) and the address half of `--resolve`/`--connect-to`, with an unparseable composite or a stray backslash token treated as ambiguous and gated; a real local path (`C:\dir`, `.\out`, `\\?\C:\dir`, `\\.\pipe\x`, `\\localhost\share`) names no host, and a bare number is a port only in an unambiguous `HOST PORT` grammar (`nc`/`ncat`/`telnet`). Secret-shaped *names* are matched both by distinctive word and by whole segment, so `DB_PASS` and `MASTER_KEY` are redacted while `bypass`, `passenger`, `keyboard` and `monkey` are not, and a lone bare word (`--key`) redacts its own bound value but not the argument after it, so `aws s3api delete-object --key prod/db/backup.tar.gz` keeps the object it names and two objects keep two digests. Short flags that only mean a credential for some tools, or only under one subcommand, are read that way too (`curl -b`, `redis-cli -a`, `sshpass -p`, `mongosh -p`, `docker login -p`/`podman login -p`), while the same letters keep their ordinary meaning elsewhere (`docker run -p`, `redis-cli -p`, `ssh -p`, `python -u`, `wget -b`); the summary and every recorded reason or error go through the same tool-aware rules, so a subprocess failure that echoes its own command line cannot carry a password into the chain. Approval codes are minted above the highest suffix held by a live `approval_requests` row *and* by a permanent `governed_actions.approval_code`, so a Workspace prune that cascades away every ASK row cannot make the next ASK re-use a code an approved, denied or expired governed action still records, and a duplicate that reaches the store anyway is reported as an approval-code collision rather than as an audit-append failure over an intact chain.
-- **Dependencies:** BL-P0-03, BL-P0-07, BL-P0-08.
-- **Definition of Done:** Governed actions and audit records commit atomically or fail closed; multi-process appends preserve chain order; SQLite enables and tests FK enforcement; SQLite/Postgres upgrade paths converge.
-- **Evidence required:** E3 multiprocess audit race/tamper tests, FK-on tests, and evolving SQLite/Postgres migration parity tests; E4 upgrade/restore drill.
-- **Remaining for closure:** FK enforcement on by default once real stores are proven clean (BL-P0-07), a live-Postgres migration parity matrix (BL-P0-08), an E4 upgrade/restore drill on the exact candidate, and the process/network boundary that would let AC-B4-02 close (BL-P0-03). One authorization gap remains explicit: outbound bridge, provider and webhook network calls are not routed through the governed-action contract at all. The resolver's identity is now bound (BL-P0-01): an approval records the principal that decided it, a Runtime credential can never resolve one, the Session that filed an ASK can never resolve it, and the Persona identity behind the request cannot either. Only approval relay is deliberately exempt, and it can never authorise anything.
-
-### BL-P0-05 - Complete the Session message, stop, and durability contract
-
-- **Maps to:** F0, F2, F3, F4; J3, J7, J8, J11; AC-F0-04, AC-F2-05, AC-F3-01..07, AC-F4-03, AC-F4-04.
-- **Current gap:** the queue, its authorization, its idempotency and its recovery are implemented; what is not implemented is a launch shape that gives a *shipped* agent CLI an input channel, so a console message to `copilot`, `claude` or `codex` is a durable, stated refusal rather than a delivery (see *Remaining for closure*).
-- **Landed at HEAD:** the SPA's `POST /v1/sessions/{id}/message` and `/stop` calls have server routes with matching shapes, and a third - `GET /v1/sessions/{id}/commands` - is what a reloaded console renders. All three authorize through the same `policy.require_workspace_capability` every other per-ID Session surface uses, so another Org's Session and a Session in a `private` Workspace answer the same non-disclosing `404` as one that does not exist, and a Runtime-narrow credential is refused outright. A command is a `session_commands` row (migration `133_session_commands`, both backends) written *before* anything is announced or delivered: nothing renders as sent before the server holds it, and a publish that fails loses no request. `operation_key` is unique, so a retried mutation is one logical command - the console mints an `operation_id` per composer submit and re-sends the same one on retry, a stop with no explicit operation id keys on the Session so pressing stop twice is one command, and concurrent retries race one INSERT with exactly one winner. That dedupe is deliberately not absolute for the default stop: a stop that reached a terminal *failure* while the Session kept running (`not_owned`, `abandoned`, a cancellation the Session outlived) is a stop that stopped nothing, so the next press mints a new attempt under the next epoch of the same key - derived from what is recorded, so concurrent presses still collide on one INSERT - while an open attempt, an attempt that already ended the Session, and any caller-supplied `operation_id` all stay strictly one command. A command belongs to one consumer, decided by its Session's binding rather than by the box it sits on: a Runtime lists and claims only the commands of Sessions bound to *it*, an unbound Session's commands belong to the process that launched the agent, and a consumer that ends up holding a command it does not own releases it (`POST /v1/runtimes/{id}/session-commands/{command}/release`, holder-only) instead of settling it `not_owned` on the owner's behalf - which on a shared machine, with two workers or an operator's own CLI session, would burn an operator's command before its owner ever saw it. `(session_id, sequence)` is unique and dense, so delivery order and console order are the same order. A claim is one conditional `UPDATE` off `requested`, so two Runtimes racing a command resolve to exactly one consumer; the winner holds a lease (`BRAINS_SESSION_COMMAND_LEASE_SECONDS`) and only the lease holder may settle it, so a previous holder whose lease expired cannot overwrite the attempt that replaced it. A consumer that dies mid-flight strands nothing: the lease expires, the command returns to `requested` with `attempt` incremented, and a command that exhausts `BRAINS_SESSION_COMMAND_MAX_ATTEMPTS` is settled `failed`/`abandoned` rather than retried forever. Delivery is truthful at every refusal. `brains.exec.session_channel` holds the `subprocess.Popen` handles this process launched and declares which tools have an input channel at all; none of the shipped CLIs do, because `copilot` takes its prompt in argv and `claude`/`codex` read one prompt from stdin and then see EOF, so a message to them is settled `failed`/`unsupported` with that reason and `GET /v1/sessions/{id}` reports `message_capability` so the console disables its composer with the reason instead of accepting text that cannot arrive. Where a tool *is* declared interactive the launch path keeps stdin open and the message is written to it, and the declaration and that launch path are changed together so the capability the console shows is the capability the process has. A stop signals a handle this process created and still holds - never a process matched by executable name, which on a shared box would stop the operator's own tools - and a Runtime that restarted owns nothing, answers `not_owned`, and does **not** cause the Session to be recorded as stopped. Only a stop that proves the process is gone makes the Session terminal, through `sessions.finalize_session`: a single conditional stamp on `ended_at IS NULL`, so a natural completion and a stop race for it and the loser changes nothing. The same pass releases the Session's Workspace claim and its in-progress Tasks, cancels its still-open commands, and moves an `in_progress` Issue to `blocked` rather than back to `open`, which would have the assignment poll re-spawn the work an operator just stopped. Hub and Runtime no longer keep two Sessions for one process: the daemon runs the claimed assignment *as* the hub's Session id instead of opening a second local one, reports the terminal state back, and on startup and re-registration reports, per Runtime, what it can still prove it owns (`POST /v1/runtimes/{id}/sessions/reconcile`) so everything else the hub shows running for that Runtime - outside a 90-second grace window that protects a Session which is merely starting - is ended with a truthful summary and has its queue cancelled; the process-handle registry records which Runtime each launch belongs to, so on a box running several CLIs a Runtime that holds nothing sends an empty list and reconciles its own stale rows instead of claiming its siblings' Sessions and having the whole call refused, and a step that fails is logged and reported rather than swallowed. Ownership is routed by binding, not by box: the machine recorded on a Session or a command says where the row was *created* - the hub, for a console spawn - so a Runtime lists, claims, releases, settles and reconciles on its Runtime binding alone, and an operator's stop reaches the remote process that can answer it. New rows still record the bound Runtime's machine (at spawn, when the Runtime opens the Session, and when a command is queued), and a Runtime credential reporting Session state is authorized against its Runtime's machine rather than the row's stamp; pre-existing rows are not migrated and keep working. Realtime is durable and deduped: the Session command publisher derives `session_command:{command_id}:{status}:{result}`, the first stable publisher-level `dedupe_key` in the product, so a retried mutation is one durable event with one `event_id` and one delivery, and the console applies command frames by `command_id`. The same operations are reachable from the CLI (`brains-ai session-message|session-stop|session-commands`) and MCP (`brains_session_message`, `brains_session_stop`, `brains_session_commands`). The console applies the same rule to its own asynchronicity: every request captures the Session it was issued for and is discarded when the operator has selected another one by the time it answers, and pending sends and the stop-in-flight flag are held per Session (`frontend/src/components/sessionScope.ts`), because a durable queue cannot stop a correct answer being painted into the wrong thread. A blocking governed run stays stoppable and stays bounded: `exec.guard.run` reproduces `subprocess.run`'s kill-on-timeout on *both* platforms - Windows collects the partial output with a `communicate()` after the kill, POSIX reaps the child with `wait()` because a second `communicate()` would block on a pipe a killed child's grandchild still holds.
-- **Dependencies:** BL-P0-01, BL-P0-02, BL-P0-03.
-- **Definition of Done:** Client and server route contracts match; messages and stop requests are authorized, durable, delivered once, recoverable after reload, and reflected in Session/Issue terminal state.
-- **Evidence required:** E3 client-route contract test, daemon integration tests, duplicate/retry tests; E4 J7/J8 send/reload/stop/failure journey.
-- **Remaining for closure:** three things, none of them a claim the code contradicts. First, no shipped agent CLI is launched with an open input channel, so "a message reaches the agent" is proven for a declared-interactive tool and a fake agent in `tests/test_session_durability.py` and is an honest `unsupported` refusal for `copilot`, `claude` and `codex`; closing this needs an interactive launch shape per provider, not more queue machinery. Second, a Session with no Runtime binding and no process owned by the hub process has no consumer, so its commands stay `requested` until the process that launched the agent dispatches them or the Session ends - visible, but not delivered; a Runtime on the same machine is deliberately *not* allowed to pick them up, because it holds no handle for them. Third, the E4 J7/J8 browser journey (send, reload, stop, failure) is absent: the E3 evidence is `tests/test_session_durability.py` - client/route contract, idempotent message and stop, stop retry after a terminal failure including concurrent presses and explicit-`operation_id` identity, ordering, concurrent claims, consumer ownership across two workers on one machine and a CLI Session with non-owner release, lease expiry and stale-consumer refusal, abandonment, unsupported provider, live delivery to an owned process, process-ownership isolation, natural finish versus stop in both orders, reload history, cross-Org and `private`-Workspace `404`, Runtime allowlist and foreign-machine refusal, daemon claim/deliver/acknowledge, daemon restart reconciliation and its idempotency, a production-shape persona/issue spawn on a remote Runtime delivering both a stop and a message for a hub-stamped Session, per-Runtime reconciliation on a multi-CLI machine, and realtime dedupe - plus `tests/test_frontend_session_scope.py` for the console's per-Session scoping, but no browser has been driven through it.
-
-### BL-P0-06 - Make one deployment shape internally correct
-
-- **Maps to:** F1, B5, B6, B8, B9; J1, J2, J7, J9, J11; AC-F1-04, AC-B5-04, AC-B6-03, AC-B8-01..04, AC-B9-01.
-- **Current gap:** Daemon default URL, dev entrypoint, legacy installers, box command/state/UID/extras, and ingress routes disagree.
-- **Dependencies:** BL-P0-04.
-- **Definition of Done:** One documented candidate topology installs on a clean host, starts the intended processes, persists state with correct ownership, exposes only intended routes, restarts, and rolls back.
-- **Evidence required:** E3 image/service/ingress smoke and persistence restart; E4 clean-host UAT with exact artifact and rollback.
-
-### BL-P0-07 - Stop and repair SQLite integrity anomalies
-
-- **Maps to:** F3, F9, B2, B5; J7, J10, J11; AC-F3-02, AC-F3-07, AC-F9-03, AC-F9-05, AC-B2-02, AC-B5-01..03.
-- **Current gap:** Foreign-key enforcement is opt-in and no existing store is proven clean, so the defects it would catch remain latent until an operator runs the repair. Legacy rows whose terminal state or Org scope cannot be derived from stored evidence still need an operator decision, and orphans on required columns are reported rather than resolved. No backup, repair, restart, restore drill has been performed against an exact candidate.
-- **Landed at HEAD:** terminal Session paths (including zombie reaping) synchronize `ended_at` and explicit state; Workspace registration assigns Org scope; `brains.storage.integrity` derives destructive cleanup and diagnosis from the schema's own foreign-key graph; `brains-ai db diagnose/repair/verify-backup/fk-check` provide a dry-run-by-default repair whose apply path requires a manifest backup verified by isolated restore, refuses a corrupt database, is transactional, and preserves durable events and handoffs; SQLite manifests capture source identity, schema fingerprint, and row counts.
-- **Dependencies:** none.
-- **Definition of Done:** Every terminal path synchronizes `ended_at` and explicit state; every Workspace creation path assigns valid Org scope; destructive cleanup is FK-safe and schema-derived. A current manifest backup and isolated restore succeed before a deterministic repair reports and fixes existing anomalies without discarding valid events or handoffs; ambiguous legacy rows are explicitly classified; `foreign_key_check` is clean before enforcement.
-- **Evidence required:** E3 writer regression tests, schema-derived cascade tests, legacy/current fixture upgrades, repair dry-run/rollback, terminal-state and Org-backfill assertions, zero post-repair FK violations; E4 backup -> repair -> restart -> restore drill.
-- **Remaining for closure:** E4 drill on the exact candidate, plus enforcement turned on by default once real stores are proven clean.
-
-### BL-P0-08 - Make schema evolution reproducible across backends
-
-- **Maps to:** B5, B6; J9, J11; AC-B5-01..03, AC-B6-03.
-- **Current gap:** Postgres reaches the current schema through the frozen baseline while every SQLite catch-up delta is recorded `skipped`, so backend convergence rests on the baseline rather than on executed per-delta equivalents, and no delta has been executed against a live Postgres in this repository's default run.
-- **Landed at HEAD:** the corpus is ordered by stable migration ID and starts at the frozen per-backend baseline DDL; `Base.metadata.create_all` is off the startup path and the runner creates only its own ledger table; `schema_versions` records order, content checksum, checksum origin, backend, status, attempts, timings, outcome detail, and error, and upgrades a pre-checksum ledger in place; adoption of a pre-checksum row is backend-aware, so a row for a migration this backend cannot run becomes `skipped`/`legacy-unproven` and stays reapplicable when that backend's delta ships, and a row that cannot be evidence of execution here is reported rather than re-executed; each delta runs in one transaction and is recorded `applied` only after it commits; a migration with no implementation for the active backend is recorded `skipped` with a reason and is refused outright unless it is one of the frozen baseline-covered patches; the Postgres baseline's deferred foreign keys are guarded on `pg_constraint` relation/column identity rather than constraint name, so a legacy `create_all` store gains no duplicate constraints; edited migrations, duplicate/malformed IDs, ledger gaps, interrupted and failed attempts, unknown ledger rows, and post-migration schema drift are detected and refused or reported; `brains-ai db migrations` / `db migrate` expose readiness without printing credentials; `db repair --apply` refuses an unsettled ledger and restore/verify refuse an archive from a build with unknown migrations.
-- **Dependencies:** BL-P0-07.
-- **Definition of Done:** New schema changes are explicit and ordered; every applied migration records an immutable checksum, backend, execution result, and compatible source schema; SQLite and Postgres converge through executed, tested deltas rather than recorded sentinels.
-- **Evidence required:** E3 fresh and multi-version SQLite/Postgres upgrade matrix, checksum-tamper refusal, concurrent-start test, and schema-diff parity check.
-- **Remaining for closure:** a live-Postgres upgrade matrix (the Postgres tests require `BRAINS_TEST_PG_URL`), and per-delta Postgres implementations if the baseline is ever not enough to converge an existing Postgres store.
-
-## P1 - Core promise and acceptance blockers
-
-### BL-P1-01 - Make the quality gate blocking
-
-- **Maps to:** F0-F10, B1-B9; J1-J11; all `AC-*`.
-- **Current gap:** Closed for the workflow contract. Every `.github/workflows/ci.yml` job is blocking, no required gate carries `continue-on-error`, and the `quality gate` job fails on any failed, cancelled, or skipped dependency. Every gate was executed locally against this candidate, including the runtime image build with its container health smoke and the Playwright journey suite against an isolated hub. Remaining: the workflow has not yet been observed green on a GitHub-hosted runner, and no gate has been run on Python 3.11 or on Linux.
-- **Dependencies:** none.
-- **Definition of Done:** Documentation, lint, format, typing, Python tests, acceptance tests, SPA build/typecheck, bundle comparison, Playwright, migration, and container smoke fail the workflow when they fail.
-- **Evidence required:** E3 deliberate-failure checks for each gate and one clean workflow against the exact candidate.
-
-### BL-P1-02 - Complete F4 Issue execution evidence
-
-- **Maps to:** F4; J5, J6, J7; AC-F4-01..07.
-- **Landed in the candidate:** Issue detail reconciles persisted Sessions, events, commands, approval decisions, comments, and uniquely attributed usage; dispatch is idempotent while in flight; Pod resolution is deterministic; natural-language creation is explicitly outside the console contract.
-- **Current gap:** E4 J5/J6/J7 evidence is incomplete, including Pod execution on a real Runtime and browser reconciliation across reload/failure cases.
-- **Dependencies:** BL-P0-01, BL-P0-05.
-- **Definition of Done:** Issue detail reconciles persisted Sessions/events/usage, assignment behavior is deterministic, and natural-language creation is implemented with confirmation or explicitly excluded.
-- **Evidence required:** E3 API reconciliation tests; E4 J5/J6/J7 journey.
-
-### BL-P1-03 - Complete F5 Pod semantics
-
-- **Maps to:** F5; J4, J6; AC-F5-01..04, AC-F4-06.
-- **Landed in the candidate:** `pod_profiles` and `pod_members` make membership and leadership Persona-oriented; leader replacement, member removal, archive, deterministic leader-first routing, unresolved legacy-member reporting, and modern console controls exist.
-- **Current gap:** Complete J4 and Pod-assigned J6 browser evidence is absent; legacy `squads` remains as the compatibility identity referenced by existing work rows.
-- **Dependencies:** BL-P1-02.
-- **Definition of Done:** Pod membership, leader rules, archive/removal, assignment, and Runtime resolution use one documented Persona-oriented contract.
-- **Evidence required:** E3 roster/routing/state tests; E4 J4 plus Pod-assigned J6 dispatch.
-
-### BL-P1-04 - Complete F6 fresh-state onboarding
-
-- **Maps to:** F6; J1; AC-F6-01..05.
-- **Landed in the candidate:** The shell uses durable server state for fresh-state routing; attempts resume per operator; retries update one step record; defer and safe exit are explicit; completion requires a visible Session linked to the attempt's Issue; cross-Org entities and unrelated Sessions are refused.
-- **Current gap:** The dedicated clean-state J1 browser journey, including available and unavailable Runtime cases, is absent.
-- **Dependencies:** BL-P0-05, BL-P1-02, BL-P1-03 where Pod setup is included.
-- **Definition of Done:** A fresh state reaches a real Session or explicit blocked state without hidden fixtures; every step supports retry/resume.
-- **Evidence required:** E3 component/API tests; E4 clean-state J1 with and without an available Runtime.
-
-### BL-P1-05 - Complete F7 configuration truth
-
-- **Maps to:** F7, B1, B6; J9; AC-F7-01..04, AC-B1-04.
-- **Landed in the candidate:** Modern Config declares a read-only contract, exposes redacted provider readiness and exact tier wiring, bounds provider-probe failures, keeps secrets outside the modern console, and states that legacy overlay/environment writes are process-local until every Brains process restarts.
-- **Current gap:** MCP and integration sections remain informational, and J9 has no live-provider degradation/recovery evidence.
-- **Dependencies:** BL-P0-01, BL-P0-06.
-- **Definition of Done:** The modern console is explicitly read-only or provides safe redacted persisted writes with validation, restart/reload semantics, and rollback.
-- **Evidence required:** E3 redaction, validation, process-reload, and rollback tests; E4 J9 failure and recovery cases.
-
-### BL-P1-06 - Complete F8 and B7 integration security
-
-- **Maps to:** F8, B7; J8, J9; AC-F8-01..04, AC-B7-01..04.
-- **Landed in the working-tree candidate:** GitHub HMAC verification, exact repository-to-Org scope, required GitHub delivery/event headers, durable replay-safe delivery outcomes, relay reply/triage dedupe, leased and attempt-fenced approval-bridge outcomes, bootstrap-admin inspection/release of confirmed-stuck attempts, migration 137 for SQLite/Postgres, and admin-only redacted integration readiness.
-- **Remaining for closure:** controlled E4 operation against GitHub and each supported bridge; provider-native delivery IDs for relay callers that currently rely on the bounded five-minute body-hash fallback; durable companion-device dedupe; dependency/readiness evidence beyond configuration discovery; and an explicit review of which non-approval outbound integration effects must enter the governed-action contract. Approval notifications remain a deliberate non-authorising relay and cannot resolve their own ASK.
-- **Dependencies:** BL-P0-01.
-- **Definition of Done:** GitHub events are signature-verified and repository-scoped; every supported inbound/outbound integration is authenticated, replay-safe, idempotent, dependency-aware, governed where required, and visible as configured/degraded with a durable delivery result.
-- **Evidence required:** E3 signed/invalid/replayed/out-of-scope GitHub tests plus credential, dedupe, dependency, governed-action and failure tests for webhooks/relay/bridges; E4 controlled integration tests or explicit simulator evidence.
-
-### BL-P1-07 - Complete F9 Org administration and usage scope
-
-- **Maps to:** F9; J10, J11; AC-F9-01..05.
-- **Landed in the candidate:** Owner/admin/member policy and the invitation/operator lifecycle were already truthful (adding a member requires an existing operator; the Settings Members panel now states this explicitly rather than leaving a raw 404 on screen). `GET /v1/orgs/{org}/usage` adds an Org-scoped usage read: it declares `scope: org`, `org`, `org_id`, and `days`, is authorized like every other Org surface (`org.read`, not bootstrap-admin-only), and joins the gateway ledger through `usage_attributions` (migration 136) filtered on `org_id` so an unattributed call or another Org's call is excluded by the SQL join, never by a client-side filter. The Settings Usage screen reads the active Org from `OrgContext` and renders loading/empty/error states with no install-wide data ever shown to a non-admin.
-- **Current gap:** Browser-session E4 evidence for the two-Org deny matrix (AC-F9-05) is absent; nothing in this candidate claims it.
-- **Dependencies:** BL-P0-01, BL-P0-02.
-- **Definition of Done:** Owner/admin/member policy is enforced; invitation/operator lifecycle is clear; usage exposes documented authorized scopes.
-- **Evidence required:** E3 RBAC and usage attribution matrix (`test_f9_org_usage_summary_is_scoped_and_excludes_other_orgs`, `test_org_usage_is_readable_by_its_own_member_but_not_another_org`); E4 multi-user J10/J11.
-
-### BL-P1-08 - Complete F10 governed automation and Skill use
-
-- **Maps to:** F2, F10, B2, B4; J3, J10; AC-F2-03, AC-F2-05, AC-F10-01..06, AC-B2-04, AC-B4-01..03.
-- **Landed in the candidate:** Autopilot list/enable/fire lookups re-derive and re-authorize the Org from the autopilot's resolved Workspace on every request (never trusting the globally-unique `name`), so a cross-Org enable/fire/list attempt answers 404 (`test_cross_org_autopilot_list_and_lifecycle_are_scoped`). Schedule grammar (`manual`/`hourly`/`daily`/`every:<N><s|m|h|d>`) is now validated at create time (`control.recurring.is_valid_schedule`, shared by the MCP scheduler's own due-check), refusing cron syntax and other unsupported strings with 400 instead of silently never firing; the SPA and legacy dashboard label the field "Schedule" and state the grammar rather than calling it cron. Migration 138 adds `persona_skills`/`project_skills`: durable, unique-per-pair, idempotent-re-attach rows with provenance (`attached_by_operator_id`, `attached_at`). `control.skills.resolve_context_for_session` composes a deduplicated, source-tagged context for a Session's Persona and Project, and `exec.runner.run_session` prepends it to the spawned agent's actual prompt — the real launch path every spawned Session goes through, not merely a `build_welcome` API response nobody reads. Protected list/attach/detach routes exist under both Persona and Project surfaces with same-Org checks and `org.read`/`org.write`, and the SPA exposes an attach/detach panel on both detail drawers. Recurring spawn already routes through the governed-action gate rather than `Popen`, and durable run provenance/repair (`recurring_runs`, `db repair`) already exist and are unchanged here.
-- **Current gap:** The autopilot `name` namespace remains install-wide rather than per-Org (a naming, not an authorization, gap). The governed-action boundary recurring spawn uses remains in-process/cooperative (BL-P0-03/BL-P0-04). Browser-session E4 evidence for scheduled/manual failure and recovery, and for the Skill-attachment UI, is absent.
-- **Dependencies:** BL-P0-01, BL-P0-03, BL-P0-04.
-- **Definition of Done:** Autopilots are Org-scoped, schedule grammar is truthful, all fire paths are gated/audited/durable, pre-ledger activity is reported without fabricated runs, and Skill attachments alter Session context with provenance.
-- **Evidence required:** E3 scope, schedule, duplicate, gate, audit, and context-injection tests (`tests/test_skill_attachments.py`; `test_cross_org_autopilot_list_and_lifecycle_are_scoped`; `test_autopilot_schedule_grammar_is_validated_at_create_time`); E4 J10 scheduled/manual failure and recovery.
-
-### BL-P1-09 - Establish recovery, readiness, and rollback
-
-- **Maps to:** B5, B6, B8; J1, J7, J10, J11; AC-B5-04, AC-B5-05, AC-B6-03, AC-B8-01..04.
-- **Landed in the candidate:** `GET /v1/admin/readiness` (bootstrap-admin only, `brains-ai readiness`) is a distinct, protected contract from `/health` reporting one overall ready/degraded verdict plus bounded, redacted storage/migration, coordination-queue, Runtime-lifecycle, and recovery-policy component state - none returning a secret or a raw exception message. `brains.control.recovery_policy` declares a managed-recovery policy (scope, schedule, retention, encryption expectation/owner, offsite owner/location, RTO/RPO, restore-drill requirement) via `BRAINS_BACKUP_*` settings, reports it back redacted with an honest completeness verdict (an unconfigured install answers `complete: false` with the exact missing fields), and runs a compatibility precheck reusing `migration_status` and, for Postgres, the existing `pg_dump`/`pg_restore` tool gate - never fabricating a schedule or drill date. `brains.service.common` upgrades the service pidfile (`service.pid`) and the Runtime daemon's `daemon.pid` to an additive JSON identity record (PID, executable, command line, start time where portable); `verify_pid` reports `verified`/`degraded`/`unverified`/`stale`/`absent`, `service.status()` exposes it as `service_pid`, and Windows/macOS `service.stop()` plus `brains-ai daemon stop` refuse to tree-kill/signal a `stale` (reused) PID by number alone, removing the stale pidfile instead.
-- **Current gap:** Brains still runs no backup scheduler itself - the recovery policy is a declaration an external scheduler is expected to honour, not an enforced schedule - and the E4 isolated backup/restore/rollback drill for a real candidate remains open. Postgres compatibility-precheck tooling is exercised only via monkeypatched tool-presence, not a live Postgres backend.
-- **Dependencies:** BL-P0-04, BL-P0-06.
-- **Definition of Done:** Managed policy defines scope, schedule, retention, encryption, ownership, RTO/RPO, compatibility checks, readiness, compaction prerequisites, and rollback order. Service status validates process identity/start time and removes stale PID state safely.
-- **Evidence required:** E3 stale/reused PID, executable/start-time identity, readiness dependency failure, compatibility refusal, and compaction-prerequisite tests (`tests/test_service.py`, `tests/test_daemon_cli.py`, `tests/test_recovery_policy.py`, `tests/test_admin_health_api.py`); E4 timestamped isolated backup/restore and rollback drill for the exact candidate.
-
-### BL-P1-10 - Generate route and traceability checks
-
-- **Maps to:** F0-F10, B1-B9; J1-J11; all `AC-*`.
-- **Current gap:** Closed for the inventories the checker derives. `scripts/check_traceability.py` generates SPA routes and route parameters, API client calls, mounted server routes and their documented families, SQLAlchemy entities against the frozen baseline and deltas, the migration corpus against files and docs, and journey/acceptance/`AC-*` markers, and fails on orphan, unmatched, or duplicate surfaces; `tests/test_check_traceability.py` proves each check with a deliberate-failure fixture. Remaining: prose traceability cells (gap statements, control/service columns) are still hand-written, and MCP/CLI family coverage is not generated.
-- **Dependencies:** BL-P1-01.
-- **Definition of Done:** CI compares frontend routes/client calls, server routes, entities, migrations, and test IDs against generated traceability data and fails on orphan or unmatched surfaces.
-- **Evidence required:** E3 deliberate orphan route/entity/test failures and a clean generated check.
-
-### BL-P1-11 - Make model routing and provider readiness truthful
-
-- **Maps to:** B1, F7; J9, J11; AC-B1-01..04, AC-F7-01, AC-F7-04.
-- **Landed in the candidate:** Exact, tier, and explicit `brains/auto` resolution remain distinct; route metadata records simulated providers; config summary distinguishes simulated/configured/unconfigured providers; bounded probes add reachable/degraded states without returning raw exceptions.
-- **Current gap:** Default tiers intentionally remain simulated through `echo` until configured, `/v1/responses` is still a thin compatibility wrapper, and E4 live-provider degradation/recovery is absent.
-- **Dependencies:** BL-P1-05.
-- **Definition of Done:** Exact IDs are never silently remapped; tier aliases resolve only through documented policy; provider readiness is redacted and machine-checkable; the supported OpenAI/Anthropic surface has explicit compatibility and failure behavior.
-- **Evidence required:** E3 exact/tier/auto routing matrix across real, unavailable, and stub providers; facade contract tests; E4 J9 provider degradation and recovery.
-
-### BL-P1-12 - Add coordination queue health and continuity repair
-
-- **Maps to:** F3, B2, B4, B8; J7, J8, J11; AC-F3-02..07, AC-B2-01..03, AC-B4-03, AC-B8-02..04.
-- **Landed in the candidate:** `brains.control.queue_health` names every durable queue family's owner, scope, lifecycle, and expiry policy (or explicit indefinite policy) in one place - approvals, handoffs, mailbox, help requests, workspace claims, coordination Session leases, Session commands, topic delivery, and checkpoints - and `summarize()` reports live total/open/stale-or-expired counts per family. `diagnose()` detects orphaned Session/Workspace/topic-post references (every family's foreign-key-shaped column checked against the live parent tables, since SQLite FK enforcement is opt-in) and stale leases without deleting anything, bounded to a fixed sample size. Topic delivery uses one announcement per post plus per-Session subscription cursors rather than one mailbox notification per live Workspace; cursor/announcement rows are ephemeral repair state, while `topic_posts` remain the durable archive. Immediate exact checkpoint retries reuse the latest Session cairn, and immediate exact handoff retries reuse the Workspace's active row; each reports `duplicate: true`, renews liveness, and writes no duplicate row/event. An intervening payload, picked/cleared/stale handoff, or later repeated checkpoint remains history rather than being collapsed. `plan_repair()`/`apply_repair()` give a dry-run and an explicit apply that only ever call each family's own existing fenced expiry helper (`mark_stale_handoffs`, claims' `_expire_claims`, help's `_expire_due`, command `expire_leases`, and `sweep_stale_session_leases`) - never deleting unresolved work, and idempotent across repeated/concurrent invocation. Claim listing now filters expired leases without taking a write lock; physical cleanup belongs to a mutation or explicit repair. SQLite writer wait is configurable and defaults to 30 seconds for multi-agent hosts. Bare CLI Session registration no longer records the short-lived helper PID; only an explicit durable `--pid` makes a Session reaper-eligible by local process identity. `GET /v1/admin/queue-health` and `POST /v1/admin/queue-health/repair` (bootstrap-admin only) plus `brains-ai queue-health status`/`repair [--apply]` expose all of this.
-- **Decision-routing addition:** Migration 145 adds optional Org-member assignment, priority, due time, and monotonic reasoned escalation for open approvals. Browser/local human routing is Workspace-authorized and audited; overdue work is visible in queue health but is never auto-resolved or made spendable.
-- **Event-scope addition:** Migration 147 stores typed category, scope (`workspace`/`global`/`unresolved`), inference source, and taxonomy version for every durable event. New writes infer Workspace from explicit scope, Session, or known entity metadata; legacy Session events are backfilled. Unknown extension kinds remain accepted but unresolved without trustworthy scope, are hidden from non-admin event listings, and are exposed in bounded admin/CLI/MCP scope reports.
-- **Workspace-identity addition:** Migration 148 records normalized path aliases separately from durable Workspace identity. Linked Git worktrees in one Org converge on the oldest Workspace; pre-existing duplicates are archived with their historical rows intact, while future path-based calls resolve through the canonical alias. Missing active roots can be archived through dry-run-first `workspaces doctor --archive-missing`; cross-Org convergence is refused and destructive prune remains explicit.
-- **Tool-readiness addition:** Explicit registry refresh now persists local PATH evidence, and local Session welcome performs that no-spawn executable-resolution check automatically. Remote Session readiness comes from its bound Runtime's heartbeated status/health, so the hub cannot falsely mark a remote CLI missing. The install-wide registry remains inventory rather than a substitute for machine-scoped Runtime state.
-- **Adoption-visibility addition:** Bootstrap-admin Operations exposes welcome follow-through with explicit observation/action windows, eligible versus incomplete-window Session counts, and per-surface `acted / offered` denominators. Starts too recent to receive the full action window are excluded rather than counted as non-adoption, and the UI states that event follow-through is not task success, user value, or causal impact.
-- **Ephemeral-review addition:** Migration 149 gives exact-tool Workspace help requests `existing`/`auto`/`ephemeral` execution modes. Auto offers live peers a short claim window and then exposes one fenced review to a matching healthy Runtime or installed local CLI. Reviewers run only against a temporary tracked-file snapshot with provider no-write policy, bounded output/runtime, source fingerprint verification, terminal Session attribution, and three-attempt lease recovery; the registered worktree path is never passed to the child. Controlled real-provider and remote-Runtime E4 evidence remains open.
-- **Current gap:** Checkpoints (`snapshots`) and the static tool registry are inventoried with an explicit indefinite/out-of-scope policy rather than an active lifecycle, since neither carries per-Session unresolved work. Checkpoint/handoff duplicate suppression fences sequential retries but has no dedicated uniqueness key for concurrent identical writers. Multiprocess/concurrent-repair evidence is proven via repeated-invocation idempotency, not a true concurrent-writer race test; E4 backlog-triage/resume/expiry/recovery browser evidence is absent.
-- **Dependencies:** BL-P0-05, BL-P0-07.
-- **Definition of Done:** Every queue item has an owner, lifecycle, expiry or explicit indefinite policy, referentially valid Session/Workspace scope, and operator-visible health; repair tooling handles legacy stale/orphaned records without hiding unresolved work.
-- **Evidence required:** E3 stale/orphan/duplicate/multiprocess queue tests and repair dry-run (`tests/test_queue_health.py`, `tests/test_admin_health_api.py`, `tests/test_readiness_cli.py`); E4 J7/J8 backlog triage, resume, expiry, and recovery.
-
-### BL-P1-14 - Make agent liveness and successor continuity survivable
-
-- **Maps to:** F3, B2, B8; J7, J8, J11; AC-F3-01..07, AC-B2-01..03, AC-B8-02..04.
-- **Landed in the candidate:** CLI-created Sessions omit the short-lived helper PID unless a harness supplies a durable `--pid`, preventing the local-PID reaper from treating ordinary quiet work as a crashed agent. Migration 143 adds renewable coordination leases; expired PID-less handles become non-terminal `dormant`, release claims/tasks, and disappear from live projections. CLI/MCP registration reuses a sole matching Workspace/tool/operator handle, refuses an ambiguous set, and automatically links/transfers ownership when a distinct replacement is created. Migration 144 topic subscriptions and their high-water marks transfer with the handle. Explicit heartbeat renews without an event row; predecessor-mail reads remain recipient-preserving through migration 142.
-- **Current gap:** Multi-hour E4 evidence across real tool restarts is still absent, and a harness that makes no further Brains call and does not use `session-heartbeat` intentionally becomes dormant after the lease window.
-- **Dependencies:** BL-P0-05, BL-P1-12.
-- **Definition of Done:** Re-registration can safely link one same-Workspace predecessor, unread predecessor mail is surfaced automatically, dead-handle polls identify the successor, and replacement candidates satisfy a bounded freshness contract.
-- **Evidence required:** E3 false-reap, stale-candidate, automatic-successor, predecessor-mail, and loop-warning tests; E4 multi-hour quiet-work plus handle-replacement journey.
-
-### BL-P1-15 - Add a governed agent-experience feedback inbox
-
-- **Maps to:** F3, B2, B4, B8; J7, J8, J11; AC-F3-03, AC-B2-03, AC-B4-02..04, AC-B8-03.
-- **Landed in the candidate:** Migration 146 adds canonical Workspace-scoped `feedback_reports`, append-only deduplicated `feedback_enrichments`, and one `feedback_promotions` row per report. Agent-facing CLI/MCP/HTTP paths require a live reporter Session in that Workspace; typed report and enrichment inputs are redacted before fingerprinting or persistence. Same-Workspace category/summary/version/surface fingerprints link duplicates to one canonical report while preserving new evidence. Human-only browser/local triage and exactly-once Task/knowledge/existing-backlog-reference promotion commit with audit correlation; backlog promotion links a `BL-PN-NN` ID and never edits roadmap text. Queue health and integrity include the new family.
-- **Current gap:** E4 two-agent report/enrichment plus human browser triage/promotion evidence is absent. Deterministic redaction removes credential-shaped data, but free-form text cannot guarantee removal of identifiers that do not look like credentials; operators remain responsible for excluding customer data.
-- **Dependencies:** BL-P0-01, BL-P0-04, BL-P1-12.
-- **Definition of Done:** CLI/MCP/HTTP accept a Workspace-scoped feedback report with category, severity, summary, evidence, reproduction, version/surface, reporter Session, and privacy-safe metadata; reports deduplicate/link, remain human-triaged, and can be promoted exactly once into a Task/knowledge/backlog reference with audit correlation. Agents may propose and enrich feedback but cannot self-approve roadmap or release changes.
-- **Evidence required:** E3 authorization, redaction, dedupe, lifecycle, promotion-idempotency, audit, and cross-Org tests (`tests/test_feedback_inbox.py`); E4 two-agent report/enrichment plus human triage/promotion in Governance or Coordination.
-
-### BL-P1-13 - Make Runtime enrollment and lifecycle operational
-
-- **Maps to:** F1, B6, B8; J2, J7, J11; AC-F1-01..06, AC-B6-02, AC-B6-03, AC-B8-02.
-- **Landed in the candidate:** The recurring-scheduler tick (`brains.mcp.server._scheduler_tick`) now calls `_sweep_stale_runtimes` every tick, alongside the existing governed-action sweep - `brains.control.runtimes.sweep_stale`, which existed with no periodic caller, now has one, flipping an online Runtime silent past `BRAINS_RUNTIME_STALE_TTL_SECONDS` (default 90s) to `offline` without an operator read. A new read-only `count_stale` mirrors the same candidate selection for `GET /v1/admin/readiness` without mutating anything on a GET. CLI lifecycle wiring (`daemon status`/`drain`/`stop`/`start`) now has direct test coverage, including the daemon pidfile identity/liveness refusal this candidate also adds (BL-P1-09): `daemon stop` verifies the recorded PID before signalling and refuses a stale/reused one.
-- **Current gap:** Enrollment redemption concurrency, Runtime-narrow credentials, and heartbeat/offline/drain transitions were already proven before this candidate and are unchanged. Real-daemon E4 browser evidence (J2 -> J7 connect, dispatch, drain, disconnect, recovery) remains absent.
-- **Dependencies:** BL-P0-01, BL-P0-06.
-- **Definition of Done:** Enrollment redemption is transactionally single-use under concurrency; the resulting credential is restricted to one Runtime and Org; heartbeat/offline/drain transitions run without an operator read; daemon start/status/stop and assignment execution work against the documented topology.
-- **Evidence required:** E3 concurrent redemption, credential allow/deny, periodic sweep, daemon lifecycle and assignment tests (`tests/test_mcp_server.py`, `tests/test_native_battalion.py`, `tests/test_daemon_cli.py`); E4 real Runtime J2 -> J7 connect, dispatch, drain, disconnect and recovery.
-
-## P2 - Maintainability and product-boundary gaps
-
-### BL-P2-01 - Decide the legacy dashboard/admin surface
-
-- **Maps to:** B9, F7; J9-J11; AC-B9-01..03, AC-F7-03.
-- **Current gap:** `/app`, `/dashboard`, and `/admin` overlap and can imply different product contracts.
-- **Dependencies:** BL-P0-01.
-- **Definition of Done:** Each surface is supported, integrated, or retired; navigation, auth, configuration ownership, and docs expose one unambiguous operator entrypoint.
-- **Evidence required:** E3 route/support matrix tests; E4 entrypoint and authorization UAT.
-
-### BL-P2-02 - Define evidence retention outside canonical docs
-
-- **Maps to:** B5, B8; J11; AC-B5-05, AC-B8-03.
-- **Current gap:** Historical reports and screenshots previously lived beside current docs; no external immutable evidence contract is defined.
-- **Dependencies:** BL-P1-01, BL-P1-10.
-- **Definition of Done:** Run artifacts have an external location, immutable ID, exact SHA/artifact/environment metadata, retention period, access policy, and deletion policy.
-- **Evidence required:** E3 artifact-schema validation and retrieval by immutable ID; repository check remains free of evidence packs.
-
-### BL-P2-03 - Break high-risk Python import cycles
-
-- **Maps to:** B2, B3, B4; J7, J11; AC-B2-01, AC-B3-01, AC-B4-02.
-- **Current gap:** Strongly connected components exist across context/session/view modules, config/admin key, exec/runner, and provider policy/registry.
-- **Dependencies:** none.
-- **Definition of Done:** Layer boundaries remove the cycles or isolate them behind explicit interfaces without changing behavior.
-- **Evidence required:** E3 import graph check, cold import smoke, and targeted subsystem tests.
-
-### BL-P2-04 - Add retrieval provenance and readiness
-
-- **Maps to:** B3, B8; J6, J7, J11; AC-B3-01..04, AC-B8-01..03.
-- **Current gap:** Code graphs can exist without linked source/index records, content hashes, build identity, or freshness evidence; semantic chunks and freshness checks have no operator-visible readiness contract.
-- **Dependencies:** none.
-- **Definition of Done:** Every graph/index build records source scope, content hash, builder version, timestamp, freshness, and failure state; search surfaces distinguish absent, stale, building, degraded, and ready data.
-- **Evidence required:** E3 deterministic rebuild/invalidation tests, stale-source and missing-embedding tests; E4 repository index/search/graph recovery journey.
-
-## P3 - Experience completeness
-
-### BL-P3-01 - Finish deep routes, error states, and accessibility
-
-- **Maps to:** F0-F10; J1-J11; AC-F0-03, AC-F0-05 and journey-specific UX criteria.
-- **Current gap:** Several entity route params are ignored, some failures become empty states, and accessibility is not a blocking browser contract.
-- **Dependencies:** BL-P0-05 and relevant F4-F10 items.
-- **Definition of Done:** Deep links select the requested entity or not-found state; errors remain distinct from empty data; keyboard, focus, labels, contrast, and responsive behavior meet the approved baseline.
-- **Evidence required:** E3 route/component/accessibility assertions; E4 J11 across all declared SPA routes.
+- Priority describes risk; feature ownership determines development and branch scope.
+- Active work uses one short-lived feature branch from current `staging`, merges to
+  `staging` after its own acceptance gates, and reaches `main` only through promotion
+  of an exact integrated candidate.
+- Active experiments are implemented, independently activatable trials. They collect
+  privacy-safe usage and defect evidence and remain subject to human authority.
+- A withdrawn implementation is not schedulable feature work. Only containment,
+  shared-data compatibility, approved removal, or replacement research may touch it.
+- A replacement enters the experimental backlog only after a separately reviewed
+  implementation is admitted as a field trial.
+- Dated measurements remain outside canonical docs; backlog items record repeatable
+  probes, unhealthy conditions, required outcomes, and evidence.
+
+## Active Backlog Registry
+
+### BL-P0-01 - Identity and authorization
+- **Maps to:** F0, F3, F8, F9, B2, B4, B7, B9; J1, J6, J8-J11.
+- **Requirement:** [Security, identity, and authority](ACTIVE_BACKLOG.md#security-identity-and-human-authority).
+
+### BL-P0-02 - Realtime consistency
+- **Maps to:** F0, F3, F9, B2, B8; J7, J8, J11.
+- **Requirement:** [Realtime and distributed consistency](ACTIVE_BACKLOG.md#realtime-and-distributed-consistency).
+
+### BL-P0-03 - Enforceable action boundary
+- **Maps to:** F3, B4; J8, J11.
+- **Requirement:** [Security, identity, and authority](ACTIVE_BACKLOG.md#security-identity-and-human-authority).
+
+### BL-P0-04 - Audit and database integrity
+- **Maps to:** F3, B4, B5; J8, J10, J11.
+- **Requirement:** [Security, identity, and authority](ACTIVE_BACKLOG.md#security-identity-and-human-authority) and [Storage and recovery](ACTIVE_BACKLOG.md#storage-migrations-and-recovery).
+
+### BL-P0-05 - Durable coordination Session control
+- **Maps to:** F0, F3, B2; J7, J8, J11.
+- **Requirement:** [Workspace coordination](ACTIVE_BACKLOG.md#workspace-coordination-and-sessions). Running-agent message delivery is withdrawn.
+
+### BL-P0-06 - Service, packaging, wiring, and transport
+- **Maps to:** F0, F7, B6, B8, B9; J1, J9, J11.
+- **Requirement:** [Installation, service, and wiring](ACTIVE_BACKLOG.md#installation-service-and-wiring).
+
+### BL-P0-07 - SQLite integrity repair
+- **Maps to:** F3, F9, B2, B5; J7, J10, J11.
+- **Requirement:** [Storage and recovery](ACTIVE_BACKLOG.md#storage-migrations-and-recovery).
+
+### BL-P0-08 - Reproducible supported schema evolution
+- **Maps to:** B5, B6; J9, J11.
+- **Requirement:** [Storage and recovery](ACTIVE_BACKLOG.md#storage-migrations-and-recovery). Postgres is withdrawn; this item protects the supported SQLite path and archive compatibility.
+
+### BL-P0-09 - Withdraw frozen capability exposure
+- **Maps to:** F1, F2, F4-F6, F10, B1, B3, B6-B9; J1-J11.
+- **Requirement:** [Frozen capability containment](ACTIVE_BACKLOG.md#frozen-capability-containment).
+
+### BL-P1-01 - Blocking quality and staging promotion
+- **Maps to:** F0-F10, B1-B9; J1-J11.
+- **Requirement:** [Quality and release](ACTIVE_BACKLOG.md#quality-release-and-traceability).
+
+### BL-P1-05 - Configuration truth
+- **Maps to:** F7, B6, B8; J9, J11.
+- **Requirement:** [Access and configuration](ACTIVE_BACKLOG.md#access-usage-and-configuration). Gateway and bridge configuration are withdrawn.
+
+### BL-P1-06 - GitHub integration security
+- **Maps to:** F8, B7; J6, J9.
+- **Requirement:** [GitHub linkage](ACTIVE_BACKLOG.md#github-linkage). Messaging bridges are withdrawn.
+
+### BL-P1-07 - Org access and scoped usage
+- **Maps to:** F9; J10, J11.
+- **Requirement:** [Access and configuration](ACTIVE_BACKLOG.md#access-usage-and-configuration).
+
+### BL-P1-09 - Readiness and recovery
+- **Maps to:** B5, B6, B8; J1, J7, J10, J11.
+- **Requirement:** [Operations and readiness](ACTIVE_BACKLOG.md#operations-readiness-and-recovery).
+
+### BL-P1-10 - Surface and traceability checks
+- **Maps to:** F0-F10, B1-B9; J1-J11.
+- **Requirement:** [Quality and release](ACTIVE_BACKLOG.md#quality-release-and-traceability).
+
+### BL-P1-12 - Durable mail and asynchronous collaboration
+- **Maps to:** F3, B2, B8; J7, J8, J11.
+- **Requirement:** [Agent communications](ACTIVE_BACKLOG.md#agent-communications-and-durable-mailboxes).
+
+### BL-P1-14 - Mailbox identity, presence, and successor continuity
+- **Maps to:** F3, B2, B8; J7, J8, J11.
+- **Requirement:** [Workspace portfolio and presence](ACTIVE_BACKLOG.md#workspace-portfolio-and-presence).
+
+### BL-P1-17 - Coordination-pattern and workflow routing
+- **Maps to:** F3, B2, B6, B8; J7, J10, J11.
+- **Requirement:** [Knowledge and patterns](ACTIVE_BACKLOG.md#knowledge-and-coordination-patterns). Managed Persona/Project Skills are withdrawn.
+
+### BL-P1-18 - Truthful default lookup guidance
+- **Maps to:** B2, B3, B6, B8; J7, J11.
+- **Requirement:** [Stable local lookup](ACTIVE_BACKLOG.md#stable-local-lookup).
+
+### BL-P1-19 - Human-approved public defect relay
+- **Maps to:** F3, F8, B2, B4, B7, B8; J8, J9, J11.
+- **Requirement:** [Community defect relay](ACTIVE_BACKLOG.md#community-defect-relay).
+
+### BL-P2-01 - Retire legacy browser surfaces
+- **Maps to:** F0, F7, B9; J9-J11.
+- **Requirement:** [Frozen capability containment](ACTIVE_BACKLOG.md#frozen-capability-containment).
+
+### BL-P2-02 - External evidence retention
+- **Maps to:** B5, B8; J11.
+- **Requirement:** [Quality and release](ACTIVE_BACKLOG.md#quality-release-and-traceability).
+
+### BL-P2-03 - Import-cycle maintainability
+- **Maps to:** B2, B4, B6; J7, J11.
+- **Requirement:** [Maintainability](ACTIVE_BACKLOG.md#maintainability).
+
+### BL-P3-01 - Normal-console routes, errors, and accessibility
+- **Maps to:** F0, F3, F7-F9, B8, B9; J1, J7-J11.
+- **Requirement:** [Workspace-first console](ACTIVE_BACKLOG.md#workspace-first-console).
+
+## Experimental Backlog Registry
+
+### BL-P1-15 - Agent-experience feedback field trial
+- **Maps to:** F3, B2, B4, B8; J7, J8, J11.
+- **Requirement:** [Agent feedback inbox](EXPERIMENTAL_BACKLOG.md#agent-feedback-inbox).
+
+### BL-P1-16 - Adoption and outcome analytics field trial
+- **Maps to:** F3, B2, B8; J7, J8, J11.
+- **Requirement:** [Adoption and outcome analytics](EXPERIMENTAL_BACKLOG.md#adoption-and-outcome-analytics).
+
+### BL-P1-20 - Ephemeral peer-review admission blocker
+- **Maps to:** F3, B2, B4, B8; J7, J8, J11.
+- **Requirement:** [Ephemeral peer review](EXPERIMENTAL_BACKLOG.md#ephemeral-peer-review-admission-blocker).
+
+## Withdrawn Historical IDs
+
+These IDs remain defined so existing documentation, commits, and external references
+do not become ambiguous. They own no schedulable backlog.
+
+### BL-P1-02 - Withdrawn Project and Issue execution
+- **Maps to:** F4; J5-J7.
+- **Disposition:** Withdrawn faulty implementation; no activation or backlog work.
+
+### BL-P1-03 - Withdrawn Pod execution
+- **Maps to:** F5; J4, J6.
+- **Disposition:** Withdrawn faulty implementation; no activation or backlog work.
+
+### BL-P1-04 - Withdrawn execution-model onboarding
+- **Maps to:** F6; J1.
+- **Disposition:** Withdrawn faulty implementation; no activation or backlog work.
+
+### BL-P1-08 - Withdrawn Automation UI and managed Skills
+- **Maps to:** F2, F10; J3, J10.
+- **Disposition:** Withdrawn faulty implementation; replacement research is isolated and does not reactivate this ID.
+
+### BL-P1-11 - Withdrawn model gateway
+- **Maps to:** B1, F7; J9, J11.
+- **Disposition:** Withdrawn faulty implementation; no activation or backlog work.
+
+### BL-P1-13 - Withdrawn Runtime execution
+- **Maps to:** F1, F2, F4, F5, B6, B8; J2-J7.
+- **Disposition:** Withdrawn faulty implementation; no activation or backlog work.
+
+### BL-P2-04 - Withdrawn semantic retrieval and code graph
+- **Maps to:** B3; J6, J7, J11.
+- **Disposition:** Withdrawn faulty implementation; replacement research is isolated and does not reactivate this ID.
