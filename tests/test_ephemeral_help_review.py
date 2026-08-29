@@ -372,6 +372,41 @@ def test_stale_review_lease_requeues_with_attempt_bound(tmp_path, monkeypatch):
         assert execution.review_session_id is None
 
 
+def test_completion_after_lease_expiry_is_refused(tmp_path, monkeypatch):
+    """An expired lease belongs to recovery: a late worker may not answer it,
+    or it races the requeue that can hand the review to somebody else."""
+    repo = _git_repo(tmp_path)
+    asker = start_session(str(repo), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    filed = file_help_request(
+        "expired lease review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=str(repo),
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=60_000,
+    )
+    claim = help_execution._claim(filed["code"])
+    assert claim is not None
+    with SessionLocal() as session:
+        execution = session.get(HelpRequestExecution, filed["code"])
+        execution.lease_expires_at = help_execution.utc_now() - help_execution.timedelta(seconds=1)
+        session.commit()
+
+    with pytest.raises(ValueError, match="lease has expired"):
+        help_execution.complete_review(
+            filed["code"],
+            session_id=claim["session_id"],
+            answer="too late",
+            evidence="review.txt:1",
+            returncode=0,
+            source_unchanged=True,
+        )
+    with SessionLocal() as session:
+        assert session.query(HelpRequest).filter_by(code=filed["code"]).one().answer is None
+
+
 @pytest.mark.parametrize(
     ("tool", "kept"),
     [

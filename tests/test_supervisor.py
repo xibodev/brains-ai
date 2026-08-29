@@ -139,6 +139,7 @@ def test_run_returns_2_when_all_children_disabled(tmp_path, monkeypatch) -> None
 
 def test_run_refuses_unavailable_gateway_before_starting_children(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINS_SUPERVISOR_PREFLIGHT_WAIT_SECONDS", "0")
     monkeypatch.setattr(supervisor, "_port_bindable", lambda _host, _port: False)
     monkeypatch.setattr(
         supervisor,
@@ -152,6 +153,7 @@ def test_run_preflights_every_enabled_listener_with_actual_host(tmp_path, monkey
     from brains.mcp import sse_auth
 
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINS_SUPERVISOR_PREFLIGHT_WAIT_SECONDS", "0")
     monkeypatch.setattr(sse_auth, "resolve_bind_host", lambda: "mcp-host")
     checked: list[tuple[str, int]] = []
 
@@ -168,6 +170,34 @@ def test_run_preflights_every_enabled_listener_with_actual_host(tmp_path, monkey
 
     assert supervisor.run(["--dashboard"]) == 3
     assert checked == [("127.0.0.1", 8787), ("127.0.0.1", 9876), ("mcp-host", 9877)]
+
+
+def test_run_waits_in_a_degraded_state_for_a_blocked_listener(tmp_path, monkeypatch) -> None:
+    """A blocked bind is usually a predecessor still shutting down: the
+    supervisor holds a bounded degraded state instead of exiting into a
+    service-manager relaunch loop."""
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("BRAINS_SUPERVISOR_PREFLIGHT_WAIT_SECONDS", "30")
+    monkeypatch.setattr(supervisor.time, "sleep", lambda _seconds: None)
+    attempts: list[int] = []
+
+    def bindable(_host: str, port: int) -> bool:
+        attempts.append(port)
+        return attempts.count(port) > 1
+
+    monkeypatch.setattr(supervisor, "_port_bindable", bindable)
+    started: list[str] = []
+
+    def build(_args):
+        started.append("built")
+        return []
+
+    monkeypatch.setattr(supervisor, "_build_children", build)
+
+    # No children to supervise (2), i.e. the preflight let the run continue.
+    assert supervisor.run(["--no-mcp"]) == 2
+    assert attempts == [8787, 8787]
+    assert started == ["built"]
 
 
 def test_run_refuses_enabled_listener_port_collision_before_binding(tmp_path, monkeypatch) -> None:

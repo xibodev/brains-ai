@@ -257,6 +257,10 @@ class ServiceSpec:
     def __post_init__(self) -> None:
         self.gateway_port = _valid_port(self.gateway_port, "gateway_port")
         self.mcp_port = _valid_port(self.mcp_port, "mcp_port")
+        if self.gateway_port == self.mcp_port:
+            # The supervisor rejects this pair deterministically, so installing
+            # it would only persist a service that can never come up.
+            raise ValueError(f"gateway_port and mcp_port must differ (both {self.gateway_port})")
 
     @property
     def command_line(self) -> str:

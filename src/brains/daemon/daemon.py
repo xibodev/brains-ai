@@ -178,6 +178,8 @@ class Daemon:
                 acted.append(self._diagnostic(runtime, "help_review_poll_failed", exc))
                 continue
             for queued in reviews:
+                if self._cap_reached(len(acted)):
+                    break
                 try:
                     claimed = self.client.claim_help_review(runtime["id"], queued["code"])
                     review = claimed.get("review") if claimed.get("claimed") else None

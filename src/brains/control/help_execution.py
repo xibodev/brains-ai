@@ -653,6 +653,31 @@ def _claim(
     return result
 
 
+def _lock_review(session, code: str) -> tuple[HelpRequest | None, HelpRequestExecution | None]:
+    """Serialize completion and lease recovery on the same two rows.
+
+    Both transitions read ownership, status and the lease before writing, so
+    they must not interleave: without this a worker completing just after its
+    lease expired and :func:`dispatch_due_help_reviews` requeueing the same
+    review can each observe a state the other is about to replace. A no-op
+    write takes SQLite's writer lock before the read; PostgreSQL locks the rows.
+    """
+    request_query = session.query(HelpRequest).filter(HelpRequest.code == code)
+    execution_query = session.query(HelpRequestExecution).filter(
+        HelpRequestExecution.request_code == code
+    )
+    if session.get_bind().dialect.name == "postgresql":
+        return request_query.with_for_update().one_or_none(), (
+            execution_query.with_for_update().one_or_none()
+        )
+    session.execute(
+        update(HelpRequestExecution)
+        .where(HelpRequestExecution.request_code == code)
+        .values(status=HelpRequestExecution.status)
+    )
+    return request_query.one_or_none(), execution_query.one_or_none()
+
+
 def claim_review_for_runtime(runtime_ref: str | int, code: str) -> dict[str, Any] | None:
     from brains.control.assignments import _get_runtime
 
@@ -682,8 +707,7 @@ def complete_review(
     clean_evidence = _bounded(evidence, 2000)
     succeeded = not error_code and returncode == 0 and source_unchanged and bool(clean_answer)
     with SessionLocal() as session:
-        request = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
-        execution = session.get(HelpRequestExecution, code)
+        request, execution = _lock_review(session, code)
         review_session = session.get(AgentSession, session_id)
         if request is None or execution is None or review_session is None:
             raise ValueError(f"unknown ephemeral help review: {code}")
@@ -695,6 +719,10 @@ def complete_review(
             return {"code": code, "status": "answered", "duplicate": True}
         if request.status != "claimed" or execution.status != "running":
             raise ValueError(f"ephemeral help review is not running: {code}")
+        if execution.lease_expires_at is None or _as_utc(execution.lease_expires_at) <= now:
+            # Recovery owns an expired lease: answering here would race a
+            # requeue that may already have handed the review to somebody else.
+            raise ValueError(f"ephemeral help review lease has expired: {code}")
         review_session.ended_at = now
         review_session.state = "completed" if succeeded else "failed"
         review_session.summary = (
@@ -826,7 +854,7 @@ def dispatch_due_help_reviews(limit: int = 5) -> list[str]:
     now = utc_now()
     with SessionLocal() as session:
         stale = (
-            session.query(HelpRequestExecution)
+            session.query(HelpRequestExecution.request_code)
             .join(HelpRequest, HelpRequest.code == HelpRequestExecution.request_code)
             .filter(
                 HelpRequestExecution.status == "running",
@@ -835,10 +863,19 @@ def dispatch_due_help_reviews(limit: int = 5) -> list[str]:
             )
             .all()
         )
-        for execution in stale:
-            request = (
-                session.query(HelpRequest).filter(HelpRequest.code == execution.request_code).one()
-            )
+        for (stale_code,) in stale:
+            request, execution = _lock_review(session, stale_code)
+            if request is None or execution is None:
+                continue
+            # Re-read under the lock: a worker may have answered between the
+            # scan above and this transition.
+            if (
+                execution.status != "running"
+                or request.status != "claimed"
+                or execution.lease_expires_at is None
+                or _as_utc(execution.lease_expires_at) >= now
+            ):
+                continue
             review_session = (
                 session.get(AgentSession, execution.review_session_id)
                 if execution.review_session_id
