@@ -328,9 +328,13 @@ manages the local supported service without mutating unrelated configuration.
 - AC-B6-04: help/docs do not advertise removed or withdrawn commands.
 
 Wire adapters for Copilot, Claude, Codex, and OpenCode preserve unrelated settings and
-ownership. Service source verifies interpreter/PID identity and performs bounded
-endpoint probes. Windowless Windows operation, listener/protocol fencing, child restart,
-and clean-host E4 remain active backlog work.
+ownership. Service installation verifies the exact interpreter, refuses conflicting
+gateway/MCP ports, and either refuses an unavailable explicit gateway port or persists
+a bindable fallback. The supervisor preflights every enabled listener on its actual bind
+host, holds a bounded degraded state while a bind is blocked, then exits with code 3;
+the systemd unit suppresses restart for that configuration exit. Service status combines
+PID identity with bounded endpoint probes. Windowless Windows operation, child-protocol
+readiness, and clean-host E4 remain active backlog work.
 
 ### B7 - Authenticated external events
 

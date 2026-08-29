@@ -2,9 +2,10 @@
 
 A user unit (under ``~/.config/systemd/user``) runs **as the logged-in user**,
 so HOME / OAuth / the canonical DB all resolve. ``WantedBy=default.target``
-starts it at login; ``Restart=always`` restarts it on crash. We best-effort
-enable *linger* so the unit can also come up at boot before an interactive
-login (``loginctl enable-linger``) — failure there is non-fatal.
+starts it at login; ``Restart=always`` restarts it on crash, except for the
+supervisor's configuration/preflight exit code, which relaunching cannot fix.
+We best-effort enable *linger* so the unit can also come up at boot before an
+interactive login (``loginctl enable-linger``) — failure there is non-fatal.
 
 The unit file is rendered by a pure function so it can be unit-tested on any
 host OS; registration shells out to ``systemctl --user``.
@@ -16,6 +17,7 @@ import contextlib
 import getpass
 from pathlib import Path
 
+from brains.control.supervisor import CONFIG_EXIT_CODE
 from brains.service.common import (
     SYSTEMD_UNIT,
     ServiceSpec,
@@ -29,7 +31,11 @@ def unit_path() -> Path:
 
 
 def render_unit(spec: ServiceSpec) -> str:
-    """Render the systemd unit (``Restart=always`` + ``default.target``)."""
+    """Render the systemd unit (``Restart=always`` + ``default.target``).
+
+    ``RestartPreventExitStatus`` excludes the supervisor's configuration exit
+    code so a port conflict it already refused is not relaunched forever.
+    """
     exec_start = spec.command_line
     return f"""[Unit]
 Description={spec.description}
@@ -42,6 +48,8 @@ ExecStart={exec_start}
 WorkingDirectory={spec.working_dir}
 Restart=always
 RestartSec=2
+# A configuration/preflight failure cannot be fixed by relaunching.
+RestartPreventExitStatus={CONFIG_EXIT_CODE}
 # Unlimited restarts: clear the default start-limit burst guard.
 StartLimitIntervalSec=0
 

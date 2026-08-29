@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from brains import service
+from brains.control import supervisor
 from brains.service import common as service_common
 from brains.service import linux, macos, windows
 from brains.service.common import (
@@ -123,6 +124,16 @@ def test_explicit_unavailable_service_port_is_refused(monkeypatch) -> None:
     assert report["ok"] is False
     assert report["action"] == "refused"
     assert "8877" in report["detail"]
+
+
+def test_install_refuses_identical_gateway_and_mcp_ports(monkeypatch, tmp_path) -> None:
+    """The supervisor rejects that pair deterministically, so installing it
+    would only persist a service that can never come up."""
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    report = service.install(gateway_port=9877, mcp_port=9877, dry_run=True)
+    assert report["ok"] is False
+    assert report["action"] == "refused"
+    assert "9877" in report["detail"]
 
 
 def test_listener_status_uses_persisted_service_ports(monkeypatch, tmp_path) -> None:
@@ -257,6 +268,8 @@ def test_macos_plist_path_in_launchagents(monkeypatch, tmp_path) -> None:
 def test_linux_unit_restart_and_target(spec: ServiceSpec) -> None:
     unit = linux.render_unit(spec)
     assert "Restart=always" in unit
+    # A configuration/preflight refusal must not be relaunched forever.
+    assert f"RestartPreventExitStatus={supervisor.CONFIG_EXIT_CODE}" in unit
     assert "WantedBy=default.target" in unit
     assert "ExecStart=" in unit and "-m brains serve-all" in unit
     assert "StartLimitIntervalSec=0" in unit

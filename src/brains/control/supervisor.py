@@ -238,6 +238,61 @@ def _build_children(args: argparse.Namespace) -> list[Child]:
     return children
 
 
+#: Exit code for a configuration/preflight failure the supervisor cannot fix by
+#: running. Service definitions that can filter on it (systemd's
+#: ``RestartPreventExitStatus``) must not restart the unit for this code.
+CONFIG_EXIT_CODE = 3
+
+#: Default bounded window the supervisor stays up, retrying a blocked listener
+#: bind, before it gives up with :data:`CONFIG_EXIT_CODE`. Service managers that
+#: cannot filter on an exit code (launchd, Task Scheduler) see a slow, bounded
+#: degraded hold instead of a tight relaunch loop.
+DEFAULT_PREFLIGHT_WAIT_SECONDS = 300
+
+
+def _preflight_wait_seconds() -> int:
+    try:
+        raw = int(os.environ.get("BRAINS_SUPERVISOR_PREFLIGHT_WAIT_SECONDS", ""))
+    except ValueError:
+        raw = DEFAULT_PREFLIGHT_WAIT_SECONDS
+    return max(0, min(raw, 3600))
+
+
+def _first_unbindable(
+    listeners: list[tuple[str, str, int]],
+) -> tuple[str, str, int] | None:
+    """The first enabled listener whose actual bind is unavailable, retried.
+
+    The supervisor holds a bounded degraded state rather than exiting on the
+    first blocked bind: a conflict is usually a slower predecessor still
+    shutting down. Returns ``None`` once every listener can bind, or the
+    listener still blocked when the window closes.
+    """
+    deadline = time.monotonic() + _preflight_wait_seconds()
+    delay = 1.0
+    while True:
+        blocked = next(
+            (
+                (name, host, port)
+                for name, host, port in listeners
+                if not _port_bindable(host, port)
+            ),
+            None,
+        )
+        if blocked is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return blocked
+        logger.warning(
+            "%s port %s:%s is unavailable; degraded, retrying for up to %.0fs",
+            *blocked,
+            remaining,
+        )
+        time.sleep(min(delay, remaining))
+        delay = min(delay * 2, 60.0)
+
+
 def _port_bindable(host: str, port: int) -> bool:
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
@@ -323,17 +378,15 @@ def run(argv: list[str] | None = None) -> int:
     for name, _host, port in listeners:
         if port in ports:
             logger.error("%s and %s both request port %s", ports[port], name, port)
-            return 3
+            return CONFIG_EXIT_CODE
         ports[port] = name
-    for name, host, port in listeners:
-        if not _port_bindable(host, port):
-            logger.error(
-                "%s port %s:%s is unavailable; refusing a permanent restart loop",
-                name,
-                host,
-                port,
-            )
-            return 3
+    blocked = _first_unbindable(listeners)
+    if blocked is not None:
+        logger.error(
+            "%s port %s:%s is still unavailable; refusing a permanent restart loop",
+            *blocked,
+        )
+        return CONFIG_EXIT_CODE
 
     children = _build_children(args)
     if not children:

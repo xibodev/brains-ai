@@ -186,6 +186,19 @@ brains-ai service status
 brains-ai service logs
 ```
 
+`brains-ai service install` preflights the requested loopback gateway port. An
+explicit unavailable port is refused. When no port is supplied and the default
+cannot be bound, the installer selects a bindable fallback, writes it into the
+OS service definition, and persists the non-secret endpoint contract under the
+Brains service state directory. `service status` probes those persisted ports
+and returns the effective gateway, console, and MCP URLs. Installation refuses a
+specification whose gateway and MCP ports are the same, because the supervisor
+rejects that pair deterministically. The supervisor preflights every enabled
+listener on its actual bind host. A blocked bind holds a bounded degraded state
+(`BRAINS_SUPERVISOR_PREFLIGHT_WAIT_SECONDS`, default 300, retried with backoff);
+when the window closes it exits with code 3, which the systemd unit excludes
+from restart (`RestartPreventExitStatus`) instead of relaunching forever.
+
 A healthy status requires all of the following:
 
 1. the recorded PID belongs to the expected Brains command and process instance;

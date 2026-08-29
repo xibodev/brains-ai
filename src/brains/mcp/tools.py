@@ -658,9 +658,16 @@ def route_decision_tool(
     clear_due: bool = False,
     escalation_level: int | None = None,
     escalation_reason: str = "",
-    operator: str | None = None,
 ):
-    """Assign or escalate an open approval from a human-bound local principal."""
+    """Assign or escalate an open approval as the calling principal.
+
+    The principal is the one the transport already authenticated: an
+    SSE caller stays its API-authenticated identity, and only a local stdio
+    invocation inherits the launching operator. A caller-supplied operator is
+    not accepted here - it would let a remote caller act as a local human and
+    walk past the human-channel gate in
+    :func:`brains.control.decisions.route_decision`.
+    """
     from brains.authz.resolver import resolve_local_principal
 
     return route_decision(
@@ -672,7 +679,7 @@ def route_decision_tool(
         clear_due=clear_due,
         escalation_level=escalation_level,
         escalation_reason=escalation_reason,
-        principal=resolve_local_principal(operator=operator),
+        principal=resolve_local_principal(),
     )
 
 
@@ -681,9 +688,12 @@ def escalate_decision_tool(
     reason: str,
     assigned_operator: str | None = None,
     due_at: str | None = None,
-    operator: str | None = None,
 ):
-    """Increment an open approval's escalation level as a local human."""
+    """Increment an open approval's escalation level as the calling principal.
+
+    As with :func:`route_decision_tool`, the identity comes from the
+    transport, never from a caller-supplied operator slug.
+    """
     from brains.authz.resolver import resolve_local_principal
 
     return escalate_decision(
@@ -691,7 +701,7 @@ def escalate_decision_tool(
         reason=reason,
         assigned_operator=assigned_operator,
         due_at=due_at,
-        principal=resolve_local_principal(operator=operator),
+        principal=resolve_local_principal(),
     )
 
 

@@ -247,6 +247,38 @@ def test_daemon_runs_and_completes_ephemeral_review(monkeypatch, tmp_path):
     )
 
 
+def test_help_review_polling_stops_at_the_cycle_cap(monkeypatch, tmp_path):
+    """One Runtime can return several queued reviews; the per-cycle cap bounds
+    how many of them a single poll runs."""
+    daemon = Daemon(DaemonConfig(machine_id="review-machine", max_concurrent=1), client=MagicMock())
+    daemon.client.list_runtimes.return_value = [
+        {"id": 7, "tool": "copilot", "status": "online", "health": "healthy", "org_id": 1}
+    ]
+    daemon.client.get_help_reviews.return_value = [{"code": "HR-1"}, {"code": "HR-2"}]
+    daemon.client.claim_help_review.side_effect = lambda _runtime, code: {
+        "claimed": True,
+        "review": {
+            "code": code,
+            "required_tool": "copilot",
+            "workspace_path": str(tmp_path),
+            "workspace_id": 3,
+            "session_id": f"ses_{code}",
+        },
+    }
+    monkeypatch.setattr(
+        "brains.control.help_execution.run_read_only_review",
+        lambda *_args, **_kwargs: __import__(
+            "brains.control.help_execution", fromlist=["ReviewRun"]
+        ).ReviewRun("No findings.", "tracked snapshot", 0, True),
+    )
+    daemon.client.complete_help_review.return_value = {"status": "answered"}
+
+    result = daemon.poll_help_reviews()
+
+    assert [row["code"] for row in result] == ["HR-1"]
+    assert daemon.client.claim_help_review.call_count == 1
+
+
 # --------------------------------------------------------------------------- #
 # Poll → claim → spawn cycle (--once)
 # --------------------------------------------------------------------------- #
