@@ -3011,7 +3011,23 @@ def workspaces_doctor_cli(
     from brains.control.sessions import has_project_marker
     from brains.storage.db import SessionLocal
     from brains.storage.migrations import init_db
-    from brains.storage.models import Workspace
+    from brains.storage.models import Workspace, WorkspaceAlias
+
+    def promote_primary(workspace: Workspace, path: str) -> None:
+        conflict = (
+            session.query(Workspace)
+            .filter(Workspace.path == path, Workspace.id != workspace.id)
+            .one_or_none()
+        )
+        if conflict is None:
+            workspace.path = path
+            return
+        previous = workspace.path
+        workspace.path = f"__brains_path_swap__/{workspace.id}/{conflict.id}"
+        session.flush()
+        conflict.path = previous
+        session.flush()
+        workspace.path = path
 
     if archive_missing and prune_missing:
         typer.echo(
@@ -3023,21 +3039,33 @@ def workspaces_doctor_cli(
     init_db()
     with SessionLocal() as session:
         rows = (
-            session.query(Workspace.id, Workspace.slug, Workspace.path)
+            session.query(Workspace)
             .filter(Workspace.status == "active")
             .order_by(Workspace.slug.asc())
             .all()
         )
+        aliases: dict[int, list[str]] = {}
+        for workspace_id, path in session.query(
+            WorkspaceAlias.workspace_id, WorkspaceAlias.path
+        ).filter(WorkspaceAlias.workspace_id.in_([row.id for row in rows])):
+            aliases.setdefault(workspace_id, []).append(path)
         missing: list[dict[str, Any]] = []
         no_marker: list[dict[str, Any]] = []
+        primary_promotions: dict[int, str] = {}
         ok = 0
         for row in rows:
-            if not row.path or not _os.path.isdir(row.path):
+            paths = list(dict.fromkeys([row.path, *aliases.get(row.id, [])]))
+            usable = [path for path in paths if path and _os.path.isdir(path)]
+            if not usable:
                 missing.append({"id": row.id, "slug": row.slug, "path": row.path})
-            elif not has_project_marker(row.path):
-                no_marker.append({"id": row.id, "slug": row.slug, "path": row.path})
             else:
-                ok += 1
+                selected = row.path if row.path in usable else usable[0]
+                if selected != row.path:
+                    primary_promotions[row.id] = selected
+                if not any(has_project_marker(path) for path in usable):
+                    no_marker.append({"id": row.id, "slug": row.slug, "path": selected})
+                else:
+                    ok += 1
 
         report: dict[str, Any] = {
             "total": len(rows),
@@ -3090,6 +3118,13 @@ def workspaces_doctor_cli(
                 "deleted": deleted_by_table["workspaces"],
                 "deleted_by_table": deleted_by_table,
             }
+
+        if apply and (archive_missing or prune_missing) and primary_promotions:
+            for workspace_id, path in primary_promotions.items():
+                workspace = session.get(Workspace, workspace_id)
+                if workspace is not None:
+                    promote_primary(workspace, path)
+            session.commit()
 
         _print_json(report)
 

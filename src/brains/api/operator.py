@@ -237,10 +237,7 @@ def _events(
 def _open_decisions(principal: Principal, *, workspace_id: int | None = None) -> list[dict]:
     from brains.control.decisions import list_open_decisions
 
-    rows = list_open_decisions(limit=100)
-    if workspace_id is not None:
-        rows = [row for row in rows if row.get("workspace_id") == workspace_id]
-    return rows
+    return list_open_decisions(limit=100, workspace_id=workspace_id)
 
 
 def _live_agents(principal: Principal, *, workspace_id: int | None = None) -> list[dict]:

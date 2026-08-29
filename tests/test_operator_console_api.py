@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from brains.audit import list_entries
 from brains.authz import credentials as creds
 from brains.control import orgs as orgs_ctl
+from brains.control.decisions import file_decision_request
 from brains.control.handoffs import set_handoff
 from brains.control.operators import add_operator, ensure_admin_operator
 from brains.control.sessions import register_workspace, start_session
@@ -100,6 +101,19 @@ def test_operator_aggregates_do_not_leak_other_org_coordination(client, tmp_path
     assert {row["title"] for row in coordination["tasks"]} == {"Visible task"}
     assert all(row["workspace"] == own.slug for row in coordination["tasks"])
     assert coordination["handoffs"] == []
+
+
+def test_workspace_detail_filters_decisions_before_limit(client, auth_headers, tmp_path):
+    target = register_workspace(str(tmp_path / "target"), slug=_slug("target"))
+    noisy = register_workspace(str(tmp_path / "noisy"), slug=_slug("noisy"))
+    wanted = file_decision_request(target.path, "older target decision")
+    for index in range(101):
+        file_decision_request(noisy.path, f"newer noisy decision {index}")
+
+    response = client.get(f"/v1/operator/workspaces/{target.slug}", headers=auth_headers)
+
+    assert response.status_code == 200, response.text
+    assert wanted["code"] in {row["code"] for row in response.json()["decisions"]}
 
 
 def test_task_create_uses_control_layer_and_attributes_browser_operator(

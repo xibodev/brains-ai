@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import or_, select, update
 from sqlalchemy.engine import CursorResult
 
 from brains.control.common import normalize_path, utc_now
@@ -485,6 +485,21 @@ def list_reviews_for_runtime(runtime_ref: str | int, limit: int = 10) -> list[di
         runtime = _get_runtime(session, runtime_ref)
         if runtime is None:
             raise ValueError(f"unknown runtime: {runtime_ref!r}")
+        if (
+            runtime.status != "online"
+            or runtime.health != "healthy"
+            or runtime.org_id is None
+            or not runtime.working_root
+        ):
+            return []
+        try:
+            root = normalize_path(runtime.working_root)
+        except (OSError, ValueError):
+            return []
+        matching_alias = select(WorkspaceAlias.id).where(
+            WorkspaceAlias.workspace_id == Workspace.id,
+            WorkspaceAlias.path == root,
+        )
         rows = (
             session.query(HelpRequestExecution, HelpRequest, Workspace)
             .join(HelpRequest, HelpRequest.code == HelpRequestExecution.request_code)
@@ -494,6 +509,9 @@ def list_reviews_for_runtime(runtime_ref: str | int, limit: int = 10) -> list[di
                 HelpRequestExecution.required_tool == runtime.tool,
                 HelpRequestExecution.launch_after <= now,
                 HelpRequest.status == "open",
+                HelpRequest.expires_at >= now,
+                Workspace.org_id == runtime.org_id,
+                or_(Workspace.path == root, matching_alias.exists()),
             )
             .order_by(HelpRequestExecution.launch_after, HelpRequest.created_at)
             .limit(max(1, min(limit, 25)))
@@ -509,7 +527,6 @@ def list_reviews_for_runtime(runtime_ref: str | int, limit: int = 10) -> list[di
                 "mode": execution.mode,
             }
             for execution, request, workspace in rows
-            if _runtime_can_read_workspace(session, runtime, workspace)
         ]
 
 
@@ -523,6 +540,10 @@ def _claim(
     init_db()
     now = utc_now()
     with SessionLocal() as session:
+        from brains.control.help import _expire_due
+
+        _expire_due(session)
+        session.commit()
         request = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
         execution = session.get(HelpRequestExecution, code)
         if request is None or execution is None or request.status != "open":
@@ -532,16 +553,39 @@ def _claim(
         workspace = session.get(Workspace, execution.source_workspace_id)
         if workspace is None:
             return None
-        if runtime is not None and not _runtime_can_read_workspace(session, runtime, workspace):
-            return None
+        if runtime is not None:
+            if runtime.tool != execution.required_tool:
+                return None
+            if not _runtime_can_read_workspace(session, runtime, workspace):
+                return None
         session_id = f"ses_{uuid.uuid4().hex[:12]}"
+        claimed_request = session.execute(
+            update(HelpRequest)
+            .where(
+                HelpRequest.code == code,
+                HelpRequest.status == "open",
+                HelpRequest.expires_at >= now,
+            )
+            .values(
+                status="claimed",
+                claimed_by_session_id=session_id,
+                claimed_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if not isinstance(claimed_request, CursorResult) or claimed_request.rowcount != 1:
+            session.rollback()
+            return None
+        claim_filters = [
+            HelpRequestExecution.request_code == code,
+            HelpRequestExecution.status == "queued",
+            HelpRequestExecution.launch_after <= now,
+        ]
+        if runtime is not None:
+            claim_filters.append(HelpRequestExecution.required_tool == runtime.tool)
         claimed_execution = session.execute(
             update(HelpRequestExecution)
-            .where(
-                HelpRequestExecution.request_code == code,
-                HelpRequestExecution.status == "queued",
-                HelpRequestExecution.launch_after <= now,
-            )
+            .where(*claim_filters)
             .values(
                 status="running",
                 runtime_id=runtime.id if runtime is not None else None,
@@ -555,21 +599,6 @@ def _claim(
             .execution_options(synchronize_session=False)
         )
         if not isinstance(claimed_execution, CursorResult) or claimed_execution.rowcount != 1:
-            session.rollback()
-            return None
-        claimed_request = (
-            session.query(HelpRequest)
-            .filter(HelpRequest.code == code, HelpRequest.status == "open")
-            .update(
-                {
-                    "status": "claimed",
-                    "claimed_by_session_id": session_id,
-                    "claimed_at": now,
-                },
-                synchronize_session=False,
-            )
-        )
-        if claimed_request != 1:
             session.rollback()
             return None
         requester = (

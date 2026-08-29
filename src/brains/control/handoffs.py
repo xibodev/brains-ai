@@ -86,7 +86,7 @@ def set_handoff(
 
                 agent = session.get(AgentSession, session_id)
                 if agent is not None:
-                    renew_session_lease(session, agent)
+                    renew_session_lease(session, agent, reactivate=False)
                     session.commit()
             return {
                 "handoff_id": active.id,

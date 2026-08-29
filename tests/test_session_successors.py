@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from brains.control.mailbox import read_messages, send_message
 from brains.control.sessions import (
     SESSION_LIVE_TTL_SECONDS,
@@ -44,6 +46,21 @@ def test_explicit_successor_link_recovers_mail(tmp_path):
     new = start_session(workspace, tool="opencode")
     link_session_successor(old["session_id"], new["session_id"])
     assert [row["id"] for row in read_messages(new["session_id"])] == [sent["id"]]
+
+
+def test_explicit_successor_link_is_idempotent_but_refuses_conflicting_relink(tmp_path):
+    workspace = str(tmp_path / "repo")
+    old = start_session(workspace, tool="opencode")
+    first = start_session(workspace, tool="opencode")
+    other = start_session(workspace, tool="opencode")
+
+    initial = link_session_successor(old["session_id"], first["session_id"])
+    retry = link_session_successor(old["session_id"], first["session_id"])
+    with pytest.raises(ValueError, match="refusing conflicting relink"):
+        link_session_successor(old["session_id"], other["session_id"])
+
+    assert initial["duplicate"] is False
+    assert retry["duplicate"] is True
 
 
 def test_replacement_candidates_and_roster_require_recent_activity(tmp_path):

@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import select
+
 from brains.control.common import utc_now
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
@@ -244,13 +246,33 @@ def _predict_expired_session_leases() -> int:
 
 
 def _predict_expired_help_requests() -> int:
+    from brains.control.help import _claim_grace_seconds
+
     now = utc_now()
+    grace_cutoff = now - timedelta(seconds=_claim_grace_seconds())
     with SessionLocal() as session:
-        return (
+        open_count = (
             session.query(HelpRequest)
-            .filter(HelpRequest.expires_at < now, HelpRequest.status.in_(("open", "claimed")))
+            .filter(
+                HelpRequest.expires_at < now,
+                HelpRequest.status == "open",
+            )
             .count()
         )
+        live_review = select(HelpRequestExecution.request_code).where(
+            HelpRequestExecution.status == "running",
+            HelpRequestExecution.lease_expires_at >= now,
+        )
+        claimed_count = (
+            session.query(HelpRequest)
+            .filter(
+                HelpRequest.status == "claimed",
+                HelpRequest.claimed_at < grace_cutoff,
+                ~HelpRequest.code.in_(live_review),
+            )
+            .count()
+        )
+        return open_count + claimed_count
 
 
 def _predict_expirable_session_command_leases() -> int:

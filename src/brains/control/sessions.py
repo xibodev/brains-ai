@@ -9,15 +9,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 from brains.control.common import normalize_path, slug_from_path, unique_slug, utc_now
-from brains.control.events import append_event
+from brains.control.events import TAXONOMY_VERSION, append_event
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentSession,
     AgentTask,
+    Event,
+    EventContext,
     Handoff,
     Org,
     SessionLease,
@@ -412,6 +414,17 @@ def _supersede_coordination_handle(
     ).update({"claimed_by_session_id": successor.id}, synchronize_session=False)
 
 
+def _lock_session_lifecycle(session, session_id: str) -> AgentSession | None:
+    """Serialize lease-driven state transitions on SQLite and PostgreSQL."""
+    query = session.query(AgentSession).filter(AgentSession.id == session_id)
+    if session.get_bind().dialect.name == "postgresql":
+        return query.with_for_update().one_or_none()
+    session.execute(
+        update(AgentSession).where(AgentSession.id == session_id).values(state=AgentSession.state)
+    )
+    return query.one_or_none()
+
+
 def sweep_stale_session_leases() -> list[str]:
     """Make expired PID-less coordination Sessions dormant and release ownership."""
     init_db()
@@ -441,38 +454,70 @@ def sweep_stale_session_leases() -> list[str]:
             .exists()
         )
         for session_id, workspace_id in rows:
+            agent = _lock_session_lifecycle(session, session_id)
+            lease = session.get(SessionLease, session_id)
+            lease_expires_at = _aware(lease.lease_expires_at) if lease is not None else None
+            if (
+                agent is None
+                or agent.ended_at is not None
+                or agent.pid is not None
+                or agent.runtime_id is not None
+                or agent.issue_id is not None
+                or agent.persona_id is not None
+                or agent.state == DORMANT_SESSION_STATE
+                or lease_expires_at is None
+                or lease_expires_at >= now
+            ):
+                continue
             updated = (
                 session.query(AgentSession)
-                .filter(
-                    AgentSession.id == session_id,
-                    AgentSession.ended_at.is_(None),
-                    AgentSession.state != DORMANT_SESSION_STATE,
-                    lease_is_still_expired,
-                )
-                .update(
-                    {"state": DORMANT_SESSION_STATE},
-                    synchronize_session=False,
-                )
+                .filter(AgentSession.id == session_id, lease_is_still_expired)
+                .update({"state": DORMANT_SESSION_STATE}, synchronize_session=False)
             )
             if not updated:
                 continue
             _release_session_ownership(session, session_id)
+            from brains.control.session_commands import OPEN_STATUSES
+            from brains.storage.models import SessionCommand
+
+            session.query(SessionCommand).filter(
+                SessionCommand.session_id == session_id,
+                SessionCommand.status.in_(sorted(OPEN_STATUSES)),
+            ).update(
+                {
+                    "status": "cancelled",
+                    "result": "session_dormant",
+                    "error": (
+                        "the coordination Session lease expired before the command was delivered"
+                    ),
+                    "completed_at": now,
+                    "updated_at": now,
+                    "lease_expires_at": None,
+                },
+                synchronize_session=False,
+            )
+            event = Event(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                kind="session_dormant",
+                message="coordination session lease expired",
+                metadata_json="{}",
+                created_at=now,
+            )
+            session.add(event)
+            session.flush()
+            session.add(
+                EventContext(
+                    event_id=event.id,
+                    category="session",
+                    scope="workspace",
+                    scope_source="explicit",
+                    taxonomy_version=TAXONOMY_VERSION,
+                )
+            )
             dormant.append((session_id, workspace_id))
         if dormant:
             session.commit()
-    for session_id, workspace_id in dormant:
-        append_event(
-            "session_dormant",
-            "coordination session lease expired",
-            workspace_id=workspace_id,
-            session_id=session_id,
-            renew_session=False,
-        )
-        _cancel_open_commands(
-            session_id,
-            reason="the coordination Session lease expired before the command was delivered",
-            result="session_dormant",
-        )
     return [session_id for session_id, _workspace_id in dormant]
 
 
@@ -1068,7 +1113,7 @@ def heartbeat_session(session_id: str, *, allow_ended: bool = False) -> dict[str
 
     init_db()
     with SessionLocal() as session:
-        row = session.get(AgentSession, session_id)
+        row = _lock_session_lifecycle(session, session_id)
         if row is None:
             raise AgentSessionNotFoundError(f"unknown session: {session_id}")
         if row.ended_at is not None and not allow_ended:
@@ -1100,12 +1145,23 @@ def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str
             raise ValueError(f"unknown successor session: {to_session_id}")
         if predecessor.workspace_id != successor.workspace_id:
             raise ValueError("predecessor and successor must belong to the same workspace")
+        link = session.get(SessionSuccessor, from_session_id)
+        if link is not None:
+            if link.successor_session_id != to_session_id:
+                raise ValueError(
+                    f"session {from_session_id} already has successor "
+                    f"{link.successor_session_id}; refusing conflicting relink"
+                )
+            return {
+                "from_session_id": from_session_id,
+                "to_session_id": to_session_id,
+                "linked": True,
+                "duplicate": True,
+            }
         require_live_session(session, to_session_id, action="link_session_successor")
         _supersede_coordination_handle(session, predecessor, successor)
-        link = session.get(SessionSuccessor, from_session_id)
-        if link is None:
-            link = SessionSuccessor(predecessor_session_id=from_session_id)
-            session.add(link)
+        link = SessionSuccessor(predecessor_session_id=from_session_id)
+        session.add(link)
         link.successor_session_id = successor.id
         link.linked_at = utc_now()
         session.commit()
@@ -1121,7 +1177,12 @@ def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str
         session_id=to_session_id,
         metadata={"from_session_id": from_session_id, "to_session_id": to_session_id},
     )
-    return {"from_session_id": from_session_id, "to_session_id": to_session_id, "linked": True}
+    return {
+        "from_session_id": from_session_id,
+        "to_session_id": to_session_id,
+        "linked": True,
+        "duplicate": False,
+    }
 
 
 def predecessor_session_ids(session, session_id: str) -> list[str]:

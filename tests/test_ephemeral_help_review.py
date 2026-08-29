@@ -12,7 +12,13 @@ from brains.control import help_execution
 from brains.control.help import file_help_request, get_help_request
 from brains.control.sessions import register_workspace, start_session
 from brains.storage.db import SessionLocal
-from brains.storage.models import AgentSession, HelpRequestExecution, Runtime
+from brains.storage.models import (
+    AgentSession,
+    HelpRequest,
+    HelpRequestExecution,
+    Runtime,
+    Workspace,
+)
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -54,7 +60,7 @@ def test_auto_exact_tool_files_durable_review_and_returns_immediately(tmp_path, 
         to_workspace=str(repo),
         required_tool="copilot",
         execution_mode="auto",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
 
     assert filed["status"] == "open"
@@ -175,7 +181,7 @@ def test_runtime_claim_and_complete_answers_original_request(tmp_path, monkeypat
         to_workspace=str(repo),
         required_tool="copilot",
         execution_mode="ephemeral",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
     with SessionLocal() as session:
         runtime = Runtime(
@@ -214,6 +220,130 @@ def test_runtime_claim_and_complete_answers_original_request(tmp_path, monkeypat
         assert review_session.state == "completed"
 
 
+def test_runtime_direct_claim_refuses_wrong_tool(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    workspace = register_workspace(str(repo))
+    asker = start_session(str(repo), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    filed = file_help_request(
+        "exact tool review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=workspace.slug,
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=60_000,
+    )
+    with SessionLocal() as session:
+        runtime = Runtime(
+            slug="wrong-tool-runtime",
+            org_id=workspace.org_id,
+            machine_id="wrong-tool-machine",
+            tool="claude",
+            working_root=str(repo),
+            status="online",
+            health="healthy",
+        )
+        session.add(runtime)
+        session.commit()
+        runtime_id = runtime.id
+
+    assert help_execution.claim_review_for_runtime(runtime_id, filed["code"]) is None
+    assert get_help_request(filed["code"], session_id=asker["session_id"])["status"] == "open"
+
+
+def test_runtime_listing_filters_eligibility_before_limit(tmp_path, monkeypatch):
+    eligible_root = tmp_path / "eligible"
+    eligible_root.mkdir()
+    eligible_repo = _git_repo(eligible_root)
+    eligible = register_workspace(str(eligible_repo))
+    asker = start_session(str(eligible_repo), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    with SessionLocal() as session:
+        runtime = Runtime(
+            slug="eligible-runtime",
+            org_id=eligible.org_id,
+            machine_id="eligible-machine",
+            tool="copilot",
+            working_root=str(eligible_repo),
+            status="online",
+            health="healthy",
+        )
+        session.add(runtime)
+        session.commit()
+        runtime_id = runtime.id
+        for index in range(12):
+            foreign = Workspace(
+                slug=f"foreign-review-{index}",
+                path=str(tmp_path / f"foreign-{index}"),
+                status="active",
+                org_id=eligible.org_id,
+            )
+            session.add(foreign)
+            session.flush()
+            request = HelpRequest(
+                code=f"HR-foreign-{index}",
+                to_workspace=foreign.slug,
+                subject="foreign",
+                question="inspect",
+                status="open",
+                ask_depth=1,
+                created_at=help_execution.utc_now() - help_execution.timedelta(minutes=2),
+                expires_at=help_execution.utc_now() + help_execution.timedelta(minutes=5),
+            )
+            session.add(request)
+            session.add(
+                HelpRequestExecution(
+                    request_code=request.code,
+                    mode="ephemeral",
+                    source_workspace_id=foreign.id,
+                    required_tool="copilot",
+                    status="queued",
+                    launch_after=help_execution.utc_now() - help_execution.timedelta(minutes=1),
+                )
+            )
+        session.commit()
+    filed = file_help_request(
+        "eligible review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=eligible.slug,
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=60_000,
+    )
+
+    assert [
+        row["code"] for row in help_execution.list_reviews_for_runtime(runtime_id, limit=1)
+    ] == [filed["code"]]
+
+
+def test_expired_review_cannot_be_claimed(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    workspace = register_workspace(str(repo))
+    asker = start_session(str(repo), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    filed = file_help_request(
+        "expired review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=workspace.slug,
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=60_000,
+    )
+    with SessionLocal() as session:
+        session.query(HelpRequest).filter_by(code=filed["code"]).update(
+            {HelpRequest.expires_at: help_execution.utc_now() - help_execution.timedelta(seconds=1)}
+        )
+        session.commit()
+
+    assert help_execution._claim(filed["code"]) is None
+    with SessionLocal() as session:
+        assert session.query(HelpRequest).filter_by(code=filed["code"]).one().status == "expired"
+        assert session.get(HelpRequestExecution, filed["code"]).status == "cancelled"
+
+
 def test_stale_review_lease_requeues_with_attempt_bound(tmp_path, monkeypatch):
     repo = _git_repo(tmp_path)
     asker = start_session(str(repo), tool="opencode")
@@ -225,7 +355,7 @@ def test_stale_review_lease_requeues_with_attempt_bound(tmp_path, monkeypatch):
         to_workspace=str(repo),
         required_tool="copilot",
         execution_mode="ephemeral",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
     claim = help_execution._claim(filed["code"])
     assert claim is not None
@@ -317,7 +447,7 @@ def test_local_fake_reviewer_answers_and_deletes_sandbox(tmp_path, monkeypatch):
         to_workspace=workspace.slug,
         required_tool="copilot",
         execution_mode="ephemeral",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
 
     completed = help_execution.run_local_review(filed["code"])

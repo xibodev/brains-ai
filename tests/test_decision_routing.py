@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -107,6 +108,46 @@ def test_escalation_increments_and_preserves_route_fields(tmp_path) -> None:
     assert second["due_at"] is not None
     assert second["overdue"] is True
     assert summarize()["families"]["approvals"]["stale_or_expired"] >= 1
+
+
+def test_concurrent_escalations_each_increment_and_audit_committed_level(tmp_path) -> None:
+    filed = file_decision_request(str(tmp_path), "concurrent escalation")
+    route_decision(filed["code"], priority="p1", principal=bootstrap_principal())
+    barrier = threading.Barrier(2)
+    results: list[dict] = []
+    errors: list[Exception] = []
+
+    def escalate(index: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            results.append(
+                escalate_decision(
+                    filed["code"],
+                    reason=f"concurrent reason {index}",
+                    principal=bootstrap_principal(),
+                )
+            )
+        except Exception as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=escalate, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert errors == []
+    assert sorted(row["escalation_level"] for row in results) == [1, 2]
+    assert get_decision(filed["code"])["escalation_level"] == 2
+    with SessionLocal() as session:
+        levels = sorted(
+            json.loads(row.payload_json)["payload"]["escalation_level"]
+            for row in session.query(AuditLogEntry)
+            .filter(AuditLogEntry.action == "approval.escalated")
+            .all()
+            if json.loads(row.payload_json)["payload"].get("code") == filed["code"]
+        )
+    assert levels == [1, 2]
 
 
 def test_routing_requires_human_channel_and_org_member_assignee(tmp_path) -> None:

@@ -251,7 +251,7 @@ def checkpoint(
         ):
             from brains.control.session_liveness import renew_session_lease
 
-            renew_session_lease(session, agent)
+            renew_session_lease(session, agent, reactivate=False)
             session.commit()
             return {**_checkpoint_to_dict(latest), "duplicate": True}
         row = SessionCheckpoint(

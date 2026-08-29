@@ -27,6 +27,7 @@ os.environ.setdefault("BRAINS_HELP_POLL_INTERVAL_MS", "10")
 from brains.control.help import (  # noqa: E402
     answer_request,
     ask_peer,
+    file_help_request,
     normalize_required_tool,
     tool_matches_requirement,
     wait_for_request,
@@ -328,3 +329,41 @@ def test_inbox_wait_times_out_quietly(tmp_path, start_tracked_session):
     result = inbox_wait(ses["session_id"], timeout_ms=250)
     assert result == {"wakeup": None, "timeout": True}
     assert time.monotonic() - started < 5
+
+
+def test_inbox_wait_skips_unclaimable_requests_before_limit(
+    tmp_path, start_tracked_session, monkeypatch
+):
+    monkeypatch.setattr("brains.control.help_execution.schedule_help_review", lambda _code: True)
+    workspace = register_workspace(str(tmp_path / "target"))
+    peer = start_tracked_session(str(tmp_path / "target"), tool="claude")
+    for index in range(12):
+        file_help_request(
+            f"wrong tool {index}",
+            "inspect",
+            to_workspace=workspace.slug,
+            required_tool="copilot",
+            execution_mode="existing",
+            timeout_ms=5000,
+        )
+    file_help_request(
+        "execution only",
+        "inspect",
+        to_workspace=workspace.slug,
+        required_tool="claude",
+        execution_mode="ephemeral",
+        timeout_ms=5000,
+    )
+    expected = file_help_request(
+        "claimable",
+        "inspect",
+        to_workspace=workspace.slug,
+        required_tool="claude",
+        execution_mode="existing",
+        timeout_ms=5000,
+    )
+
+    wake = inbox_wait(peer["session_id"], timeout_ms=250)
+
+    assert wake["wakeup"] == "peer_request"
+    assert wake["request"]["code"] == expected["code"]

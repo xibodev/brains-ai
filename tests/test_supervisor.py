@@ -146,3 +146,36 @@ def test_run_refuses_unavailable_gateway_before_starting_children(tmp_path, monk
         lambda _args: (_ for _ in ()).throw(AssertionError("children must not start")),
     )
     assert supervisor.run([]) == 3
+
+
+def test_run_preflights_every_enabled_listener_with_actual_host(tmp_path, monkeypatch) -> None:
+    from brains.mcp import sse_auth
+
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(sse_auth, "resolve_bind_host", lambda: "mcp-host")
+    checked: list[tuple[str, int]] = []
+
+    def bindable(host: str, port: int) -> bool:
+        checked.append((host, port))
+        return port != 9877
+
+    monkeypatch.setattr(supervisor, "_port_bindable", bindable)
+    monkeypatch.setattr(
+        supervisor,
+        "_build_children",
+        lambda _args: (_ for _ in ()).throw(AssertionError("children must not start")),
+    )
+
+    assert supervisor.run(["--dashboard"]) == 3
+    assert checked == [("127.0.0.1", 8787), ("127.0.0.1", 9876), ("mcp-host", 9877)]
+
+
+def test_run_refuses_enabled_listener_port_collision_before_binding(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        supervisor,
+        "_port_bindable",
+        lambda _host, _port: (_ for _ in ()).throw(AssertionError("collision binds nothing")),
+    )
+
+    assert supervisor.run(["--gateway-port", "9877"]) == 3

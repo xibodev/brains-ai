@@ -587,11 +587,19 @@ def append_event_tool(
 
 def event_context_tool(event_id: int):
     """Return taxonomy category, scope, and scope provenance for one event."""
+    from brains.authz.policy import require_install_admin
+    from brains.authz.resolver import resolve_local_principal
+
+    require_install_admin(resolve_local_principal(), operation="event-context inspection")
     return get_event_context(event_id)
 
 
 def event_scope_report_tool():
     """Bounded counts and unresolved samples for the durable event ledger."""
+    from brains.authz.policy import require_install_admin
+    from brains.authz.resolver import resolve_local_principal
+
+    require_install_admin(resolve_local_principal(), operation="event-scope reporting")
     return event_scope_report()
 
 

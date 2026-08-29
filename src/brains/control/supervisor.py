@@ -310,13 +310,30 @@ def run(argv: list[str] | None = None) -> int:
         os.getpid(),
     )
 
-    if not args.no_gateway and not _port_bindable(args.gateway_host, args.gateway_port):
-        logger.error(
-            "gateway port %s:%s is unavailable; refusing a permanent restart loop",
-            args.gateway_host,
-            args.gateway_port,
-        )
-        return 3
+    listeners: list[tuple[str, str, int]] = []
+    if not args.no_gateway:
+        listeners.append(("gateway", args.gateway_host, args.gateway_port))
+    if _include_legacy_dashboard(args):
+        listeners.append(("dashboard", args.dashboard_host, args.dashboard_port))
+    if not args.no_mcp:
+        from brains.mcp.sse_auth import resolve_bind_host
+
+        listeners.append(("mcp", resolve_bind_host(), args.mcp_port))
+    ports: dict[int, str] = {}
+    for name, _host, port in listeners:
+        if port in ports:
+            logger.error("%s and %s both request port %s", ports[port], name, port)
+            return 3
+        ports[port] = name
+    for name, host, port in listeners:
+        if not _port_bindable(host, port):
+            logger.error(
+                "%s port %s:%s is unavailable; refusing a permanent restart loop",
+                name,
+                host,
+                port,
+            )
+            return 3
 
     children = _build_children(args)
     if not children:

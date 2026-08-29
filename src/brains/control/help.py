@@ -34,7 +34,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from brains.control.common import normalize_path, utc_now
 from brains.control.events import append_event
@@ -174,6 +174,53 @@ def tool_matches_requirement(required_tool: str | None, tool: str | None) -> boo
     if req.startswith("not:"):
         return claimer != req[4:]
     return claimer == req
+
+
+def _claimable_request_query(
+    session,
+    *,
+    session_id: str,
+    workspace_slug: str | None,
+    tool: str | None,
+    visible_workspace_ids: set[int] | None,
+):
+    """Return peer-help rows this Session could claim, before any limit."""
+    targets = [HelpRequest.to_session_id == session_id]
+    if workspace_slug:
+        targets.append(HelpRequest.to_workspace == workspace_slug)
+    query = (
+        session.query(HelpRequest, HelpRequestConstraint.required_tool)
+        .outerjoin(
+            HelpRequestConstraint,
+            HelpRequestConstraint.request_code == HelpRequest.code,
+        )
+        .outerjoin(
+            HelpRequestExecution,
+            HelpRequestExecution.request_code == HelpRequest.code,
+        )
+        .filter(
+            HelpRequest.status == "open",
+            or_(*targets),
+            (HelpRequestExecution.request_code.is_(None))
+            | ((HelpRequestExecution.mode == "auto") & (HelpRequestExecution.status == "queued")),
+        )
+    )
+    if visible_workspace_ids is not None:
+        query = query.filter(
+            (HelpRequest.from_workspace_id.is_(None))
+            | (HelpRequest.from_workspace_id.in_(visible_workspace_ids))
+        )
+    normalized_tool = (tool or "").strip().lower()
+    required = func.lower(HelpRequestConstraint.required_tool)
+    if normalized_tool:
+        query = query.filter(
+            (HelpRequestConstraint.request_code.is_(None))
+            | (required == normalized_tool)
+            | (required.like("not:%") & (required != f"not:{normalized_tool}"))
+        )
+    else:
+        query = query.filter(HelpRequestConstraint.request_code.is_(None))
+    return query.order_by(HelpRequest.created_at.asc(), HelpRequest.id.asc())
 
 
 def _execution_tool(required_tool: str | None) -> str | None:
@@ -798,44 +845,14 @@ def wait_for_request(
     while True:
         with SessionLocal() as session:
             _expire_due(session)
-            filters = [HelpRequest.to_session_id == session_id]
-            if resolved_slug:
-                filters.append(HelpRequest.to_workspace == resolved_slug)
-            query = (
-                session.query(HelpRequest, HelpRequestConstraint.required_tool)
-                .outerjoin(
-                    HelpRequestConstraint,
-                    HelpRequestConstraint.request_code == HelpRequest.code,
-                )
-                .outerjoin(
-                    HelpRequestExecution,
-                    HelpRequestExecution.request_code == HelpRequest.code,
-                )
-                .filter(
-                    HelpRequest.status == "open",
-                    or_(*filters),
-                    (HelpRequestExecution.request_code.is_(None))
-                    | (
-                        (HelpRequestExecution.mode == "auto")
-                        & (HelpRequestExecution.status == "queued")
-                    ),
-                )
-                .order_by(HelpRequest.created_at.asc())
-            )
-            if visible is not None:
-                query = query.filter(
-                    (HelpRequest.from_workspace_id.is_(None))
-                    | (HelpRequest.from_workspace_id.in_(visible))
-                )
-            # Harness constraint: skip requests this session's tool may not
-            # claim. They stay open for a matching peer; we keep polling.
-            candidate: HelpRequest | None = None
-            candidate_required_tool: str | None = None
-            for row, required_tool in query.limit(25).all():
-                if tool_matches_requirement(required_tool, my_tool):
-                    candidate = row
-                    candidate_required_tool = required_tool
-                    break
+            match = _claimable_request_query(
+                session,
+                session_id=session_id,
+                workspace_slug=resolved_slug,
+                tool=my_tool,
+                visible_workspace_ids=visible,
+            ).first()
+            candidate, candidate_required_tool = match if match is not None else (None, None)
             if candidate is None:
                 session.commit()
             if candidate is not None:
@@ -848,6 +865,7 @@ def wait_for_request(
                         and_(
                             HelpRequest.id == candidate.id,
                             HelpRequest.status == "open",
+                            HelpRequest.expires_at >= now,
                         )
                     )
                     .update(

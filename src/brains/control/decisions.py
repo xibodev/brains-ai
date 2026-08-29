@@ -406,7 +406,19 @@ def route_decision(
     _assert_human_router(principal)
     init_db()
     with SessionLocal() as session:
-        ask = session.query(ApprovalRequest).filter(ApprovalRequest.code == code).one_or_none()
+        ask_query = session.query(ApprovalRequest).filter(ApprovalRequest.code == code)
+        if session.get_bind().dialect.name == "postgresql":
+            ask = ask_query.with_for_update().one_or_none()
+        else:
+            # The approval is the stable serialization row even before routing
+            # metadata exists. A no-op write takes SQLite's writer lock before
+            # the escalation level is read, preventing two N -> N+1 updates.
+            session.execute(
+                update(ApprovalRequest)
+                .where(ApprovalRequest.code == code)
+                .values(status=ApprovalRequest.status)
+            )
+            ask = ask_query.one_or_none()
         if ask is None:
             raise ValueError(f"unknown decision request: {code}")
         if ask.status != "open":
@@ -569,7 +581,12 @@ def count_overdue_decisions() -> int:
         )
 
 
-def list_open_decisions(workspace_path: str | None = None, limit: int = 50) -> list[dict]:
+def list_open_decisions(
+    workspace_path: str | None = None,
+    limit: int = 50,
+    *,
+    workspace_id: int | None = None,
+) -> list[dict]:
     # Layer 2 visibility filter — see ``brains.control.memberships``.
     from brains.control.memberships import visible_workspace_ids_for_current
 
@@ -586,6 +603,8 @@ def list_open_decisions(workspace_path: str | None = None, limit: int = 50) -> l
         if workspace_path:
             workspace = register_workspace(workspace_path)
             query = query.filter(ApprovalRequest.workspace_id == workspace.id)
+        if workspace_id is not None:
+            query = query.filter(ApprovalRequest.workspace_id == workspace_id)
         if visible is not None:
             query = query.filter(ApprovalRequest.workspace_id.in_(visible))
         rows = (

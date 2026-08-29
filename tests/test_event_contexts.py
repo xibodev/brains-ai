@@ -9,8 +9,10 @@ import uuid
 from pathlib import Path
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from brains.authz.resolver import principal_for_operator_slug, set_current_principal
 from brains.control.events import (
     append_event,
     classify_event_kind,
@@ -18,11 +20,13 @@ from brains.control.events import (
     get_event_context,
 )
 from brains.control.feedback import file_feedback
+from brains.control.operators import add_operator
 from brains.control.projects import create_project
 from brains.control.sessions import register_workspace, start_session
 from brains.control.tasks import create_task
 from brains.main import app
 from brains.mcp import server as mcp_server
+from brains.mcp import tools as mcp_tools
 
 
 def test_session_infers_workspace_and_core_category(tmp_path) -> None:
@@ -185,3 +189,23 @@ def test_http_and_mcp_scope_surfaces_are_wired(auth_headers) -> None:
     response = TestClient(app).get("/v1/admin/event-scope", headers=auth_headers)
     assert response.status_code == 200
     assert {"event_context", "event_scope_report"} <= set(mcp_server.TOOL_REGISTRY)
+
+
+def test_mcp_event_scope_surfaces_require_install_admin() -> None:
+    operator, _key = add_operator(f"event-reader-{uuid.uuid4().hex[:8]}")
+    principal = principal_for_operator_slug(operator["slug"])
+    assert principal is not None
+    token = set_current_principal(principal)
+    try:
+        with pytest.raises(HTTPException) as context_denial:
+            mcp_tools.event_context_tool(1)
+        with pytest.raises(HTTPException) as report_denial:
+            mcp_tools.event_scope_report_tool()
+    finally:
+        if token is not None:
+            from brains.authz.resolver import current_principal
+
+            current_principal.reset(token)
+
+    assert context_denial.value.status_code == 403
+    assert report_denial.value.status_code == 403

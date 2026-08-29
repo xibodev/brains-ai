@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from sqlalchemy import or_
-
 from brains.control.common import utc_now
 from brains.control.events import append_event
 from brains.control.sessions import register_workspace, require_live_session
@@ -243,8 +241,13 @@ def inbox_wait(
     """
     import time as _time
 
-    from brains.control.help import _poll_interval_seconds as _help_poll
-    from brains.control.help import tool_matches_requirement
+    from brains.control.help import (
+        _claimable_request_query,
+        _expire_due,
+    )
+    from brains.control.help import (
+        _poll_interval_seconds as _help_poll,
+    )
 
     if not session_id:
         raise ValueError("inbox_wait requires session_id")
@@ -294,30 +297,19 @@ def inbox_wait(
 
     def _claimable_request() -> dict | None:
         with SessionLocal() as session:
-            from brains.storage.models import HelpRequest, HelpRequestConstraint
-
-            filters = [HelpRequest.to_session_id == session_id]
-            if resolved_slug:
-                filters.append(HelpRequest.to_workspace == resolved_slug)
-            q = (
-                session.query(HelpRequest, HelpRequestConstraint.required_tool)
-                .outerjoin(
-                    HelpRequestConstraint,
-                    HelpRequestConstraint.request_code == HelpRequest.code,
-                )
-                .filter(HelpRequest.status == "open", or_(*filters))
-                .order_by(HelpRequest.created_at.asc())
-                .limit(10)
-            )
-            if visible is not None:
-                q = q.filter(
-                    (HelpRequest.from_workspace_id.is_(None))
-                    | (HelpRequest.from_workspace_id.in_(visible))
-                )
-            for row, required_tool in q.all():
-                if tool_matches_requirement(required_tool, my_tool):
-                    return {"code": row.code, "subject": row.subject}
-            return None
+            _expire_due(session)
+            match = _claimable_request_query(
+                session,
+                session_id=session_id,
+                workspace_slug=resolved_slug,
+                tool=my_tool,
+                visible_workspace_ids=visible,
+            ).first()
+            session.commit()
+            if match is None:
+                return None
+            row, _required_tool = match
+            return {"code": row.code, "subject": row.subject}
 
     deadline = _time.monotonic() + (timeout_ms / 1000.0)
     while True:

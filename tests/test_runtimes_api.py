@@ -218,7 +218,7 @@ def test_runtime_help_review_lifecycle_is_tool_and_workspace_scoped(
         to_workspace=workspace.slug,
         required_tool="copilot",
         execution_mode="ephemeral",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
     matching = runtimes.register_runtime(
         _machine(),
@@ -282,7 +282,7 @@ def test_foreign_runtime_cannot_claim_help_review(client, org, tmp_path, monkeyp
         to_workspace=workspace.slug,
         required_tool="copilot",
         execution_mode="ephemeral",
-        timeout_ms=5000,
+        timeout_ms=60_000,
     )
     other = orgs.create_org(f"other-{uuid.uuid4().hex[:8]}", "Other")
     runtime = runtimes.register_runtime(

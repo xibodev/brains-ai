@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import timedelta
 
 import pytest
@@ -24,6 +26,9 @@ from brains.storage.db import SessionLocal
 from brains.storage.models import (
     AgentSession,
     AgentTask,
+    Event,
+    EventContext,
+    SessionCommand,
     SessionLease,
     SessionSuccessor,
     WorkspaceClaim,
@@ -88,7 +93,80 @@ def test_expired_lease_becomes_dormant_and_releases_ownership(tmp_path) -> None:
         task_row = session.query(AgentTask).filter_by(code=task["code"]).one()
         assert task_row.status == "available"
         assert task_row.claimed_by_session_id is None
+        command_events = (
+            session.query(Event, EventContext)
+            .join(EventContext, EventContext.event_id == Event.id)
+            .filter(Event.session_id == row.id, Event.kind == "session_dormant")
+            .all()
+        )
+        assert len(command_events) == 1
+        assert command_events[0][1].scope == "workspace"
     assert result["session_id"] not in {row["session_id"] for row in live_agent_sessions()}
+
+
+def test_dormancy_cancels_open_commands_in_the_same_transition(tmp_path) -> None:
+    started = start_session(str(tmp_path / "repo"), tool="opencode")
+    command, created = enqueue(started["session_id"], KIND_STOP)
+    assert created is True
+    _expire(started["session_id"])
+
+    sweep_stale_session_leases()
+
+    with SessionLocal() as session:
+        row = session.query(SessionCommand).filter_by(command_id=command["command_id"]).one()
+        assert row.status == "cancelled"
+        assert row.result == "session_dormant"
+
+
+def test_resume_winning_dormancy_race_prevents_event_and_command_cancellation(
+    tmp_path, monkeypatch
+) -> None:
+    from brains.control import session_liveness
+
+    started = start_session(str(tmp_path / "repo"), tool="opencode")
+    command, created = enqueue(started["session_id"], KIND_STOP)
+    assert created is True
+    _expire(started["session_id"])
+    heartbeat_locked = threading.Event()
+    finish_heartbeat = threading.Event()
+    original_renew = session_liveness.renew_session_lease
+
+    def paused_renew(*args, **kwargs):
+        heartbeat_locked.set()
+        assert finish_heartbeat.wait(timeout=5)
+        return original_renew(*args, **kwargs)
+
+    monkeypatch.setattr(session_liveness, "renew_session_lease", paused_renew)
+    heartbeat_result: list[dict] = []
+    sweep_result: list[list[str]] = []
+    heartbeat = threading.Thread(
+        target=lambda: heartbeat_result.append(heartbeat_session(started["session_id"]))
+    )
+    heartbeat.start()
+    assert heartbeat_locked.wait(timeout=5)
+    sweep = threading.Thread(target=lambda: sweep_result.append(sweep_stale_session_leases()))
+    sweep.start()
+    time.sleep(0.05)
+    finish_heartbeat.set()
+    heartbeat.join(timeout=10)
+    sweep.join(timeout=10)
+
+    assert not heartbeat.is_alive()
+    assert not sweep.is_alive()
+    assert heartbeat_result[0]["state"] == "running"
+    assert sweep_result == [[]]
+    with SessionLocal() as session:
+        assert session.get(AgentSession, started["session_id"]).state == "running"
+        assert (
+            session.query(Event)
+            .filter_by(session_id=started["session_id"], kind="session_dormant")
+            .count()
+            == 0
+        )
+        assert (
+            session.query(SessionCommand).filter_by(command_id=command["command_id"]).one().status
+            == "requested"
+        )
 
 
 def test_canonical_start_reuses_dormant_handle(tmp_path) -> None:
