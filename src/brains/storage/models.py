@@ -703,6 +703,39 @@ class HelpRequestConstraint(Base):
     required_tool: Mapped[str] = mapped_column(String(64))
 
 
+class HelpRequestExecution(Base):
+    """Fenced execution state for an on-demand ephemeral help reviewer."""
+
+    __tablename__ = "help_request_executions"
+    request_code: Mapped[str] = mapped_column(ForeignKey("help_requests.code"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), index=True)
+    source_workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    required_tool: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    runtime_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtimes.id"), nullable=True, index=True
+    )
+    review_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    launch_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class SecureSetting(Base):
     """Encrypted local configuration value.
 

@@ -73,6 +73,11 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
     assert handoffs["owner"]
     assert handoffs["lifecycle"]
     assert "generated_at" in result
+    assert set(result["families"]["help_requests"]["review_executions"]) == {
+        "total",
+        "open",
+        "stale",
+    }
 
 
 def test_summarize_counts_stale_handoffs_before_any_sweep_runs(tmp_path):

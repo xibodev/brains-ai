@@ -123,6 +123,7 @@ POST_CHECKSUM_DELTAS = (
     "146_feedback_inbox",
     "147_event_contexts",
     "148_workspace_aliases",
+    "149_ephemeral_help_review",
 )
 
 _LEGACY_LEDGER_DDL = """

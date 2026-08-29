@@ -15,7 +15,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from brains.control import issues, orgs, personas, projects, runtimes
+from brains.control.help import file_help_request
 from brains.control.operators import ensure_admin_operator
+from brains.control.sessions import register_workspace, start_session
 from brains.main import app
 
 
@@ -199,6 +201,106 @@ def test_get_one_runtime(client, auth_headers):
     resp = client.get(f"/v1/runtimes/{rt['id']}", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["id"] == rt["id"]
+
+
+def test_runtime_help_review_lifecycle_is_tool_and_workspace_scoped(
+    client, auth_headers, org, tmp_path, monkeypatch
+):
+    from brains.control import help_execution
+
+    workspace = register_workspace(str(tmp_path), org_id=org["id"])
+    asker = start_session(str(tmp_path), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    review = file_help_request(
+        "runtime review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=workspace.slug,
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=5000,
+    )
+    matching = runtimes.register_runtime(
+        _machine(),
+        "copilot",
+        org_id=org["id"],
+        working_root=str(tmp_path),
+        status="online",
+        health="healthy",
+    )
+    wrong_tool = runtimes.register_runtime(
+        _machine(),
+        "claude",
+        org_id=org["id"],
+        working_root=str(tmp_path),
+        status="online",
+        health="healthy",
+    )
+
+    assert (
+        client.get(f"/v1/runtimes/{wrong_tool['id']}/help-reviews", headers=auth_headers).json()[
+            "reviews"
+        ]
+        == []
+    )
+    listed = client.get(f"/v1/runtimes/{matching['id']}/help-reviews", headers=auth_headers).json()[
+        "reviews"
+    ]
+    assert [row["code"] for row in listed] == [review["code"]]
+    claimed = client.post(
+        f"/v1/runtimes/{matching['id']}/help-reviews/{review['code']}/claim",
+        headers=auth_headers,
+    ).json()
+    assert claimed["claimed"] is True
+    session_id = claimed["review"]["session_id"]
+    completed = client.post(
+        f"/v1/runtimes/{matching['id']}/help-reviews/{review['code']}/complete",
+        headers=auth_headers,
+        json={
+            "session_id": session_id,
+            "answer": "No findings.",
+            "evidence": "review.txt:1",
+            "returncode": 0,
+            "source_unchanged": True,
+        },
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "answered"
+
+
+def test_foreign_runtime_cannot_claim_help_review(client, org, tmp_path, monkeypatch):
+    from brains.authz.credentials import mint_runtime_credential
+    from brains.control import help_execution
+
+    workspace = register_workspace(str(tmp_path), org_id=org["id"])
+    asker = start_session(str(tmp_path), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    review = file_help_request(
+        "scoped review",
+        "inspect",
+        from_session_id=asker["session_id"],
+        to_workspace=workspace.slug,
+        required_tool="copilot",
+        execution_mode="ephemeral",
+        timeout_ms=5000,
+    )
+    other = orgs.create_org(f"other-{uuid.uuid4().hex[:8]}", "Other")
+    runtime = runtimes.register_runtime(
+        _machine(), "copilot", org_id=other["id"], working_root=str(tmp_path)
+    )
+    _credential, raw_key = mint_runtime_credential(
+        machine_id=runtime["machine_id"],
+        runtime_id=runtime["id"],
+        org_id=other["id"],
+        label="review test",
+    )
+    headers = {"Authorization": f"Bearer {raw_key}"}
+
+    response = client.post(
+        f"/v1/runtimes/{runtime['id']}/help-reviews/{review['code']}/claim",
+        headers=headers,
+    )
+    assert response.json()["claimed"] is False
 
 
 # --------------------------------------------------------------------------- #
