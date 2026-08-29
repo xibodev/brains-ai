@@ -126,6 +126,27 @@ def test_explicit_unavailable_service_port_is_refused(monkeypatch) -> None:
     assert "8877" in report["detail"]
 
 
+def test_install_dry_run_does_not_probe_an_implicit_default(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        service_common,
+        "probe_listener_port",
+        lambda _host, _port: (_ for _ in ()).throw(
+            AssertionError("an implicit dry-run port must not inspect live listeners")
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "verify_service_interpreter",
+        lambda program: {"ok": True, "program": program, "detail": ""},
+    )
+
+    report = service.install(dry_run=True)
+
+    assert report["action"] == "would-install"
+    assert report["endpoints"]["console"] == "http://127.0.0.1:8787/app"
+
+
 def test_install_refuses_identical_gateway_and_mcp_ports(monkeypatch, tmp_path) -> None:
     """The supervisor rejects that pair deterministically, so installing it
     would only persist a service that can never come up."""
@@ -299,6 +320,11 @@ def test_render_definition_matches_platform(spec: ServiceSpec) -> None:
 def test_install_dry_run_touches_nothing(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / ".brains"))
+    monkeypatch.setattr(
+        service,
+        "verify_service_interpreter",
+        lambda program: {"ok": True, "program": program, "detail": ""},
+    )
     report = service.install(dry_run=True)
     assert report["action"] == "would-install"
     # No unit file should have been written anywhere under the fake home.

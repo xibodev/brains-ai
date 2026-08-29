@@ -69,11 +69,13 @@ def install(
     mcp_port: int | None = None,
 ) -> dict:
     """Register (and, unless ``dry_run``, start) the autostart service."""
+    backend = _backend()
     try:
         resolved = spec or default_spec(
             gateway_host=gateway_host,
             gateway_port=gateway_port,
             mcp_port=mcp_port,
+            probe_default=not dry_run,
         )
     except ValueError as exc:
         return {"ok": False, "action": "refused", "detail": str(exc)}
@@ -85,7 +87,7 @@ def install(
             "detail": "service interpreter cannot import brains",
             "interpreter": check,
         }
-    report = _backend().install(resolved, dry_run=dry_run)
+    report = backend.install(resolved, dry_run=dry_run)
     report["interpreter"] = check
     report["endpoints"] = {
         "console": f"http://{resolved.gateway_host}:{resolved.gateway_port}/app",

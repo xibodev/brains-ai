@@ -279,12 +279,16 @@ def default_spec(
     gateway_host: str = DEFAULT_GATEWAY_HOST,
     gateway_port: int | None = None,
     mcp_port: int | None = None,
+    probe_default: bool = True,
 ) -> ServiceSpec:
     """Build a :class:`ServiceSpec` from the live interpreter + environment."""
     persisted = read_service_config()
     if gateway_port is None and service_config_path().is_file():
         resolved_gateway_port = int(persisted["gateway_port"])
         used_fallback = resolved_gateway_port != DEFAULT_GATEWAY_PORT
+    elif gateway_port is None and not probe_default:
+        resolved_gateway_port = DEFAULT_GATEWAY_PORT
+        used_fallback = False
     elif gateway_port is None:
         resolved_gateway_port, used_fallback = select_gateway_port(
             gateway_host,
