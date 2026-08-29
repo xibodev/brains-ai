@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:25:00.000-06:00
+last_verified: 2026-08-29T12:28:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus the approved feature lifecycle and withdrawal decisions; implementation not changed; deployment not verified
+verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus the approved durable mailbox, address-book, operator-inbox, and one-way SMTP-copy contract; implementation not changed; deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -67,10 +67,20 @@ supported harnesses renew while active and end or detach when their process fini
 expired PID-less Sessions become dormant without an operator read, disappear from live
 projections, and transactionally release claims/tasks; replacement handles transfer
 owned continuity once; machine restart leaves no permanently running stale handles.
+Identity, activity, reachability, and Workspace ownership are separate signals. A
+durable agent mailbox is keyed by canonical Workspace, canonical tool, and validated
+tool-native Session ID; its current `ses_*` incarnation may attach, detach, and resume
+without changing the address or moving stored mail. Meaningful artefacts contribute
+`last_active_at`, while a current lease/process/transport determines reachability. An
+artefact timestamp, Workspace claim, or `state='running'` alone never proves that an
+agent is reachable. Concurrent or conflicting address attachments fail closed and are
+visible to the operator.
 
-**Evidence:** E3 alias, end/detach, lease, false-reap, successor, predecessor-mail, and
-ownership-release tests; E4 multi-hour, abrupt-exit, and restart journeys across
-Copilot, Claude, Codex, and OpenCode.
+**Evidence:** E3 real-native-ID validation, alias, address registration/reattachment,
+conflicting attachment, activity-versus-reachability, end/detach, lease, false-reap,
+successor, predecessor-mail, and ownership-release tests; E4 multi-hour, idle,
+abrupt-exit, restart, Workspace movement, and resume journeys across Copilot, Claude,
+Codex, and OpenCode.
 
 ### Workspace Coordination and Sessions
 
@@ -82,29 +92,83 @@ execution claims.
 **Open requirements:** Coordination Sessions, tasks, claims, handoffs, checkpoints,
 resume, terminal state, and Workspace scope are durable and idempotent. Unsupported
 steering remains an explicit refusal. Running-agent message delivery is withdrawn and
-must not be implied by durable mailbox or command persistence.
+must not be implied by durable mailbox or command persistence. The ephemeral `ses_*`
+row is one current incarnation, not a durable mail recipient. Session start/resume
+idempotently opens or finds the address
+`(workspace_id, tool, native_tool_session_id)`, attaches the current incarnation, and
+returns the mailbox address, unread count, and cursor. Successor/resume preserves the
+durable address and mailbox history without copying messages between Session IDs.
 
 **Evidence:** E3 lifecycle, concurrent ownership, duplicate, reload, and refusal tests;
 E4 two-harness interruption and resume journey.
 
-### Agent Communications
+### Agent Communications and Durable Mailboxes
 
-**Outcome:** Mail, topics, handoffs, and peer help reach an eligible consumer or expose
-a recoverable undelivered state.
+**Outcome:** Agents and operators have durable, authorized Brains mailboxes. Mail,
+threads, topics, handoffs, and peer help survive agent restarts and expose truthful
+delivery, read, and notification state.
 
 **Owned items:** BL-P1-12.
 
-**Open requirements:** Default guidance uses asynchronous help: file returns
+**Delivery dependency:** Complete the address/registration and current-incarnation
+contract with BL-P0-05 and BL-P1-14 before relying on Brains mail as the sole carrier
+of parallel-work ownership, requirements, approval, or handoff. Unrelated slices may
+continue through isolated worktrees and GitHub branches/PRs.
+
+**Address and registration:** An agent address is
+`tool:native-tool-session-id@workspace-slug`, backed by the unique canonical key
+`(workspace_id, tool, native_tool_session_id)`. `workspace_path` is registration input
+resolved through Workspace aliases; a phonebook reader with administrative visibility
+may display the resolved path, but no full local path appears in the address. Each
+supported harness supplies its actual native Session ID and idempotently opens or finds
+its mailbox once; values
+such as `current`, model names, task labels, or guessed IDs are rejected. Existing
+invalid/ambiguous links are diagnosed and quarantined rather than fabricated into valid
+addresses. A native ID is an address component, not an authentication principal.
+
+**Delivery and authorization:** A message commits directly to a registered durable
+mailbox, whether its agent is online or offline; current-Session resolution is used only
+for wakeup and read attribution. Unknown, retired, conflicting, or unauthorized
+addresses are rejected without enumeration. Cross-Workspace send, forward, phonebook,
+and mailbox inspection re-check the sender and reader against the message's originating
+Workspace. Broadcast is an explicit operation and never the accidental meaning of a
+null recipient. Local acceptance, agent notification, reading, and SMTP copy are
+separate states so a send/end race cannot fabricate delivery.
+
+**Threads and browser:** Messages retain a durable sender mailbox, point-in-time sender
+Session, durable recipients, originating Workspace, `thread_id`, `in_reply_to`, and
+forward provenance. Coordination provides an authorized mailbox selector, Inbox, Sent,
+thread timeline, unread state, compose, reply, forward, delivery/read state, address
+book, and a deep link from an agent to its mailbox. The first release does not require
+attachments, HTML mail, drafts, spam, folders, rules, or a bespoke top-level mail app.
+
+**Operator and SMTP copy:** Every authenticated operator has a separate durable Brains
+mailbox at `operator:slug@brains`. Agents can address it within authorized scope.
+Ordinary members may discover addresses in Workspaces they can read but may open only
+their own mailbox; the install administrator or an Org owner/admin with visibility of
+the originating Workspace may inspect an agent mailbox. Optional SMTP is a one-way,
+post-commit copy from the operator's local Brains inbox to the configured real email:
+local mail remains authoritative, SMTP uses a durable retryable outbox, copy failure
+does not change local delivery, and the external message directs the operator to reply
+inside Brains. SMTP notification-only content is the default; copying the full body is
+an explicit operator opt-in. There is no inbound email polling, webhook, reply parsing,
+or external-to-agent delivery.
+
+**Other communications:** Default guidance uses asynchronous help: file returns
 immediately, waits leave requests open, fresh eligible peers claim/release/answer with
 evidence, requesters cancel, and inbox wakeup reports the terminal result. Brief
 connectivity probes remain distinct from review deadlines. Empty reads do not count as
-consumption; explicit handoff pickup, passive welcome consumption, successor delivery,
-and undelivered mail are distinct outcomes. Queue repair handles stale Sessions,
-claims, messages, handoffs, requests, aliases, and missing roots without deleting
-unresolved work.
+consumption; explicit handoff pickup, passive welcome consumption, address delivery,
+agent wakeup, read, reply, and undeliverable attempts are distinct outcomes. Queue
+repair handles stale Sessions, address conflicts, aged unread mail, failed SMTP copies,
+claims, handoffs, requests, aliases, and missing roots without deleting unresolved work.
 
-**Evidence:** E3 asynchronous lifecycle, deadline, consumer, cursor, passive
-consumption, and repair tests; E4 two-real-harness help/mail/handoff/recovery journey.
+**Evidence:** E3 address validation/uniqueness, idempotent registration, offline accept,
+unknown/ambiguous/unauthorized refusal, send/end race, explicit broadcast,
+cross-Workspace disclosure, thread/reply/forward, operator mailbox, cursor, notification,
+read, SMTP outbox/retry/redaction, asynchronous-help lifecycle, and repair tests; E4
+two-real-harness and one-operator browser journey covering restart/resume, offline mail,
+threaded reply/forward, phonebook state, one-way SMTP copy, and recovery.
 
 ### Knowledge and Coordination Patterns
 
@@ -134,7 +198,10 @@ Org/Workspace capability. Effects are classified as `governed`,
 `externally_observed`, or `unverified_claim`; a free-form event cannot imply governed
 execution. Approval/action/result and audit entries correlate or fail closed. The
 process/network boundary covers approved execution shapes, and residual out-of-band
-paths are stated rather than hidden.
+paths are stated rather than hidden. Mailbox registration binds an address to the
+authenticated caller's authorized Workspace and adapter-provided native identity;
+operator mailbox access, agent-mailbox inspection, address-book lookup, cross-Workspace
+send/forward, and full-body SMTP copy each have explicit non-enumerating authorization.
 
 **Evidence:** E3 two-Org deny matrix, bypass, redaction, event-correlation, and audit
 race/tamper tests; E4 denied, approved, and out-of-band effect journey.
@@ -151,7 +218,10 @@ progress, configured wire transports, registry freshness, package/migration/sche
 identity, coordination queues, SQLite integrity, and declared recovery policy. It
 names affected capability without raw exceptions or secrets. Backup scope, retention,
 encryption ownership, RTO/RPO, compatibility, compaction, restore drill, and rollback
-order are explicit.
+order are explicit. Mail readiness reports invalid/ambiguous address registrations,
+conflicting live attachments, aged accepted-but-unread mail, wakeup failures, and SMTP
+outbox backlog/failure separately; an offline registered mailbox with accepted mail is
+not itself degraded.
 
 **Evidence:** E3 child, scheduler, transport, schema, registry, backup-compatibility,
 and stale-state tests; E4 service failure/recovery plus isolated backup/restore/rollback.

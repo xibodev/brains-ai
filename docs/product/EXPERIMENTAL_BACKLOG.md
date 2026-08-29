@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:25:00.000-06:00
+last_verified: 2026-08-29T12:28:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static inspection of implemented feedback, adoption, and ephemeral-review surfaces; real field outcomes remain under observation; deployment not verified
+verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus static inspection of implemented feedback, adoption, and ephemeral-review surfaces and the approved future durable-mailbox measurement boundary; real field outcomes remain under observation; deployment not verified
 -->
 
 # Brains Experimental Feature Backlog
@@ -59,7 +59,11 @@ with eligible/right-censored denominators.
 family, duration, semantic result (`success`, `empty`, `refused`, `timeout`, `failed`),
 passive versus explicit consumption, exact timestamp windows, and workflow/user outcome
 separation. Disabled or withdrawn features must have separate denominators and never
-reduce normal-product adoption.
+reduce normal-product adoption. Legacy Session-addressed mail and `state='running'`
+presence data are not valid baselines for durable mailbox adoption. After BL-P1-12 and
+BL-P1-14 land, measure address registration, accepted mail, wakeup, read, reply,
+forward, explicit broadcast, rejection reason, and SMTP-copy outcome as separate local
+events; no message subject, body, address path, or native Session ID enters analytics.
 
 **Safety boundary:** Record no prompt, argument, secret, source path, output, customer
 data, or machine identity. Aggregation must enforce minimum group size before anything

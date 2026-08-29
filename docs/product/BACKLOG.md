@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:25:00.000-06:00
+last_verified: 2026-08-29T12:28:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static reconciliation of advertised surfaces, experimental gates, the approved withdrawal decision, and active/experimental ownership; implementation of withdrawal not verified; deployment not verified
+verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus static reconciliation of active/experimental ownership and the approved durable mailbox contract; implementation not changed; deployment not verified
 -->
 
 # Brains Backlog Registry
@@ -99,11 +99,11 @@ that containment work is active backlog item BL-P0-09.
 - **Maps to:** F0-F10, B1-B9; J1-J11.
 - **Requirement:** [Quality and release](ACTIVE_BACKLOG.md#quality-release-and-traceability).
 
-### BL-P1-12 - Queue health and asynchronous collaboration
+### BL-P1-12 - Durable mail and asynchronous collaboration
 - **Maps to:** F3, B2, B8; J7, J8, J11.
-- **Requirement:** [Agent communications](ACTIVE_BACKLOG.md#agent-communications).
+- **Requirement:** [Agent communications](ACTIVE_BACKLOG.md#agent-communications-and-durable-mailboxes).
 
-### BL-P1-14 - Session liveness and successor continuity
+### BL-P1-14 - Mailbox identity, presence, and successor continuity
 - **Maps to:** F3, B2, B8; J7, J8, J11.
 - **Requirement:** [Workspace portfolio and presence](ACTIVE_BACKLOG.md#workspace-portfolio-and-presence).
 
