@@ -34,13 +34,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, select
 
-from brains.control.common import utc_now
+from brains.control.common import normalize_path, utc_now
 from brains.control.events import append_event
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
-from brains.storage.models import AgentSession, HelpRequest, HelpRequestConstraint, Workspace
+from brains.storage.models import (
+    AgentSession,
+    HelpRequest,
+    HelpRequestConstraint,
+    HelpRequestExecution,
+    Workspace,
+    WorkspaceAlias,
+)
 
 
 # How often to re-poll the DB while blocked on ask_peer / wait_for_request.
@@ -63,6 +70,16 @@ MAX_ASK_DEPTH = 2
 # Default timeout when callers don't specify one. 30 s is short enough to
 # feel responsive and long enough for a peer to pick up the work.
 DEFAULT_TIMEOUT_MS = 30_000
+EXECUTION_MODES = frozenset({"auto", "existing", "ephemeral"})
+EPHEMERAL_REVIEW_TOOLS = frozenset({"claude", "codex", "copilot"})
+
+
+def _peer_grace_milliseconds() -> int:
+    try:
+        raw = int(os.environ.get("BRAINS_HELP_PEER_GRACE_MS", "1000"))
+    except ValueError:
+        raw = 1000
+    return max(0, min(raw, 30_000))
 
 
 class HelpDeadlockError(ValueError):
@@ -83,6 +100,7 @@ def _required_tool_for(session, code: str) -> str | None:
 
 
 def _row_to_dict(session, row: HelpRequest) -> dict[str, Any]:
+    execution = session.get(HelpRequestExecution, row.code)
     return {
         "code": row.code,
         "from_session_id": row.from_session_id,
@@ -102,6 +120,22 @@ def _row_to_dict(session, row: HelpRequest) -> dict[str, Any]:
         "ask_depth": row.ask_depth,
         "created_at": row.created_at.isoformat(),
         "expires_at": row.expires_at.isoformat(),
+        "execution_mode": execution.mode if execution is not None else "existing",
+        "execution": (
+            {
+                "status": execution.status,
+                "runtime_id": execution.runtime_id,
+                "review_session_id": execution.review_session_id,
+                "attempt": execution.attempt,
+                "launch_after": execution.launch_after.isoformat(),
+                "lease_expires_at": (
+                    execution.lease_expires_at.isoformat() if execution.lease_expires_at else None
+                ),
+                "error_code": execution.error_code,
+            }
+            if execution is not None
+            else None
+        ),
     }
 
 
@@ -140,6 +174,52 @@ def tool_matches_requirement(required_tool: str | None, tool: str | None) -> boo
     if req.startswith("not:"):
         return claimer != req[4:]
     return claimer == req
+
+
+def _execution_tool(required_tool: str | None) -> str | None:
+    required = normalize_required_tool(required_tool)
+    if required is None or required.startswith("not:"):
+        return None
+    return required if required in EPHEMERAL_REVIEW_TOOLS else None
+
+
+def _resolve_target_workspace(session, reference: str) -> Workspace | None:
+    raw = (reference or "").strip()
+    if not raw:
+        return None
+    workspace = session.query(Workspace).filter(Workspace.slug == raw).one_or_none()
+    if workspace is not None:
+        return workspace
+    try:
+        normalized = normalize_path(raw)
+    except (OSError, ValueError):
+        return None
+    alias = session.query(WorkspaceAlias).filter(WorkspaceAlias.path == normalized).one_or_none()
+    if alias is not None:
+        return session.get(Workspace, alias.workspace_id)
+    return session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
+
+
+def _resolved_execution_mode(
+    requested: str,
+    *,
+    required_tool: str | None,
+    to_workspace: str | None,
+    to_session_id: str | None,
+) -> str:
+    mode = (requested or "auto").strip().lower()
+    if mode not in EXECUTION_MODES:
+        raise ValueError(f"execution_mode must be one of {sorted(EXECUTION_MODES)}")
+    tool = _execution_tool(required_tool)
+    eligible = bool(tool and to_workspace and not to_session_id)
+    if mode == "ephemeral" and not eligible:
+        raise ValueError(
+            "ephemeral help requires a Workspace target and exact required_tool "
+            f"in {sorted(EPHEMERAL_REVIEW_TOOLS)}"
+        )
+    if mode == "auto" and not eligible:
+        return "existing"
+    return mode
 
 
 def _resolve_session_workspace_id(session, session_id: str | None) -> int | None:
@@ -212,13 +292,33 @@ def _expire_due(session) -> int:
     open_count = open_q.count()
     if open_count:
         open_q.update({"status": "expired"}, synchronize_session=False)
+    live_review = select(HelpRequestExecution.request_code).where(
+        HelpRequestExecution.status == "running",
+        HelpRequestExecution.lease_expires_at >= now,
+    )
     claimed_q = session.query(HelpRequest).filter(
         HelpRequest.status == "claimed",
         HelpRequest.claimed_at < grace_cutoff,
+        ~HelpRequest.code.in_(live_review),
     )
     claimed_count = claimed_q.count()
     if claimed_count:
         claimed_q.update({"status": "expired"}, synchronize_session=False)
+    if open_count or claimed_count:
+        expired_codes = session.query(HelpRequest.code).filter(HelpRequest.status == "expired")
+        session.query(HelpRequestExecution).filter(
+            HelpRequestExecution.request_code.in_(expired_codes),
+            HelpRequestExecution.status.in_(("queued", "running")),
+        ).update(
+            {
+                "status": "cancelled",
+                "lease_expires_at": None,
+                "completed_at": now,
+                "updated_at": now,
+                "error_code": "request_expired",
+            },
+            synchronize_session=False,
+        )
     return open_count + claimed_count
 
 
@@ -232,6 +332,7 @@ def file_help_request(
     context: str = "",
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
+    execution_mode: str = "existing",
 ) -> dict[str, Any]:
     """File a durable peer-help request and return without waiting.
 
@@ -251,7 +352,18 @@ def file_help_request(
     if to_workspace is None and to_session_id is None:
         raise ValueError("ask_peer requires to_workspace or to_session_id")
     required_tool_norm = normalize_required_tool(required_tool)
+    resolved_mode = _resolved_execution_mode(
+        execution_mode,
+        required_tool=required_tool_norm,
+        to_workspace=to_workspace,
+        to_session_id=to_session_id,
+    )
     timeout_ms = max(100, int(timeout_ms))
+
+    if resolved_mode != "existing" and to_workspace and os.path.isdir(to_workspace):
+        from brains.control.sessions import register_workspace
+
+        register_workspace(to_workspace)
 
     init_db()
     now = utc_now()
@@ -271,11 +383,25 @@ def file_help_request(
                 f"ask_peer refused: ask_depth would exceed cap ({depth} > {MAX_ASK_DEPTH})"
             )
         workspace_id = _resolve_session_workspace_id(session, from_session_id)
+        target_workspace = (
+            _resolve_target_workspace(session, to_workspace or "")
+            if resolved_mode != "existing"
+            else None
+        )
+        if resolved_mode != "existing" and target_workspace is None:
+            raise ValueError(f"unknown Workspace for ephemeral review: {to_workspace!r}")
+        if target_workspace is not None:
+            from brains.control.memberships import visible_workspace_ids_for_current
+
+            visible = visible_workspace_ids_for_current()
+            if visible is not None and target_workspace.id not in visible:
+                raise ValueError("Workspace unavailable for ephemeral review")
+        canonical_target = target_workspace.slug if target_workspace is not None else to_workspace
         row = HelpRequest(
             code=code,
             from_session_id=from_session_id,
             from_workspace_id=workspace_id,
-            to_workspace=to_workspace,
+            to_workspace=canonical_target,
             to_session_id=to_session_id,
             subject=subject.strip(),
             question=question.strip(),
@@ -290,6 +416,21 @@ def file_help_request(
             # Harness constraint lives in its own delta-created table: the
             # help_requests table is frozen baseline and must not drift.
             session.add(HelpRequestConstraint(request_code=code, required_tool=required_tool_norm))
+        if target_workspace is not None:
+            launch_delay = _peer_grace_milliseconds() if resolved_mode == "auto" else 0
+            session.add(
+                HelpRequestExecution(
+                    request_code=code,
+                    mode=resolved_mode,
+                    source_workspace_id=target_workspace.id,
+                    required_tool=required_tool_norm or "",
+                    status="queued",
+                    attempt=0,
+                    launch_after=now + timedelta(milliseconds=launch_delay),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
         session.commit()
         session.refresh(row)
         result = _row_to_dict(session, row)
@@ -301,12 +442,18 @@ def file_help_request(
         session_id=from_session_id,
         metadata={
             "code": code,
-            "to_workspace": to_workspace,
+            "to_workspace": canonical_target,
             "to_session_id": to_session_id,
             "required_tool": required_tool_norm,
             "depth": depth,
+            "execution_mode": resolved_mode,
         },
     )
+
+    if resolved_mode != "existing":
+        from brains.control.help_execution import schedule_help_review
+
+        schedule_help_review(code)
 
     return result
 
@@ -321,8 +468,9 @@ def ask_peer(
     context: str = "",
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
+    execution_mode: str = "existing",
 ) -> dict[str, Any]:
-    """Compatibility wrapper: file a request and block for its outcome."""
+    """File a request; block only for the existing-peer compatibility lane."""
     timeout_ms = max(100, int(timeout_ms))
     filed = file_help_request(
         subject,
@@ -333,7 +481,10 @@ def ask_peer(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
+        execution_mode=execution_mode,
     )
+    if filed["execution_mode"] != "existing":
+        return filed
     code = filed["code"]
     workspace_id = filed["from_workspace_id"]
     with SessionLocal() as session:
@@ -477,6 +628,8 @@ def cancel_help_request(code: str, *, session_id: str) -> dict[str, Any]:
             return {**_row_to_dict(session, row), "duplicate": True}
         if row.status not in {"open", "claimed"}:
             raise ValueError(f"help request {code} is {row.status}, not cancellable")
+        execution = session.get(HelpRequestExecution, code)
+        review_session_id = execution.review_session_id if execution is not None else None
         updated = (
             session.query(HelpRequest)
             .filter(
@@ -490,9 +643,25 @@ def cancel_help_request(code: str, *, session_id: str) -> dict[str, Any]:
         if not updated:
             session.refresh(row)
             raise ValueError(f"help request {code} changed state before cancellation")
+        if execution is not None and execution.status in {"queued", "running", "failed"}:
+            execution.status = "cancelled"
+            execution.lease_expires_at = None
+            execution.completed_at = utc_now()
+            execution.updated_at = execution.completed_at
+        if review_session_id:
+            review_session = session.get(AgentSession, review_session_id)
+            if review_session is not None and review_session.ended_at is None:
+                review_session.ended_at = utc_now()
+                review_session.state = "failed"
+                review_session.summary = "ephemeral help review cancelled by requester"
+        session.commit()
         session.refresh(row)
         result = {**_row_to_dict(session, row), "duplicate": False}
         workspace_id = row.from_workspace_id
+    if review_session_id:
+        from brains.exec.session_channel import stop_session
+
+        stop_session(review_session_id)
     append_event(
         "help_cancelled",
         f"{code}: cancelled by requester",
@@ -530,6 +699,7 @@ def release_help_request(
             raise ValueError(f"help request {code} is {row.status}, not claimed")
         if row.claimed_by_session_id != session_id:
             raise ValueError(f"help request claimed by another session: {code}")
+        execution = session.get(HelpRequestExecution, code)
         updated = (
             session.query(HelpRequest)
             .filter(
@@ -551,6 +721,15 @@ def release_help_request(
         if not updated:
             session.refresh(row)
             raise ValueError(f"help request {code} changed state before release")
+        if execution is not None and execution.mode == "auto":
+            execution.status = "queued"
+            execution.review_session_id = None
+            execution.runtime_id = None
+            execution.launch_after = now
+            execution.lease_expires_at = None
+            execution.updated_at = now
+            execution.error_code = None
+        session.commit()
         session.refresh(row)
         result = _row_to_dict(session, row)
         workspace_id = row.from_workspace_id
@@ -561,6 +740,10 @@ def release_help_request(
         session_id=session_id,
         metadata={"code": code, "retry_timeout_ms": retry_timeout_ms},
     )
+    if result.get("execution_mode") == "auto":
+        from brains.control.help_execution import schedule_help_review
+
+        schedule_help_review(code)
     return result
 
 
@@ -624,9 +807,18 @@ def wait_for_request(
                     HelpRequestConstraint,
                     HelpRequestConstraint.request_code == HelpRequest.code,
                 )
+                .outerjoin(
+                    HelpRequestExecution,
+                    HelpRequestExecution.request_code == HelpRequest.code,
+                )
                 .filter(
                     HelpRequest.status == "open",
                     or_(*filters),
+                    (HelpRequestExecution.request_code.is_(None))
+                    | (
+                        (HelpRequestExecution.mode == "auto")
+                        & (HelpRequestExecution.status == "queued")
+                    ),
                 )
                 .order_by(HelpRequest.created_at.asc())
             )
@@ -669,6 +861,13 @@ def wait_for_request(
                 )
                 session.commit()
                 if updated:
+                    execution = session.get(HelpRequestExecution, candidate.code)
+                    if execution is not None and execution.mode == "auto":
+                        execution.status = "cancelled"
+                        execution.completed_at = now
+                        execution.updated_at = now
+                        execution.lease_expires_at = None
+                        session.commit()
                     session.refresh(candidate)
                     result = _row_to_dict(session, candidate)
                     append_event(

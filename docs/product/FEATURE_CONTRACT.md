@@ -249,6 +249,15 @@ structured evidence expectations for these same IDs are maintained in
 
 Migration 146 adds the governed feedback inbox required by BL-P1-15. Live Workspace Sessions can report and enrich redacted canonical records through CLI/MCP/HTTP. Triage and exactly-once promotion into a Task, knowledge entry, or existing backlog reference require a browser/local human and are deliberately absent from MCP; promotion commits with its audit entry and never edits roadmap text or authorizes a release.
 
+Migration 149 adds fenced on-demand peer review. An exact-tool Workspace request
+can prefer existing peers, fall back after a short claim window, or force a fresh
+ephemeral reviewer. The worker receives only a temporary Git-tracked snapshot,
+uses provider-specific read-only/no-write policy, has bounded output/runtime and
+attempt leases, and answers the original help request before its terminal Session
+and sandbox are cleaned up. Registered source fingerprints are checked before and
+after; changed source discards the answer. Real provider/remote-Runtime operation
+remains an evidence gap rather than an implied capability.
+
 Operations exposes welcome follow-through as observational telemetry with explicit
 observation/action windows, eligible and right-censored Session denominators, and
 per-surface `acted / offered` rates. It explicitly does not claim task success,

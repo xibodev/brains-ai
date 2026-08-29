@@ -411,6 +411,17 @@ def _sweep_stale_sessions() -> int:
     return len(dormant)
 
 
+def _dispatch_help_reviews() -> int:
+    try:
+        from brains.control.help_execution import dispatch_due_help_reviews
+
+        scheduled = dispatch_due_help_reviews()
+    except Exception as exc:  # noqa: BLE001 - maintenance must not break scheduler
+        log.error("scheduler: ephemeral help review dispatch failed: %s", exc)
+        return 0
+    return len(scheduled)
+
+
 def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     """Evaluate every enabled recurring task and fire those that are due.
 
@@ -435,6 +446,7 @@ def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     _sweep_governed_actions()
     _sweep_stale_runtimes()
     _sweep_stale_sessions()
+    _dispatch_help_reviews()
     if not experimental_enabled():
         return []
     fired: list[dict] = []

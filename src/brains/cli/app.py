@@ -2059,6 +2059,7 @@ def help_file_cli(
     context: str = typer.Option("", "--context"),
     timeout_ms: int = typer.Option(30000, "--timeout-ms"),
     required_tool: str | None = typer.Option(None, "--required-tool"),
+    execution_mode: str = typer.Option("auto", "--execution-mode"),
 ):
     """File durable peer help and return immediately."""
     from brains.control.help import file_help_request
@@ -2073,6 +2074,7 @@ def help_file_cli(
             context=context,
             timeout_ms=timeout_ms,
             required_tool=required_tool,
+            execution_mode=execution_mode,
         )
     )
 

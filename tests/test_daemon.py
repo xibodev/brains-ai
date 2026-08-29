@@ -208,6 +208,45 @@ def test_build_register_payload_shape():
     assert payload["tools"][0]["capabilities"] == {"tool": "copilot"}
 
 
+def test_daemon_runs_and_completes_ephemeral_review(monkeypatch, tmp_path):
+    daemon = Daemon(DaemonConfig(machine_id="review-machine"), client=MagicMock())
+    daemon.client.list_runtimes.return_value = [
+        {"id": 7, "tool": "copilot", "status": "online", "health": "healthy", "org_id": 1}
+    ]
+    daemon.client.get_help_reviews.return_value = [{"code": "HR-daemon"}]
+    daemon.client.claim_help_review.return_value = {
+        "claimed": True,
+        "review": {
+            "code": "HR-daemon",
+            "required_tool": "copilot",
+            "workspace_path": str(tmp_path),
+            "workspace_id": 3,
+            "session_id": "ses_review",
+        },
+    }
+    monkeypatch.setattr(
+        "brains.control.help_execution.run_read_only_review",
+        lambda *_args, **_kwargs: __import__(
+            "brains.control.help_execution", fromlist=["ReviewRun"]
+        ).ReviewRun("No findings.", "tracked snapshot", 0, True),
+    )
+    daemon.client.complete_help_review.return_value = {"status": "answered"}
+
+    result = daemon.poll_help_reviews()
+
+    assert result == [{"code": "HR-daemon", "status": "answered"}]
+    daemon.client.complete_help_review.assert_called_once_with(
+        7,
+        "HR-daemon",
+        session_id="ses_review",
+        answer="No findings.",
+        evidence="tracked snapshot",
+        returncode=0,
+        source_unchanged=True,
+        error_code=None,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Poll → claim → spawn cycle (--once)
 # --------------------------------------------------------------------------- #

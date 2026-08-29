@@ -1226,7 +1226,9 @@ def _agent_session_to_dict(row: AgentSession) -> dict:
     ended = row.ended_at
     duration_seconds = None
     if started is not None and ended is not None:
-        duration_seconds = max(0.0, (ended - started).total_seconds())
+        started_utc = started if started.tzinfo else started.replace(tzinfo=UTC)
+        ended_utc = ended if ended.tzinfo else ended.replace(tzinfo=UTC)
+        duration_seconds = max(0.0, (ended_utc - started_utc).total_seconds())
     return {
         "id": row.id,
         "status": (

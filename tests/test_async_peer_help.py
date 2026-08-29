@@ -214,3 +214,43 @@ def test_async_help_cli_and_mcp_surfaces_are_wired(tmp_path) -> None:
         "cancel_help_request",
         "release_help_request",
     } <= set(mcp_server.TOOL_REGISTRY)
+
+
+def test_help_cli_and_mcp_expose_ephemeral_execution_mode(tmp_path, monkeypatch) -> None:
+    from brains.control import help_execution
+
+    workspace = tmp_path / "review"
+    workspace.mkdir()
+    register = start_session(str(workspace), tool="opencode")
+    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
+    result = CliRunner().invoke(
+        app,
+        [
+            "help-file",
+            "--subject",
+            "review",
+            "--question",
+            "inspect",
+            "--from-session",
+            register["session_id"],
+            "--to-workspace",
+            str(workspace),
+            "--required-tool",
+            "copilot",
+            "--execution-mode",
+            "ephemeral",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["execution_mode"] == "ephemeral"
+
+    mcp_result = mcp_server.call_tool(
+        "file_help_request",
+        subject="review through mcp",
+        question="inspect",
+        from_session_id=register["session_id"],
+        to_workspace=str(workspace),
+        required_tool="copilot",
+        execution_mode="auto",
+    )
+    assert mcp_result["execution_mode"] == "auto"

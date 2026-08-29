@@ -1243,6 +1243,7 @@ def ask_peer_tool(
     context: str = "",
     timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
+    execution_mode: str = "auto",
 ):
     """Ask another peer (session or workspace) a question and block until
     they answer or the request expires. Returns the resolved request.
@@ -1253,6 +1254,11 @@ def ask_peer_tool(
     ``required_tool`` constrains the claiming harness — exact tool name
     (``"claude"``) or ``not:<tool>`` (``"not:copilot"``) — so a session can
     route validation to a different CLI without sharing context.
+
+    ``execution_mode`` is ``existing`` (live peers only), ``ephemeral``
+    (launch a fresh read-only reviewer), or ``auto`` (offer live peers a short
+    claim window, then launch). Auto/ephemeral return the durable request
+    immediately; use ``wait_help_request`` to observe completion.
     """
     return ask_peer(
         subject,
@@ -1263,6 +1269,7 @@ def ask_peer_tool(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
+        execution_mode=execution_mode,
     )
 
 
@@ -1275,6 +1282,7 @@ def file_help_request_tool(
     context: str = "",
     timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
+    execution_mode: str = "auto",
 ):
     """File peer help and return immediately with its durable code."""
     return file_help_request(
@@ -1286,6 +1294,7 @@ def file_help_request_tool(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
+        execution_mode=execution_mode,
     )
 
 

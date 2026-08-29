@@ -46,6 +46,7 @@ from brains.storage.models import (
     FeedbackReport,
     Handoff,
     HelpRequest,
+    HelpRequestExecution,
     MailboxMessage,
     Operator,
     SessionCommand,
@@ -111,9 +112,12 @@ FAMILIES: tuple[QueueFamily, ...] = (
     ),
     QueueFamily(
         name="help_requests",
-        owner="the peer Session/Workspace it targets",
+        owner="the peer Session/Workspace it targets, or one fenced ephemeral reviewer",
         scope="Session-scoped or Workspace-scoped, per-request timeout",
-        lifecycle="open -> claimed -> answered|expired|cancelled",
+        lifecycle=(
+            "open -> claimed by peer|ephemeral reviewer -> answered|expired|cancelled; "
+            "review execution queued -> running -> answered|failed|cancelled"
+        ),
         expiry_policy=(
             "each request's own expires_at (from its timeout_ms at ask_peer time); "
             "past-deadline open/claimed rows flip to expired via "
@@ -330,6 +334,20 @@ def summarize() -> dict[str, Any]:
         help_open = (
             session.query(HelpRequest).filter(HelpRequest.status.in_(("open", "claimed"))).count()
         )
+        help_reviews = session.query(HelpRequestExecution).count()
+        help_reviews_open = (
+            session.query(HelpRequestExecution)
+            .filter(HelpRequestExecution.status.in_(("queued", "running")))
+            .count()
+        )
+        help_reviews_stale = (
+            session.query(HelpRequestExecution)
+            .filter(
+                HelpRequestExecution.status == "running",
+                HelpRequestExecution.lease_expires_at < utc_now(),
+            )
+            .count()
+        )
         feedback_total = session.query(FeedbackReport).count()
         feedback_open = (
             session.query(FeedbackReport)
@@ -385,6 +403,11 @@ def summarize() -> dict[str, Any]:
             "total": help_total,
             "open": help_open,
             "stale_or_expired": _predict_expired_help_requests(),
+            "review_executions": {
+                "total": help_reviews,
+                "open": help_reviews_open,
+                "stale": help_reviews_stale,
+            },
             **_family_metadata("help_requests"),
         },
         "feedback": {

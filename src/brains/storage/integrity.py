@@ -87,6 +87,7 @@ TERMINAL_SESSION_STATES = ("completed", "failed")
 LEASE_TABLES = (
     "approval_routing",
     "event_contexts",
+    "help_request_executions",
     "session_leases",
     "topic_announcements",
     "topic_subscriptions",
