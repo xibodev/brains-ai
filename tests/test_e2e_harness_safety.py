@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 UP = ROOT / "sandbox" / "pivot" / "try" / "up.ps1"
@@ -51,6 +52,10 @@ def test_ci_e2e_stack_uses_the_normal_install_contract() -> None:
     assert "/v1/orgs/demo/personas" not in workflow
     assert "/v1/orgs/demo/projects" not in workflow
     assert "npm run typecheck" in workflow
+
+
+def test_ci_workflow_is_valid_yaml() -> None:
+    assert isinstance(yaml.safe_load(_text(CI)), dict)
 
 
 def test_windows_e2e_stack_guards_the_worktree() -> None:

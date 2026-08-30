@@ -419,19 +419,19 @@ jobs:
             -d '{"slug":"demo","name":"Demo Org"}' >/dev/null
 
           uv run python - <<'PY'
-import os
-from brains.control.orgs import get_org
-from brains.control.sessions import register_workspace
+          import os
+          from brains.control.orgs import get_org
+          from brains.control.sessions import register_workspace
 
-state_dir = os.environ["BRAINS_STATE_DIR"]
-org = get_org("demo")
-register_workspace(
-    f"{state_dir}/workspace",
-    slug="e2e-workspace",
-    name="E2E Workspace",
-    org_id=int(org["id"]),
-)
-PY
+          state_dir = os.environ["BRAINS_STATE_DIR"]
+          org = get_org("demo")
+          register_workspace(
+              f"{state_dir}/workspace",
+              slug="e2e-workspace",
+              name="E2E Workspace",
+              org_id=int(org["id"]),
+          )
+          PY
 
       - uses: actions/setup-node@v4
         with:
