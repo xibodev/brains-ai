@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T05:30:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP not implemented; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP remain unimplemented; deployment not verified
 -->
 
 # Brains Architecture
@@ -169,8 +169,11 @@ and agent reads require current attachment plus binding proof. Raw operator API 
 send-only to human inboxes; browser/local human channels may read owned operator mail.
 Cross-Workspace history is returned only while every represented Workspace remains
 visible, and thread projections include only messages the opened mailbox sent or
-received. Legacy Session-addressed messages remain separate. Notification, browser mail
-UI, and SMTP remain later slices.
+received. The Coordination mailbox desk provides human-bound selection, Inbox/Sent,
+explicit read, filtered threads, operator compose/reply/forward, address-book state, and
+agent deep links; it never grants browser authority to send as an agent. Legacy
+Session-addressed messages remain separate. Live notification and SMTP remain later
+slices.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate

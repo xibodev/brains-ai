@@ -15,6 +15,11 @@ function stateDir(): string {
   return path.join(os.tmpdir(), 'brains-e2e', resolveStackConfig().name);
 }
 
+function manifest(): Record<string, unknown> | null {
+  const raw = process.env.BRAINS_E2E_SEED_MANIFEST;
+  return raw ? JSON.parse(raw) as Record<string, unknown> : null;
+}
+
 function runSeed(script: string): Record<string, unknown> {
   const container = process.env.BRAINS_E2E_SEED_CONTAINER;
   if (container) {
@@ -47,6 +52,8 @@ function runSeed(script: string): Record<string, unknown> {
 }
 
 export function seedWorkspace(): Record<string, unknown> {
+  const seeded = manifest();
+  if (seeded?.workspace) return seeded.workspace as Record<string, unknown>;
   const state = (
     process.env.BRAINS_E2E_SEED_STATE_DIR ?? stateDir()
   ).replaceAll('\\', '/');
@@ -66,6 +73,8 @@ print(json.dumps({"id": workspace.id, "slug": workspace.slug, "path": workspace.
 }
 
 export function seedApproval(): Record<string, unknown> {
+  const seeded = manifest();
+  if (seeded?.approval) return seeded.approval as Record<string, unknown>;
   seedWorkspace();
   const state = stateDir().replaceAll('\\', '/');
   return runSeed(`
@@ -79,5 +88,66 @@ result = file_decision_request(
     metadata={"kind": "action_gate"},
 )
 print(json.dumps(result))
+`);
+}
+
+export function seedMailboxJourney(): Record<string, unknown> {
+  const seeded = manifest();
+  if (seeded?.mailbox) return seeded.mailbox as Record<string, unknown>;
+  seedWorkspace();
+  const state = stateDir().replaceAll('\\', '/');
+  return runSeed(`
+import json
+import uuid
+from brains.control.durable_mail import send_mailbox_message
+from brains.control.durable_mailbox import register_agent_mailbox
+from brains.control.sessions import start_session
+from brains.storage.db import SessionLocal
+from brains.storage.models import Mailbox, MailboxAttachment
+
+workspace_path = "${state}/workspace"
+
+def agent(tool):
+    binding = "e2e-mailbox-binding-" + tool + "-" + ("x" * 32)
+    native_id = "e2e-" + tool + "-mailbox-session"
+    address = tool + ":" + native_id + "@e2e-workspace"
+    with SessionLocal() as session:
+        existing = session.query(Mailbox).filter(Mailbox.address == address).one_or_none()
+        if existing is not None:
+            attachment = session.query(MailboxAttachment).filter(
+                MailboxAttachment.mailbox_id == existing.id,
+                MailboxAttachment.active_slot == 1,
+            ).one()
+            return {"session_id": attachment.session_id, "workspace": "e2e-workspace"}, {"address": address}, binding
+    started = start_session(workspace_path, tool=tool)
+    mailbox = register_agent_mailbox(
+        workspace_path,
+        tool,
+        native_id,
+        started["session_id"],
+        binding,
+    )
+    return started, mailbox, binding
+
+sender, sender_mailbox, sender_binding = agent("opencode")
+other, other_mailbox, _other_binding = agent("codex")
+root = send_mailbox_message(
+    workspace_path,
+    ["operator:admin@brains"],
+    "Mailbox journey handoff " + uuid.uuid4().hex[:8],
+    "e2e-mailbox-root-" + uuid.uuid4().hex,
+    body="The durable context survived while the operator was away.",
+    sender_session_id=sender["session_id"],
+    binding_secret=sender_binding,
+)
+print(json.dumps({
+    "workspace": sender["workspace"],
+    "sender_session_id": sender["session_id"],
+    "sender_address": sender_mailbox["address"],
+    "other_address": other_mailbox["address"],
+    "message_id": root["message_id"],
+    "thread_id": root["thread_id"],
+    "subject": root["subject"],
+}))
 `);
 }

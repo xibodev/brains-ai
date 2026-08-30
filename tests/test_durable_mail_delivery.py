@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
 from brains.api.auth import mint_browser_token
+from brains.authz.principal import CHANNEL_API, CHANNEL_BROWSER
 from brains.authz.resolver import principal_for_operator_slug
 from brains.cli.app import app as cli_app
 from brains.config import settings
 from brains.control.durable_mail import (
     broadcast_mailbox_message,
     forward_mailbox_message,
+    list_browser_mailboxes,
     read_mailbox_inbox,
     read_mailbox_sent,
     read_mailbox_thread,
@@ -31,7 +33,7 @@ from brains.control.sessions import end_session, register_workspace, start_sessi
 from brains.main import app
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
-from brains.storage.models import MailDelivery, MailMessage, MailNotificationAttempt
+from brains.storage.models import MailDelivery, MailMessage, MailNotificationAttempt, Workspace
 
 
 def _native(prefix: str = "native") -> str:
@@ -513,6 +515,118 @@ def test_http_human_mailbox_read_requires_browser_cookie(tmp_path, auth_headers)
     )
     assert read.status_code == 200, read.text
     assert read.json()["messages"][0]["inbox_delivery"]["read_channel"] == "browser"
+
+
+def test_browser_mailbox_selector_reports_truthful_open_and_send_capabilities(
+    tmp_path, auth_headers
+) -> None:
+    agent = _agent(tmp_path / "browser-access")
+    client = TestClient(app)
+
+    assert client.get("/v1/operator/mailboxes/access", headers=auth_headers).status_code == 404
+    client.cookies.set("brains_admin_key", mint_browser_token(settings.api_key))
+    response = client.get("/v1/operator/mailboxes/access")
+
+    assert response.status_code == 200, response.text
+    rows = {row["address"]: row for row in response.json()["data"]}
+    assert rows["operator:admin@brains"] == {
+        "address": "operator:admin@brains",
+        "kind": "operator",
+        "workspace": None,
+        "tool": None,
+        "owner_operator": "admin",
+        "unread_count": 0,
+        "can_open": True,
+        "can_send": True,
+        "deep_link": "/app/coordination?mailbox=operator%3Aadmin%40brains",
+    }
+    agent_row = rows[agent["mailbox"]["address"]]
+    assert agent_row["can_open"] is True
+    assert agent_row["can_send"] is False
+    assert agent_row["workspace"] == agent["session"]["workspace"]
+    assert agent_row["deep_link"].endswith(
+        f"mailbox={agent['mailbox']['address'].replace(':', '%3A').replace('@', '%40')}"
+    )
+
+    assert list_browser_mailboxes()[0]["can_send"] is True
+
+    coordination = client.get("/v1/operator/coordination")
+    assert coordination.status_code == 200, coordination.text
+    projected = next(
+        row
+        for row in coordination.json()["live_agents"]
+        if row["session_id"] == agent["session"]["session_id"]
+    )
+    assert projected["mailbox_address"] == agent["mailbox"]["address"]
+    assert projected["mailbox_deep_link"] == agent_row["deep_link"]
+
+    api_principal = principal_for_operator_slug("admin")
+    assert api_principal is not None
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        list_browser_mailboxes(principal=api_principal.with_channel(CHANNEL_API))
+
+
+def test_browser_member_cannot_open_or_link_another_owners_agent_mailbox(tmp_path) -> None:
+    owner, _ = add_operator(f"mail-owner-{uuid.uuid4().hex[:8]}")
+    reader, _ = add_operator(f"mail-reader-{uuid.uuid4().hex[:8]}")
+    org = create_org(f"mail-browser-org-{uuid.uuid4().hex[:8]}", "Mailbox Browser Org")
+    add_member(org["id"], owner["slug"], role="member")
+    add_member(org["id"], reader["slug"], role="member")
+    path = tmp_path / "browser-private"
+    workspace = register_workspace(str(path), org_id=org["id"])
+    set_workspace_visibility(workspace.slug, "private")
+    add_membership(workspace.slug, owner["slug"])
+    add_membership(workspace.slug, reader["slug"])
+    agent = _agent(path, operator=owner["slug"])
+    reader_principal = principal_for_operator_slug(reader["slug"])
+    assert reader_principal is not None
+    browser_principal = reader_principal.with_channel(CHANNEL_BROWSER)
+
+    rows = list_browser_mailboxes(principal=browser_principal)
+    assert agent["mailbox"]["address"] not in {row["address"] for row in rows}
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        read_mailbox_inbox(
+            address=agent["mailbox"]["address"],
+            principal=browser_principal,
+            mark_read=False,
+        )
+
+    from brains.api.operator import _live_agents
+
+    projected = next(
+        row
+        for row in _live_agents(browser_principal)
+        if row["session_id"] == agent["session"]["session_id"]
+    )
+    assert "mailbox_address" not in projected
+    assert "mailbox_deep_link" not in projected
+
+
+def test_archived_workspace_agent_mailbox_is_not_openable_or_linked(tmp_path) -> None:
+    agent = _agent(tmp_path / "browser-archived")
+    browser_principal = principal_for_operator_slug("admin")
+    assert browser_principal is not None
+    browser_principal = browser_principal.with_channel(CHANNEL_BROWSER)
+
+    with SessionLocal() as session:
+        workspace = (
+            session.query(Workspace)
+            .filter(Workspace.slug == agent["session"]["workspace"])
+            .one_or_none()
+        )
+        assert workspace is not None
+        workspace.status = "archived"
+        session.commit()
+
+    assert agent["mailbox"]["address"] not in {
+        row["address"] for row in list_browser_mailboxes(principal=browser_principal)
+    }
+
+    from brains.api.operator import _live_agents
+
+    assert agent["session"]["session_id"] not in {
+        row["session_id"] for row in _live_agents(browser_principal)
+    }
 
 
 def test_concurrent_operator_reads_attribute_a_delivery_once(tmp_path) -> None:

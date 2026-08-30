@@ -714,6 +714,8 @@ export interface OperatorAgent {
   started_at?: string;
   last_activity_at?: string | null;
   interactive_input?: boolean;
+  mailbox_address?: string;
+  mailbox_deep_link?: string;
 }
 
 export interface OperatorKnowledge {
@@ -798,6 +800,88 @@ export interface OperatorCoordination {
   signals: OperatorSignal[];
   patterns: OperatorPattern[];
   live_agents: OperatorAgent[];
+}
+
+export interface MailboxAccess {
+  address: string;
+  kind: "agent" | "operator";
+  workspace: string | null;
+  tool: string | null;
+  owner_operator: string | null;
+  unread_count: number;
+  can_open: boolean;
+  can_send: boolean;
+  deep_link: string;
+}
+
+export interface MailboxAddress {
+  address: string;
+  kind: "agent" | "operator";
+  workspace: string | null;
+  tool: string | null;
+  owner_operator: string | null;
+}
+
+export interface MailDeliveryState {
+  cursor: number;
+  delivery_id: string;
+  recipient: string | null;
+  recipient_workspace: string | null;
+  state: "accepted" | "read";
+  accepted_at: string;
+  read_at: string | null;
+  read_by_session_id: string | null;
+  read_by_operator: string | null;
+  read_channel: string | null;
+}
+
+export interface MailMessage {
+  cursor: number;
+  message_id: string;
+  thread_id: string;
+  sender: string;
+  sender_session_id: string | null;
+  origin_workspace: string;
+  audience: "direct" | "broadcast";
+  in_reply_to: string | null;
+  forwarded_from: string | null;
+  forwarded_message: {
+    message_id: string;
+    forwarded_from: string | null;
+    sender: string | null;
+    origin_workspace: string | null;
+    kind: string;
+    subject: string;
+    body: string;
+    created_at: string;
+  } | null;
+  kind: string;
+  subject: string;
+  body: string;
+  created_at: string;
+  deliveries: MailDeliveryState[];
+  inbox_delivery?: MailDeliveryState | null;
+  created?: boolean;
+}
+
+export interface MailboxMessageList {
+  mailbox: string;
+  cursor: number;
+  unread_count?: number;
+  messages: MailMessage[];
+}
+
+export interface MailThread {
+  thread_id: string;
+  origin_workspace: string;
+  started_by: string;
+  subject: string;
+  created_at: string;
+  updated_at: string;
+  mailbox: string;
+  unread_count: number;
+  cursor: number;
+  messages: MailMessage[];
 }
 
 export interface OperatorGovernance {

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-02T00:24:58.901-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: candidate tree based on HEAD 7903eb55ce5fbe6e115169a90263d209e59e4fa4; static inspection and local simulated-harness verification; deployment not verified
+last_verified: 2026-08-30T09:45:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Docker-only J1-J11 browser evidence over a private internal network with synthetic state; deployment not verified
 -->
 
 # Brains browser journey contracts
@@ -26,36 +26,31 @@ This Playwright suite exercises the Workspace-first `/app` console in a normal i
 
 J2-J6 and J10 are withdrawn and prove no normal discovery/navigation/activation path. J1 and J7-J11 cover advertised Command Center, Workspaces, Coordination, Governance, Operations/Access/Configuration, Act, and cross-cutting hygiene states. The full mapping and evidence gaps are in [Traceability](../../docs/product/TRACEABILITY.md).
 
-## Run against an isolated stack
+## Run in isolated Docker containers
 
 ```text
-cd tests/e2e
-npm ci
-npm run typecheck
-npm run install:browsers
-$env:BRAINS_E2E_AUTO_STACK="1"
-npm test
+pwsh -File scripts/run_docker_e2e.ps1
 ```
 
-Configuration:
+The runner builds the exact candidate app and a lockfile-defined Playwright image,
+connects them only through a private internal Docker network, publishes no host port,
+uses tmpfs for Brains state, and removes its owned containers, network, and images in
+`finally`. It refuses pre-existing artifact names rather than deleting or reusing them.
+
+Container configuration:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BRAINS_E2E_BASE_URL` | `http://127.0.0.1:8810` | Isolated gateway origin |
-| `BRAINS_E2E_KEY` | `try-brains` | Sign-in key expected by fixtures |
-| `BRAINS_E2E_AUTO_STACK` | unset | When `1`, uses the Windows PowerShell global setup/teardown |
-| `BRAINS_E2E_STACK_NAME` | `trystack` | Lowercase slug for the owned temporary stack |
-| `BRAINS_E2E_SEED_CONTAINER` | unset | Docker container in which direct setup helpers run |
-| `BRAINS_E2E_SEED_STATE_DIR` | local temporary state | State path as seen inside that container |
+| `BRAINS_E2E_BASE_URL` | `http://<app-container>:8787` | Private Docker-network gateway origin. |
+| `BRAINS_E2E_KEY` | generated per run | Synthetic sign-in key shared only by the disposable app and browser containers. |
+| `BRAINS_E2E_SEED_MANIFEST` | generated | Synthetic IDs and addresses prepared inside the disposable app container. |
 
-Auto-stack mode rejects non-loopback URLs and passes the configured port, key,
-and stack name to setup/teardown as one contract.
+The older `BRAINS_E2E_AUTO_STACK=1` PowerShell harness remains compatibility inventory
+for environments that explicitly choose a host process. It is not the default isolated
+UAT path. Auto-stack mode rejects non-loopback URLs; Docker mode accepts only a plain
+internal HTTP origin without embedded credentials.
 
-When testing an already-running Docker stack, set both seed variables so setup
-helpers use the container's filesystem view. Do not open a bind-mounted SQLite
-WAL database from the host while the container is running.
-
-The repository's Windows auto-stack scripts:
+The compatibility Windows auto-stack scripts:
 
 - resolve the repository from the script location;
 - create temporary state and isolated compatibility seed data;

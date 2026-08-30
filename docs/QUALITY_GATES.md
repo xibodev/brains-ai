@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:26:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static reconciliation of staging-first delivery, advertised feature gates, active field trials, and withdrawn capability containment; current command execution not verified; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus candidate inspection of Docker-only quality and browser UAT runner contracts; deployment not verified
 -->
 
 # Brains Quality Gates
@@ -103,17 +103,30 @@ Current workflow facts at HEAD:
   Workspace-first advertised surfaces. Remaining withdrawn source modules stay
   compatibility inventory and are not product activation evidence.
 
-### Local gate command
+### Docker-only gate commands
 
-The exact local equivalent of the workflow, in CI order:
+Run the complete candidate quality gate in Docker:
 
 ```text
-python scripts/run_quality_gates.py
+pwsh -File scripts/run_docker_quality.ps1
 ```
 
-It runs the documentation contract, the generated traceability contract, Ruff lint and format, mypy, the acceptance subset, the full pytest suite, `npm ci`, the SPA typecheck, the committed-bundle comparison, the distribution build, and the shipped-data assertions. `--fast` swaps the full sweep for the contract self-tests; `--no-spa` skips the Node gates; `--list` prints the commands without running them.
+The runner bakes source plus locked Python/Node dependencies into a disposable image,
+then runs without a network, host mount, Linux capabilities, or published port. It runs
+the documentation and traceability contracts, Ruff, mypy, acceptance and full pytest,
+SPA and E2E TypeScript checks, the committed-bundle comparison, distribution build, and
+shipped-data assertions.
 
-The Docker smoke and Playwright gates are deliberately not run by that script: they need a Docker daemon, browsers, and an ephemeral hub. Run them explicitly when the change touches those surfaces, and record which of them actually ran when reporting evidence.
+Run browser UAT separately:
+
+```text
+pwsh -File scripts/run_docker_e2e.ps1
+```
+
+That runner uses a private internal Docker network, publishes no host port, stores state
+in tmpfs, passes only a synthetic manifest to Playwright, and tears down only artifacts
+it created. `scripts/run_quality_gates.py` remains a CI-command enumerator and
+compatibility fallback, not the isolated operator-machine path.
 
 Candidate evidence must state the exact SHA, which gates ran, and on what platform. A local run is E3 evidence for the gates it actually executed and for nothing else.
 

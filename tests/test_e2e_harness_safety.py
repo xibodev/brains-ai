@@ -13,6 +13,11 @@ UP = ROOT / "sandbox" / "pivot" / "try" / "up.ps1"
 DOWN = ROOT / "sandbox" / "pivot" / "try" / "down.ps1"
 STACK = ROOT / "tests" / "e2e" / "fixtures" / "stack.ts"
 GLOBAL_SETUP = ROOT / "tests" / "e2e" / "fixtures" / "global-setup.ts"
+DOCKER_E2E = ROOT / "scripts" / "run_docker_e2e.ps1"
+DOCKER_QUALITY = ROOT / "scripts" / "run_docker_quality.ps1"
+DOCKER_QUALITY_FILE = ROOT / "docker" / "Dockerfile.quality"
+DOCKERIGNORE = ROOT / ".dockerignore"
+GITATTRIBUTES = ROOT / ".gitattributes"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 
@@ -113,6 +118,63 @@ def test_windows_auto_stack_rejects_non_loopback_targets() -> None:
     assert "'-Key'" not in setup
 
 
+def test_docker_e2e_is_private_owned_and_volume_free() -> None:
+    script = _text(DOCKER_E2E)
+
+    assert "network create --internal" in script
+    assert "PowerShell 7 or newer is required" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert '--tmpfs "/tmp:rw,nosuid,nodev,mode=1777"' in script
+    assert "PortBindings" in script
+    assert "unexpectedly publishes a host port" in script
+    assert "unexpectedly uses a persistent or host mount" in script
+    assert '--tmpfs "/data:' in script
+    assert "BRAINS_DB_URL=sqlite:////data/brains.db" in script
+    assert "BRAINS_STATE_DIR=/data/.brains" in script
+    assert '-e "HOME=/tmp"' in script
+    assert "Refusing to reuse pre-existing container" in script
+    assert "Refusing to reuse pre-existing network" in script
+    assert "Refusing to overwrite pre-existing image" in script
+    assert "docker network rm $network" in script
+    assert "Container teardown was incomplete" in script
+    assert "Network teardown was incomplete" in script
+    assert "Image teardown was incomplete" in script
+    assert "--mount" not in script and "--volume" not in script
+    assert "-p " not in script and "--publish" not in script
+
+
+def test_docker_quality_has_no_network_mount_or_capabilities() -> None:
+    script = _text(DOCKER_QUALITY)
+    dockerfile = _text(DOCKER_QUALITY_FILE)
+
+    assert "--network none" in script
+    assert "PowerShell 7 or newer is required" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert '--tmpfs "/tmp:rw,exec,nosuid,nodev,mode=1777"' in script
+    assert "--mount" not in script and "--volume" not in script
+    assert "Refusing to reuse pre-existing container" in script
+    assert "Refusing to overwrite pre-existing image" in script
+    assert "Quality container teardown was incomplete" in script
+    assert "Quality image teardown was incomplete" in script
+    assert "COPY . ." in dockerfile
+    assert "uv sync --extra dev --python 3.12" in dockerfile
+    assert 'uv pip install "setuptools==84.0.0" "wheel==0.48.0"' in dockerfile
+    assert "uv build --no-build-isolation" in _text(ROOT / "docker" / "run-quality-gates.sh")
+
+
+def test_docker_context_excludes_private_host_state_and_linux_script_keeps_lf() -> None:
+    ignored = _text(DOCKERIGNORE)
+
+    assert "brains.db-*" in ignored
+    assert "*.pem" in ignored
+    assert "*.key" in ignored
+    assert ".brains" in ignored
+    assert ".opencode" in ignored
+    assert "docker/run-quality-gates.sh text eol=lf" in _text(GITATTRIBUTES)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell harness")
 def test_windows_e2e_stack_rejects_path_traversal_names() -> None:
     powershell = shutil.which("powershell")
@@ -139,4 +201,4 @@ def test_windows_e2e_stack_rejects_path_traversal_names() -> None:
     )
 
     assert result.returncode != 0
-    assert "Harness name must be a lowercase slug" in (result.stdout + result.stderr)
+    assert "Harness name must be a lowercase slug" in result.stdout + result.stderr

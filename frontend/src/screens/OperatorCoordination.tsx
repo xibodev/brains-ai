@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { OperatorTask } from "../api/types";
 import { relativeTime } from "../components/format";
+import { MailboxWorkspace } from "../components/MailboxWorkspace";
 import {
   OperatorCard,
   OperatorMiniList,
@@ -32,7 +33,6 @@ export function OperatorCoordination() {
         lede="Global queues for tasks, ownership, handoffs, messages, topics, and shared learning, always traceable back to a workspace."
         actions={
           <>
-            <button className="operator-button" onClick={() => openAct("message.send")}>Send message</button>
             <button className="operator-button" onClick={() => openAct("topic.post")}>Post topic</button>
             <button className="operator-button primary" onClick={() => openAct("task.create")}>Create task</button>
           </>
@@ -41,6 +41,7 @@ export function OperatorCoordination() {
       <OperatorState loading={state.loading} error={state.error} />
       {data && (
         <>
+          <MailboxWorkspace />
           <div className="operator-filterbar">
             <div className="operator-filter-chips">
               {FILTERS.map((name) => (

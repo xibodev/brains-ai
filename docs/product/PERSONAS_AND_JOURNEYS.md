@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T05:30:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; browser mail and notification journeys remain open; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP journeys remain open; deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -383,8 +383,10 @@ and represented no more strongly than its observed result.
 
 **Evidence gaps:** Current E3 covers local offline acceptance, retries, read attribution,
 thread/reply/forward, explicit broadcast, cursor continuity, and cross-Workspace refusal.
-Browser mail UI, live harness notification, SMTP copy, two-real-harness E4, and the
-residual in-process governance boundary remain open.
+Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
+reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
+refusal, and accepted/read state. Live harness notification, SMTP copy, two-real-harness
+E4, and the residual in-process governance boundary remain open.
 
 ## J9 - Configure Brains and GitHub linkage
 

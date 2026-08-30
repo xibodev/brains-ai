@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T05:30:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP slices remain open; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP slices remain open; deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -122,9 +122,9 @@ delivery, read, and notification state.
 
 **Owned items:** BL-P1-12.
 
-**Delivery dependency:** Address registration plus local direct/offline delivery,
-explicit Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state,
-and cursors are implemented at E3. Live harness notification, browser mail UI, SMTP copy,
+**Delivery dependency:** Address registration, local direct/offline delivery, explicit
+Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state, cursors,
+and the Coordination mailbox desk are implemented. Live harness notification, SMTP copy,
 adapter-native ID extraction, recovery, and two-real-harness E4 remain open. Until those
 slices pass, do not rely on Brains mail as the sole carrier of parallel-work ownership,
 requirements, approval, or handoff.
@@ -175,6 +175,14 @@ forward provenance. Coordination provides an authorized mailbox selector, Inbox,
 thread timeline, unread state, compose, reply, forward, delivery/read state, address
 book, and a deep link from an agent to its mailbox. The first release does not require
 attachments, HTML mail, drafts, spam, folders, rules, or a bespoke top-level mail app.
+
+Current browser E4 provides a human-bound mailbox selector, Inbox/Sent, explicit unread
+and read actions, a participant-filtered thread timeline, operator compose/reply/forward,
+per-recipient accepted/read state, authorized address book, non-enumerating unknown deep
+links, and agent-mailbox links from Workspace presence. Agent mailboxes remain read-only
+in the browser because sending as an agent requires adapter-held binding proof. The
+normal route is responsive and keyboard reachable; isolated Docker UAT runs with no
+published host port and synthetic state only.
 
 **Operator and SMTP copy:** Every authenticated operator has a separate durable Brains
 mailbox at `operator:slug@brains`. Agents can address it within authorized scope.

@@ -54,6 +54,11 @@ import type {
   OperatorTransitionResult,
   OperatorWorkspace,
   OperatorWorkspaceDetail,
+  MailboxAccess,
+  MailboxAddress,
+  MailboxMessageList,
+  MailMessage,
+  MailThread,
 } from "./types";
 
 export class ApiError extends Error {
@@ -404,6 +409,58 @@ export const api = {
   operatorWorkspace: (slug: string) =>
     request<OperatorWorkspaceDetail>(`/operator/workspaces/${encodeURIComponent(slug)}`),
   operatorCoordination: () => request<OperatorCoordination>("/operator/coordination"),
+  operatorMailboxAccess: () =>
+    request<{ data: MailboxAccess[] }>("/operator/mailboxes/access").then((body) => body.data),
+  operatorMailboxPhonebook: (workspace: string) =>
+    request<{ data: MailboxAddress[] }>(
+      `/operator/mailboxes${qs({ workspace })}`,
+    ).then((body) => body.data),
+  operatorMailboxInbox: (address: string, includeRead = false) =>
+    request<MailboxMessageList>(
+      `/operator/mailboxes/inbox${qs({ address, include_read: includeRead ? "true" : undefined })}`,
+    ),
+  operatorMailboxSent: (address: string) =>
+    request<MailboxMessageList>(`/operator/mailboxes/sent${qs({ address })}`),
+  operatorMailboxThread: (threadId: string, address: string) =>
+    request<MailThread>(
+      `/operator/mailboxes/threads/${encodeURIComponent(threadId)}${qs({ address })}`,
+    ),
+  operatorMailboxReadInbox: (address: string) =>
+    request<MailboxMessageList>("/operator/mailboxes/inbox/read", {
+      method: "POST",
+      body: JSON.stringify({ address }),
+    }),
+  operatorMailboxReadThread: (threadId: string, address: string) =>
+    request<MailThread>(`/operator/mailboxes/threads/${encodeURIComponent(threadId)}/read`, {
+      method: "POST",
+      body: JSON.stringify({ address }),
+    }),
+  operatorMailboxSend: (
+    workspace: string,
+    body: { recipients: string[]; subject: string; body: string; operation_id: string },
+  ) =>
+    request<MailMessage>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/mailboxes/messages`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorMailboxReply: (
+    workspace: string,
+    messageId: string,
+    body: { subject?: string; body: string; operation_id: string },
+  ) =>
+    request<MailMessage>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/mailboxes/messages/${encodeURIComponent(messageId)}/reply`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  operatorMailboxForward: (
+    workspace: string,
+    messageId: string,
+    body: { recipients: string[]; subject?: string; body: string; operation_id: string },
+  ) =>
+    request<MailMessage>(
+      `/operator/workspaces/${encodeURIComponent(workspace)}/mailboxes/messages/${encodeURIComponent(messageId)}/forward`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
   operatorGovernance: () => request<OperatorGovernance>("/operator/governance"),
   operatorOperations: () => request<OperatorOperations>("/operator/operations"),
   operatorCapabilities: () =>

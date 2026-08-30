@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -21,6 +22,8 @@ from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentTask,
+    Mailbox,
+    MailboxAttachment,
     MailboxMessage,
     Workspace,
 )
@@ -299,7 +302,7 @@ def _live_agents(principal: Principal, *, workspace_id: int | None = None) -> li
     with SessionLocal() as session:
         allowed = {
             row.id: row.slug
-            for row in session.query(Workspace).all()
+            for row in session.query(Workspace).filter(Workspace.status == "active").all()
             if visible is None or row.id in visible
         }
     rows = live_agent_sessions()
@@ -308,7 +311,46 @@ def _live_agents(principal: Principal, *, workspace_id: int | None = None) -> li
         rows = [row for row in rows if row.get("workspace") in selected]
     else:
         rows = [row for row in rows if row.get("workspace") in set(allowed.values())]
-    return rows
+    session_ids = [str(row["session_id"]) for row in rows if row.get("session_id")]
+    mailbox_by_session: dict[str, str] = {}
+    if session_ids:
+        with SessionLocal() as session:
+            mailbox_by_session = {}
+            attached = (
+                session.query(MailboxAttachment, Mailbox, Workspace)
+                .join(Mailbox, Mailbox.id == MailboxAttachment.mailbox_id)
+                .join(Workspace, Workspace.id == Mailbox.workspace_id)
+                .filter(
+                    MailboxAttachment.session_id.in_(session_ids),
+                    MailboxAttachment.active_slot == 1,
+                    Mailbox.status == "active",
+                    Workspace.status == "active",
+                )
+                .all()
+            )
+            for attachment, mailbox, workspace in attached:
+                elevated = principal.is_bootstrap_admin or principal.role_in_org(
+                    workspace.org_id
+                ) in {"admin", "owner"}
+                if mailbox.owner_operator_id == principal.operator_id or elevated:
+                    mailbox_by_session[attachment.session_id] = mailbox.address
+    return [
+        {
+            **row,
+            **(
+                {
+                    "mailbox_address": mailbox_by_session[str(row["session_id"])],
+                    "mailbox_deep_link": (
+                        "/app/coordination?mailbox="
+                        + quote(mailbox_by_session[str(row["session_id"])], safe="")
+                    ),
+                }
+                if str(row.get("session_id")) in mailbox_by_session
+                else {}
+            ),
+        }
+        for row in rows
+    ]
 
 
 def _workspace_rows(principal: Principal) -> list[dict[str, Any]]:
@@ -580,6 +622,20 @@ def mailbox_lookup(
 
     try:
         return lookup_mailbox(address, include_path=include_path, principal=principal)
+    except MailboxUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+
+
+@router.get("/mailboxes/access")
+def mailbox_access(
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    """Human-bound mailbox selector for the Coordination browser surface."""
+    from brains.control.durable_mail import list_browser_mailboxes
+    from brains.control.durable_mailbox import MailboxUnavailableError
+
+    try:
+        return {"data": list_browser_mailboxes(principal=principal)}
     except MailboxUnavailableError as exc:
         raise policy.not_found("mailbox", "unavailable") from exc
 

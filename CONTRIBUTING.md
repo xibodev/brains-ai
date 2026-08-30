@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-04T08:00:00.000-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: HEAD c21a15db3859e6b9f147260a38a7a0d6fe2533b2 plus the local blocking-quality-gates change; static inspection of project manifest, workflows, source layout, tests, and canonical quality contract, with a local Windows execution of every documented gate command including the container health smoke and the Playwright journey suite; a GitHub-hosted workflow run and deployment not verified
+last_verified: 2026-08-30T09:45:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus candidate inspection of Docker-only quality and browser UAT runner contracts; deployment not verified
 -->
 
 # Contributing to Brains
@@ -64,24 +64,31 @@ check the committed bundle without touching it, run
 
 For browser journeys, follow [tests/e2e/README.md](tests/e2e/README.md).
 
-## Full local gate
+## Docker-only validation
 
-Before opening a pull request, run the exact local equivalent of the workflow:
+Before opening a pull request, run the candidate quality gate in Docker:
 
 ```text
-python scripts/run_quality_gates.py
+pwsh -File scripts/run_docker_quality.ps1
 ```
 
-It runs, in CI order: the documentation contract, the generated traceability
-contract, Ruff lint and format, mypy, the acceptance subset, the full pytest
-suite, `npm ci`, the SPA typecheck, the committed-bundle comparison, the
-distribution build, and the shipped-data assertions. Use `--fast` to swap the
-full sweep for the contract self-tests, `--no-spa` to skip the Node gates, and
-`--list` to print the commands without running them.
+It bakes the complete candidate source and locked Python/Node dependencies into a
+disposable image, then runs without a network, host mount, Linux capabilities, or
+published port. It covers documentation, traceability, Ruff, mypy, acceptance and full
+pytest, both TypeScript checks, the committed SPA bundle, package build, and distribution
+contents.
 
-The Docker smoke and Playwright gates are not run by that script because they
-need a Docker daemon, browsers, and an ephemeral hub. Run them explicitly when
-your change touches those surfaces.
+Run browser UAT separately:
+
+```text
+pwsh -File scripts/run_docker_e2e.ps1
+```
+
+The UAT runner publishes no host port, uses an internal Docker network and tmpfs state,
+passes only a synthetic seed manifest to Playwright, and removes only artifacts it
+created. Both runners refuse pre-existing artifact names. `scripts/run_quality_gates.py`
+remains the CI-command enumerator and compatibility fallback; it is not the isolated
+operator-machine path.
 
 Every job in `.github/workflows/ci.yml` is blocking: documentation and
 traceability contracts, Ruff, mypy, pytest on Python 3.11 and 3.12, the
