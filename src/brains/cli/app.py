@@ -28,6 +28,13 @@ from brains.control.decisions import (
     list_open_decisions,
     resolve_decision,
 )
+from brains.control.durable_mailbox import (
+    ensure_operator_mailboxes,
+    list_phonebook,
+    lookup_mailbox,
+    read_mailbox_binding_file,
+    register_agent_mailbox,
+)
 from brains.control.events import append_event, list_events
 from brains.control.handoffs import (
     clear_handoff,
@@ -105,12 +112,16 @@ credentials_app = typer.Typer(
     "accepts. Every accepted key resolves to one principal; raw secrets are "
     "never stored or printed."
 )
+mailbox_app = typer.Typer(
+    help="Register durable agent mailboxes and inspect the authorized phonebook."
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(admin_key_app, name="admin-key")
 app.add_typer(operator_app, name="operator")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(service_app, name="service")
 app.add_typer(credentials_app, name="credentials")
+app.add_typer(mailbox_app, name="mailbox")
 
 daemon_app = typer.Typer(
     help="Run the brains daemon — one process per machine that detects coding "
@@ -2356,7 +2367,23 @@ def session_start_cli(
         "--new",
         help="Create a distinct handle instead of reusing this workspace/tool/operator Session.",
     ),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Adapter-owned file containing the mailbox reattachment secret.",
+    ),
 ):
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
     _print_json(
         start_session(
             workspace,
@@ -2365,25 +2392,124 @@ def session_start_cli(
             predecessor_session_id=predecessor_session,
             reuse_existing=not new,
             auto_link_predecessor=True,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
         )
     )
 
 
 @app.command("session-heartbeat")
-def session_heartbeat_cli(session: str = typer.Option(...)):
+def session_heartbeat_cli(
+    session: str = typer.Option(...),
+    tool: str | None = typer.Option(None, "--tool"),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
     from brains.control.sessions import heartbeat_session
 
-    _print_json(heartbeat_session(session))
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
+    _print_json(
+        heartbeat_session(
+            session,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("register")
+def mailbox_register_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    tool: str = typer.Option(..., "--tool"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Adapter-owned file containing the mailbox reattachment secret.",
+    ),
+):
+    binding_secret = read_mailbox_binding_file(binding_file)
+    _print_json(
+        register_agent_mailbox(
+            workspace,
+            tool,
+            native_tool_session_id,
+            session,
+            binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("phonebook")
+def mailbox_phonebook_cli(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    include_paths: bool = typer.Option(False, "--include-paths"),
+    limit: int = typer.Option(500, "--limit", min=1, max=1000),
+):
+    ensure_operator_mailboxes()
+    _print_json(list_phonebook(workspace, include_paths=include_paths, limit=limit))
+
+
+@mailbox_app.command("lookup")
+def mailbox_lookup_cli(
+    address: str,
+    include_path: bool = typer.Option(False, "--include-path"),
+):
+    ensure_operator_mailboxes()
+    _print_json(lookup_mailbox(address, include_path=include_path))
 
 
 @app.command("session-link-successor")
 def session_link_successor_cli(
     from_session: str = typer.Option(..., "--from-session"),
     to_session: str = typer.Option(..., "--to-session"),
+    tool: str | None = typer.Option(None, "--tool"),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
 ):
     from brains.control.sessions import link_session_successor
 
-    _print_json(link_session_successor(from_session, to_session))
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
+    _print_json(
+        link_session_successor(
+            from_session,
+            to_session,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+        )
+    )
 
 
 @app.command("session-end")

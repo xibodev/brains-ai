@@ -28,6 +28,12 @@ from brains.control.decisions import (
     resolve_decision,
     route_decision,
 )
+from brains.control.durable_mailbox import (
+    list_phonebook,
+    lookup_mailbox,
+    read_mailbox_binding_file,
+    register_agent_mailbox,
+)
 from brains.control.events import append_event, event_scope_report, get_event_context
 from brains.control.feedback import enrich_feedback, file_feedback, get_feedback, list_feedback
 from brains.control.handoffs import (
@@ -495,30 +501,107 @@ def get_state_tool(
     return get_state(workspace_path=workspace_path, session_id=session_id, limit=limit)
 
 
+def mailbox_phonebook_tool(
+    workspace_path: str | None = None,
+    include_paths: bool = False,
+    limit: int = 500,
+):
+    """List active mailbox addresses visible to the current principal."""
+    return list_phonebook(workspace_path, include_paths=include_paths, limit=limit)
+
+
+def mailbox_lookup_tool(address: str, include_path: bool = False):
+    """Resolve one visible active mailbox without enumerating refusals."""
+    return lookup_mailbox(address, include_path=include_path)
+
+
+def mailbox_register_tool(
+    workspace_path: str,
+    tool: str,
+    native_tool_session_id: str,
+    session_id: str,
+    binding_file: str,
+):
+    """Register/reattach using an adapter-owned local binding file."""
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return register_agent_mailbox(
+        workspace_path,
+        tool,
+        native_tool_session_id,
+        session_id,
+        binding_secret,
+    )
+
+
+def _read_mailbox_binding_file(binding_file: str) -> str:
+    from brains.authz.resolver import resolve_local_principal
+
+    principal = resolve_local_principal()
+    return read_mailbox_binding_file(
+        binding_file,
+        managed_only=not principal.is_human_channel,
+    )
+
+
 def start_session_tool(
     workspace_path: str = ".",
     tool: str = "codex",
     predecessor_session_id: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
 ):
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return start_session(
         workspace_path,
         tool=tool,
         predecessor_session_id=predecessor_session_id,
         reuse_existing=True,
         auto_link_predecessor=True,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
     )
 
 
-def heartbeat_session_tool(session_id: str):
+def heartbeat_session_tool(
+    session_id: str,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+):
     """Renew a PID-less coordination Session lease without journal noise."""
-    return heartbeat_session(session_id)
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
+    return heartbeat_session(
+        session_id,
+        tool=tool,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+    )
 
 
-def link_session_successor_tool(from_session_id: str, to_session_id: str):
+def link_session_successor_tool(
+    from_session_id: str,
+    to_session_id: str,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+):
     """Link one ended/replaced handle to its explicit same-workspace successor."""
     from brains.control.sessions import link_session_successor
 
-    return link_session_successor(from_session_id, to_session_id)
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
+    return link_session_successor(
+        from_session_id,
+        to_session_id,
+        tool=tool,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+    )
 
 
 def end_session_tool(session_id: str, summary: str = ""):
@@ -1474,6 +1557,8 @@ def link_tool_session_tool(
     tool: str,
     tool_session_id: str,
     linked_by: str = "auto",
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
 ):
     """Bind a tool-side session id (Claude Code / Copilot CLI / Codex /
     custom) to a brain ``AgentSession``. Idempotent — the same triple
@@ -1484,11 +1569,16 @@ def link_tool_session_tool(
     is ``"auto"`` when the tool registers itself or ``"operator"`` when
     a human pinned the link via the resume flow.
     """
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return link_tool_session(
         brain_session_id,
         tool,
         tool_session_id,
         linked_by=linked_by,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
     )
 
 
@@ -1496,22 +1586,29 @@ def resume_brain_session_tool(
     brain_session_id: str,
     tool: str | None = None,
     tool_session_id: str | None = None,
+    native_tool_session_id: str | None = None,
     operator: bool = False,
     mail_limit: int = 10,
     event_limit: int = 20,
+    mailbox_binding_file: str | None = None,
 ):
     """Re-attach to an existing brain session and get a one-call resume
     packet — last checkpoint, active claims / handoffs / tasks, unread
     mail count + preview, every tool-side session ever linked, and the
     most recent events. Provide ``tool`` + ``tool_session_id`` to record
     the new tool-side incarnation in the same call."""
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return resume_brain_session(
         brain_session_id,
         tool=tool,
         tool_session_id=tool_session_id,
+        native_tool_session_id=native_tool_session_id,
         operator=operator,
         mail_limit=mail_limit,
         event_limit=event_limit,
+        mailbox_binding_secret=mailbox_binding_secret,
     )
 
 

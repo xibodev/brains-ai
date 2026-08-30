@@ -63,6 +63,18 @@ def test_explicit_successor_link_is_idempotent_but_refuses_conflicting_relink(tm
     assert retry["duplicate"] is True
 
 
+def test_explicit_successor_link_retry_stays_idempotent_after_successor_ends(tmp_path):
+    workspace = str(tmp_path / "repo")
+    old = start_session(workspace, tool="opencode")
+    new = start_session(workspace, tool="opencode")
+    link_session_successor(old["session_id"], new["session_id"])
+    end_session(new["session_id"])
+
+    retry = link_session_successor(old["session_id"], new["session_id"])
+
+    assert retry["duplicate"] is True
+
+
 def test_replacement_candidates_and_roster_require_recent_activity(tmp_path):
     workspace = str(tmp_path / "repo")
     stale = start_session(workspace, tool="copilot")

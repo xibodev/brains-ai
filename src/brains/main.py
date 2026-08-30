@@ -41,9 +41,11 @@ async def lifespan(_: FastAPI):
     # Auto-provision / sync the ``admin`` operator so every session
     # started against this gateway can stamp a valid foreign key. See the
     # identity and trust boundaries in ``docs/ARCHITECTURE.md``.
+    from brains.control.durable_mailbox import ensure_operator_mailboxes
     from brains.control.operators import ensure_admin_operator
 
     ensure_admin_operator()
+    ensure_operator_mailboxes()
     yield
 
 

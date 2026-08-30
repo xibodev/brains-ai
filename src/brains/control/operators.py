@@ -147,12 +147,14 @@ def ensure_admin_operator() -> OperatorRecord:
                 key_fingerprint=fingerprint,
             )
             session.add(row)
-            session.commit()
-            session.refresh(row)
+            session.flush()
         elif row.key_fingerprint != fingerprint:
             row.key_fingerprint = fingerprint
-            session.commit()
-            session.refresh(row)
+        from brains.control.durable_mailbox import _ensure_operator_mailbox_row
+
+        _ensure_operator_mailbox_row(session, row.id, row.slug)
+        session.commit()
+        session.refresh(row)
         return _to_record(row)
 
 
@@ -194,21 +196,42 @@ def add_operator(
                 "overwrite. Remove the file manually if this is intentional."
             )
         key = api_key or secrets.token_urlsafe(32)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(key + "\n", encoding="utf-8")
-        if os.name != "nt":
-            # Best-effort on filesystems that don't support chmod.
-            with contextlib.suppress(OSError):
-                os.chmod(path, 0o600)
         row = Operator(
             slug=clean_slug,
             display_name=display_name or clean_slug,
             key_fingerprint=_fingerprint(key),
         )
         session.add(row)
+        session.flush()
+        from brains.control.durable_mailbox import _ensure_operator_mailbox_row
+
+        _ensure_operator_mailbox_row(session, row.id, row.slug)
         session.commit()
         session.refresh(row)
         record = _to_record(row)
+    file_created = False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8", newline="\n") as handle:
+            file_created = True
+            handle.write(key + "\n")
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+    except OSError:
+        if file_created:
+            with contextlib.suppress(OSError):
+                path.unlink()
+        with contextlib.suppress(Exception), _db_module.SessionLocal() as session:
+            from brains.storage.models import Mailbox
+
+            session.query(Mailbox).filter(Mailbox.owner_operator_id == record["id"]).delete(
+                synchronize_session=False
+            )
+            persisted = session.get(Operator, record["id"])
+            if persisted is not None:
+                session.delete(persisted)
+            session.commit()
+        raise
     _register_operator_credential(record, key)
     _invalidate_credential_sources()
     return record, key

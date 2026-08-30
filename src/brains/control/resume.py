@@ -82,6 +82,8 @@ def link_tool_session(
     tool_session_id: str,
     *,
     linked_by: str = "auto",
+    native_tool_session_id: str | None = None,
+    mailbox_binding_secret: str | None = None,
 ) -> dict[str, Any]:
     """Record that ``tool_session_id`` (under ``tool``) is serving
     ``brain_session_id``.
@@ -96,7 +98,13 @@ def link_tool_session(
     if linked_by not in ("auto", "operator"):
         raise ValueError("linked_by must be 'auto' or 'operator'")
     init_db()
-    heartbeat_session(brain_session_id, allow_ended=True)
+    heartbeat_session(
+        brain_session_id,
+        allow_ended=True,
+        tool=tool,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+    )
     with SessionLocal() as session:
         agent = (
             session.query(AgentSession).filter(AgentSession.id == brain_session_id).one_or_none()
@@ -312,9 +320,11 @@ def resume_brain_session(
     *,
     tool: str | None = None,
     tool_session_id: str | None = None,
+    native_tool_session_id: str | None = None,
     operator: bool = False,
     mail_limit: int = 10,
     event_limit: int = 20,
+    mailbox_binding_secret: str | None = None,
 ) -> dict[str, Any]:
     """Build a one-call resume packet for a brain session.
 
@@ -351,6 +361,10 @@ def resume_brain_session(
     """
     if not brain_session_id:
         raise ValueError("brain_session_id is required")
+    if bool(native_tool_session_id) != bool(mailbox_binding_secret):
+        raise ValueError(
+            "native_tool_session_id and mailbox_binding_secret must be supplied together"
+        )
     # Reap zombies + stale handoffs first so the packet is honest about
     # what's actually still live.
     try:
@@ -359,9 +373,41 @@ def resume_brain_session(
     except Exception:
         pass
     init_db()
-    # Resuming is the explicit operation that may reactivate an expired
-    # coordination lease. It also refuses a handle that already has a successor.
-    heartbeat_session(brain_session_id)
+    mailbox = None
+    if native_tool_session_id and mailbox_binding_secret:
+        if not tool:
+            raise ValueError("mailbox registration requires the canonical tool name")
+        with SessionLocal() as session:
+            agent = session.get(AgentSession, brain_session_id)
+            if agent is None:
+                raise AgentSessionNotFoundError(f"unknown brain session: {brain_session_id}")
+            workspace = session.get(Workspace, agent.workspace_id)
+            if workspace is None:
+                raise AgentSessionNotFoundError(f"unknown brain session: {brain_session_id}")
+            workspace_path_for_mailbox = workspace.path
+        from brains.control.durable_mailbox import resume_agent_mailbox
+
+        mailbox = resume_agent_mailbox(
+            workspace_path_for_mailbox,
+            tool,
+            native_tool_session_id,
+            brain_session_id,
+            mailbox_binding_secret,
+        )
+    else:
+        # Legacy resume remains available for Sessions with no durable mailbox.
+        with SessionLocal() as session:
+            from brains.control.durable_mailbox import MailboxUnavailableError
+            from brains.storage.models import MailboxAttachment
+
+            if (
+                session.query(MailboxAttachment.id)
+                .filter(MailboxAttachment.session_id == brain_session_id)
+                .first()
+                is not None
+            ):
+                raise MailboxUnavailableError("mailbox unavailable")
+        heartbeat_session(brain_session_id)
     # Auto-link the fresh tool-side id if provided. We do this BEFORE
     # building the packet so list_tool_session_links includes it.
     if tool and tool_session_id:
@@ -370,6 +416,8 @@ def resume_brain_session(
             tool,
             tool_session_id,
             linked_by="operator" if operator else "auto",
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
         )
 
     with SessionLocal() as session:
@@ -409,6 +457,7 @@ def resume_brain_session(
             "summary": agent.summary,
             "lease_expires_at": lease.lease_expires_at.isoformat() if lease else None,
         }
+        workspace_id = workspace.id
 
     last = latest_checkpoint(brain_session_id)
     with SessionLocal() as session:
@@ -462,6 +511,7 @@ def resume_brain_session(
 
     packet = {
         "brain_session": brain_session_dict,
+        "mailbox": mailbox,
         "last_checkpoint": last,
         "checkpoints_total": checkpoints_total,
         "active_handoffs": handoffs,
@@ -475,11 +525,12 @@ def resume_brain_session(
     append_event(
         "session_resumed",
         f"brain session {brain_session_id} resumed",
-        workspace_id=agent.workspace_id,
+        workspace_id=workspace_id,
         session_id=brain_session_id,
         metadata={
             "tool": tool,
             "tool_session_id": tool_session_id,
+            "native_tool_session_id": native_tool_session_id,
             "by": "operator" if operator else "auto",
         },
     )

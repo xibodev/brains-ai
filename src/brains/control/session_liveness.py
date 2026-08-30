@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from brains.control.common import utc_now
-from brains.storage.models import AgentSession, SessionLease, SessionSuccessor
+from brains.storage.models import AgentSession, MailboxAttachment, SessionLease, SessionSuccessor
 
 DEFAULT_SESSION_LEASE_SECONDS = 60 * 60
 
@@ -29,6 +29,7 @@ def renew_session_lease(
     now: datetime | None = None,
     reactivate: bool = True,
     create: bool = False,
+    mailbox_verified: bool = False,
 ) -> SessionLease | None:
     """Renew ``agent`` when it is a non-terminal PID-less Session."""
     if (
@@ -41,11 +42,23 @@ def renew_session_lease(
         return None
     current = now or utc_now()
     lease = session.get(SessionLease, agent.id)
+    mailbox_bound = (
+        session.query(MailboxAttachment.id).filter(MailboxAttachment.session_id == agent.id).first()
+        is not None
+    )
     if lease is None:
         if not create:
+            if mailbox_bound:
+                agent.last_activity_at = current
             return None
         lease = SessionLease(session_id=agent.id)
         session.add(lease)
+    if mailbox_bound and not mailbox_verified:
+        # Meaningful work is activity, not proof that the harness is reachable.
+        # Only an adapter call that verified the durable mailbox binding may
+        # extend a mailbox-bound Session's reachability lease.
+        agent.last_activity_at = current
+        return lease
     if agent.state == "dormant" and not reactivate:
         return lease
     if reactivate and agent.state == "dormant":
