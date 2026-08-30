@@ -53,6 +53,8 @@ The user-centered outcome and evidence view of this matrix is
 ## Modern SPA route inventory
 
 All routes are declared in `frontend/src/App.tsx` and served under the `/app` basename.
+In the normal install contract, `labs_enabled` is false, so Labs and legacy
+execution-model deep links fail closed to `/app/command-center`.
 
 | Route | Component/behavior | Feature/journey | Current gap |
 |---|---|---|---|
@@ -68,7 +70,7 @@ All routes are declared in `frontend/src/App.tsx` and served under the `/app` ba
 | `/app/operations/access` | Redirect to `/app/operations/access/org` | F9, J10 | None beyond section contract. |
 | `/app/operations/access/:section` | `Settings` | F9, J10 | Org role enforcement remains a server capability check, not a visual-only gate. |
 | `/app/act` | `Act` typed capability launcher | F0, F3, B2, B4-B6, J11 | No generic shell or MCP-call endpoint; missing adapters are labeled and disabled. |
-| `/app/labs` | `LabsHome` behind `LabsGate` | F1-F6, F10 | Withdrawn route still declared in source; BL-P0-09 must remove the route and activation switch. |
+| `/app/labs` | `LabsHome` behind `LabsGate` | F1-F6, F10 | Withdrawn route remains in source; in normal install `LabsGate` redirects to Command Center and no supported enable switch is exposed in navigation. |
 | `/app/labs/onboarding` | `Onboarding` behind `LabsGate` | F6, J1 | Withdrawn execution-model route; no supported activation. |
 | `/app/labs/sessions` | `Sessions` behind `LabsGate` | F3, J7, J8 | Withdrawn execution-supervision route; Workspace coordination remains on normal surfaces. |
 | `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | `:id` remains unconsumed by the legacy screen. |
@@ -84,20 +86,20 @@ All routes are declared in `frontend/src/App.tsx` and served under the `/app` ba
 | `/app/labs/runtimes` | `Runtimes` behind `LabsGate` | F1, J2 | Withdrawn route; no supported activation. |
 | `/app/labs/runtimes/:slug` | `Runtimes` behind `LabsGate` | F1, J2 | Withdrawn route; `:slug` is also unconsumed by retained source. |
 | `/app/inbox` | Redirect to `/app/governance` | F3, J8 | Compatibility redirect; Inbox is no longer primary navigation. |
-| `/app/sessions` | Redirect to `/app/labs/sessions` | F3, J7 | Withdrawn redirect still declared; BL-P0-09 must replace it with retirement/not-found behavior. |
+| `/app/sessions` | Redirect to `/app/labs/sessions` | F3, J7 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/sessions/:id` | Parameter-preserving redirect to Labs | F3, J7 | Withdrawn compatibility source only. |
-| `/app/personas` | Redirect to `/app/labs/personas` | F2, J3 | Withdrawn redirect still declared in source. |
+| `/app/personas` | Redirect to `/app/labs/personas` | F2, J3 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/personas/:slug` | Parameter-preserving redirect to Labs | F2, J3 | Withdrawn compatibility source only. |
-| `/app/pods` | Redirect to `/app/labs/pods` | F5, J4 | Withdrawn redirect still declared in source. |
+| `/app/pods` | Redirect to `/app/labs/pods` | F5, J4 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/pods/:slug` | Parameter-preserving redirect to Labs | F5, J4 | Withdrawn compatibility source only. |
-| `/app/projects` | Redirect to `/app/labs/projects` | F4, J5 | Withdrawn redirect still declared in source. |
+| `/app/projects` | Redirect to `/app/labs/projects` | F4, J5 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/projects/:code` | Parameter-preserving redirect to Labs | F4, J5 | Withdrawn compatibility source only. |
-| `/app/issues` | Redirect to `/app/labs/issues` | F4, J6 | Withdrawn redirect still declared in source. |
+| `/app/issues` | Redirect to `/app/labs/issues` | F4, J6 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/issues/:code` | Parameter-preserving redirect to Labs | F4, J6 | Withdrawn compatibility source only. |
-| `/app/automation` | Redirect to `/app/labs/automation` | F10, J10 | Withdrawn redirect still declared in source. |
-| `/app/runtimes` | Redirect to `/app/labs/runtimes` | F1, J2 | Withdrawn redirect still declared in source. |
+| `/app/automation` | Redirect to `/app/labs/automation` | F10, J10 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
+| `/app/runtimes` | Redirect to `/app/labs/runtimes` | F1, J2 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/runtimes/:slug` | Parameter-preserving redirect to Labs | F1, J2 | Withdrawn compatibility source only. |
-| `/app/onboarding` | Redirect to `/app/labs/onboarding` | F6, J1 | Withdrawn redirect still declared in source. |
+| `/app/onboarding` | Redirect to `/app/labs/onboarding` | F6, J1 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
 | `/app/config` | Redirect to `/app/operations/config/general` | F7, J9 | Compatibility only. |
 | `/app/config/:section` | Parameter-preserving redirect to Operations | F7, J9 | Compatibility only. |
 | `/app/settings` | Redirect to `/app/operations/access/org` | F9, J10 | Compatibility only. |
@@ -198,17 +200,17 @@ inspect or migrate existing stores without advertising Postgres support.
 
 | Journey | Browser file at HEAD | Backend/static evidence | Gap |
 |---|---|---|---|
-| J1 | `j01-first-run.spec.ts` | Existing F6/onboarding plus sign-in assertions | Spec still encodes withdrawn execution onboarding; BL-P0-09 must replace it with Workspace-first entry and zero withdrawn exposure. |
-| J2 | `j02-connect-machine.spec.ts` | F1 enrollment/Runtime/daemon source tests | Entire journey is withdrawn; retain the file only until containment tests replace activation expectations. |
-| J3 | `j03-personas.spec.ts` | F2 Persona and Skill-attachment source tests | Entire journey is withdrawn; existing tests are compatibility evidence only. |
-| J4 | `j04-pods.spec.ts` | F5 Pod roster/routing source tests | Entire journey is withdrawn; containment and data compatibility are the current acceptance needs. |
-| J5 | `j05-project-workspace.spec.ts` | Project plus Workspace scope source tests | Project portion is withdrawn; advertised Workspace identity needs independent journey evidence. |
-| J6 | `j06-issues.spec.ts` | F4 Issue/dispatch source tests | Entire Issue/dispatch journey is withdrawn; GitHub linkage must no longer depend on a normal Issue UI. |
-| J7 | `j07-sessions.spec.ts`; simulated Runtime in `sandbox/pivot/try` | F3 Session/event source tests | Advertised coordination Session E4 must replace Runtime dispatch/execution expectations. |
-| J8 | `j08-governance-session-control.spec.ts` | approval/ask/gate/session-command/WS tests | Stop/running-agent command portions are withdrawn; durable communications and explicit refusal remain to prove. |
-| J9 | `j09-config-settings.spec.ts` | F7/F8 plus withdrawn admin/provider source tests | Supported config/GitHub expectations must be separated from withdrawn activation controls. |
-| J10 | `j10-automation.spec.ts`; Settings assertion in J9 | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Automation is withdrawn; advertised access/usage/pattern E4 remains absent. |
-| J11 | `j11-console-clean.spec.ts` | auth, error, WS, privacy tests | Blocking CI; authorization/accessibility/route contract incomplete. |
+| J1 | `j01-first-run.spec.ts` | Sign-in and Workspace registration controls | Workspace-first entry plus withdrawn onboarding fail-closed is asserted; long-run E4 recovery evidence remains open. |
+| J2 | `j02-connect-machine.spec.ts` | F1 enrollment/Runtime/daemon source tests | Withdrawn journey now asserts containment only: no discovery and direct Runtime URLs fail closed to Command Center. |
+| J3 | `j03-personas.spec.ts` | F2 Persona and Skill-attachment source tests | Withdrawn journey now asserts containment only: no discovery and direct Persona URLs fail closed. |
+| J4 | `j04-pods.spec.ts` | F5 Pod roster/routing source tests | Withdrawn journey now asserts containment only: no discovery and direct Pod URLs fail closed. |
+| J5 | `j05-project-workspace.spec.ts` | Project plus Workspace scope source tests | Browser evidence keeps advertised Workspace control-room routing while asserting withdrawn Project fail-closed behavior. |
+| J6 | `j06-issues.spec.ts` | F4 Issue/dispatch source tests | Withdrawn journey now asserts containment only: no Issue activation controls and direct Issue URLs fail closed. |
+| J7 | `j07-sessions.spec.ts` | F3 coordination source tests | Browser coverage now exercises durable task/handoff coordination on Act, Coordination, and Workspace surfaces. |
+| J8 | `j08-governance-session-control.spec.ts` | approval/ask/gate/session-command/WS tests | Browser coverage asserts one-time governance resolution and fail-closed legacy session-control navigation. |
+| J9 | `j09-config-settings.spec.ts` | F7/F8 configuration and access source tests | Browser coverage targets advertised Operations config/access sections without Labs activation. |
+| J10 | `j10-automation.spec.ts` | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Withdrawn automation journey now asserts containment only while keeping advertised Access surface checks. |
+| J11 | `j11-console-clean.spec.ts` | auth, error, WS, privacy tests | Blocking CI; accessibility, route-contract depth, and multi-process realtime evidence remain incomplete. |
 
 The backend acceptance module contains active F0-F10 tests and no live `xfail` decorators at this HEAD. Test presence is E2 only and is not evidence that the tests passed.
 
@@ -233,7 +235,7 @@ The backend acceptance module contains active F0-F10 tests and no live `xfail` d
 ## Explicit traceability gaps
 
 1. No E3/E4 evidence is embedded in canonical docs; run evidence belongs outside this tree.
-2. J1-J11 retain dedicated browser specs, but J2-J6 and F10 execution expectations are withdrawn source evidence; BL-P0-09 must replace activation assertions with containment while preserving stable IDs.
+2. J1-J11 retain dedicated browser specs, and J2-J6 plus J10 now assert withdrawn containment rather than activation while preserving stable IDs.
 3. Running-agent message and stop routes remain matched in source (UM-01..03), but both capabilities are withdrawn and must disappear from advertised UI/CLI/MCP guidance.
 4. Native HTTP authorization satisfies F9's enforcement criteria at E2, including Org-scoped usage (`GET /v1/orgs/{org}/usage`); the open part is browser-session E4 evidence for AC-F9-05. Realtime topics are server-derived and persist-before-publish; the residual gap is per-process live fan-out (BL-P0-02).
 5. Frontend routes and route parameters, API client calls, mounted server routes and their families, SQLAlchemy entities, the migration corpus, journey specs, acceptance tests, and `AC-*` references are generated from source by `scripts/check_traceability.py` and fail the gate on drift. What is still hand-written is the prose in these tables - gap statements, control/service columns, and the MCP/CLI family mapping - so those can still drift without failing a check.

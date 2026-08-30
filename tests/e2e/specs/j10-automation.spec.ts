@@ -1,38 +1,29 @@
 import { test, expect, signIn } from '../fixtures/console.js';
 
 /**
- * J10 — Manage Org automation and Skills.
+ * J10 — Manage Org, members, usage, and reusable guidance.
  *
- * Authority: F9/F10, AC-F10-01 through AC-F10-06, and the J10 governance
- * mappings. These deterministic checks create browser-visible definitions;
- * gate enforcement and Skill attachment remain separately traced gaps.
+ * Lifecycle: F10 automation is withdrawn. This spec proves containment while
+ * confirming advertised Access surfaces remain available.
  */
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J10 (F10) create an autopilot', async ({ page, consoleGuard }) => {
-  await page.goto('/app/labs/automation');
-  await page.getByRole('button', { name: /new autopilot|\+ new autopilot/i }).first().click();
+test('J10 withdrawn automation routes fail closed', async ({ page, consoleGuard }) => {
+  await page.goto('/app/operations/access/org');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
+  await expect(page.getByText(/organisation/i)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle').catch(() => {});
 
-  const name = `nightly-${Date.now()}`;
-  await page.getByLabel(/^name/i).first().fill(name);
-  await page.getByLabel(/title template|title/i).first().fill('Nightly triage');
-  await page.getByRole('button', { name: /^create$/i }).click();
+  for (const route of ['/app/automation', '/app/labs/automation']) {
+    await page.goto(route);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await expect(page).toHaveURL(/\/app\/command-center$/);
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  }
 
-  await expect(page.locator('[data-testid="autopilots-list"]').getByText(name)).toBeVisible();
-  consoleGuard.assertClean();
-});
-
-test('J10 (F10) create a skill', async ({ page, consoleGuard }) => {
-  await page.goto('/app/labs/automation');
-  await page.getByRole('button', { name: /new skill|\+ new skill/i }).first().click();
-
-  const name = `Skill ${Date.now()}`;
-  await page.getByLabel(/^name/i).first().fill(name);
-  await page.getByRole('button', { name: /^create$/i }).click();
-
-  await expect(page.locator('[data-testid="skills-list"]').getByText(name)).toBeVisible();
   consoleGuard.assertClean();
 });

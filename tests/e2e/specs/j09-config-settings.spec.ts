@@ -1,34 +1,30 @@
 import { test, expect, signIn } from '../fixtures/console.js';
 
 /**
- * J9 — Configure providers and integrations.
+ * J9 — Configure Brains and GitHub linkage.
  *
- * Authority: F7/F8, B1/B7, and their J9 acceptance mappings. Config renders
- * effective redacted state, a provider test returns a bounded result, and
- * Settings exposes usage without claiming live-provider readiness.
+ * Advertised browser evidence focuses on Operations config/access surfaces.
  */
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J9 (F7) Config Providers shows real providers + a working Test', async ({ page, consoleGuard }) => {
-  await page.goto('/app/operations/config/providers');
-  const providers = page.locator('[data-testid="config-providers"]');
-  await expect(providers).toBeVisible();
-  // No "wire me" stub text anywhere on the config surface.
-  await expect(page.getByText(/wire it to its config endpoint/i)).toHaveCount(0);
-  // The Test button runs and yields a result (ok or fail) without a console error.
-  const testBtn = providers.getByRole('button', { name: /test connection/i }).first();
-  if (await testBtn.count()) {
-    await testBtn.click();
-    await expect(providers.getByText(/\u2713|\u2717|reachable|models|not configured/i).first()).toBeVisible({ timeout: 7000 });
-  }
+test('J9.1 operations config sections remain reachable without Labs activation', async ({ page, consoleGuard }) => {
+  await page.goto('/app/operations/config/general');
+  await expect(page.getByRole('heading', { name: 'Configure' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Runtime overlay' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+
+  await page.goto('/app/operations/config/integrations');
+  await expect(page.getByRole('heading', { name: 'Configure' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Integrations' })).toBeVisible();
   consoleGuard.assertClean();
 });
 
-test('J9 (F9) Settings exposes a Usage dashboard', async ({ page, consoleGuard }) => {
+test('J9.2 operations access usage remains reachable', async ({ page, consoleGuard }) => {
   await page.goto('/app/operations/access/usage');
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await expect(page.locator('[data-testid="usage-summary"]')).toBeVisible();
   consoleGuard.assertClean();
 });

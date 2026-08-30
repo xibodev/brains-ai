@@ -1,66 +1,64 @@
 import { test, expect, signIn } from '../fixtures/console.js';
+import { seedWorkspace } from '../fixtures/seed.js';
 
 /**
  * J7 — Dispatch and watch a Session.
  *
- * Authority: F3, AC-F3-01/02, AC-F4-03/04, AC-F1-06, and AC-F0-04.
- * tests/test_acceptance_brains.py covers the backend Spawn and event contracts;
- * this deterministic spec covers the gated browser Session, transcript, and Governance
- * surfaces without claiming a real-daemon E4 run.
+ * Advertised browser evidence here focuses on durable Workspace coordination.
  */
+
+test.beforeAll(() => {
+  seedWorkspace();
+});
 
 test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J7.1 (F0.1+F2) Spawning a bound persona creates a session that appears in Sessions', async ({ page, consoleGuard }) => {
-  await page.goto('/app/labs/personas');
-  // 'mason' is seeded bound to an online runtime, so its Spawn produces a session.
-  const masonCard = page.locator('[data-testid="persona-card"]', { hasText: /mason/i }).first();
-  // Wait for the spawn POST to complete before navigating (else it aborts).
-  const [resp] = await Promise.all([
-    page.waitForResponse((r) => /\/personas\/.*\/spawn/.test(r.url())),
-    masonCard.getByRole('button', { name: /spawn/i }).click(),
-  ]);
-  expect(resp.ok(), `spawn failed: ${resp.status()}`).toBeTruthy();
+test('J7.1 task creation in Act is durable across Coordination and Workspace views', async ({ page, consoleGuard }) => {
+  const title = `J7 task ${Date.now()}`;
+  await page.goto('/app/act?capability=task.create&workspace=e2e-workspace');
+  const sheet = page.locator('.operator-action-sheet');
+  await expect(sheet.getByRole('heading', { name: 'Create task' })).toBeVisible();
+  await sheet.getByLabel('Title').fill(title);
 
-  await page.goto('/app/labs/sessions');
-  await expect(page.getByText(/no sessions yet/i)).toHaveCount(0);
+  const [created] = await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes('/v1/operator/workspaces/e2e-workspace/tasks') &&
+      response.request().method() === 'POST',
+    ),
+    sheet.getByRole('button', { name: 'Create task', exact: true }).click(),
+  ]);
+  expect(created.ok(), `typed task create failed: ${created.status()}`).toBeTruthy();
+
+  await page.goto('/app/coordination');
+  await expect(page.getByText(title)).toBeVisible();
+
+  await page.goto('/app/workspaces/e2e-workspace');
+  await page.getByRole('button', { name: /^work$/i }).click();
+  await expect(page.getByText(title)).toBeVisible();
   consoleGuard.assertClean();
 });
 
-test('J7.2 (F3.1) Session detail shows the streamed transcript', async ({ page }) => {
-  await page.goto('/app/labs/personas');
-  const masonCard = page.locator('[data-testid="persona-card"]', { hasText: /mason/i }).first();
-  const [resp] = await Promise.all([
-    page.waitForResponse((r) => /\/personas\/.*\/spawn/.test(r.url())),
-    masonCard.getByRole('button', { name: /spawn/i }).click(),
+test('J7.2 handoff set in Act is visible in the Workspace communication tab', async ({ page, consoleGuard }) => {
+  const handoffTitle = `J7 handoff ${Date.now()}`;
+  await page.goto('/app/act?capability=handoff.set&workspace=e2e-workspace');
+  const sheet = page.locator('.operator-action-sheet');
+  await expect(sheet.getByRole('heading', { name: 'Set handoff' })).toBeVisible();
+  await sheet.getByLabel('Title').fill(handoffTitle);
+  await sheet.getByLabel('Description').fill('Carry forward durable coordination context.');
+
+  const [saved] = await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes('/v1/operator/workspaces/e2e-workspace/handoffs') &&
+      response.request().method() === 'POST',
+    ),
+    sheet.getByRole('button', { name: 'Set handoff', exact: true }).click(),
   ]);
-  const spawn = await resp.json();
-  const sessionId = spawn.session_id;
-  const runtimeId = spawn.runtime_id;
-  expect(sessionId, 'spawn returned a session id').toBeTruthy();
+  expect(saved.ok(), `handoff set failed: ${saved.status()}`).toBeTruthy();
 
-  // Simulate the daemon streaming a stdout chunk (what a real runtime posts).
-  const marker = `STREAM-${Date.now()}`;
-  const ev = await page.request.post(
-    `/v1/runtimes/${runtimeId}/sessions/${sessionId}/events`,
-    { data: { seq: 1, stream: 'stdout', chunk: marker } },
-  );
-  expect(ev.ok(), `event ingest failed: ${ev.status()}`).toBeTruthy();
-
-  // Open the session detail and assert the streamed chunk renders in the transcript.
-  await page.goto('/app/labs/sessions');
-  await page.locator('.card-list .softcard').first().click();
-  await expect(page.getByText(marker)).toBeVisible({ timeout: 7000 });
-});
-
-test('J7.3 (F3.4) Governance surfaces the gate approvals queue', async ({ page, consoleGuard }) => {
-  // The gate files into the same store Governance reads; the full
-  // intercept -> queue -> resolve loop is guarded by the F3.4 acceptance tests
-  // (backend) + tests/test_gate_integration.py (real spawn on Linux). Here we
-  // assert the operator surface renders + is interactive, console-clean.
-  await page.goto('/app/governance');
-  await expect(page.getByRole('heading', { name: /governance/i })).toBeVisible();
+  await page.goto('/app/workspaces/e2e-workspace');
+  await page.getByRole('button', { name: /^communication$/i }).click();
+  await expect(page.getByText(handoffTitle)).toBeVisible();
   consoleGuard.assertClean();
 });

@@ -45,10 +45,9 @@ function attachConsoleGuard(page: Page): ConsoleGuard {
   };
 }
 
-/** Sign into the console with the try-stack admin key (idempotent). */
+/** Sign into the console with the seeded admin key (idempotent). */
 export async function signIn(page: Page): Promise<void> {
-  // Pin the active org to the seeded one BEFORE first paint, so screens that
-  // assert on seeded data (personas, issues) don't land on an empty default org.
+  // Pin the active org to the seeded one before first paint.
   await page.addInitScript((org) => {
     try {
       window.localStorage.setItem('brains.activeOrg', org as string);
@@ -66,27 +65,6 @@ export async function signIn(page: Page): Promise<void> {
       .click()
       .catch(() => {});
     await page.waitForLoadState('networkidle').catch(() => {});
-  }
-
-  // The isolated harness represents a live daemon with a simulated Runtime.
-  // Refresh its heartbeat before each journey so the production stale-runtime
-  // sweep remains enabled without turning the fixture offline mid-suite.
-  const response = await page.request.get('/v1/runtimes');
-  if (response.ok()) {
-    const body = (await response.json()) as { runtimes?: Array<{
-      id?: number;
-      machine_id?: string;
-      capabilities?: { models?: string[] };
-    }> };
-    for (const runtime of body.runtimes ?? []) {
-      if (!runtime.id || !runtime.machine_id || !runtime.capabilities?.models?.length) continue;
-      await page.request.post('/v1/runtimes/heartbeat', {
-        data: {
-          machine_id: runtime.machine_id,
-          runtimes: [{ id: runtime.id, status: 'online', health: 'healthy' }],
-        },
-      });
-    }
   }
 }
 
