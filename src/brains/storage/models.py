@@ -460,19 +460,28 @@ class Mailbox(Base):
     __table_args__ = (
         UniqueConstraint("address", name="uq_mailbox_address"),
         UniqueConstraint(
-            "workspace_id", "tool", "native_session_id", name="uq_mailbox_agent_address"
+            "workspace_id",
+            "tool",
+            "native_tool_session_id",
+            name="uq_mailbox_agent_address",
         ),
         UniqueConstraint("owner_operator_id", "operator_slot", name="uq_mailbox_operator_slot"),
+        UniqueConstraint("binding_key_hash", name="uq_mailbox_binding_key_hash"),
         CheckConstraint(
             "operator_slot IS NULL OR operator_slot = 1",
             name="ck_mailbox_operator_slot",
         ),
         CheckConstraint(
+            "binding_key_version IS NULL OR binding_key_version > 0",
+            name="ck_mailbox_binding_version",
+        ),
+        CheckConstraint(
             "(kind = 'agent' AND workspace_id IS NOT NULL AND tool IS NOT NULL "
-            "AND native_session_id IS NOT NULL AND binding_key_hash IS NOT NULL "
-            "AND operator_slot IS NULL) OR "
+            "AND native_tool_session_id IS NOT NULL AND binding_key_hash IS NOT NULL "
+            "AND binding_key_version IS NOT NULL AND operator_slot IS NULL) OR "
             "(kind = 'operator' AND workspace_id IS NULL AND tool IS NULL "
-            "AND native_session_id IS NULL AND binding_key_hash IS NULL "
+            "AND native_tool_session_id IS NULL AND binding_key_hash IS NULL "
+            "AND binding_key_version IS NULL AND binding_rotated_at IS NULL "
             "AND operator_slot = 1)",
             name="ck_mailbox_identity_shape",
         ),
@@ -484,7 +493,9 @@ class Mailbox(Base):
         ForeignKey("workspaces.id"), nullable=True, index=True
     )
     tool: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    native_session_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    native_tool_session_id: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, index=True
+    )
     owner_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"), index=True)
     operator_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     binding_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -513,12 +524,23 @@ class MailboxAttachment(Base):
             "active_slot IS NULL OR active_slot = 1",
             name="ck_mailbox_attachment_active_slot",
         ),
+        CheckConstraint(
+            "(active_slot IS NOT NULL AND active_slot = 1 "
+            "AND detached_at IS NULL AND detach_reason IS NULL) OR "
+            "(active_slot IS NULL AND detached_at IS NOT NULL AND detach_reason IS NOT NULL)",
+            name="ck_mailbox_attachment_state",
+        ),
+        CheckConstraint(
+            "last_seen_delivery_id >= 0",
+            name="ck_mailbox_attachment_cursor",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
     session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
     active_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notification_mode: Mapped[str] = mapped_column(String(24), default="pull", index=True)
+    last_seen_delivery_id: Mapped[int] = mapped_column(Integer, default=0)
     attached_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )

@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     kind VARCHAR(16) NOT NULL,
     workspace_id INTEGER REFERENCES workspaces(id),
     tool VARCHAR(64),
-    native_session_id VARCHAR(256),
+    native_tool_session_id VARCHAR(256),
     owner_operator_id INTEGER NOT NULL REFERENCES operators(id),
     operator_slot INTEGER,
     binding_key_hash VARCHAR(64),
@@ -17,16 +17,23 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
     retired_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT uq_mailbox_address UNIQUE (address),
-    CONSTRAINT uq_mailbox_agent_address UNIQUE (workspace_id, tool, native_session_id),
+    CONSTRAINT uq_mailbox_agent_address UNIQUE (
+        workspace_id, tool, native_tool_session_id
+    ),
     CONSTRAINT uq_mailbox_operator_slot UNIQUE (owner_operator_id, operator_slot),
+    CONSTRAINT uq_mailbox_binding_key_hash UNIQUE (binding_key_hash),
     CONSTRAINT ck_mailbox_operator_slot CHECK (operator_slot IS NULL OR operator_slot = 1),
+    CONSTRAINT ck_mailbox_binding_version CHECK (
+        binding_key_version IS NULL OR binding_key_version > 0
+    ),
     CONSTRAINT ck_mailbox_identity_shape CHECK (
         (kind = 'agent' AND workspace_id IS NOT NULL AND tool IS NOT NULL
-         AND native_session_id IS NOT NULL AND binding_key_hash IS NOT NULL
-         AND operator_slot IS NULL)
+         AND native_tool_session_id IS NOT NULL AND binding_key_hash IS NOT NULL
+         AND binding_key_version IS NOT NULL AND operator_slot IS NULL)
         OR
         (kind = 'operator' AND workspace_id IS NULL AND tool IS NULL
-         AND native_session_id IS NULL AND binding_key_hash IS NULL
+         AND native_tool_session_id IS NULL AND binding_key_hash IS NULL
+         AND binding_key_version IS NULL AND binding_rotated_at IS NULL
          AND operator_slot = 1)
     )
 );
@@ -34,7 +41,8 @@ CREATE INDEX IF NOT EXISTS ix_mailboxes_address ON mailboxes(address);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_kind ON mailboxes(kind);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_workspace_id ON mailboxes(workspace_id);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_tool ON mailboxes(tool);
-CREATE INDEX IF NOT EXISTS ix_mailboxes_native_session_id ON mailboxes(native_session_id);
+CREATE INDEX IF NOT EXISTS ix_mailboxes_native_tool_session_id
+    ON mailboxes(native_tool_session_id);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_owner_operator_id ON mailboxes(owner_operator_id);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_status ON mailboxes(status);
 CREATE INDEX IF NOT EXISTS ix_mailboxes_created_at ON mailboxes(created_at);
@@ -45,6 +53,7 @@ CREATE TABLE IF NOT EXISTS mailbox_attachments (
     session_id VARCHAR(32) NOT NULL REFERENCES agent_sessions(id),
     active_slot INTEGER,
     notification_mode VARCHAR(24) NOT NULL DEFAULT 'pull',
+    last_seen_delivery_id INTEGER NOT NULL DEFAULT 0,
     attached_at TIMESTAMP WITH TIME ZONE NOT NULL,
     detached_at TIMESTAMP WITH TIME ZONE,
     detach_reason VARCHAR(64),
@@ -52,7 +61,14 @@ CREATE TABLE IF NOT EXISTS mailbox_attachments (
     CONSTRAINT uq_mailbox_attachment_current UNIQUE (mailbox_id, active_slot),
     CONSTRAINT ck_mailbox_attachment_active_slot CHECK (
         active_slot IS NULL OR active_slot = 1
-    )
+    ),
+    CONSTRAINT ck_mailbox_attachment_state CHECK (
+        (active_slot IS NOT NULL AND active_slot = 1
+         AND detached_at IS NULL AND detach_reason IS NULL)
+        OR
+        (active_slot IS NULL AND detached_at IS NOT NULL AND detach_reason IS NOT NULL)
+    ),
+    CONSTRAINT ck_mailbox_attachment_cursor CHECK (last_seen_delivery_id >= 0)
 );
 CREATE INDEX IF NOT EXISTS ix_mailbox_attachments_mailbox_id ON mailbox_attachments(mailbox_id);
 CREATE INDEX IF NOT EXISTS ix_mailbox_attachments_session_id ON mailbox_attachments(session_id);

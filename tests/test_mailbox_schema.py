@@ -41,7 +41,7 @@ def _agent_mailbox(conn: sqlite3.Connection, *, address: str = "codex:native@alp
     cursor = conn.execute(
         """
         INSERT INTO mailboxes (
-            address, kind, workspace_id, tool, native_session_id,
+            address, kind, workspace_id, tool, native_tool_session_id,
             owner_operator_id, binding_key_hash, binding_key_version,
             status, created_at, updated_at
         ) VALUES (?, 'agent', 1, 'codex', 'native', 1, ?, 1, 'active',
@@ -165,12 +165,37 @@ def test_agent_and_operator_identity_shapes_fail_closed() -> None:
         conn.execute(
             """
             INSERT INTO mailboxes (
-                address, kind, workspace_id, tool, native_session_id,
+                address, kind, workspace_id, tool, native_tool_session_id,
                 owner_operator_id, status, created_at, updated_at
             ) VALUES ('codex:no-binding@alpha', 'agent', 1, 'codex',
                       'no-binding', 1, 'active', CURRENT_TIMESTAMP,
                       CURRENT_TIMESTAMP)
             """
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailboxes (
+                address, kind, workspace_id, tool, native_tool_session_id,
+                owner_operator_id, binding_key_hash, status, created_at, updated_at
+            ) VALUES ('codex:no-version@alpha', 'agent', 1, 'codex',
+                      'no-version', 1, ?, 'active', CURRENT_TIMESTAMP,
+                      CURRENT_TIMESTAMP)
+            """,
+            ("b" * 64,),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailboxes (
+                address, kind, workspace_id, tool, native_tool_session_id,
+                owner_operator_id, binding_key_hash, binding_key_version,
+                status, created_at, updated_at
+            ) VALUES ('codex:reused-binding@alpha', 'agent', 1, 'codex',
+                      'reused-binding', 1, ?, 1, 'active', CURRENT_TIMESTAMP,
+                      CURRENT_TIMESTAMP)
+            """,
+            ("a" * 64,),
         )
 
     conn.execute(
@@ -192,11 +217,41 @@ def test_agent_and_operator_identity_shapes_fail_closed() -> None:
                       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
         )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailboxes (
+                address, kind, owner_operator_id, operator_slot,
+                binding_key_version, status, created_at, updated_at
+            ) VALUES ('operator:binding@brains', 'operator', 2, 1, 1,
+                      'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """
+        )
 
 
 def test_only_one_current_attachment_exists_per_mailbox() -> None:
     conn = _connection()
     mailbox_id = _agent_mailbox(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailbox_attachments (
+                mailbox_id, session_id, active_slot, notification_mode,
+                attached_at, detached_at, detach_reason
+            ) VALUES (?, 'ses_one', 1, 'pull', CURRENT_TIMESTAMP,
+                      CURRENT_TIMESTAMP, 'contradictory')
+            """,
+            (mailbox_id,),
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailbox_attachments (
+                mailbox_id, session_id, active_slot, notification_mode, attached_at
+            ) VALUES (?, 'ses_one', NULL, 'pull', CURRENT_TIMESTAMP)
+            """,
+            (mailbox_id,),
+        )
     conn.execute(
         """
         INSERT INTO mailbox_attachments (
@@ -205,6 +260,16 @@ def test_only_one_current_attachment_exists_per_mailbox() -> None:
         """,
         (mailbox_id,),
     )
+    assert conn.execute(
+        "SELECT last_seen_delivery_id FROM mailbox_attachments WHERE session_id = 'ses_one'"
+    ).fetchone() == (0,)
+    conn.execute(
+        "UPDATE mailbox_attachments SET last_seen_delivery_id = 7 WHERE session_id = 'ses_one'"
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "UPDATE mailbox_attachments SET last_seen_delivery_id = -1 WHERE session_id = 'ses_one'"
+        )
 
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(

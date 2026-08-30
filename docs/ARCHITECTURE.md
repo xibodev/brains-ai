@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T21:20:00.000-06:00
+last_verified: 2026-08-29T22:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Architecture
@@ -135,14 +135,15 @@ Advertised durable families include:
 
 Migration 150 reserves the durable-mailbox data boundary without making it available:
 
-- agent/operator mailbox identity and hash-only reattachment binding;
-- one current ephemeral Session attachment plus detached history;
+- agent/operator mailbox identity and unique, versioned hash-only reattachment binding;
+- one current ephemeral Session attachment plus detached history and a per-incarnation
+  delivery cursor;
 - threads, messages, per-recipient local delivery/read attribution, and explicit
   direct/broadcast audience;
 - body-free notification attempts and per-operator SMTP consent/destination references;
 - one retryable SMTP outbox row per local delivery;
-- non-destructive classification of every legacy `mailbox_messages` and
-  `tool_session_links` row as unverified.
+- non-destructive classification of legacy `mailbox_messages` and
+  `tool_session_links` rows present when the migration runs as unverified.
 
 The migration creates no mailbox, infers no address or owner, copies no message body,
 and changes no existing row. APIs, authorization, registration, delivery, UI,

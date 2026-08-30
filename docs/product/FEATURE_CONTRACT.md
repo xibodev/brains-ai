@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T21:20:00.000-06:00
+last_verified: 2026-08-29T22:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Feature Contract
@@ -267,7 +267,7 @@ Cross-harness liveness/end integration, concurrent duplicate uniqueness, real-pr
 review, and broad per-tool authorization remain open.
 
 Migration 150 is E1/E2 storage preparation for BL-P1-12/BL-P1-14 only. It reserves
-hash-bound mailbox identity, one-current-incarnation attachment, threaded message,
+hash-bound mailbox identity, one-current-incarnation attachment and cursor, threaded message,
 per-recipient delivery/read, notification, per-operator SMTP setting/outbox, and
 unverified legacy-inventory state. It implements no registration, lookup,
 authorization, delivery, read, reply/forward, UI, wakeup, or SMTP behavior, so durable

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T21:20:00.000-06:00
+last_verified: 2026-08-29T22:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Traceability

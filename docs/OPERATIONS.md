@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T21:20:00.000-06:00
+last_verified: 2026-08-29T22:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Operations
@@ -316,8 +316,9 @@ recorded migration to force an upgrade through.
 Migration `150_durable_mailboxes` is an additive state reservation only. It creates the
 future durable mailbox, attachment, thread, message, delivery, notification, per-operator
 SMTP setting, retryable SMTP outbox, and legacy-inventory tables. It leaves every
-existing mail/tool-link row unchanged and records only its table/key plus an
-`unverified` reason; no subject, body, address, owner, or credential is copied. Applying
+existing mail/tool-link row unchanged and inventories rows present at migration time by
+only table/key plus an `unverified` reason; no subject, body, address, owner, or
+credential is copied. Applying
 the migration does not enable mailbox registration, delivery, browser UI, live wakeup,
 or SMTP copying. Rollback uses the normal application/archive compatibility contract;
 do not drop these tables from a store that a newer build may have written.
