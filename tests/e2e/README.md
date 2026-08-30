@@ -6,22 +6,25 @@ verification_basis: candidate tree based on HEAD 7903eb55ce5fbe6e115169a90263d20
 
 # Brains browser journey contracts
 
-This Playwright suite exercises the workspace-first `/app` console. Execution-model journeys use `/app/labs/*` and the isolated harness explicitly sets `BRAINS_UI_LABS=1`; that does not promote those screens into the normal product surface. Test files are contract presence (E2), not proof that the current SHA passed.
+This Playwright suite exercises the Workspace-first `/app` console in a normal install (Labs disabled). Withdrawn journeys retain one spec file per stable `J*` ID, and those specs assert containment/fail-closed behavior rather than activation. Test files are contract presence (E2), not proof that the current SHA passed.
 
 ## Current spec coverage
 
 | Journey | Spec |
 |---|---|
+| J1 | `specs/j01-first-run.spec.ts` |
 | J2 | `specs/j02-connect-machine.spec.ts` |
 | J3 | `specs/j03-personas.spec.ts` |
 | J4 | `specs/j04-pods.spec.ts` |
+| J5 | `specs/j05-project-workspace.spec.ts` |
 | J6 | `specs/j06-issues.spec.ts` |
 | J7 | `specs/j07-sessions.spec.ts` |
+| J8 | `specs/j08-governance-session-control.spec.ts` |
 | J9 | `specs/j09-config-settings.spec.ts` |
 | J10 | `specs/j10-automation.spec.ts` |
 | J11 | `specs/j11-console-clean.spec.ts` |
 
-Dedicated J1, J5, and J8 specs are missing. The full mapping and evidence gaps are in [Traceability](../../docs/product/TRACEABILITY.md).
+J2-J6 and J10 are withdrawn and prove no normal discovery/navigation/activation path. J1 and J7-J11 cover advertised Command Center, Workspaces, Coordination, Governance, Operations/Access/Configuration, Act, and cross-cutting hygiene states. The full mapping and evidence gaps are in [Traceability](../../docs/product/TRACEABILITY.md).
 
 ## Run against an isolated stack
 
@@ -55,7 +58,7 @@ The repository's Windows auto-stack scripts:
 
 - resolve the repository from the script location;
 - create temporary state and seeded product data;
-- launch only the gateway and register a simulated Runtime;
+- launch only the gateway with seeded Org/Workspace data for Workspace-first journeys;
 - never launch a real agent CLI or read the operator's `~/.brains` state;
 - stop only the recorded hub process tree;
 - compare Git status before and after the run and fail if the worktree changed;
@@ -63,7 +66,7 @@ The repository's Windows auto-stack scripts:
 
 Do not edit the worktree while the auto-stack is running because the mutation
 guard intentionally treats any repository change as a failed test. The harness
-is deterministic browser evidence, not proof of a real Runtime daemon lifecycle.
+is deterministic browser evidence, not proof of Runtime execution-model lifecycle behavior.
 
 ## Acceptance rules
 

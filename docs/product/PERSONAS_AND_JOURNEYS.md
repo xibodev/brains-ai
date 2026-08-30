@@ -118,9 +118,9 @@ supported next action and no withdrawn route exposure.
 
 **Acceptance IDs:** AC-F0-01, AC-F0-02, AC-F6-01, AC-F6-02, AC-F6-03, AC-F6-04, AC-F6-05.
 
-**Evidence gaps:** Existing `j01-first-run.spec.ts` still contains withdrawn onboarding
-coverage. BL-P0-09 must replace that expectation with clean-state Workspace-first entry
-and zero withdrawn activation paths.
+**Evidence gaps:** `j01-first-run.spec.ts` now asserts clean-state Workspace-first entry
+and fail-closed onboarding-route containment. Multi-process and isolated-UAT E4 evidence
+for long-running first-run recovery remains open.
 
 ## J2 - Connect a machine
 
@@ -335,8 +335,8 @@ false claim about process execution.
 
 **Acceptance IDs:** AC-F3-01, AC-F3-02, AC-F4-03, AC-F4-04, AC-F1-06.
 
-**Evidence gaps:** Multi-hour, abrupt-exit, restart, and cross-harness E4 remain open.
-Existing Runtime execution tests do not count toward this advertised journey.
+**Evidence gaps:** Browser coverage now exercises durable task/handoff coordination on
+advertised surfaces. Multi-hour, abrupt-exit, restart, and cross-harness E4 remain open.
 
 ## J8 - Ask, approve, steer, chat, and stop
 
@@ -370,9 +370,9 @@ and represented no more strongly than its observed result.
 
 **Acceptance IDs:** AC-F3-04 through AC-F3-07, AC-B4-01 through AC-B4-04, AC-B7-01.
 
-**Evidence gaps:** Current browser coverage includes withdrawn stop source behavior.
-Advertised E4 must cover one-time decisions, durable agent communications, explicit
-unsupported execution control, and the residual in-process governance boundary.
+**Evidence gaps:** Current browser coverage verifies one-time governance decisions and
+fail-closed legacy execution-control navigation. Advertised E4 for durable
+agent-to-agent communications and the residual in-process governance boundary remains open.
 
 ## J9 - Configure Brains and GitHub linkage
 
@@ -442,8 +442,8 @@ non-activatable.
 **Acceptance IDs:** AC-F9-01 through AC-F9-05, AC-F10-01 through AC-F10-06, AC-B4-01, AC-B5-04.
 
 **Evidence gaps:** Browser-session E4 for Org usage and coordination-pattern receipts is
-absent. Existing Skill/Autopilot tests are source-compatibility evidence only; BL-P0-09
-must prove their containment.
+absent. Existing Skill/Autopilot source tests remain compatibility evidence only, while
+browser specs now assert withdrawn automation containment.
 
 ## J11 - Cross-cutting trust, realtime, errors, accessibility, and hygiene
 
