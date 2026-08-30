@@ -806,6 +806,8 @@ def test_workspace_cascade_is_derived_from_declared_foreign_keys(isolated_db):
     # Direct Workspace scope is deleted.
     assert by_table["agent_sessions"].operation == "delete"
     assert by_table["events"].operation == "delete"
+    assert by_table["mailboxes"].operation == "delete"
+    assert by_table["mailbox_attachments"].operation == "delete"
     # Transitive required dependants the hand-maintained list never covered.
     assert by_table["approval_decisions"].operation == "delete"
     assert by_table["chunks"].operation == "delete"

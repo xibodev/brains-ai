@@ -150,6 +150,33 @@ def test_add_operator_persists_key_and_fingerprint(
     assert slugs == {"admin", "alice"}
 
 
+def test_add_operator_filesystem_failure_removes_operator_and_mailbox(
+    isolated_brains: Path,
+    monkeypatch,
+) -> None:
+    import brains.control.operators as operators_module
+    from brains.control.operators import add_operator, ensure_admin_operator
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import Mailbox, Operator
+
+    ensure_admin_operator()
+    blocked_parent = isolated_brains / "blocked-parent"
+    blocked_parent.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(operators_module, "operator_keys_dir", lambda: blocked_parent)
+
+    with pytest.raises(OSError):
+        add_operator("filesystem-failure")
+
+    with SessionLocal() as session:
+        assert session.query(Operator).filter(Operator.slug == "filesystem-failure").count() == 0
+        assert (
+            session.query(Mailbox)
+            .filter(Mailbox.address == "operator:filesystem-failure@brains")
+            .count()
+            == 0
+        )
+
+
 def test_add_operator_rejects_admin_and_invalid_slugs(
     isolated_brains: Path,
 ) -> None:

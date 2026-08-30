@@ -77,6 +77,9 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "store_memory": tools.store_memory_tool,
     "explain_route": tools.explain_route,
     "get_state": tools.get_state_tool,
+    "mailbox_register": tools.mailbox_register_tool,
+    "mailbox_phonebook": tools.mailbox_phonebook_tool,
+    "mailbox_lookup": tools.mailbox_lookup_tool,
     "start_session": tools.start_session_tool,
     "heartbeat_session": tools.heartbeat_session_tool,
     "link_session_successor": tools.link_session_successor_tool,
@@ -189,9 +192,8 @@ mcp = FastMCP("Brains v2", transport_security=_build_mcp_transport_security())
 # See tests/test_mcp_server.py::test_registered_mcp_tool_names_are_anthropic_safe.
 TOOL_PREFIX = "brains_"
 
-# A v1.0 efficiency lever: the MCP tool surface is configurable so a client only
-# pays the context cost of the tools it needs. Measured: the full 86-tool surface
-# adds ~4.2k tokens of definitions per prompt; the lean core below is ~460 (-89%).
+# The MCP tool surface is configurable so a client only pays the context cost
+# of the tools it needs. The lean core keeps the normal coordination contract.
 #   BRAINS_MCP_TOOLS unset | "full" | "all"  -> all tools (back-compat default)
 #   BRAINS_MCP_TOOLS = "lean"                 -> the curated core set below
 #   BRAINS_MCP_TOOLS = "a,b,c"                -> an explicit allowlist
@@ -199,6 +201,9 @@ TOOL_PREFIX = "brains_"
 LEAN_TOOLS = frozenset(
     {
         "start_session",
+        "mailbox_register",
+        "mailbox_phonebook",
+        "mailbox_lookup",
         "heartbeat_session",
         "end_session",
         "append_event",
@@ -492,9 +497,11 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
     ensure_admin_key(print_banner=mode == "sse")
     # Make sure the admin operator row exists before any tool can be
     # invoked over either transport. Idempotent and cheap.
+    from brains.control.durable_mailbox import ensure_operator_mailboxes
     from brains.control.operators import ensure_admin_operator
 
     ensure_admin_operator()
+    ensure_operator_mailboxes()
 
     if mode == "sse":
         # Load the persisted admin key into settings so the SSE auth

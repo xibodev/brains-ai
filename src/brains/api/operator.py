@@ -11,7 +11,7 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from brains.authz import policy
@@ -66,6 +66,12 @@ class MessageBody(BaseModel):
     from_session_id: str | None = None
     to_session_id: str | None = None
     route_to_current: bool = False
+
+
+class MailboxRegistrationBody(BaseModel):
+    tool: str = Field(min_length=1, max_length=64)
+    native_tool_session_id: str = Field(min_length=1, max_length=256)
+    session_id: str = Field(min_length=1, max_length=64)
 
 
 class TopicBody(BaseModel):
@@ -446,6 +452,91 @@ def coordination(principal: Principal = Depends(require_operator_principal)) -> 
         "patterns": list_patterns(status="all", limit=100),
         "live_agents": _live_agents(principal),
     }
+
+
+@router.post("/workspaces/{slug}/mailboxes/register")
+def register_mailbox(
+    slug: str,
+    body: MailboxRegistrationBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+        min_length=32,
+        max_length=512,
+    ),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Register or reattach an agent mailbox without exposing its binding."""
+    from brains.control.durable_mailbox import (
+        MailboxUnavailableError,
+        MailboxValidationError,
+        register_agent_mailbox,
+    )
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    if not mailbox_binding:
+        raise _bad_request(ValueError("x-brains-mailbox-binding is required"))
+    try:
+        result = register_agent_mailbox(
+            workspace["path"],
+            body.tool,
+            body.native_tool_session_id,
+            body.session_id,
+            mailbox_binding,
+            principal=principal,
+        )
+    except MailboxValidationError as exc:
+        raise _bad_request(exc) from exc
+    except MailboxUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+    _record_action(
+        principal,
+        "mailbox.register",
+        workspace_id=workspace["id"],
+        payload={"mailbox_id": result["mailbox_id"], "created": result["created"]},
+    )
+    return result
+
+
+@router.get("/mailboxes")
+def mailbox_phonebook(
+    workspace: str | None = None,
+    include_paths: bool = False,
+    limit: int = Query(default=500, ge=1, le=1000),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Visible active mailbox addresses; paths require Org admin visibility."""
+    from brains.control.durable_mailbox import MailboxUnavailableError, list_phonebook
+
+    workspace_path = None
+    if workspace is not None:
+        workspace_path = _workspace(principal, workspace)["path"]
+    try:
+        return {
+            "data": list_phonebook(
+                workspace_path,
+                include_paths=include_paths,
+                principal=principal,
+                limit=limit,
+            )
+        }
+    except MailboxUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+
+
+@router.get("/mailboxes/lookup")
+def mailbox_lookup(
+    address: str = Query(min_length=1, max_length=512),
+    include_path: bool = False,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Resolve one visible address with the same response for every refusal."""
+    from brains.control.durable_mailbox import MailboxUnavailableError, lookup_mailbox
+
+    try:
+        return lookup_mailbox(address, include_path=include_path, principal=principal)
+    except MailboxUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
 
 
 def _workspace_sessions(principal: Principal, workspace_id: int) -> list[dict]:

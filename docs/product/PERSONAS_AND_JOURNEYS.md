@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:26:00.000-06:00
+last_verified: 2026-08-29T23:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static reconciliation of Workspace-first journeys and withdrawn execution-model journeys; withdrawal implementation not verified; deployment not verified
+verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery/browser mail journeys remain open; deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -310,10 +310,12 @@ withdrawn.
 
 **Actions**
 
-1. Start or resume a Workspace-scoped coordination Session.
+1. Start or resume a Workspace-scoped coordination Session. A supported adapter may
+   atomically register/reattach its durable mailbox with native-ID and binding proof.
 2. Inspect or claim durable work.
 3. Record checkpoints, handoffs, messages, and scoped events.
-4. Renew presence while the harness is active.
+4. Renew presence while the harness is active; mailbox-bound Sessions prove their
+   native ID and binding rather than treating `ses_*` as a credential.
 5. Backfill durable events before realtime continuation.
 6. End cleanly, or become dormant and release ownership after lease expiry.
 
@@ -324,10 +326,10 @@ failed, stale presence.
 
 - No eligible claimant: preserve open work and expose a recoverable undelivered state.
 - Browser disconnects: backfill persisted events before live continuation.
-- Harness exits: end/detach where integrated; otherwise lease expiry marks dormant
-  without fabricating execution failure.
-- Successor Session: transfer eligible claims, tasks, subscriptions, and unread continuity
-  once rather than duplicate ownership.
+- Harness exits: terminal/dormant paths transactionally detach the current mailbox
+  incarnation; lease expiry marks dormant without fabricating execution failure.
+- Successor Session: transfer eligible claims, tasks, subscriptions, and mailbox cursor
+  continuity once after binding proof rather than duplicate ownership.
 
 **Success:** The operator or successor agent can reload and understand who owned which
 Workspace work, what durable context exists, and what remains unresolved, without a
@@ -335,8 +337,11 @@ false claim about process execution.
 
 **Acceptance IDs:** AC-F3-01, AC-F3-02, AC-F4-03, AC-F4-04, AC-F1-06.
 
-**Evidence gaps:** Browser coverage now exercises durable task/handoff coordination on
-advertised surfaces. Multi-hour, abrupt-exit, restart, and cross-harness E4 remain open.
+**Evidence gaps:** E3 now covers mailbox identity validation, proof-bound
+start/reuse/heartbeat/resume/successor transitions, cursor continuity, scope, and
+terminal detach. Browser coverage exercises durable task/handoff coordination on
+advertised surfaces. Adapter-native ID extraction plus multi-hour, abrupt-exit,
+restart, and cross-harness E4 remain open.
 
 ## J8 - Ask, approve, steer, chat, and stop
 

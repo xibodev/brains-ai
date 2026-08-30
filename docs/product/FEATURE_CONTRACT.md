@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T22:30:00.000-06:00
+last_verified: 2026-08-29T23:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery not implemented; deployment not verified
 -->
 
 # Brains Feature Contract
@@ -262,16 +262,23 @@ blocked from experimental admission.
 
 Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
 successor transfer, interest-scoped topics, asynchronous peer help, sequential retry
-dedupe, Workspace browser adapters, feedback reporting, and fenced ephemeral review.
-Cross-harness liveness/end integration, concurrent duplicate uniqueness, real-provider
-review, and broad per-tool authorization remain open.
+dedupe, Workspace browser adapters, feedback reporting, fenced ephemeral review, and
+durable mailbox identity/attachment. Mailbox registration validates supported canonical
+tools and native IDs, stores only a unique versioned binding hash, provisions operator
+inboxes, authorizes phonebook/lookup by Workspace visibility, and makes start/reuse,
+heartbeat, resume, tool linking, successor transfer, and terminal detach proof-bound and
+transactional once a Session has mailbox history. Legacy link rows never fabricate an
+address. Cross-harness native-ID extraction and restart evidence, durable message
+delivery/read/thread behavior, real-provider review, and broad per-tool authorization
+remain open.
 
-Migration 150 is E1/E2 storage preparation for BL-P1-12/BL-P1-14 only. It reserves
-hash-bound mailbox identity, one-current-incarnation attachment and cursor, threaded message,
-per-recipient delivery/read, notification, per-operator SMTP setting/outbox, and
-unverified legacy-inventory state. It implements no registration, lookup,
-authorization, delivery, read, reply/forward, UI, wakeup, or SMTP behavior, so durable
-mailbox acceptance remains missing until later slices land.
+Migration 150 and the current control/adapters implement the BL-P1-12/BL-P1-14 identity
+foundation: hash-bound mailbox identity, one-current-incarnation attachment and cursor,
+operator inbox provisioning, authorized phonebook/lookup, and non-enumerating conflict
+refusal. The reserved threaded message, per-recipient delivery/read, notification,
+per-operator SMTP setting/outbox, and unverified legacy-inventory state remain present,
+but delivery, read, reply/forward, UI, wakeup, SMTP, rotation/recovery, and two-real-harness
+acceptance remain missing until later slices land.
 
 ### B3 - Workspace knowledge and repository lookup
 

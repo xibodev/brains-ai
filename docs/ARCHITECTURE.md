@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T22:30:00.000-06:00
+last_verified: 2026-08-29T23:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery not implemented; deployment not verified
 -->
 
 # Brains Architecture
@@ -133,7 +133,7 @@ Advertised durable families include:
 - realtime replay rows, integration delivery identity, usage attribution, secure local
   settings, and migration state.
 
-Migration 150 reserves the durable-mailbox data boundary without making it available:
+Migration 150 reserves the durable-mailbox data boundary:
 
 - agent/operator mailbox identity and unique, versioned hash-only reattachment binding;
 - one current ephemeral Session attachment plus detached history and a per-incarnation
@@ -145,10 +145,23 @@ Migration 150 reserves the durable-mailbox data boundary without making it avail
 - non-destructive classification of legacy `mailbox_messages` and
   `tool_session_links` rows present when the migration runs as unverified.
 
-The migration creates no mailbox, infers no address or owner, copies no message body,
-and changes no existing row. APIs, authorization, registration, delivery, UI,
-notification, and SMTP workers remain later slices; table presence is not feature
-availability.
+The migration itself creates no mailbox, infers no address or owner, copies no message
+body, and changes no existing row. The current control/API/CLI/MCP layer now creates one
+operator inbox per operator and explicitly registers agent addresses from a canonical
+Workspace, supported harness, validated native Session ID, authenticated owner, and a
+hash-only adapter binding. Registration and successor attachment commit atomically;
+wrong, missing, retired, conflicting, or unauthorized identity answers one unavailable
+result. Phonebook and lookup reads filter by Org/Workspace visibility, and only Org
+admins/owners may request a resolved local path. Legacy `tool_session_links`, including
+`current`, never create an address.
+
+The current attachment is the only Session incarnation that may renew or inherit a
+mailbox. Once attachment history exists, start reuse, heartbeat, resume, tool-linking,
+and successor transfer require the native ID and binding proof. End, terminal state,
+dormancy, reaping, and ephemeral-review completion/cancellation detach in the same
+transaction as their Session transition. Message acceptance, Inbox/Sent, read state,
+threads/reply/forward, notifications, browser mail UI, and SMTP remain later slices;
+registered addresses do not yet accept durable mail.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
@@ -177,20 +190,23 @@ Historical duplicate rows are archived rather than rewritten or deleted.
 A supported Session is a durable agent coordination handle, not proof that Brains
 launched a process.
 
-1. A harness starts or resumes a Session for one Workspace and tool identity.
+1. A harness starts or resumes a Session for one Workspace and tool identity. Supported
+   adapters may atomically register the durable mailbox with a native Session ID and an
+   adapter-owned binding file.
 2. The Session receives current ownership, handoff, task, message, knowledge, and
    pattern context.
-3. Tool calls renew its lease while the harness remains active.
+3. Tool calls renew its lease while the harness remains active. A mailbox-bound Session
+   must prove its native ID and binding; knowing only `ses_*` is insufficient.
 4. The Session can claim work, checkpoint, hand off, communicate, ask for help, and
    file human decisions.
 5. A clean end releases eligible ownership. An expired PID-less handle becomes dormant
    without being mislabeled as execution failure.
 6. An explicit successor can inherit eligible claims, in-progress tasks, topic
-   subscriptions, and unread continuity once.
+   subscriptions, and mailbox attachment/cursor continuity once; mailbox inheritance
+   requires the same binding proof and rolls back the whole transfer on failure.
 
-The active backlog requires stronger end/detach integration across Copilot, Claude,
-Codex, and OpenCode and scheduler-driven expiry that does not depend on an operator
-read.
+Cross-harness abrupt-exit/restart evidence and adapter-native ID extraction remain open.
+Scheduler-driven lease expiry itself does not depend on an operator read.
 
 ### Queue semantics
 

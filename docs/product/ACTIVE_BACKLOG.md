@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T12:28:00.000-06:00
+last_verified: 2026-08-29T23:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus the approved durable mailbox, address-book, operator-inbox, and one-way SMTP-copy contract; implementation not changed; deployment not verified
+verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; delivery/UI/notification/SMTP slices remain open; deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -62,8 +62,15 @@ with no Labs flag.
 
 **Owned items:** BL-P1-14.
 
+**Implemented foundation:** Canonical supported-tool normalization, validated native-ID
+registration, unique versioned hash-only binding, one current attachment and cursor,
+operator inbox provisioning, proof-bound start/reuse/heartbeat/resume/tool-link/successor
+transitions, and transactional detach on terminal/dormant paths are implemented at E3.
+Legacy link values such as `current` remain inventory only and cannot create mailboxes.
+
 **Open requirements:** Canonical tool identity retains raw adapter provenance;
-supported harnesses renew while active and end or detach when their process finishes;
+supported harness adapters extract their actual native IDs, renew while active, and end
+or detach when their process finishes;
 expired PID-less Sessions become dormant without an operator read, disappear from live
 projections, and transactionally release claims/tasks; replacement handles transfer
 owned continuity once; machine restart leaves no permanently running stale handles.
@@ -89,6 +96,11 @@ execution claims.
 
 **Owned items:** BL-P0-05.
 
+**Implemented foundation:** Mailbox-aware Session start/reuse, heartbeat, resume, and
+successor operations return the address, unread count, and per-incarnation cursor and
+roll back lifecycle transfer on failed binding proof. Legacy mailbox-less Session calls
+remain compatible; once mailbox history exists, `ses_*` alone cannot reactivate it.
+
 **Open requirements:** Coordination Sessions, tasks, claims, handoffs, checkpoints,
 resume, terminal state, and Workspace scope are durable and idempotent. Unsupported
 steering remains an explicit refusal. Running-agent message delivery is withdrawn and
@@ -110,10 +122,11 @@ delivery, read, and notification state.
 
 **Owned items:** BL-P1-12.
 
-**Delivery dependency:** Complete the address/registration and current-incarnation
-contract with BL-P0-05 and BL-P1-14 before relying on Brains mail as the sole carrier
-of parallel-work ownership, requirements, approval, or handoff. Unrelated slices may
-continue through isolated worktrees and GitHub branches/PRs.
+**Delivery dependency:** The address/registration and current-incarnation foundation is
+implemented, but durable message delivery/read/thread behavior is not. Do not rely on
+Brains mail as the sole carrier of parallel-work ownership, requirements, approval, or
+handoff until those slices and two-harness E4 pass. Unrelated slices may continue through
+isolated worktrees and GitHub branches/PRs.
 
 **Address and registration:** An agent address is
 `tool:native-tool-session-id@workspace-slug`, backed by the unique canonical key
@@ -131,6 +144,11 @@ binding as well as current Workspace authorization; knowing a detached mailbox a
 or native ID is never sufficient to attach an incarnation or read mail. Rotation,
 revocation, loss, and conflicting ownership fail closed and remain recoverable by an
 explicit local-human administrative flow.
+
+Current E3 implements registration, reattachment, operator inbox provisioning,
+visibility-filtered phonebook/lookup, fixed unavailable refusal, binding-file/header
+adapters, and lifecycle proof/detach. Per-adapter native-ID extraction plus binding
+rotation, revocation/loss diagnosis, and local-human recovery remain open.
 
 **Delivery and authorization:** A message commits directly to a registered durable
 mailbox, whether its agent is online or offline; current-Session resolution is used only

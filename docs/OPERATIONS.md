@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T22:30:00.000-06:00
+last_verified: 2026-08-29T23:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2af052a12dce8b2a792605a981d127b0232c2c8d plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
+verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery not implemented; deployment not verified
 -->
 
 # Brains Operations
@@ -64,7 +64,8 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `setup`, `serve-all`, `serve`, `mcp`, `up` | Initialize or run the supported gateway/MCP stack. |
 | `wire`, `unwire` | Add, inspect, or remove only the Brains-owned MCP entry for a supported harness. |
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
-| Session/state/task/claim/handoff/message/topic/help/checkpoint commands | Coordinate durable Workspace work. |
+| Session/state/task/claim/handoff/message/topic/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
+| `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | knowledge/pattern/tool commands | Maintain reusable coordination knowledge and tool posture. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
 | `readiness`, `queue-health`, `recovery-policy` | Inspect supported operational posture. |
@@ -313,15 +314,33 @@ gaps, interrupted/failed attempts, missing implementation, and schema/model drif
 closed. Restore a modified historical file and add a new migration; never alter the
 recorded migration to force an upgrade through.
 
-Migration `150_durable_mailboxes` is an additive state reservation only. It creates the
-future durable mailbox, attachment, thread, message, delivery, notification, per-operator
+Migration `150_durable_mailboxes` is additive. It creates the durable mailbox,
+attachment, thread, message, delivery, notification, per-operator
 SMTP setting, retryable SMTP outbox, and legacy-inventory tables. It leaves every
 existing mail/tool-link row unchanged and inventories rows present at migration time by
 only table/key plus an `unverified` reason; no subject, body, address, owner, or
-credential is copied. Applying
-the migration does not enable mailbox registration, delivery, browser UI, live wakeup,
-or SMTP copying. Rollback uses the normal application/archive compatibility contract;
-do not drop these tables from a store that a newer build may have written.
+credential is copied.
+
+The application now provisions operator inboxes and supports explicit agent registration,
+reattachment, visible phonebook/lookup, and proof-bound Session lifecycle. Binding values
+are read from a local adapter-owned file by CLI/stdio MCP or sent in the protected
+`x-brains-mailbox-binding` registration header; they are hash-only in SQLite and are not
+returned, logged, or placed in CLI arguments. On POSIX, binding files must be owner-only;
+all platforms reject files larger than 1 KiB. Authenticated SSE adapters may reference
+only files under `BRAINS_STATE_DIR/mailbox-bindings`; resolved symlinks may not escape
+that directory. Do not use `tool_session_links` or values
+such as `current` as mailbox identities. A mailbox-aware `session-start`, heartbeat,
+resume, or successor call must carry the actual native Session ID and binding-file path.
+Missing/wrong/conflicting proof fails closed without identifying which condition failed.
+
+Registration does not enable durable message delivery, browser mail UI, live wakeup, or
+SMTP copying. Rollback uses the normal application/archive compatibility contract; do
+not drop these tables from a store that a newer build may have written.
+
+Prefer Workspace archive when mailbox history must remain. The explicit destructive
+Workspace prune treats an agent mailbox as owned by its Workspace and removes that
+mailbox plus its required descendant rows; operator mailboxes have no Workspace foreign
+key and are not selected by that cascade.
 
 Diagnose before repair:
 
