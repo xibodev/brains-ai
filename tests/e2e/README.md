@@ -31,6 +31,7 @@ J2-J6 and J10 are withdrawn and prove no normal discovery/navigation/activation 
 ```text
 cd tests/e2e
 npm ci
+npm run typecheck
 npm run install:browsers
 $env:BRAINS_E2E_AUTO_STACK="1"
 npm test
@@ -57,8 +58,8 @@ WAL database from the host while the container is running.
 The repository's Windows auto-stack scripts:
 
 - resolve the repository from the script location;
-- create temporary state and seeded product data;
-- launch only the gateway with seeded Org/Workspace data for Workspace-first journeys;
+- create temporary state and isolated compatibility seed data;
+- launch only the gateway with Labs disabled; specs seed required Workspace data;
 - never launch a real agent CLI or read the operator's `~/.brains` state;
 - stop only the recorded hub process tree;
 - compare Git status before and after the run and fail if the worktree changed;
@@ -77,4 +78,4 @@ is deterministic browser evidence, not proof of Runtime execution-model lifecycl
 - Cover error, authorization, disconnect/reconnect, retry, and recovery states.
 - Do not commit screenshots or reports as current product proof.
 
-The `brains-e2e` workflow job is advisory at current HEAD. The target hard-gate contract is [QUALITY_GATES.md](../../docs/QUALITY_GATES.md).
+The `brains-e2e` workflow job is part of the blocking quality gate described in [QUALITY_GATES.md](../../docs/QUALITY_GATES.md).

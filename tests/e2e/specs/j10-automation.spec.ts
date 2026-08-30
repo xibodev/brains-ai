@@ -16,6 +16,7 @@ test('J10 withdrawn automation routes fail closed', async ({ page, consoleGuard 
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await expect(page.getByText(/organisation/i)).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle').catch(() => {});
 
   for (const route of ['/app/automation', '/app/labs/automation']) {
     await page.goto(route);

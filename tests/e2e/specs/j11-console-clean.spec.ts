@@ -34,7 +34,7 @@ for (const route of ROUTES) {
   });
 }
 
-test('J11 (F0.2) the canonical command center persists across a full reload', async ({ page }) => {
+test('J11 (F0.2) the canonical command center persists across a full reload', async ({ page, consoleGuard }) => {
   await page.goto('/app/command-center');
   await page.waitForLoadState('networkidle').catch(() => {});
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
@@ -43,6 +43,7 @@ test('J11 (F0.2) the canonical command center persists across a full reload', as
   await page.reload();
   await page.waitForLoadState('networkidle').catch(() => {});
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  consoleGuard.assertClean();
 });
 
 test('J11 workspace-first shell is responsive and keeps Labs fail-closed', async ({ page, consoleGuard }) => {

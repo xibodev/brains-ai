@@ -36,13 +36,22 @@ test('J8.1 a pending governed action is approved once from Governance', async ({
   consoleGuard.assertClean();
 });
 
-test('J8.2 withdrawn execution-control routes fail closed while governance remains available', async ({ page }) => {
-  await page.goto('/app/sessions');
-  await expect(page).toHaveURL(/\/app\/command-center$/);
-  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+test('J8.2 withdrawn execution-control routes fail closed while governance remains available', async ({ page, consoleGuard }) => {
+  for (const route of [
+    '/app/sessions',
+    '/app/sessions/session-1',
+    '/app/labs/sessions',
+    '/app/labs/sessions/session-1',
+  ]) {
+    await page.goto(route);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await expect(page).toHaveURL(/\/app\/command-center$/);
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  }
 
   await page.goto('/app/governance');
   await expect(page.getByRole('heading', { name: /governance/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /verify audit chain/i })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  consoleGuard.assertClean();
 });

@@ -19,7 +19,7 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_windows_e2e_stack_uses_a_simulated_runtime() -> None:
+def test_windows_e2e_stack_keeps_labs_disabled() -> None:
     script = _text(UP)
 
     assert "$PSScriptRoot" in script
@@ -40,13 +40,16 @@ def test_windows_e2e_stack_uses_a_simulated_runtime() -> None:
     assert "UVICORN_" in script
     assert "WEB_CONCURRENCY" in script
     assert '"--workers", "1"' in script
-    assert '$env:BRAINS_UI_LABS = "1"' in script
+    assert "BRAINS_UI_LABS" not in script
 
 
-def test_ci_e2e_stack_enables_the_labs_routes_the_suite_exercises() -> None:
+def test_ci_e2e_stack_uses_the_normal_install_contract() -> None:
     workflow = _text(CI)
 
-    assert 'BRAINS_UI_LABS: "1"' in workflow
+    assert "BRAINS_UI_LABS" not in workflow
+    assert "/v1/runtimes/register" not in workflow
+    assert "/v1/orgs/demo/personas" not in workflow
+    assert "/v1/orgs/demo/projects" not in workflow
 
 
 def test_windows_e2e_stack_guards_the_worktree() -> None:

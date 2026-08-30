@@ -15,16 +15,24 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J5 withdrawn Project routes fail closed while Workspace route remains supported', async ({ page }) => {
+test('J5 withdrawn Project routes fail closed while Workspace route remains supported', async ({ page, consoleGuard }) => {
   await page.goto('/app/workspaces/e2e-workspace');
   await expect(page.getByRole('heading', { name: /E2E Workspace/i })).toBeVisible();
   await expect(page.getByRole('button', { name: /create task/i })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle').catch(() => {});
 
-  for (const route of ['/app/projects', '/app/projects/PRJ-1', '/app/labs/projects']) {
+  for (const route of [
+    '/app/projects',
+    '/app/projects/PRJ-1',
+    '/app/labs/projects',
+    '/app/labs/projects/PRJ-1',
+  ]) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page).toHaveURL(/\/app\/command-center$/);
     await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
   }
+
+  consoleGuard.assertClean();
 });

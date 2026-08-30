@@ -1,6 +1,6 @@
 # Reproducible local stack for the Brains browser journeys.
-# Starts an isolated hub and registers a simulated Runtime. It never launches a
-# real agent CLI or reads the operator's ~/.brains state.
+# Starts an isolated normal-install hub with compatibility seed data. It never
+# launches a real agent CLI or reads the operator's ~/.brains state.
 param(
   [int]$Port = 8810,
   [string]$Key = "",
@@ -177,8 +177,6 @@ try {
     $env:BRAINS_DB_URL = "sqlite:///$dbPath"
     $env:BRAINS_API_KEY = $Key
     $env:BRAINS_PREWARM_INDEX_ON_SESSION = "0"
-    $env:BRAINS_UI_LABS = "1"
-
     $hub = Start-Process `
       -FilePath $python `
       -ArgumentList @("-m", "uvicorn", "brains.main:app", "--host", "127.0.0.1", "--port", "$Port", "--workers", "1") `
@@ -340,11 +338,11 @@ try {
 
   Write-Host ""
   Write-Host "============================================="
-  Write-Host " Brains simulated console UP"
+  Write-Host " Brains normal-install console UP"
   Write-Host "   URL         : $base/app"
   Write-Host "   sign-in key : configured (value hidden)"
   Write-Host "   hub pid     : $($hub.Id)"
-  Write-Host "   runtime     : simulated ($($runtime.id))"
+  Write-Host "   seed data   : isolated compatibility rows"
   Write-Host "   state dir   : $state"
   Write-Host "============================================="
 } catch {

@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J9.1 operations config sections remain reachable without Labs activation', async ({ page }) => {
+test('J9.1 operations config sections remain reachable without Labs activation', async ({ page, consoleGuard }) => {
   await page.goto('/app/operations/config/general');
   await expect(page.getByRole('heading', { name: 'Configure' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Runtime overlay' })).toBeVisible();
@@ -19,6 +19,7 @@ test('J9.1 operations config sections remain reachable without Labs activation',
   await page.goto('/app/operations/config/integrations');
   await expect(page.getByRole('heading', { name: 'Configure' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Integrations' })).toBeVisible();
+  consoleGuard.assertClean();
 });
 
 test('J9.2 operations access usage remains reachable', async ({ page, consoleGuard }) => {
