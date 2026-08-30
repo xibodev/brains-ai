@@ -1,8 +1,8 @@
 """Durable mailbox identity, attachment, and phonebook controls.
 
-This module deliberately stops before message delivery. Migration 150 owns the
-storage boundary; this slice makes mailbox identity usable without changing the
-legacy Session-addressed mail path in :mod:`brains.control.mailbox`.
+Migration 150 owns the storage boundary. Address-based delivery lives in
+:mod:`brains.control.durable_mail`; the legacy Session-addressed path in
+:mod:`brains.control.mailbox` remains separate.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ from brains.storage.models import (
     AgentSession,
     Mailbox,
     MailboxAttachment,
-    MailDelivery,
     Operator,
     OrgMember,
     SessionLease,
@@ -424,6 +423,60 @@ def prove_session_mailbox_binding_in_transaction(
     return mailbox.id
 
 
+def require_current_agent_mailbox_in_transaction(
+    session,
+    session_id: str,
+    binding_secret: str,
+    *,
+    address: str | None = None,
+    capability: str = CAP_ORG_READ,
+    principal: Principal | None = None,
+) -> tuple[Mailbox, MailboxAttachment, AgentSession, Workspace]:
+    """Resolve one proof-bound current agent mailbox without renewing reachability."""
+    resolved = _principal_or_local(principal)
+    agent = _lock_agent_session(session, session_id)
+    if agent is None:
+        raise MailboxUnavailableError("mailbox unavailable")
+    attachment_query = session.query(MailboxAttachment).filter(
+        MailboxAttachment.session_id == session_id,
+        MailboxAttachment.active_slot == 1,
+    )
+    if session.get_bind().dialect.name == "postgresql":
+        attachment_query = attachment_query.with_for_update()
+    attachment = attachment_query.one_or_none()
+    if attachment is None or not _attachment_session_is_current(session, agent):
+        raise MailboxUnavailableError("mailbox unavailable")
+    mailbox = session.get(Mailbox, attachment.mailbox_id)
+    workspace = session.get(Workspace, agent.workspace_id) if agent.workspace_id else None
+    if (
+        mailbox is None
+        or mailbox.kind != "agent"
+        or workspace is None
+        or workspace.status != "active"
+        or mailbox.workspace_id != workspace.id
+        or (address is not None and mailbox.address != address.strip())
+        or not policy.can_see_workspace(resolved, workspace.id)
+        or not resolved.has_capability(capability, workspace.org_id)
+    ):
+        raise MailboxUnavailableError("mailbox unavailable")
+    try:
+        canonical_tool = canonical_mailbox_tool(mailbox.tool or "")
+        native_id = validate_native_tool_session_id(mailbox.native_tool_session_id or "")
+        binding_hash = _binding_hash(binding_secret)
+    except MailboxValidationError as exc:
+        raise MailboxUnavailableError("mailbox unavailable") from exc
+    _assert_agent_identity(agent, workspace, resolved, canonical_tool)
+    operator_id = resolved.operator_id
+    assert operator_id is not None
+    _verify_existing_mailbox(
+        mailbox,
+        owner_operator_id=operator_id,
+        binding_hash=binding_hash,
+        address=_mailbox_address(canonical_tool, native_id, workspace.slug),
+    )
+    return mailbox, attachment, agent, workspace
+
+
 def _attachment_result(row: MailboxAttachment) -> dict[str, Any]:
     return {
         "session_id": row.session_id,
@@ -559,13 +612,12 @@ def register_agent_mailbox_in_transaction(
             )
     attachment = _attach_current_session(session, mailbox, agent)
     session.flush()
-    unread_count = (
-        session.query(MailDelivery.id)
-        .filter(
-            MailDelivery.recipient_mailbox_id == mailbox.id,
-            MailDelivery.read_at.is_(None),
-        )
-        .count()
+    from brains.control.durable_mail import unread_mailbox_count_in_transaction
+
+    unread_count = unread_mailbox_count_in_transaction(
+        session,
+        mailbox.id,
+        principal=resolved,
     )
     return {
         "mailbox_id": mailbox.id,
@@ -679,6 +731,13 @@ def resume_agent_mailbox(
         if agent.pid is None and lease is None:
             raise MailboxUnavailableError("mailbox unavailable")
         attachment = _attach_current_session(session, mailbox, agent)
+        from brains.control.durable_mail import unread_mailbox_count_in_transaction
+
+        unread_count = unread_mailbox_count_in_transaction(
+            session,
+            mailbox.id,
+            principal=resolved,
+        )
         session.commit()
         session.refresh(mailbox)
         session.refresh(attachment)
@@ -690,14 +749,7 @@ def resume_agent_mailbox(
             "workspace": workspace.slug,
             "tool": mailbox.tool,
             "attachment": _attachment_result(attachment),
-            "unread_count": (
-                session.query(MailDelivery.id)
-                .filter(
-                    MailDelivery.recipient_mailbox_id == mailbox.id,
-                    MailDelivery.read_at.is_(None),
-                )
-                .count()
-            ),
+            "unread_count": unread_count,
             "created": False,
         }
         workspace_id = workspace.id
@@ -920,6 +972,7 @@ __all__ = [
     "prove_session_mailbox_binding_in_transaction",
     "record_agent_mailbox_registration",
     "read_mailbox_binding_file",
+    "require_current_agent_mailbox_in_transaction",
     "register_agent_mailbox",
     "register_agent_mailbox_in_transaction",
     "resume_agent_mailbox",

@@ -74,6 +74,51 @@ class MailboxRegistrationBody(BaseModel):
     session_id: str = Field(min_length=1, max_length=64)
 
 
+class MailboxSendBody(BaseModel):
+    recipients: list[str] = Field(min_length=1, max_length=100)
+    subject: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    kind: str = Field(default="info", min_length=1, max_length=32)
+    operation_id: str = Field(min_length=1, max_length=96)
+    sender_address: str | None = Field(default=None, max_length=512)
+    sender_session_id: str | None = Field(default=None, max_length=64)
+
+
+class MailboxBroadcastBody(BaseModel):
+    subject: str = Field(min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    kind: str = Field(default="info", min_length=1, max_length=32)
+    operation_id: str = Field(min_length=1, max_length=96)
+    sender_address: str | None = Field(default=None, max_length=512)
+    sender_session_id: str | None = Field(default=None, max_length=64)
+
+
+class MailboxReplyBody(BaseModel):
+    subject: str | None = Field(default=None, min_length=1, max_length=256)
+    body: str = Field(default="", max_length=65_536)
+    kind: str = Field(default="info", min_length=1, max_length=32)
+    operation_id: str = Field(min_length=1, max_length=96)
+    sender_address: str | None = Field(default=None, max_length=512)
+    sender_session_id: str | None = Field(default=None, max_length=64)
+
+
+class MailboxForwardBody(MailboxReplyBody):
+    recipients: list[str] = Field(min_length=1, max_length=100)
+
+
+class MailboxInboxReadBody(BaseModel):
+    address: str | None = Field(default=None, max_length=512)
+    session_id: str | None = Field(default=None, max_length=64)
+    include_read: bool = False
+    after_delivery_id: int | None = Field(default=None, ge=0)
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class MailboxThreadReadBody(BaseModel):
+    address: str | None = Field(default=None, max_length=512)
+    session_id: str | None = Field(default=None, max_length=64)
+
+
 class TopicBody(BaseModel):
     topic: str = Field(min_length=1, max_length=64)
     subject: str = Field(min_length=1, max_length=256)
@@ -537,6 +582,311 @@ def mailbox_lookup(
         return lookup_mailbox(address, include_path=include_path, principal=principal)
     except MailboxUnavailableError as exc:
         raise policy.not_found("mailbox", "unavailable") from exc
+
+
+def _mailbox_binding_or_none(value: str | None) -> str | None:
+    return value or None
+
+
+def _mailbox_http_error(exc: Exception) -> HTTPException:
+    from brains.control.durable_mailbox import MailboxUnavailableError
+
+    if isinstance(exc, MailboxUnavailableError):
+        return policy.not_found("mailbox", "unavailable")
+    return _bad_request(exc)
+
+
+@router.post("/workspaces/{slug}/mailboxes/messages")
+def mailbox_send(
+    slug: str,
+    body: MailboxSendBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_mail import send_mailbox_message
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        result = send_mailbox_message(
+            workspace["path"],
+            body.recipients,
+            body.subject,
+            body.operation_id,
+            body=body.body,
+            kind=body.kind,
+            sender_address=body.sender_address,
+            sender_session_id=body.sender_session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+    _record_action(
+        principal,
+        "mailbox.message.send",
+        workspace_id=workspace["id"],
+        payload={"message_id": result["message_id"], "created": result["created"]},
+    )
+    return result
+
+
+@router.post("/workspaces/{slug}/mailboxes/broadcast")
+def mailbox_broadcast(
+    slug: str,
+    body: MailboxBroadcastBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_mail import broadcast_mailbox_message
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        result = broadcast_mailbox_message(
+            workspace["path"],
+            body.subject,
+            body.operation_id,
+            body=body.body,
+            kind=body.kind,
+            sender_address=body.sender_address,
+            sender_session_id=body.sender_session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+    _record_action(
+        principal,
+        "mailbox.message.broadcast",
+        workspace_id=workspace["id"],
+        payload={"message_id": result["message_id"], "created": result["created"]},
+    )
+    return result
+
+
+@router.post("/workspaces/{slug}/mailboxes/messages/{message_id}/reply")
+def mailbox_reply(
+    slug: str,
+    message_id: str,
+    body: MailboxReplyBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_mail import reply_mailbox_message
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        result = reply_mailbox_message(
+            workspace["path"],
+            message_id,
+            body.operation_id,
+            subject=body.subject,
+            body=body.body,
+            kind=body.kind,
+            sender_address=body.sender_address,
+            sender_session_id=body.sender_session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+    _record_action(
+        principal,
+        "mailbox.message.reply",
+        workspace_id=workspace["id"],
+        payload={"message_id": result["message_id"], "created": result["created"]},
+    )
+    return result
+
+
+@router.post("/workspaces/{slug}/mailboxes/messages/{message_id}/forward")
+def mailbox_forward(
+    slug: str,
+    message_id: str,
+    body: MailboxForwardBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_mail import forward_mailbox_message
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        result = forward_mailbox_message(
+            workspace["path"],
+            message_id,
+            body.recipients,
+            body.operation_id,
+            subject=body.subject,
+            body=body.body,
+            kind=body.kind,
+            sender_address=body.sender_address,
+            sender_session_id=body.sender_session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+    _record_action(
+        principal,
+        "mailbox.message.forward",
+        workspace_id=workspace["id"],
+        payload={"message_id": result["message_id"], "created": result["created"]},
+    )
+    return result
+
+
+@router.get("/mailboxes/inbox")
+def mailbox_inbox(
+    address: str | None = Query(default=None, max_length=512),
+    session_id: str | None = Query(default=None, max_length=64),
+    include_read: bool = False,
+    after_delivery_id: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.durable_mail import read_mailbox_inbox
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    try:
+        return read_mailbox_inbox(
+            address=address,
+            session_id=session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            mark_read=False,
+            include_read=include_read,
+            after_delivery_id=after_delivery_id,
+            limit=limit,
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+
+
+@router.post("/mailboxes/inbox/read")
+def mailbox_inbox_read(
+    body: MailboxInboxReadBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.durable_mail import read_mailbox_inbox
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    try:
+        return read_mailbox_inbox(
+            address=body.address,
+            session_id=body.session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            mark_read=True,
+            include_read=body.include_read,
+            after_delivery_id=body.after_delivery_id,
+            limit=body.limit,
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+
+
+@router.get("/mailboxes/sent")
+def mailbox_sent(
+    address: str | None = Query(default=None, max_length=512),
+    session_id: str | None = Query(default=None, max_length=64),
+    after_message_id: int | None = Query(default=None, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.durable_mail import read_mailbox_sent
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    try:
+        return read_mailbox_sent(
+            address=address,
+            session_id=session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            after_message_id=after_message_id,
+            limit=limit,
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+
+
+@router.get("/mailboxes/threads/{thread_id}")
+def mailbox_thread(
+    thread_id: str,
+    address: str | None = Query(default=None, max_length=512),
+    session_id: str | None = Query(default=None, max_length=64),
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.durable_mail import read_mailbox_thread
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    try:
+        return read_mailbox_thread(
+            thread_id,
+            address=address,
+            session_id=session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            mark_read=False,
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
+
+
+@router.post("/mailboxes/threads/{thread_id}/read")
+def mailbox_thread_read(
+    thread_id: str,
+    body: MailboxThreadReadBody,
+    mailbox_binding: str | None = Header(
+        default=None,
+        alias="x-brains-mailbox-binding",
+    ),
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    from brains.control.durable_mail import read_mailbox_thread
+    from brains.control.durable_mailbox import MailboxUnavailableError, MailboxValidationError
+
+    try:
+        return read_mailbox_thread(
+            thread_id,
+            address=body.address,
+            session_id=body.session_id,
+            binding_secret=_mailbox_binding_or_none(mailbox_binding),
+            mark_read=True,
+            principal=principal,
+        )
+    except (MailboxUnavailableError, MailboxValidationError) as exc:
+        raise _mailbox_http_error(exc) from exc
 
 
 def _workspace_sessions(principal: Principal, workspace_id: int) -> list[dict]:

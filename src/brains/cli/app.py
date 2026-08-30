@@ -2478,6 +2478,252 @@ def mailbox_lookup_cli(
     _print_json(lookup_mailbox(address, include_path=include_path))
 
 
+@mailbox_app.command("send")
+def mailbox_send_cli(
+    recipient: list[str] = typer.Option(..., "--to", help="Recipient address. Repeatable."),
+    subject: str = typer.Option(..., "--subject"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import send_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        send_mailbox_message(
+            workspace,
+            recipient,
+            subject,
+            operation_id,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("broadcast")
+def mailbox_broadcast_cli(
+    subject: str = typer.Option(..., "--subject"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import broadcast_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        broadcast_mailbox_message(
+            workspace,
+            subject,
+            operation_id,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("reply")
+def mailbox_reply_cli(
+    in_reply_to: str = typer.Option(..., "--in-reply-to"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    subject: str | None = typer.Option(None, "--subject"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import reply_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        reply_mailbox_message(
+            workspace,
+            in_reply_to,
+            operation_id,
+            subject=subject,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("forward")
+def mailbox_forward_cli(
+    forwarded_from: str = typer.Option(..., "--forwarded-from"),
+    recipient: list[str] = typer.Option(..., "--to", help="Recipient address. Repeatable."),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    subject: str | None = typer.Option(None, "--subject"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import forward_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        forward_mailbox_message(
+            workspace,
+            forwarded_from,
+            recipient,
+            operation_id,
+            subject=subject,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("inbox")
+def mailbox_inbox_cli(
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mark_read: bool = typer.Option(False, "--mark-read/--no-mark-read"),
+    include_read: bool = typer.Option(False, "--include-read"),
+    after_delivery_id: int | None = typer.Option(None, "--after-delivery-id", min=0),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    from brains.control.durable_mail import read_mailbox_inbox
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_inbox(
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            mark_read=mark_read,
+            include_read=include_read,
+            after_delivery_id=after_delivery_id,
+            limit=limit,
+        )
+    )
+
+
+@mailbox_app.command("sent")
+def mailbox_sent_cli(
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    after_message_id: int | None = typer.Option(None, "--after-message-id", min=0),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    from brains.control.durable_mail import read_mailbox_sent
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_sent(
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            after_message_id=after_message_id,
+            limit=limit,
+        )
+    )
+
+
+@mailbox_app.command("thread")
+def mailbox_thread_cli(
+    thread_id: str,
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mark_read: bool = typer.Option(False, "--mark-read/--no-mark-read"),
+):
+    from brains.control.durable_mail import read_mailbox_thread
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_thread(
+            thread_id,
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            mark_read=mark_read,
+        )
+    )
+
+
 @app.command("session-link-successor")
 def session_link_successor_cli(
     from_session: str = typer.Option(..., "--from-session"),

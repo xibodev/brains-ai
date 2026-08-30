@@ -13,14 +13,17 @@ def test_auth_is_enforced_on_v1_routes():
 
 
 def test_validation_errors_are_standardized(auth_headers):
+    private_value = f"private-invalid-value-{uuid.uuid4()}"
     response = TestClient(app).post(
         "/v1/chat/completions",
         headers=auth_headers,
-        json={"model": "brains-auto", "messages": "invalid"},
+        json={"model": "brains-auto", "messages": private_value},
     )
     assert response.status_code == 422
     payload = response.json()
     assert payload["error"]["type"] == "invalid_request_error"
+    assert payload["details"][0]["location"][-1] == "messages"
+    assert private_value not in response.text
 
 
 def test_trace_payload_redaction(auth_headers, monkeypatch):

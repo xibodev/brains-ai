@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T23:30:00.000-06:00
+last_verified: 2026-08-30T05:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; delivery/UI/notification/SMTP slices remain open; deployment not verified
+verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP slices remain open; deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -122,11 +122,12 @@ delivery, read, and notification state.
 
 **Owned items:** BL-P1-12.
 
-**Delivery dependency:** The address/registration and current-incarnation foundation is
-implemented, but durable message delivery/read/thread behavior is not. Do not rely on
-Brains mail as the sole carrier of parallel-work ownership, requirements, approval, or
-handoff until those slices and two-harness E4 pass. Unrelated slices may continue through
-isolated worktrees and GitHub branches/PRs.
+**Delivery dependency:** Address registration plus local direct/offline delivery,
+explicit Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state,
+and cursors are implemented at E3. Live harness notification, browser mail UI, SMTP copy,
+adapter-native ID extraction, recovery, and two-real-harness E4 remain open. Until those
+slices pass, do not rely on Brains mail as the sole carrier of parallel-work ownership,
+requirements, approval, or handoff.
 
 **Address and registration:** An agent address is
 `tool:native-tool-session-id@workspace-slug`, backed by the unique canonical key
@@ -160,6 +161,13 @@ Workspace A cannot address or discover a mailbox in Workspace B. Broadcast is an
 explicit operation and never the accidental meaning of a null recipient. Local
 acceptance, agent notification, reading, and SMTP copy are separate states so a
 send/end race cannot fabricate delivery.
+
+Current E3 commits direct and explicit-broadcast messages under sender-scoped operation
+IDs, accepts mail for detached/offline active addresses, returns filtered Inbox/Sent and
+thread timelines, records per-recipient reads, retains reply/forward provenance, and
+preserves the delivery cursor across incarnations. Agent actors prove the current
+attachment and binding; human operator-mailbox reads require a browser/local channel.
+Local acceptance creates no notification attempt and implies no wakeup or SMTP state.
 
 **Threads and browser:** Messages retain a durable sender mailbox, point-in-time sender
 Session, durable recipients, originating Workspace, `thread_id`, `in_reply_to`, and

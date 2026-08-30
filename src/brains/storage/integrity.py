@@ -629,15 +629,22 @@ def descendant_delete_order(
     nulls: list[CascadeStep] = []
     for (table, column), edge in sorted(null_edges.items()):
         parent_predicate, parent_distance = resolve(edge.parent_table)
+        predicate = (
+            f'"{column}" IN (SELECT "{edge.parent_column}" '
+            f'FROM "{edge.parent_table}" WHERE {parent_predicate})'
+        )
+        if table in delete_edges:
+            table_predicate, _table_distance = resolve(table)
+            # A row already scheduled for deletion does not need its optional
+            # references cleared first. Excluding it also avoids transiently
+            # violating compound checks such as mailbox read attribution.
+            predicate = f"({predicate}) AND COALESCE(({table_predicate}), 0) = 0"
         nulls.append(
             CascadeStep(
                 table=table,
                 operation="null",
                 depth=parent_distance + 1,
-                predicate=(
-                    f'"{column}" IN (SELECT "{edge.parent_column}" '
-                    f'FROM "{edge.parent_table}" WHERE {parent_predicate})'
-                ),
+                predicate=predicate,
                 columns=(column,),
             )
         )
