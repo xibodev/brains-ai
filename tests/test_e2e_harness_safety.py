@@ -50,6 +50,7 @@ def test_ci_e2e_stack_uses_the_normal_install_contract() -> None:
     assert "/v1/runtimes/register" not in workflow
     assert "/v1/orgs/demo/personas" not in workflow
     assert "/v1/orgs/demo/projects" not in workflow
+    assert "npm run typecheck" in workflow
 
 
 def test_windows_e2e_stack_guards_the_worktree() -> None:
