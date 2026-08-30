@@ -28,6 +28,15 @@ from brains.control.decisions import (
     resolve_decision,
     route_decision,
 )
+from brains.control.durable_mail import (
+    broadcast_mailbox_message,
+    forward_mailbox_message,
+    read_mailbox_inbox,
+    read_mailbox_sent,
+    read_mailbox_thread,
+    reply_mailbox_message,
+    send_mailbox_message,
+)
 from brains.control.durable_mailbox import (
     list_phonebook,
     lookup_mailbox,
@@ -530,6 +539,164 @@ def mailbox_register_tool(
         native_tool_session_id,
         session_id,
         binding_secret,
+    )
+
+
+def mailbox_send_tool(
+    workspace_path: str,
+    recipients: list[str],
+    subject: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return send_mailbox_message(
+        workspace_path,
+        recipients,
+        subject,
+        operation_id,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_broadcast_tool(
+    workspace_path: str,
+    subject: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return broadcast_mailbox_message(
+        workspace_path,
+        subject,
+        operation_id,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_reply_tool(
+    workspace_path: str,
+    in_reply_to: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    subject: str | None = None,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return reply_mailbox_message(
+        workspace_path,
+        in_reply_to,
+        operation_id,
+        subject=subject,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_forward_tool(
+    workspace_path: str,
+    forwarded_from: str,
+    recipients: list[str],
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    subject: str | None = None,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return forward_mailbox_message(
+        workspace_path,
+        forwarded_from,
+        recipients,
+        operation_id,
+        subject=subject,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_inbox_tool(
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    mark_read: bool = False,
+    include_read: bool = False,
+    after_delivery_id: int | None = None,
+    limit: int = 50,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_inbox(
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        mark_read=mark_read,
+        include_read=include_read,
+        after_delivery_id=after_delivery_id,
+        limit=limit,
+        require_agent_proof=True,
+    )
+
+
+def mailbox_sent_tool(
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    after_message_id: int | None = None,
+    limit: int = 50,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_sent(
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        after_message_id=after_message_id,
+        limit=limit,
+        require_agent_proof=True,
+    )
+
+
+def mailbox_thread_tool(
+    thread_id: str,
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    mark_read: bool = False,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_thread(
+        thread_id,
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        mark_read=mark_read,
+        require_agent_proof=True,
     )
 
 

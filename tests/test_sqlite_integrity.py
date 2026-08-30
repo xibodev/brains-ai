@@ -946,6 +946,84 @@ def test_workspace_cascade_orders_merged_dependants_before_their_parents(isolate
         conn.close()
 
 
+def test_workspace_cascade_does_not_clear_read_attribution_on_doomed_delivery(isolated_db):
+    conn = _connect(isolated_db)
+    try:
+        workspace_id = _seed_workspace(conn, "ws-mail-read", org_id=_default_org_id(conn))
+        _seed_session(conn, "ses-mail-read", workspace_id)
+        operator_id = int(
+            conn.execute(
+                "INSERT INTO operators (slug, display_name, created_at) VALUES "
+                "('mail-cascade', 'Mail Cascade', ?) RETURNING id",
+                ("2026-01-01T00:00:00+00:00",),
+            ).fetchone()[0]
+        )
+        mailbox_id = int(
+            conn.execute(
+                "INSERT INTO mailboxes (address, kind, workspace_id, tool, "
+                "native_tool_session_id, owner_operator_id, binding_key_hash, "
+                "binding_key_version, status, created_at, updated_at) VALUES "
+                "('opencode:native-session-123@ws-mail-read', 'agent', ?, 'opencode', "
+                "'native-session-123', ?, ?, 1, 'active', ?, ?) RETURNING id",
+                (
+                    workspace_id,
+                    operator_id,
+                    "a" * 64,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            ).fetchone()[0]
+        )
+        thread_id = int(
+            conn.execute(
+                "INSERT INTO mail_threads (thread_id, origin_workspace_id, "
+                "started_by_mailbox_id, subject, created_at, updated_at) VALUES "
+                "('thr-cascade', ?, ?, 'subject', ?, ?) RETURNING id",
+                (
+                    workspace_id,
+                    mailbox_id,
+                    "2026-01-01T00:00:00+00:00",
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            ).fetchone()[0]
+        )
+        message_id = int(
+            conn.execute(
+                "INSERT INTO mail_messages (message_id, operation_key, thread_id, "
+                "sender_mailbox_id, sender_session_id, origin_workspace_id, audience, "
+                "subject, created_at) VALUES ('msg-cascade', 'op-cascade', ?, ?, "
+                "'ses-mail-read', ?, 'direct', 'subject', ?) RETURNING id",
+                (
+                    thread_id,
+                    mailbox_id,
+                    workspace_id,
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            ).fetchone()[0]
+        )
+        conn.execute(
+            "INSERT INTO mail_deliveries (delivery_id, message_id, recipient_mailbox_id, "
+            "recipient_workspace_id, accepted_at, read_at, read_by_session_id, "
+            "read_channel) VALUES ('del-cascade', ?, ?, ?, ?, ?, 'ses-mail-read', 'agent')",
+            (
+                message_id,
+                mailbox_id,
+                workspace_id,
+                "2026-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:01+00:00",
+            ),
+        )
+
+        for step in integrity.workspace_cascade_tables(conn):
+            conn.execute(step.sql(f"id = {workspace_id}"))
+        conn.execute(f"DELETE FROM workspaces WHERE id = {workspace_id}")
+
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("SELECT COUNT(*) FROM mail_deliveries").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 # ----------------------------------------------------------------------
 # Diagnosis
 # ----------------------------------------------------------------------

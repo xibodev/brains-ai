@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T23:30:00.000-06:00
+last_verified: 2026-08-30T05:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery/browser mail journeys remain open; deployment not verified
+verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; browser mail and notification journeys remain open; deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -356,7 +356,9 @@ action.
 2. Governance shows context, actor, Workspace/Session, and proposed effect or human question.
 3. Human answers, approves, edits, rejects, or defers.
 4. The decision is consumed exactly once by an advertised governed path.
-5. Agent mail, topics, and peer help preserve durable communication.
+5. Address-based agent mail commits before local acceptance is reported, survives an
+   offline recipient and Session replacement, and exposes Inbox/Sent, scoped threads,
+   reply/forward provenance, explicit broadcast, and per-recipient read state.
 6. Unsupported running-agent steering or process stop is refused explicitly.
 
 **UX states:** new, awaiting human, approved, rejected, deferred, consumed, timed out,
@@ -369,15 +371,20 @@ message unread/read, help open/claimed/answered, unsupported.
 - Outbound delivery unavailable: retain the open decision in the console.
 - Running-agent steering/stop requested: refuse rather than queue a claim that the
   withdrawn execution channel can deliver.
+- Unknown, retired, conflicting, or unauthorized mailbox: return one non-enumerating
+  unavailable result and keep prior local mail unchanged.
+- Detached recipient: accept to the durable mailbox without claiming wakeup; the next
+  proof-bound incarnation resumes from its cursor.
 
 **Success:** The human decision or coordination message is durable, scoped, attributable,
 and represented no more strongly than its observed result.
 
 **Acceptance IDs:** AC-F3-04 through AC-F3-07, AC-B4-01 through AC-B4-04, AC-B7-01.
 
-**Evidence gaps:** Current browser coverage verifies one-time governance decisions and
-fail-closed legacy execution-control navigation. Advertised E4 for durable
-agent-to-agent communications and the residual in-process governance boundary remains open.
+**Evidence gaps:** Current E3 covers local offline acceptance, retries, read attribution,
+thread/reply/forward, explicit broadcast, cursor continuity, and cross-Workspace refusal.
+Browser mail UI, live harness notification, SMTP copy, two-real-harness E4, and the
+residual in-process governance boundary remain open.
 
 ## J9 - Configure Brains and GitHub linkage
 

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T23:30:00.000-06:00
+last_verified: 2026-08-30T05:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery not implemented; deployment not verified
+verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP not implemented; deployment not verified
 -->
 
 # Brains Operations
@@ -66,6 +66,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
 | Session/state/task/claim/handoff/message/topic/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
+| `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
 | knowledge/pattern/tool commands | Maintain reusable coordination knowledge and tool posture. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
 | `readiness`, `queue-health`, `recovery-policy` | Inspect supported operational posture. |
@@ -333,9 +334,18 @@ such as `current` as mailbox identities. A mailbox-aware `session-start`, heartb
 resume, or successor call must carry the actual native Session ID and binding-file path.
 Missing/wrong/conflicting proof fails closed without identifying which condition failed.
 
-Registration does not enable durable message delivery, browser mail UI, live wakeup, or
-SMTP copying. Rollback uses the normal application/archive compatibility contract; do
-not drop these tables from a store that a newer build may have written.
+Address-based `mailbox send`, explicit `mailbox broadcast`, `reply`, `forward`, `inbox`,
+`sent`, and `thread` now use migration 150 rows. Every send supplies an operation ID;
+retry with the same sender/action/operation ID returns the original message, while a
+changed payload is refused. Agent send/read requires the current Session attachment plus
+binding proof. `mailbox inbox` is non-mutating by default; pass `--mark-read`
+deliberately. HTTP GET history is always non-mutating, and explicit POST read routes
+record per-recipient attribution. Successful send means local SQLite acceptance only;
+it does not claim agent wakeup, live harness delivery, or SMTP copy.
+
+Browser mail UI, notification adapters, and SMTP copying remain unavailable. Rollback
+uses the normal application/archive compatibility contract; do not drop these tables
+from a store that a newer build may have written.
 
 Prefer Workspace archive when mailbox history must remain. The explicit destructive
 Workspace prune treats an agent mailbox as owned by its Workspace and removes that

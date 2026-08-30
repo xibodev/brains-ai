@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T23:30:00.000-06:00
+last_verified: 2026-08-30T05:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD cd5ffb0eef5c17daa240a57b1c12303dec6ad8a4 plus durable mailbox registration/authorization candidate inspection and focused lifecycle, scope, API, CLI, and MCP tests; message delivery not implemented; deployment not verified
+verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP not implemented; deployment not verified
 -->
 
 # Brains Architecture
@@ -159,9 +159,18 @@ The current attachment is the only Session incarnation that may renew or inherit
 mailbox. Once attachment history exists, start reuse, heartbeat, resume, tool-linking,
 and successor transfer require the native ID and binding proof. End, terminal state,
 dormancy, reaping, and ephemeral-review completion/cancellation detach in the same
-transaction as their Session transition. Message acceptance, Inbox/Sent, read state,
-threads/reply/forward, notifications, browser mail UI, and SMTP remain later slices;
-registered addresses do not yet accept durable mail.
+transaction as their Session transition. Address-based direct delivery, explicit
+Workspace broadcast, Inbox/Sent, scoped thread timelines, reply/forward provenance,
+per-recipient acceptance/read state, and per-incarnation delivery cursors now use the
+reserved rows. A local commit is authoritative; current Session state is used only to
+prove an agent actor and attribute a read, so an offline active mailbox still accepts
+mail. Sender operation IDs deduplicate retries, GET history reads never mark mail read,
+and agent reads require current attachment plus binding proof. Raw operator API keys are
+send-only to human inboxes; browser/local human channels may read owned operator mail.
+Cross-Workspace history is returned only while every represented Workspace remains
+visible, and thread projections include only messages the opened mailbox sent or
+received. Legacy Session-addressed messages remain separate. Notification, browser mail
+UI, and SMTP remain later slices.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
