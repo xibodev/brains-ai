@@ -15,3 +15,7 @@ src/brains/web/spa/** -text
 # newline-normalised text; keep the bytes stable across platforms too.
 src/brains/storage/baseline/*.sql text eol=lf
 src/brains/storage/sql_migrations/*.sql text eol=lf
+
+# This script executes inside Linux quality containers even when the source
+# worktree was checked out on Windows.
+docker/run-quality-gates.sh text eol=lf

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T05:30:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP not implemented; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP remain unimplemented; deployment not verified
 -->
 
 # Brains Feature Contract
@@ -274,15 +274,17 @@ per-recipient read state, filtered thread timelines, reply/forward provenance,
 idempotent operation IDs, and cursor continuity now use migration 150 rows. Agent
 operations require current attachment plus binding; operator-inbox reads require a
 browser/local human channel. Cross-harness native-ID extraction, live notification,
-browser mail UI, SMTP, recovery, real-provider review, and broad per-tool authorization
-remain open.
+SMTP, recovery, real-provider review, and broad per-tool authorization remain open. The
+Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
+explicit read, participant-filtered threads, operator compose/reply/forward, delivery
+state, address-book selection, agent deep links, and responsive keyboard operation.
 
 Migration 150 and the current control/adapters implement the BL-P1-12/BL-P1-14 identity
 foundation: hash-bound mailbox identity, one-current-incarnation attachment and cursor,
 operator inbox provisioning, authorized phonebook/lookup, and non-enumerating conflict
 refusal. The threaded message and per-recipient delivery/read rows are now active for
 durable local mail. Notification, per-operator SMTP setting/outbox, and unverified
-legacy-inventory state remain reserved; UI, wakeup, SMTP, rotation/recovery, and
+legacy-inventory state remain reserved; wakeup, SMTP, rotation/recovery, and
 two-real-harness acceptance remain missing until later slices land.
 
 ### B3 - Workspace knowledge and repository lookup

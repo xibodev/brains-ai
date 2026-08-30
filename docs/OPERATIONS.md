@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T05:30:00.000-06:00
+last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD a65f33d75ce833f3256069958de6deb9693647fc plus durable mailbox delivery/read/thread candidate inspection and focused authorization, lifecycle, API, CLI, and MCP tests; notification/UI/SMTP not implemented; deployment not verified
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP remain unimplemented; deployment not verified
 -->
 
 # Brains Operations
@@ -343,9 +343,11 @@ deliberately. HTTP GET history is always non-mutating, and explicit POST read ro
 record per-recipient attribution. Successful send means local SQLite acceptance only;
 it does not claim agent wakeup, live harness delivery, or SMTP copy.
 
-Browser mail UI, notification adapters, and SMTP copying remain unavailable. Rollback
-uses the normal application/archive compatibility contract; do not drop these tables
-from a store that a newer build may have written.
+The Coordination browser mailbox desk supports authorized human reads and operator
+compose/reply/forward; agent mailboxes remain read-only because agent send authority
+requires adapter-held proof. Notification adapters and SMTP copying remain unavailable.
+Rollback uses the normal application/archive compatibility contract; do not drop these
+tables from a store that a newer build may have written.
 
 Prefer Workspace archive when mailbox history must remain. The explicit destructive
 Workspace prune treats an agent mailbox as owned by its Workspace and removes that

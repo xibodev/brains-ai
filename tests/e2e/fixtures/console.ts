@@ -26,7 +26,12 @@ function attachConsoleGuard(page: Page): ConsoleGuard {
   });
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('requestfailed', (req) => {
-    failedRequests.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText}`);
+    const errorText = req.failure()?.errorText ?? '';
+    // A deliberate page navigation cancels the previous document's pending
+    // fetches. That is not an API failure; HTTP errors and every other network
+    // failure remain blocking below.
+    if (errorText.includes('ERR_ABORTED') || errorText.includes('NS_BINDING_ABORTED')) return;
+    failedRequests.push(`${req.method()} ${req.url()} — ${errorText}`);
   });
   page.on('response', (resp) => {
     // Surface 4xx/5xx on the app's own API as a failed fetch.

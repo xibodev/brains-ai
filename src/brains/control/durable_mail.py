@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -1035,6 +1036,74 @@ def unread_mailbox_count_in_transaction(
     return _unread_count(session, mailbox_id, _principal_or_local(principal))
 
 
+def list_browser_mailboxes(
+    *,
+    principal: Principal | None = None,
+) -> list[dict[str, Any]]:
+    """List mailboxes this human-bound principal may open in Coordination."""
+    resolved = _principal_or_local(principal)
+    if not resolved.is_human_channel:
+        raise MailboxUnavailableError("mailbox unavailable")
+    operator_id = resolved.operator_id
+    assert operator_id is not None
+    init_db()
+    with _db_module.SessionLocal() as session:
+        operator = session.get(Operator, operator_id)
+        if operator is None:
+            raise MailboxUnavailableError("mailbox unavailable")
+        own_operator_mailbox, _created = _ensure_operator_mailbox_row(
+            session,
+            operator.id,
+            operator.slug,
+        )
+        rows = (
+            session.query(Mailbox, Workspace, Operator)
+            .outerjoin(Workspace, Workspace.id == Mailbox.workspace_id)
+            .outerjoin(Operator, Operator.id == Mailbox.owner_operator_id)
+            .filter(Mailbox.status == "active")
+            .order_by(Mailbox.kind.desc(), Mailbox.address.asc())
+            .yield_per(200)
+        )
+        result: list[dict[str, Any]] = []
+        for mailbox, workspace, owner in rows:
+            if mailbox.kind == "operator":
+                if mailbox.id != own_operator_mailbox.id:
+                    continue
+                can_send = True
+            elif mailbox.kind == "agent":
+                elevated = resolved.is_bootstrap_admin or (
+                    workspace is not None
+                    and resolved.role_in_org(workspace.org_id) in {"admin", "owner"}
+                )
+                if (
+                    workspace is None
+                    or workspace.status != "active"
+                    or not _workspace_readable(resolved, workspace)
+                    or (mailbox.owner_operator_id != operator_id and not elevated)
+                ):
+                    continue
+                can_send = False
+            else:
+                continue
+            result.append(
+                {
+                    "address": mailbox.address,
+                    "kind": mailbox.kind,
+                    "workspace": workspace.slug if workspace is not None else None,
+                    "tool": mailbox.tool,
+                    "owner_operator": owner.slug if owner is not None else None,
+                    "unread_count": _unread_count(session, mailbox.id, resolved),
+                    "can_open": True,
+                    "can_send": can_send,
+                    "deep_link": f"/app/coordination?mailbox={quote(mailbox.address, safe='')}",
+                }
+            )
+            if len(result) >= 500:
+                break
+        session.commit()
+        return result
+
+
 def read_mailbox_inbox(
     *,
     address: str | None = None,
@@ -1274,6 +1343,7 @@ def read_mailbox_thread(
 __all__ = [
     "broadcast_mailbox_message",
     "forward_mailbox_message",
+    "list_browser_mailboxes",
     "read_mailbox_inbox",
     "read_mailbox_sent",
     "read_mailbox_thread",

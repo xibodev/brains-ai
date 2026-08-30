@@ -1,5 +1,7 @@
 import { test, expect, signIn } from '../fixtures/console.js';
-import { seedWorkspace } from '../fixtures/seed.js';
+import { seedMailboxJourney, seedWorkspace } from '../fixtures/seed.js';
+
+let mailboxJourney: Record<string, unknown> = {};
 
 /**
  * J7 — Dispatch and watch a Session.
@@ -9,6 +11,7 @@ import { seedWorkspace } from '../fixtures/seed.js';
 
 test.beforeAll(() => {
   seedWorkspace();
+  mailboxJourney = seedMailboxJourney();
 });
 
 test.beforeEach(async ({ page }) => {
@@ -60,5 +63,23 @@ test('J7.2 handoff set in Act is visible in the Workspace communication tab', as
   await page.goto('/app/workspaces/e2e-workspace');
   await page.getByRole('button', { name: /^communication$/i }).click();
   await expect(page.getByText(handoffTitle)).toBeVisible();
+  consoleGuard.assertClean();
+});
+
+test('J7.3 a live agent links directly to its durable mailbox', async ({ page, consoleGuard }) => {
+  await page.goto('/app/workspaces/e2e-workspace');
+  await page.getByRole('button', { name: /^communication$/i }).click();
+  const row = page.locator('.operator-agent-row', {
+    hasText: String(mailboxJourney.sender_session_id).slice(0, 12),
+  });
+  await expect(row.getByRole('button', { name: 'Open mailbox' })).toBeVisible();
+  await row.getByRole('button', { name: 'Open mailbox' }).click();
+
+  await expect(page).toHaveURL(
+    new RegExp(`mailbox=${encodeURIComponent(String(mailboxJourney.sender_address))}`),
+  );
+  const desk = page.locator('.operator-mailroom');
+  await expect(desk.getByLabel('Open mailbox')).toHaveValue(String(mailboxJourney.sender_address));
+  await expect(desk.getByRole('button', { name: 'Compose mail' })).toBeDisabled();
   consoleGuard.assertClean();
 });
