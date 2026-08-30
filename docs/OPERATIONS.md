@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T09:45:00.000-06:00
+last_verified: 2026-08-30T16:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP remain unimplemented; deployment not verified
+verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
 -->
 
 # Brains Operations
@@ -67,6 +67,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | Session/state/task/claim/handoff/message/topic/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
+| `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
 | knowledge/pattern/tool commands | Maintain reusable coordination knowledge and tool posture. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
 | `readiness`, `queue-health`, `recovery-policy` | Inspect supported operational posture. |
@@ -343,9 +344,27 @@ deliberately. HTTP GET history is always non-mutating, and explicit POST read ro
 record per-recipient attribution. Successful send means local SQLite acceptance only;
 it does not claim agent wakeup, live harness delivery, or SMTP copy.
 
+Migration `151_mail_notification_state` constrains attachment modes and the
+`queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. A
+harness integration that it has actually installed may explicitly register `immediate`
+for Claude Code/OpenCode or `turn_boundary` for Codex; Copilot CLI accepts only pull.
+For a stronger mode, `mailbox notification-take` claims one attempt and returns only the
+fixed nudge `Brains mailbox: new mail is waiting. Pull your durable inbox.` plus bounded
+attempt metadata. It never returns subject, body, sender, recipient, or delivery
+identity. The adapter records what it observed with `notification-settle`; failure,
+detach, mode change, timeout, and prior inbox read leave local delivery intact.
+
+Current `wire` output reports `mailbox_notification_mode: pull` for all harnesses. The
+wiring command installs MCP/rules only, not a notification hook or plugin, so stronger
+modes must not be selected merely because a harness platform could support one. There is
+no Brains follower daemon or model-input injection in this slice. Use proof-bound
+`mailbox inbox` as the authoritative recovery path.
+
 The Coordination browser mailbox desk supports authorized human reads and operator
 compose/reply/forward; agent mailboxes remain read-only because agent send authority
-requires adapter-held proof. Notification adapters and SMTP copying remain unavailable.
+requires adapter-held proof. The notification take/settle protocol is available to
+explicit adapters, but concrete hook/plugin installation and SMTP copying remain
+unavailable.
 Rollback uses the normal application/archive compatibility contract; do not drop these
 tables from a store that a newer build may have written.
 

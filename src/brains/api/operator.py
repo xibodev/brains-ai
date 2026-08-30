@@ -75,6 +75,7 @@ class MailboxRegistrationBody(BaseModel):
     tool: str = Field(min_length=1, max_length=64)
     native_tool_session_id: str = Field(min_length=1, max_length=256)
     session_id: str = Field(min_length=1, max_length=64)
+    notification_mode: str | None = Field(default=None, min_length=1, max_length=24)
 
 
 class MailboxSendBody(BaseModel):
@@ -570,6 +571,7 @@ def register_mailbox(
             body.native_tool_session_id,
             body.session_id,
             mailbox_binding,
+            notification_mode=body.notification_mode or "pull",
             principal=principal,
         )
     except MailboxValidationError as exc:

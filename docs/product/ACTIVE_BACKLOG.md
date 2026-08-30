@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T09:45:00.000-06:00
+last_verified: 2026-08-30T16:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP slices remain open; deployment not verified
+verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -124,7 +124,8 @@ delivery, read, and notification state.
 
 **Delivery dependency:** Address registration, local direct/offline delivery, explicit
 Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state, cursors,
-and the Coordination mailbox desk are implemented. Live harness notification, SMTP copy,
+and the Coordination mailbox desk are implemented. A body-free adapter notification
+protocol is implemented, but concrete harness hook/plugin installation, SMTP copy,
 adapter-native ID extraction, recovery, and two-real-harness E4 remain open. Until those
 slices pass, do not rely on Brains mail as the sole carrier of parallel-work ownership,
 requirements, approval, or handoff.
@@ -167,7 +168,25 @@ IDs, accepts mail for detached/offline active addresses, returns filtered Inbox/
 thread timelines, records per-recipient reads, retains reply/forward provenance, and
 preserves the delivery cursor across incarnations. Agent actors prove the current
 attachment and binding; human operator-mailbox reads require a browser/local channel.
-Local acceptance creates no notification attempt and implies no wakeup or SMTP state.
+Local acceptance creates a notification attempt only when the current attachment has
+explicitly declared a supported stronger mode. Pull-only and detached recipients create
+no attempt, and acceptance never implies wakeup or SMTP state.
+
+**Notification adapters:** Durable mail remains authoritative. A current proof-bound
+attachment may declare `immediate` for Claude Code/OpenCode or `turn_boundary` for
+Codex; Copilot CLI is pull-only. Brains then creates one idempotent body-free attempt per
+delivery and incarnation. The adapter claims it through MCP/CLI, receives only the fixed
+nudge `Brains mailbox: new mail is waiting. Pull your durable inbox.`, and settles the
+observed result as `delivered` or `failed`. Subject, body, sender, recipient, and delivery
+identity never cross that notification boundary. Detach, mode change, or an authoritative
+read settles stale work without changing local delivery. Failure always falls back to
+proof-bound inbox pull.
+
+Current M5 evidence covers this secure adapter-facing protocol and reports `pull` from
+`wire` for every harness because wiring does not yet install a notification hook/plugin.
+It does not prove that a running external model was interrupted, prompted, or awakened.
+Concrete hook/plugin assets, explicit installation/consent, and real-harness E4 remain
+open; no follower daemon, shell relay, or model-input channel is part of this slice.
 
 **Threads and browser:** Messages retain a durable sender mailbox, point-in-time sender
 Session, durable recipients, originating Workspace, `thread_id`, `in_reply_to`, and

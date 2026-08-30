@@ -29,6 +29,7 @@ from brains.storage.models import (
     AgentSession,
     Mailbox,
     MailboxAttachment,
+    MailNotificationAttempt,
     Operator,
     OrgMember,
     SessionLease,
@@ -69,6 +70,13 @@ _MODEL_NAME_RE = re.compile(
 _BRAINS_SESSION_ID_RE = re.compile(r"^ses_[0-9a-f]{12}$", re.IGNORECASE)
 _MANAGED_BINDING_FILE_RE = re.compile(r"^[0-9a-f]{64}\.binding$")
 _BINDING_DOMAIN = b"brains-mailbox-binding-v1\0"
+MAILBOX_NOTIFICATION_MODES = frozenset({"pull", "turn_boundary", "immediate"})
+_TOOL_NOTIFICATION_MODES = {
+    "copilot-cli": frozenset({"pull"}),
+    "claude-code": frozenset({"pull", "immediate"}),
+    "codex": frozenset({"pull", "turn_boundary"}),
+    "opencode": frozenset({"pull", "immediate"}),
+}
 
 
 class MailboxError(RuntimeError):
@@ -135,6 +143,21 @@ def validate_mailbox_registration_inputs(
     native_id = validate_native_tool_session_id(native_tool_session_id)
     _binding_hash(binding_secret)
     return canonical_tool, native_id
+
+
+def validate_notification_mode(tool: str, notification_mode: str) -> str:
+    """Accept only truthful adapter-declared delivery capabilities."""
+    canonical_tool = canonical_mailbox_tool(tool)
+    mode = (notification_mode or "").strip().lower()
+    if mode not in _TOOL_NOTIFICATION_MODES[canonical_tool]:
+        raise MailboxValidationError(f"notification_mode is unavailable for {canonical_tool}")
+    return mode
+
+
+def notification_modes_for_tool(tool: str) -> tuple[str, ...]:
+    """The modes a canonical harness adapter can truthfully implement."""
+    canonical_tool = canonical_mailbox_tool(tool)
+    return tuple(sorted(_TOOL_NOTIFICATION_MODES[canonical_tool]))
 
 
 def read_mailbox_binding_file(
@@ -486,7 +509,39 @@ def _attachment_result(row: MailboxAttachment) -> dict[str, Any]:
     }
 
 
-def _attach_current_session(session, mailbox: Mailbox, agent: AgentSession) -> MailboxAttachment:
+def _fail_attachment_notifications(
+    session,
+    attachment: MailboxAttachment,
+    *,
+    reason: str,
+    include_claimed: bool,
+) -> None:
+    statuses = ("queued", "claimed") if include_claimed else ("queued",)
+    now = utc_now()
+    rows = (
+        session.query(MailNotificationAttempt)
+        .filter(
+            MailNotificationAttempt.attachment_id == attachment.id,
+            MailNotificationAttempt.status.in_(statuses),
+        )
+        .all()
+    )
+    for row in rows:
+        if row.status == "queued":
+            row.attempt = 1
+            row.started_at = now
+        row.status = "failed"
+        row.error_code = reason
+        row.completed_at = now
+
+
+def _attach_current_session(
+    session,
+    mailbox: Mailbox,
+    agent: AgentSession,
+    *,
+    notification_mode: str,
+) -> MailboxAttachment:
     try:
         with session.begin_nested():
             current_query = session.query(MailboxAttachment).filter(
@@ -497,6 +552,14 @@ def _attach_current_session(session, mailbox: Mailbox, agent: AgentSession) -> M
                 current_query = current_query.with_for_update()
             current = current_query.one_or_none()
             if current is not None and current.session_id == agent.id:
+                if current.notification_mode != notification_mode:
+                    _fail_attachment_notifications(
+                        session,
+                        current,
+                        reason="notification_mode_changed",
+                        include_claimed=False,
+                    )
+                current.notification_mode = notification_mode
                 return current
             if current is not None:
                 current_agent = _lock_agent_session(session, current.session_id)
@@ -515,6 +578,7 @@ def _attach_current_session(session, mailbox: Mailbox, agent: AgentSession) -> M
                 if existing.mailbox_id != mailbox.id:
                     raise MailboxUnavailableError("mailbox unavailable")
                 existing.active_slot = 1
+                existing.notification_mode = notification_mode
                 existing.detached_at = None
                 existing.detach_reason = None
                 session.flush()
@@ -532,7 +596,7 @@ def _attach_current_session(session, mailbox: Mailbox, agent: AgentSession) -> M
                 mailbox_id=mailbox.id,
                 session_id=agent.id,
                 active_slot=1,
-                notification_mode="pull",
+                notification_mode=notification_mode,
                 last_seen_delivery_id=last_cursor,
             )
             session.add(attachment)
@@ -550,11 +614,13 @@ def register_agent_mailbox_in_transaction(
     native_tool_session_id: str,
     binding_secret: str,
     *,
+    notification_mode: str = "pull",
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Create/find and attach a mailbox without committing the caller's transaction."""
     canonical_tool = canonical_mailbox_tool(tool)
     native_id = validate_native_tool_session_id(native_tool_session_id)
+    mode = validate_notification_mode(canonical_tool, notification_mode)
     binding_hash = _binding_hash(binding_secret)
     resolved = _principal_or_local(principal)
     if not policy.can_see_workspace(resolved, workspace.id) or not resolved.has_capability(
@@ -610,10 +676,19 @@ def register_agent_mailbox_in_transaction(
                 binding_hash=binding_hash,
                 address=address,
             )
-    attachment = _attach_current_session(session, mailbox, agent)
+    attachment = _attach_current_session(
+        session,
+        mailbox,
+        agent,
+        notification_mode=mode,
+    )
     session.flush()
-    from brains.control.durable_mail import unread_mailbox_count_in_transaction
+    from brains.control.durable_mail import (
+        _queue_unread_notifications_in_transaction,
+        unread_mailbox_count_in_transaction,
+    )
 
+    _queue_unread_notifications_in_transaction(session, mailbox)
     unread_count = unread_mailbox_count_in_transaction(
         session,
         mailbox.id,
@@ -652,6 +727,7 @@ def register_agent_mailbox(
     session_id: str,
     binding_secret: str,
     *,
+    notification_mode: str = "pull",
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Create/find one durable address and attach its current Brains Session."""
@@ -674,6 +750,7 @@ def register_agent_mailbox(
             tool,
             native_tool_session_id,
             binding_secret,
+            notification_mode=notification_mode,
             principal=resolved,
         )
         session.commit()
@@ -689,11 +766,13 @@ def resume_agent_mailbox(
     session_id: str,
     binding_secret: str,
     *,
+    notification_mode: str = "pull",
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Verify binding, renew the Session, and reattach as one transaction."""
     canonical_tool = canonical_mailbox_tool(tool)
     native_id = validate_native_tool_session_id(native_tool_session_id)
+    mode = validate_notification_mode(canonical_tool, notification_mode)
     binding_hash = _binding_hash(binding_secret)
     resolved = _principal_or_local(principal)
     operator_id = resolved.operator_id
@@ -730,9 +809,18 @@ def resume_agent_mailbox(
             raise MailboxUnavailableError("mailbox unavailable") from exc
         if agent.pid is None and lease is None:
             raise MailboxUnavailableError("mailbox unavailable")
-        attachment = _attach_current_session(session, mailbox, agent)
-        from brains.control.durable_mail import unread_mailbox_count_in_transaction
+        attachment = _attach_current_session(
+            session,
+            mailbox,
+            agent,
+            notification_mode=mode,
+        )
+        from brains.control.durable_mail import (
+            _queue_unread_notifications_in_transaction,
+            unread_mailbox_count_in_transaction,
+        )
 
+        _queue_unread_notifications_in_transaction(session, mailbox)
         unread_count = unread_mailbox_count_in_transaction(
             session,
             mailbox.id,
@@ -771,8 +859,15 @@ def detach_session_mailbox_in_transaction(
     )
     if attachment is None:
         return False
+    _fail_attachment_notifications(
+        session,
+        attachment,
+        reason="attachment_detached",
+        include_claimed=True,
+    )
+    now = utc_now()
     attachment.active_slot = None
-    attachment.detached_at = utc_now()
+    attachment.detached_at = now
     attachment.detach_reason = (reason or "session_ended")[:64]
     return True
 
@@ -968,6 +1063,7 @@ __all__ = [
     "ensure_operator_mailboxes",
     "list_phonebook",
     "lookup_mailbox",
+    "notification_modes_for_tool",
     "mailbox_attachment_is_current_in_transaction",
     "prove_session_mailbox_binding_in_transaction",
     "record_agent_mailbox_registration",
@@ -978,4 +1074,5 @@ __all__ = [
     "resume_agent_mailbox",
     "validate_native_tool_session_id",
     "validate_mailbox_registration_inputs",
+    "validate_notification_mode",
 ]

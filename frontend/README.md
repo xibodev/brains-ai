@@ -1,7 +1,7 @@
 <!--
 last_verified: 2026-08-30T09:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox source inspection, committed-bundle comparison, and isolated Docker browser evidence; live notification, SMTP, and deployment not verified
+verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus Coordination mailbox source inspection, committed-bundle comparison, and isolated Docker browser evidence; external harness notification, SMTP, and deployment not verified
 -->
 
 # Brains operator SPA

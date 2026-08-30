@@ -36,6 +36,8 @@ from brains.control.durable_mail import (
     read_mailbox_thread,
     reply_mailbox_message,
     send_mailbox_message,
+    settle_mailbox_notification,
+    take_mailbox_notification,
 )
 from brains.control.durable_mailbox import (
     list_phonebook,
@@ -530,6 +532,7 @@ def mailbox_register_tool(
     native_tool_session_id: str,
     session_id: str,
     binding_file: str,
+    notification_mode: str | None = None,
 ):
     """Register/reattach using an adapter-owned local binding file."""
     binding_secret = _read_mailbox_binding_file(binding_file)
@@ -539,6 +542,7 @@ def mailbox_register_tool(
         native_tool_session_id,
         session_id,
         binding_secret,
+        notification_mode=notification_mode or "pull",
     )
 
 
@@ -700,6 +704,38 @@ def mailbox_thread_tool(
     )
 
 
+def mailbox_notification_take_tool(
+    session_id: str,
+    binding_file: str,
+    notification_id: str | None = None,
+    wait_ms: int = 0,
+):
+    """Claim only the fixed Brains mailbox nudge; pull remains authoritative."""
+    return take_mailbox_notification(
+        session_id,
+        _read_mailbox_binding_file(binding_file),
+        notification_id=notification_id,
+        wait_ms=wait_ms,
+    )
+
+
+def mailbox_notification_settle_tool(
+    session_id: str,
+    binding_file: str,
+    notification_id: str,
+    status: str,
+    error_code: str | None = None,
+):
+    """Settle an adapter-observed notification outcome without reading mail."""
+    return settle_mailbox_notification(
+        session_id,
+        _read_mailbox_binding_file(binding_file),
+        notification_id,
+        status=status,
+        error_code=error_code,
+    )
+
+
 def _read_mailbox_binding_file(binding_file: str) -> str:
     from brains.authz.resolver import resolve_local_principal
 
@@ -716,6 +752,7 @@ def start_session_tool(
     predecessor_session_id: str | None = None,
     native_tool_session_id: str | None = None,
     mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     mailbox_binding_secret = None
     if mailbox_binding_file is not None:
@@ -728,6 +765,7 @@ def start_session_tool(
         auto_link_predecessor=True,
         native_tool_session_id=native_tool_session_id,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
@@ -736,6 +774,7 @@ def heartbeat_session_tool(
     tool: str | None = None,
     native_tool_session_id: str | None = None,
     mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Renew a PID-less coordination Session lease without journal noise."""
     mailbox_binding_secret = None
@@ -746,6 +785,7 @@ def heartbeat_session_tool(
         tool=tool,
         native_tool_session_id=native_tool_session_id,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
@@ -755,6 +795,7 @@ def link_session_successor_tool(
     tool: str | None = None,
     native_tool_session_id: str | None = None,
     mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Link one ended/replaced handle to its explicit same-workspace successor."""
     from brains.control.sessions import link_session_successor
@@ -768,6 +809,7 @@ def link_session_successor_tool(
         tool=tool,
         native_tool_session_id=native_tool_session_id,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
@@ -1726,6 +1768,7 @@ def link_tool_session_tool(
     linked_by: str = "auto",
     native_tool_session_id: str | None = None,
     mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Bind a tool-side session id (Claude Code / Copilot CLI / Codex /
     custom) to a brain ``AgentSession``. Idempotent — the same triple
@@ -1746,6 +1789,7 @@ def link_tool_session_tool(
         linked_by=linked_by,
         native_tool_session_id=native_tool_session_id,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
@@ -1758,6 +1802,7 @@ def resume_brain_session_tool(
     mail_limit: int = 10,
     event_limit: int = 20,
     mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Re-attach to an existing brain session and get a one-call resume
     packet — last checkpoint, active claims / handoffs / tasks, unread
@@ -1776,6 +1821,7 @@ def resume_brain_session_tool(
         mail_limit=mail_limit,
         event_limit=event_limit,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 

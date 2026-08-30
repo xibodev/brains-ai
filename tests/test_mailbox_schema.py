@@ -424,3 +424,59 @@ def test_notification_and_smtp_idempotency_are_reserved() -> None:
             """,
             (delivery_id, mailbox_id),
         )
+
+
+def test_notification_state_migration_rejects_contradictory_rows() -> None:
+    conn = _connection()
+    state_migration = importlib.import_module(
+        "brains.storage.sql_migrations.151_mail_notification_state"
+    )
+    state_migration.upgrade(conn)
+    mailbox_id = _agent_mailbox(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mailbox_attachments (
+                mailbox_id, session_id, active_slot, notification_mode, attached_at
+            ) VALUES (?, 'ses_one', 1, 'invented', CURRENT_TIMESTAMP)
+            """,
+            (mailbox_id,),
+        )
+    thread_id = conn.execute(
+        """
+        INSERT INTO mail_threads (
+            thread_id, origin_workspace_id, started_by_mailbox_id, subject,
+            created_at, updated_at
+        ) VALUES ('thr_state', 1, ?, 'subject', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (mailbox_id,),
+    ).lastrowid
+    message_id = conn.execute(
+        """
+        INSERT INTO mail_messages (
+            message_id, operation_key, thread_id, sender_mailbox_id,
+            origin_workspace_id, audience, subject, created_at
+        ) VALUES ('msg_state', 'op_state', ?, ?, 1, 'direct', 'subject', CURRENT_TIMESTAMP)
+        """,
+        (thread_id, mailbox_id),
+    ).lastrowid
+    delivery_id = conn.execute(
+        """
+        INSERT INTO mail_deliveries (
+            delivery_id, message_id, recipient_mailbox_id,
+            recipient_workspace_id, accepted_at
+        ) VALUES ('del_state', ?, ?, 1, CURRENT_TIMESTAMP)
+        """,
+        (message_id, mailbox_id),
+    ).lastrowid
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO mail_notification_attempts (
+                notification_id, idempotency_key, delivery_id, adapter, status,
+                attempt, created_at
+            ) VALUES ('note_state_invalid', 'note-state-invalid', ?, 'immediate',
+                      'delivered', 0, CURRENT_TIMESTAMP)
+            """,
+            (delivery_id,),
+        )

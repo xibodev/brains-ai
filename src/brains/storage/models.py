@@ -534,6 +534,10 @@ class MailboxAttachment(Base):
             "last_seen_delivery_id >= 0",
             name="ck_mailbox_attachment_cursor",
         ),
+        CheckConstraint(
+            "notification_mode IN ('pull', 'turn_boundary', 'immediate')",
+            name="ck_mailbox_attachment_notification_mode",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
@@ -649,6 +653,22 @@ class MailNotificationAttempt(Base):
     __table_args__ = (
         UniqueConstraint("notification_id", name="uq_mail_notification_id"),
         UniqueConstraint("idempotency_key", name="uq_mail_notification_idempotency_key"),
+        CheckConstraint(
+            "status IN ('queued', 'claimed', 'delivered', 'failed')",
+            name="ck_mail_notification_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_mail_notification_attempt"),
+        CheckConstraint(
+            "(status = 'queued' AND attempt = 0 AND error_code IS NULL "
+            "AND started_at IS NULL AND completed_at IS NULL) OR "
+            "(status = 'claimed' AND attempt > 0 AND error_code IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NULL) OR "
+            "(status = 'delivered' AND attempt > 0 AND error_code IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL) OR "
+            "(status = 'failed' AND attempt > 0 AND error_code IS NOT NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL)",
+            name="ck_mail_notification_state",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     notification_id: Mapped[str] = mapped_column(String(40), index=True)
