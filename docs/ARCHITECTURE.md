@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:26:00.000-06:00
+last_verified: 2026-08-29T21:20:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static inspection of the supported Workspace-first topology, active field trials, and withdrawn compatibility modules; withdrawal implementation not verified; deployment not verified
+verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Architecture
@@ -105,7 +105,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | GitHub ingress | Signature, repository scope, delivery identity, replay refusal | `src/brains/api/webhooks.py` |
 | Active experiment | Agent feedback inbox | Redacted agent reports and human-only triage/promotion | `src/brains/control` |
 | Active experiment | Adoption analytics | Privacy-safe offered/acted observation with censoring | `src/brains/control`, operator projections |
-| Active experiment | Ephemeral peer review | Fenced disposable tracked snapshot and bounded reviewer result | `src/brains/control`, Runtime compatibility endpoints |
+| Admission candidate | Ephemeral peer review | Fenced disposable tracked snapshot; not field-active until default activation and worker transport are corrected | `src/brains/control`, Runtime compatibility endpoints |
 | Withdrawn | Execution model | Runtimes, Personas, Pods, Projects, Issues, execution onboarding/Sessions | `src/brains/api`, `src/brains/daemon`, execution-model frontend screens |
 | Withdrawn | Automation | Managed Skills, recurring definitions, generic triggers, scheduled auto-fire | `src/brains/control`, `src/brains/mcp`, Automation frontend |
 | Withdrawn | Model edge | OpenAI/Anthropic facades, router, providers, LiteLLM, tool launcher | `src/brains/api`, `src/brains/router`, `src/brains/providers` |
@@ -126,12 +126,28 @@ Advertised durable families include:
 
 - operators, credentials, Orgs, members, Workspaces, aliases, and memberships;
 - coordination Sessions and events;
-- tasks, claims, handoffs, mailbox, topics, peer help, checkpoints, snapshots, and
-  knowledge;
+- tasks, claims, handoffs, legacy Session-addressed mailbox rows, topics, peer help,
+  checkpoints, snapshots, and knowledge;
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
 - feedback, event context, adoption events, and ephemeral-review attempt metadata;
 - realtime replay rows, integration delivery identity, usage attribution, secure local
   settings, and migration state.
+
+Migration 150 reserves the durable-mailbox data boundary without making it available:
+
+- agent/operator mailbox identity and hash-only reattachment binding;
+- one current ephemeral Session attachment plus detached history;
+- threads, messages, per-recipient local delivery/read attribution, and explicit
+  direct/broadcast audience;
+- body-free notification attempts and per-operator SMTP consent/destination references;
+- one retryable SMTP outbox row per local delivery;
+- non-destructive classification of every legacy `mailbox_messages` and
+  `tool_session_links` row as unverified.
+
+The migration creates no mailbox, infers no address or owner, copies no message body,
+and changes no existing row. APIs, authorization, registration, delivery, UI,
+notification, and SMTP workers remain later slices; table presence is not feature
+availability.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate

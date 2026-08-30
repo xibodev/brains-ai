@@ -79,7 +79,7 @@ def _blocks(ddl: str) -> set[tuple[str, str]]:
     matches = list(re.finditer(rf"(?m)^{re.escape(BASELINE_BLOCK_MARKER)} (?P<label>.+)$", ddl))
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(ddl)
-        out.add((match.group("label").strip(), ddl[match.end() : end]))
+        out.add((match.group("label").strip(), ddl[match.end() : end].rstrip("\n")))
     return out
 
 

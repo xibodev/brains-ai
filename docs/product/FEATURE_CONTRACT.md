@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:26:00.000-06:00
+last_verified: 2026-08-29T21:20:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static reconciliation of advertised, experimental, target-only, withdrawn, and source-compatibility lifecycle state; withdrawal implementation not verified; deployment not verified
+verification_basis: HEAD 7a69c1c3c2389749178746f2bee293d5d5dc4a59 plus migration 150 candidate static inspection and focused fresh/upgrade schema tests; durable mailbox behavior not implemented; deployment not verified
 -->
 
 # Brains Feature Contract
@@ -252,7 +252,8 @@ LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility on
 topics, peer help, decisions, knowledge, patterns, tool records, and checkpoints through
 stable scoped MCP/CLI/browser surfaces.
 
-**Lifecycle:** advertised/partial, with BL-P1-15/20 field trials.
+**Lifecycle:** advertised/partial, with BL-P1-15 as an active field trial and BL-P1-20
+blocked from experimental admission.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
@@ -264,6 +265,13 @@ successor transfer, interest-scoped topics, asynchronous peer help, sequential r
 dedupe, Workspace browser adapters, feedback reporting, and fenced ephemeral review.
 Cross-harness liveness/end integration, concurrent duplicate uniqueness, real-provider
 review, and broad per-tool authorization remain open.
+
+Migration 150 is E1/E2 storage preparation for BL-P1-12/BL-P1-14 only. It reserves
+hash-bound mailbox identity, one-current-incarnation attachment, threaded message,
+per-recipient delivery/read, notification, per-operator SMTP setting/outbox, and
+unverified legacy-inventory state. It implements no registration, lookup,
+authorization, delivery, read, reply/forward, UI, wakeup, or SMTP behavior, so durable
+mailbox acceptance remains missing until later slices land.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -315,6 +323,10 @@ Ordered checksummed migrations, WAL/busy timeout, manifest backup, isolated
 verification, schema-compatibility refusal, dry-run-first repair, and redacted recovery
 policy exist. FK default enforcement and exact-candidate E4 remain open. Brains does not
 run a backup scheduler.
+
+Migration 150 has equivalent SQLite and PostgreSQL DDL so an existing compatibility
+store never records skipped work as applied. The supported product remains SQLite;
+the PostgreSQL delta is archive/store compatibility, not reactivation of that backend.
 
 ### B6 - CLI, wiring, and service management
 
