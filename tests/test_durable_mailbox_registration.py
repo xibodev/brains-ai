@@ -274,6 +274,7 @@ def test_resume_verifies_binding_before_reactivating_and_preserves_cursor(tmp_pa
         tool="codex",
         native_tool_session_id=native_id,
         mailbox_binding_secret=binding,
+        mailbox_notification_mode="turn_boundary",
     )
     with SessionLocal() as session:
         attachment = (
@@ -321,10 +322,12 @@ def test_resume_verifies_binding_before_reactivating_and_preserves_cursor(tmp_pa
         tool_session_id=_native("tool-link"),
         native_tool_session_id=native_id,
         mailbox_binding_secret=binding,
+        mailbox_notification_mode="turn_boundary",
     )
     assert packet["brain_session"]["state"] == "running"
     assert packet["mailbox"]["address"] == started["mailbox"]["address"]
     assert packet["mailbox"]["attachment"]["cursor"] == 23
+    assert packet["mailbox"]["attachment"]["notification_mode"] == "turn_boundary"
     renewed = heartbeat_session(
         started["session_id"],
         tool="codex",
@@ -945,6 +948,7 @@ def test_mcp_and_cli_adapters_expose_phonebook_without_binding_values(tmp_path) 
         mailbox_binding_file=str(lifecycle_binding),
     )
     assert lifecycle["mailbox"]["address"].startswith(f"opencode:{lifecycle_native}@")
+    assert lifecycle["mailbox"]["attachment"]["notification_mode"] == "pull"
     assert lifecycle_secret not in repr(lifecycle)
 
     second = start_session(str(tmp_path / "mcp"), tool="opencode")
@@ -959,6 +963,7 @@ def test_mcp_and_cli_adapters_expose_phonebook_without_binding_values(tmp_path) 
         binding_file=str(mcp_binding),
     )
     assert mcp_registered["created"] is True
+    assert mcp_registered["attachment"]["notification_mode"] == "pull"
     assert "binding" not in mcp_registered
 
     phonebook = mcp_server.call_tool("brains_mailbox_phonebook", workspace_path=str(tmp_path))

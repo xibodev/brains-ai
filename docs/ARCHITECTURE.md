@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T09:45:00.000-06:00
+last_verified: 2026-08-30T16:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Coordination mailbox UI/API candidate inspection and isolated Docker browser evidence; live notification and SMTP remain unimplemented; deployment not verified
+verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
 -->
 
 # Brains Architecture
@@ -172,7 +172,16 @@ visible, and thread projections include only messages the opened mailbox sent or
 received. The Coordination mailbox desk provides human-bound selection, Inbox/Sent,
 explicit read, filtered threads, operator compose/reply/forward, address-book state, and
 agent deep links; it never grants browser authority to send as an agent. Legacy
-Session-addressed messages remain separate. Live notification and SMTP remain later
+Session-addressed messages remain separate.
+
+Migration 151 activates and constrains the reserved notification rows. Pull remains the
+default and authoritative recovery path. An explicitly declared, harness-compatible
+attachment may create one idempotent attempt per delivery/incarnation. CLI/MCP adapters
+atomically claim it, receive only a constant body-free nudge, and settle the observed
+result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
+local delivery. Brains does not retain a generic live model-input channel, and current
+`wire` installs no notification hook/plugin, so this protocol is not evidence that an
+external running model was awakened. Concrete harness integration and SMTP remain later
 slices.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,

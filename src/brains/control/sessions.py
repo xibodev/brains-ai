@@ -21,6 +21,7 @@ from brains.storage.models import (
     Event,
     EventContext,
     Handoff,
+    MailboxAttachment,
     Org,
     SessionLease,
     SessionSuccessor,
@@ -840,6 +841,7 @@ def start_session(
     lease_session: bool = True,
     native_tool_session_id: str | None = None,
     mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict:
     if bool(native_tool_session_id) != bool(mailbox_binding_secret):
         raise ValueError(
@@ -853,7 +855,12 @@ def start_session(
         if not lease_session:
             raise ValueError("mailbox registration requires a renewable Session lease")
         assert mailbox_binding_secret is not None
+        from brains.control.durable_mailbox import validate_notification_mode
+
         validate_mailbox_registration_inputs(tool, native_tool_session_id, mailbox_binding_secret)
+        mailbox_notification_mode = validate_notification_mode(
+            tool, mailbox_notification_mode or "pull"
+        )
     workspace = register_workspace(workspace_path)
     # Resolve who owns this session before we open it so the row can be
     # stamped with ``created_by_operator_id``. Defaults to the auto-
@@ -955,6 +962,7 @@ def start_session(
                     operator_record,
                     native_tool_session_id=native_tool_session_id,
                     mailbox_binding_secret=mailbox_binding_secret,
+                    mailbox_notification_mode=mailbox_notification_mode,
                 )
                 db_session.commit()
                 result = _session_registration_result(
@@ -1098,6 +1106,7 @@ def start_session(
             operator_record,
             native_tool_session_id=native_tool_session_id,
             mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
         )
         if (
             predecessor_session_id
@@ -1140,6 +1149,7 @@ def _register_session_mailbox_in_transaction(
     *,
     native_tool_session_id: str | None,
     mailbox_binding_secret: str | None,
+    mailbox_notification_mode: str | None,
 ) -> dict[str, Any] | None:
     if native_tool_session_id is None or mailbox_binding_secret is None:
         return None
@@ -1156,6 +1166,7 @@ def _register_session_mailbox_in_transaction(
         tool,
         native_tool_session_id,
         mailbox_binding_secret,
+        notification_mode=mailbox_notification_mode or "pull",
         principal=principal,
     )
 
@@ -1267,6 +1278,7 @@ def heartbeat_session(
     tool: str | None = None,
     native_tool_session_id: str | None = None,
     mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict[str, Any]:
     """Renew a PID-less coordination Session without writing a journal event."""
     if bool(native_tool_session_id) != bool(mailbox_binding_secret):
@@ -1275,6 +1287,10 @@ def heartbeat_session(
         )
     if native_tool_session_id and not tool:
         raise ValueError("mailbox heartbeat requires the canonical tool name")
+    if mailbox_notification_mode is not None:
+        from brains.control.durable_mailbox import validate_notification_mode
+
+        validate_notification_mode(tool or "", mailbox_notification_mode)
     from brains.control.session_liveness import renew_session_lease
 
     init_db()
@@ -1314,6 +1330,12 @@ def heartbeat_session(
             assert mailbox_binding_secret is not None
             from brains.control.durable_mailbox import register_agent_mailbox_in_transaction
 
+            existing_attachment = (
+                session.query(MailboxAttachment)
+                .filter(MailboxAttachment.session_id == row.id)
+                .one()
+            )
+
             register_agent_mailbox_in_transaction(
                 session,
                 workspace,
@@ -1321,6 +1343,9 @@ def heartbeat_session(
                 tool,
                 native_tool_session_id,
                 mailbox_binding_secret,
+                notification_mode=(
+                    mailbox_notification_mode or existing_attachment.notification_mode
+                ),
             )
         if row.ended_at is None and lease is None:
             row.last_activity_at = utc_now()
@@ -1339,6 +1364,7 @@ def link_session_successor(
     tool: str | None = None,
     native_tool_session_id: str | None = None,
     mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict[str, Any]:
     """Explicitly link a predecessor handle to one same-workspace successor."""
     if from_session_id == to_session_id:
@@ -1349,6 +1375,10 @@ def link_session_successor(
         )
     if native_tool_session_id and not tool:
         raise ValueError("mailbox successor linkage requires the canonical tool name")
+    if mailbox_notification_mode is not None:
+        from brains.control.durable_mailbox import validate_notification_mode
+
+        validate_notification_mode(tool or "", mailbox_notification_mode)
     init_db()
     with SessionLocal() as session:
         locked = {
@@ -1426,6 +1456,11 @@ def link_session_successor(
             assert tool is not None
             assert native_tool_session_id is not None
             assert mailbox_binding_secret is not None
+            predecessor_attachment = (
+                session.query(MailboxAttachment)
+                .filter(MailboxAttachment.session_id == predecessor.id)
+                .one()
+            )
             mailbox = register_agent_mailbox_in_transaction(
                 session,
                 workspace,
@@ -1433,6 +1468,9 @@ def link_session_successor(
                 tool,
                 native_tool_session_id,
                 mailbox_binding_secret,
+                notification_mode=(
+                    mailbox_notification_mode or predecessor_attachment.notification_mode
+                ),
             )
             if mailbox["mailbox_id"] != predecessor_mailbox_id:
                 raise MailboxUnavailableError("mailbox unavailable")

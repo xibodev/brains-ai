@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
@@ -34,6 +35,7 @@ from brains.storage.models import (
     MailboxAttachment,
     MailDelivery,
     MailMessage,
+    MailNotificationAttempt,
     MailThread,
     Operator,
     OrgMember,
@@ -44,6 +46,8 @@ from brains.storage.models import (
 MAX_DIRECT_RECIPIENTS = 100
 MAX_BROADCAST_RECIPIENTS = 500
 MAX_BODY_CHARS = 65_536
+MAILBOX_NUDGE = "Brains mailbox: new mail is waiting. Pull your durable inbox."
+NOTIFY_MODES = frozenset({"turn_boundary", "immediate"})
 _OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$")
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,31}$")
 
@@ -88,6 +92,97 @@ def _normalize_addresses(addresses: Iterable[str], *, maximum: int) -> list[str]
 
 def _public_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _notification_dict(row: MailNotificationAttempt) -> dict[str, Any]:
+    return {
+        "notification_id": row.notification_id,
+        "adapter": row.adapter,
+        "status": row.status,
+        "attempt": row.attempt,
+        "error_code": row.error_code,
+        "nudge": MAILBOX_NUDGE if row.status == "claimed" else None,
+        "created_at": _iso(row.created_at),
+        "started_at": _iso(row.started_at) if row.started_at else None,
+        "completed_at": _iso(row.completed_at) if row.completed_at else None,
+    }
+
+
+def _ensure_notification_in_transaction(
+    session,
+    delivery: MailDelivery,
+    recipient: Mailbox,
+) -> MailNotificationAttempt | None:
+    if recipient.kind != "agent":
+        return None
+    attachment = (
+        session.query(MailboxAttachment)
+        .filter(
+            MailboxAttachment.mailbox_id == recipient.id,
+            MailboxAttachment.active_slot == 1,
+        )
+        .one_or_none()
+    )
+    if attachment is None or attachment.notification_mode not in NOTIFY_MODES:
+        return None
+    expected_modes = {
+        "claude-code": "immediate",
+        "codex": "turn_boundary",
+        "opencode": "immediate",
+    }
+    if expected_modes.get(recipient.tool or "") != attachment.notification_mode:
+        return None
+    key = f"mail-notify:{delivery.id}:{attachment.id}:{attachment.notification_mode}"
+    existing = (
+        session.query(MailNotificationAttempt)
+        .filter(MailNotificationAttempt.idempotency_key == key)
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+    row = MailNotificationAttempt(
+        notification_id=_public_id("note"),
+        idempotency_key=key,
+        delivery_id=delivery.id,
+        attachment_id=attachment.id,
+        adapter=recipient.tool or "unknown",
+        status="queued",
+        attempt=0,
+    )
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        session.expire_all()
+        existing = (
+            session.query(MailNotificationAttempt)
+            .filter(MailNotificationAttempt.idempotency_key == key)
+            .one_or_none()
+        )
+        if existing is None:
+            raise
+        return existing
+    return row
+
+
+def _queue_unread_notifications_in_transaction(
+    session,
+    mailbox: Mailbox,
+) -> int:
+    deliveries = (
+        session.query(MailDelivery)
+        .filter(
+            MailDelivery.recipient_mailbox_id == mailbox.id,
+            MailDelivery.read_at.is_(None),
+        )
+        .order_by(MailDelivery.id.asc())
+        .all()
+    )
+    return sum(
+        _ensure_notification_in_transaction(session, delivery, mailbox) is not None
+        for delivery in deliveries
+    )
 
 
 def _iso(value: datetime) -> str:
@@ -816,15 +911,16 @@ def _send(
                 session.add(message)
                 session.flush()
                 for recipient in recipient_mailboxes:
-                    session.add(
-                        MailDelivery(
-                            delivery_id=_public_id("del"),
-                            message_id=message.id,
-                            recipient_mailbox_id=recipient.id,
-                            recipient_workspace_id=recipient.workspace_id,
-                            accepted_at=now,
-                        )
+                    delivery = MailDelivery(
+                        delivery_id=_public_id("del"),
+                        message_id=message.id,
+                        recipient_mailbox_id=recipient.id,
+                        recipient_workspace_id=recipient.workspace_id,
+                        accepted_at=now,
                     )
+                    session.add(delivery)
+                    session.flush()
+                    _ensure_notification_in_transaction(session, delivery, recipient)
                 session.flush()
                 session.commit()
                 result = _message_dict(session, message)
@@ -1004,6 +1100,31 @@ def _mark_deliveries_read(
     return marked
 
 
+def _settle_read_notifications(
+    session,
+    deliveries: list[MailDelivery],
+) -> None:
+    """Stop stale nudges after the authoritative inbox state was consumed."""
+    if not deliveries:
+        return
+    delivery_ids = [delivery.id for delivery in deliveries]
+    now = utc_now()
+    rows = (
+        session.query(MailNotificationAttempt)
+        .filter(
+            MailNotificationAttempt.delivery_id.in_(delivery_ids),
+            MailNotificationAttempt.status == "queued",
+        )
+        .all()
+    )
+    for row in rows:
+        row.attempt = 1
+        row.started_at = now
+        row.status = "failed"
+        row.error_code = "mail_already_read"
+        row.completed_at = now
+
+
 def _unread_count(session, mailbox_id: int, principal: Principal) -> int:
     rows = (
         session.query(MailDelivery)
@@ -1104,6 +1225,184 @@ def list_browser_mailboxes(
         return result
 
 
+def take_mailbox_notification(
+    session_id: str,
+    binding_secret: str,
+    *,
+    notification_id: str | None = None,
+    wait_ms: int = 0,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """Claim one body-free adapter nudge; durable mail remains pull-authoritative."""
+    resolved = _principal_or_local(principal)
+    deadline = time.monotonic() + max(0, min(int(wait_ms), 30_000)) / 1000
+    init_db()
+    while True:
+        with _db_module.SessionLocal() as session:
+            mailbox, attachment, _agent = _resolve_open_mailbox(
+                session,
+                resolved,
+                address=None,
+                session_id=session_id,
+                binding_secret=binding_secret,
+                require_agent_proof=True,
+            )
+            assert attachment is not None
+            if attachment.notification_mode not in NOTIFY_MODES:
+                session.commit()
+                return {"notification": None, "fallback": "pull", "timeout": False}
+            _queue_unread_notifications_in_transaction(session, mailbox)
+            query = session.query(MailNotificationAttempt).filter(
+                MailNotificationAttempt.attachment_id == attachment.id,
+                MailNotificationAttempt.status == "queued",
+            )
+            if notification_id:
+                query = query.filter(
+                    MailNotificationAttempt.notification_id == notification_id.strip()
+                )
+            row = query.order_by(MailNotificationAttempt.id.asc()).first()
+            if row is not None:
+                updated = (
+                    session.query(MailNotificationAttempt)
+                    .filter(
+                        MailNotificationAttempt.id == row.id,
+                        MailNotificationAttempt.status == "queued",
+                    )
+                    .update(
+                        {
+                            "status": "claimed",
+                            "attempt": MailNotificationAttempt.attempt + 1,
+                            "started_at": utc_now(),
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                if not updated:
+                    session.rollback()
+                    continue
+                session.commit()
+                row = session.get(MailNotificationAttempt, row.id)
+                assert row is not None
+                session.refresh(row)
+                return {
+                    "notification": _notification_dict(row),
+                    "fallback": "pull",
+                }
+            session.commit()
+        if notification_id:
+            raise MailboxUnavailableError("mailbox unavailable")
+        if time.monotonic() >= deadline:
+            return {"notification": None, "fallback": "pull", "timeout": wait_ms > 0}
+        time.sleep(0.05)
+
+
+def settle_mailbox_notification(
+    session_id: str,
+    binding_secret: str,
+    notification_id: str,
+    *,
+    status: str,
+    error_code: str | None = None,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """Record the adapter-observed nudge outcome without changing local delivery."""
+    normalized = (status or "").strip().lower()
+    if normalized not in {"delivered", "failed"}:
+        raise MailboxValidationError("notification status must be delivered or failed")
+    normalized_error = (error_code or "").strip() or None
+    if normalized == "failed" and (
+        normalized_error is None
+        or len(normalized_error) > 64
+        or not _KIND_RE.fullmatch(normalized_error)
+    ):
+        raise MailboxValidationError("failed notification requires a bounded error_code")
+    if normalized == "delivered" and normalized_error is not None:
+        raise MailboxValidationError("delivered notification cannot carry error_code")
+    resolved = _principal_or_local(principal)
+    init_db()
+    with _db_module.SessionLocal() as session:
+        _mailbox, attachment, _agent = _resolve_open_mailbox(
+            session,
+            resolved,
+            address=None,
+            session_id=session_id,
+            binding_secret=binding_secret,
+            require_agent_proof=True,
+        )
+        assert attachment is not None
+        row = (
+            session.query(MailNotificationAttempt)
+            .filter(
+                MailNotificationAttempt.notification_id == (notification_id or "").strip(),
+                MailNotificationAttempt.attachment_id == attachment.id,
+            )
+            .one_or_none()
+        )
+        if row is None:
+            raise MailboxUnavailableError("mailbox unavailable")
+        if row.status in {"delivered", "failed"}:
+            if row.status != normalized or row.error_code != normalized_error:
+                raise MailboxUnavailableError("mailbox unavailable")
+            return {"notification": _notification_dict(row), "fallback": "pull"}
+        if row.status != "claimed":
+            raise MailboxUnavailableError("mailbox unavailable")
+        now = utc_now()
+        stmt = (
+            update(MailNotificationAttempt)
+            .where(
+                MailNotificationAttempt.id == row.id,
+                MailNotificationAttempt.status == "claimed",
+            )
+            .values(
+                status=normalized,
+                error_code=normalized_error,
+                completed_at=now,
+            )
+        )
+        if session.get_bind().dialect.name == "postgresql":
+            stmt = stmt.returning(MailNotificationAttempt.id)
+            updated = session.execute(stmt).scalar_one_or_none() is not None
+        else:
+            updated = bool(getattr(session.execute(stmt), "rowcount", 0))
+        if not updated:
+            session.rollback()
+            replay = (
+                session.query(MailNotificationAttempt)
+                .filter(
+                    MailNotificationAttempt.notification_id == (notification_id or "").strip(),
+                    MailNotificationAttempt.attachment_id == attachment.id,
+                )
+                .one_or_none()
+            )
+            if (
+                replay is not None
+                and replay.status == normalized
+                and replay.error_code == normalized_error
+            ):
+                return {"notification": _notification_dict(replay), "fallback": "pull"}
+            raise MailboxUnavailableError("mailbox unavailable")
+        session.commit()
+        row = session.get(MailNotificationAttempt, row.id)
+        assert row is not None
+        session.refresh(row)
+        result = {"notification": _notification_dict(row), "fallback": "pull"}
+    notification = result.get("notification")
+    assert isinstance(notification, dict)
+    append_event(
+        "mailbox_notification_delivered"
+        if normalized == "delivered"
+        else "mailbox_notification_failed",
+        f"durable mailbox notification {normalized}",
+        session_id=session_id,
+        metadata={
+            "notification_id": notification_id,
+            "adapter": notification["adapter"],
+            "error_code": normalized_error,
+        },
+    )
+    return result
+
+
 def read_mailbox_inbox(
     *,
     address: str | None = None,
@@ -1163,6 +1462,10 @@ def read_mailbox_inbox(
                 selected_deliveries,
                 agent=agent,
                 principal=resolved,
+            )
+            _settle_read_notifications(
+                session,
+                selected_deliveries,
             )
         if attachment is not None:
             if mark_read:
@@ -1307,6 +1610,10 @@ def read_mailbox_thread(
                 agent=agent,
                 principal=resolved,
             )
+            _settle_read_notifications(
+                session,
+                mailbox_deliveries,
+            )
             if attachment is not None and mailbox_deliveries:
                 attachment.last_seen_delivery_id = max(
                     attachment.last_seen_delivery_id,
@@ -1349,5 +1656,7 @@ __all__ = [
     "read_mailbox_thread",
     "reply_mailbox_message",
     "send_mailbox_message",
+    "settle_mailbox_notification",
+    "take_mailbox_notification",
     "unread_mailbox_count_in_transaction",
 ]

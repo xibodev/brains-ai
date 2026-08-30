@@ -2378,6 +2378,7 @@ def session_start_cli(
         resolve_path=True,
         help="Adapter-owned file containing the mailbox reattachment secret.",
     ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
 ):
     mailbox_binding_secret = (
         read_mailbox_binding_file(mailbox_binding_file)
@@ -2394,6 +2395,7 @@ def session_start_cli(
             auto_link_predecessor=True,
             native_tool_session_id=native_tool_session_id,
             mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
         )
     )
 
@@ -2412,6 +2414,7 @@ def session_heartbeat_cli(
         readable=True,
         resolve_path=True,
     ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
 ):
     from brains.control.sessions import heartbeat_session
 
@@ -2426,6 +2429,7 @@ def session_heartbeat_cli(
             tool=tool,
             native_tool_session_id=native_tool_session_id,
             mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
         )
     )
 
@@ -2446,6 +2450,7 @@ def mailbox_register_cli(
         resolve_path=True,
         help="Adapter-owned file containing the mailbox reattachment secret.",
     ),
+    notification_mode: str | None = typer.Option(None, "--notification-mode"),
 ):
     binding_secret = read_mailbox_binding_file(binding_file)
     _print_json(
@@ -2455,6 +2460,7 @@ def mailbox_register_cli(
             native_tool_session_id,
             session,
             binding_secret,
+            notification_mode=notification_mode or "pull",
         )
     )
 
@@ -2724,6 +2730,62 @@ def mailbox_thread_cli(
     )
 
 
+@mailbox_app.command("notification-take")
+def mailbox_notification_take_cli(
+    session: str = typer.Option(..., "--session"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    notification_id: str | None = typer.Option(None, "--notification-id"),
+    wait_ms: int = typer.Option(0, "--wait-ms", min=0, max=30_000),
+):
+    from brains.control.durable_mail import take_mailbox_notification
+
+    _print_json(
+        take_mailbox_notification(
+            session,
+            read_mailbox_binding_file(binding_file),
+            notification_id=notification_id,
+            wait_ms=wait_ms,
+        )
+    )
+
+
+@mailbox_app.command("notification-settle")
+def mailbox_notification_settle_cli(
+    notification_id: str,
+    session: str = typer.Option(..., "--session"),
+    status: str = typer.Option(..., "--status"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    error_code: str | None = typer.Option(None, "--error-code"),
+):
+    from brains.control.durable_mail import settle_mailbox_notification
+
+    _print_json(
+        settle_mailbox_notification(
+            session,
+            read_mailbox_binding_file(binding_file),
+            notification_id,
+            status=status,
+            error_code=error_code,
+        )
+    )
+
+
 @app.command("session-link-successor")
 def session_link_successor_cli(
     from_session: str = typer.Option(..., "--from-session"),
@@ -2739,6 +2801,7 @@ def session_link_successor_cli(
         readable=True,
         resolve_path=True,
     ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
 ):
     from brains.control.sessions import link_session_successor
 
@@ -2754,6 +2817,7 @@ def session_link_successor_cli(
             tool=tool,
             native_tool_session_id=native_tool_session_id,
             mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
         )
     )
 

@@ -84,6 +84,7 @@ def link_tool_session(
     linked_by: str = "auto",
     native_tool_session_id: str | None = None,
     mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict[str, Any]:
     """Record that ``tool_session_id`` (under ``tool``) is serving
     ``brain_session_id``.
@@ -104,6 +105,7 @@ def link_tool_session(
         tool=tool,
         native_tool_session_id=native_tool_session_id,
         mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
     with SessionLocal() as session:
         agent = (
@@ -325,6 +327,7 @@ def resume_brain_session(
     mail_limit: int = 10,
     event_limit: int = 20,
     mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict[str, Any]:
     """Build a one-call resume packet for a brain session.
 
@@ -393,6 +396,7 @@ def resume_brain_session(
             native_tool_session_id,
             brain_session_id,
             mailbox_binding_secret,
+            notification_mode=mailbox_notification_mode or "pull",
         )
     else:
         # Legacy resume remains available for Sessions with no durable mailbox.
@@ -418,6 +422,7 @@ def resume_brain_session(
             linked_by="operator" if operator else "auto",
             native_tool_session_id=native_tool_session_id,
             mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
         )
 
     with SessionLocal() as session:
