@@ -110,6 +110,7 @@ LEASE_TABLES = (
 WORKSPACE_SCOPED_TABLES = (
     "events",
     "help_requests",
+    "mailboxes",
     "mailbox_messages",
     "session_checkpoints",
     "sources",

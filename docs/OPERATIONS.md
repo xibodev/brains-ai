@@ -337,6 +337,11 @@ Registration does not enable durable message delivery, browser mail UI, live wak
 SMTP copying. Rollback uses the normal application/archive compatibility contract; do
 not drop these tables from a store that a newer build may have written.
 
+Prefer Workspace archive when mailbox history must remain. The explicit destructive
+Workspace prune treats an agent mailbox as owned by its Workspace and removes that
+mailbox plus its required descendant rows; operator mailboxes have no Workspace foreign
+key and are not selected by that cascade.
+
 Diagnose before repair:
 
 ```text

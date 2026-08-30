@@ -822,6 +822,32 @@ def test_archived_workspace_address_is_not_discoverable_or_attachable(tmp_path) 
         )
 
 
+def test_destructive_workspace_prune_removes_agent_mailbox_but_keeps_operator_inbox(
+    tmp_path,
+) -> None:
+    from brains.cli.app import _apply_workspace_cascade
+
+    workspace_path = str(tmp_path / "pruned-mailbox")
+    started = start_session(workspace_path, tool="opencode")
+    mailbox = register_agent_mailbox(
+        workspace_path,
+        "opencode",
+        _native("opencode"),
+        started["session_id"],
+        _binding(),
+    )
+    operator_address = f"operator:{started['operator']}@brains"
+
+    with SessionLocal() as session:
+        workspace = session.query(Workspace).filter(Workspace.slug == started["workspace"]).one()
+        affected = _apply_workspace_cascade(session, [workspace.id])
+
+    assert affected["mailboxes"] == 1
+    with SessionLocal() as session:
+        assert session.get(Mailbox, mailbox["mailbox_id"]) is None
+        assert session.query(Mailbox).filter(Mailbox.address == operator_address).count() == 1
+
+
 def test_http_registration_and_lookup_are_protected_and_non_disclosing(
     tmp_path, auth_headers
 ) -> None:
