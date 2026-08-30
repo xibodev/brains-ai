@@ -1,7 +1,7 @@
 name: ci
 
-# The blocking quality gate for every push to main and every pull request
-# (BL-P1-01). Every job below fails the workflow when it fails: there is no
+# The blocking quality gate for every push and pull request targeting the
+# integration or promotion branch (BL-P1-01). Every job below fails the workflow when it fails: there is no
 # `continue-on-error` on a required gate, and no gate reports success on a
 # command that did not run. The release workflow (release.yml) does NOT re-run
 # this — tag pushes are expected to be on commits that already passed ci.
@@ -20,10 +20,11 @@ name: ci
 #   gate        one required status that depends on all of the above
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: read

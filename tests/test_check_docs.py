@@ -183,8 +183,7 @@ def test_checker_requires_feature_backlogs_and_their_freshness(tmp_path: Path) -
     experimental = case / "docs/product/EXPERIMENTAL_BACKLOG.md"
     experimental.write_text("# missing freshness\n", encoding="utf-8")
     assert (
-        "docs/product/EXPERIMENTAL_BACKLOG.md: missing HTML freshness header"
-        in _run(case).stdout
+        "docs/product/EXPERIMENTAL_BACKLOG.md: missing HTML freshness header" in _run(case).stdout
     )
 
 

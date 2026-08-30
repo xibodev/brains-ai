@@ -90,7 +90,10 @@ The target hard gate includes:
 
 Current workflow facts at HEAD:
 
-- Every job in `.github/workflows/ci.yml` is blocking. No required gate carries `continue-on-error`, and the `quality gate` job fails when any dependency failed, was cancelled, or was skipped.
+- Every job in `.github/workflows/ci.yml` is blocking for pushes and pull requests
+  targeting `staging` or `main`, and the same workflow is manually dispatchable. No
+  required gate carries `continue-on-error`, and the `quality gate` job fails when any
+  dependency failed, was cancelled, or was skipped.
 - The blocking jobs are: documentation and generated traceability contract; Ruff lint and format; mypy; pytest (Python 3.11 and 3.12, acceptance subset then the full unit/integration suite); migration and frozen-baseline contract; SPA typecheck, production build and committed-bundle comparison; wheel/sdist build with shipped-data assertions; the privacy scan; the runtime image build and container health smoke; and the Playwright journey suite.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
