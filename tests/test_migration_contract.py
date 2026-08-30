@@ -124,6 +124,7 @@ POST_CHECKSUM_DELTAS = (
     "147_event_contexts",
     "148_workspace_aliases",
     "149_ephemeral_help_review",
+    "150_durable_mailboxes",
 )
 
 _LEGACY_LEDGER_DDL = """
