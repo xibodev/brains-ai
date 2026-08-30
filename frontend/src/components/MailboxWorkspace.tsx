@@ -190,28 +190,30 @@ export function MailboxWorkspace() {
   const markInboxRead = async () => {
     const address = selectedAddress;
     const openThreadId = thread?.thread_id;
-    const request = messageRequest.current;
-    let refreshStarted = false;
+    const request = ++messageRequest.current;
     setLoadingMessages(true);
     setMessageError(null);
     try {
       await api.operatorMailboxReadInbox(address);
       if (request !== messageRequest.current || selectedAddressRef.current !== address) return;
-      refreshStarted = true;
-      await Promise.all([
-        refreshMessages(address),
-        refreshAccess(),
+      const [nextMessages, nextMailboxes, nextThread] = await Promise.all([
+        api.operatorMailboxInbox(address, true),
+        api.operatorMailboxAccess(),
         openThreadId
-          ? loadThread(openThreadId, address).catch(() => null)
+          ? api.operatorMailboxThread(openThreadId, address)
           : Promise.resolve(null),
       ]);
-      if (selectedAddressRef.current === address) toast("Inbox marked read");
+      if (request !== messageRequest.current || selectedAddressRef.current !== address) return;
+      setMessages(nextMessages.messages);
+      setMailboxes(nextMailboxes);
+      if (nextThread) setThread(nextThread);
+      toast("Inbox marked read");
     } catch (error) {
       if (request === messageRequest.current) {
         setMessageError(formatApiError("Mark inbox read", error));
       }
     } finally {
-      if (!refreshStarted && request === messageRequest.current) setLoadingMessages(false);
+      if (request === messageRequest.current) setLoadingMessages(false);
     }
   };
 

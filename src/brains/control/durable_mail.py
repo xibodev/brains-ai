@@ -1057,18 +1057,15 @@ def list_browser_mailboxes(
             operator.slug,
         )
         rows = (
-            session.query(Mailbox)
+            session.query(Mailbox, Workspace, Operator)
+            .outerjoin(Workspace, Workspace.id == Mailbox.workspace_id)
+            .outerjoin(Operator, Operator.id == Mailbox.owner_operator_id)
             .filter(Mailbox.status == "active")
             .order_by(Mailbox.kind.desc(), Mailbox.address.asc())
             .yield_per(200)
         )
         result: list[dict[str, Any]] = []
-        for mailbox in rows:
-            workspace = (
-                session.get(Workspace, mailbox.workspace_id)
-                if mailbox.workspace_id is not None
-                else None
-            )
+        for mailbox, workspace, owner in rows:
             if mailbox.kind == "operator":
                 if mailbox.id != own_operator_mailbox.id:
                     continue
@@ -1088,7 +1085,6 @@ def list_browser_mailboxes(
                 can_send = False
             else:
                 continue
-            owner = session.get(Operator, mailbox.owner_operator_id)
             result.append(
                 {
                     "address": mailbox.address,
