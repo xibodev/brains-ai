@@ -98,10 +98,10 @@ Current workflow facts at HEAD:
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
 - Failing jobs upload their diagnostics: pytest and migration JUnit XML plus coverage, the rebuilt SPA bundle, container logs, and the Playwright report and hub log.
-- A blocking gate is not an evidence claim. J1-J11 retain Playwright files, but tests
-  that activate withdrawn Runtime, provider, execution-model, or automation paths are
-  source-compatibility evidence rather than product acceptance. BL-P0-09 must replace
-  those expectations with containment while preserving stable journey IDs.
+- A blocking gate is not an evidence claim. J1-J11 retain Playwright files; J2-J6 and
+  J10 now assert withdrawn containment/fail-closed behavior, while J1 and J7-J11 cover
+  Workspace-first advertised surfaces. Remaining withdrawn source modules stay
+  compatibility inventory and are not product activation evidence.
 
 ### Local gate command
 

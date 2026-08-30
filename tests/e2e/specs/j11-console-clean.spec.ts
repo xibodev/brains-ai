@@ -34,7 +34,7 @@ for (const route of ROUTES) {
   });
 }
 
-test('J11 (F0.2) the canonical command center persists across a full reload', async ({ page }) => {
+test('J11 (F0.2) the canonical command center persists across a full reload', async ({ page, consoleGuard }) => {
   await page.goto('/app/command-center');
   await page.waitForLoadState('networkidle').catch(() => {});
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
@@ -43,9 +43,10 @@ test('J11 (F0.2) the canonical command center persists across a full reload', as
   await page.reload();
   await page.waitForLoadState('networkidle').catch(() => {});
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  consoleGuard.assertClean();
 });
 
-test('J11 workspace-first shell is responsive and reports the explicit Labs gate', async ({ page, consoleGuard }) => {
+test('J11 workspace-first shell is responsive and keeps Labs fail-closed', async ({ page, consoleGuard }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/app/command-center');
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
@@ -60,13 +61,13 @@ test('J11 workspace-first shell is responsive and reports the explicit Labs gate
     labs_enabled: boolean;
     data: Array<Record<string, unknown>>;
   };
-  // The E2E harness opts into Labs so J1-J10 can exercise those gated screens.
-  // Default-off behavior is covered by the operator API and gate unit tests.
-  expect(body.labs_enabled).toBe(true);
+  expect(body.labs_enabled).toBe(false);
   expect(body.data.every((row) => !('command' in row) && !('argv' in row))).toBe(true);
 
   await page.goto('/app/labs');
-  await expect(page.getByRole('heading', { name: 'Labs' })).toBeVisible();
+  await expect(page).toHaveURL(/\/app\/command-center$/);
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
   consoleGuard.assertClean();
 });
 

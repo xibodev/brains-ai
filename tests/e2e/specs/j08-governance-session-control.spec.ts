@@ -2,11 +2,11 @@ import { test, expect, signIn } from '../fixtures/console.js';
 import { seedApproval } from '../fixtures/seed.js';
 
 /**
- * J8 — Approve governed work and control a running Session.
+ * J8 — Ask, approve, steer, chat, and stop.
  *
  * Authority: F3, AC-F3-04 through AC-F3-07, and AC-B4-01 through AC-B4-04.
- * The simulated Copilot Runtime cannot accept interactive follow-up input, so
- * the browser must show that limitation truthfully while stop remains durable.
+ * Browser coverage is limited to advertised governance and fail-closed behavior
+ * for withdrawn execution controls.
  */
 
 let approvalCode = '';
@@ -36,32 +36,22 @@ test('J8.1 a pending governed action is approved once from Governance', async ({
   consoleGuard.assertClean();
 });
 
-test('J8.2 unsupported chat is explicit and stop is durably idempotent', async ({ page }) => {
-  await page.goto('/app/labs/personas');
-  const mason = page.locator('[data-testid="persona-card"]', { hasText: /mason/i }).first();
-  const [spawnResponse] = await Promise.all([
-    page.waitForResponse((resp) => /\/personas\/.*\/spawn/.test(resp.url())),
-    mason.getByRole('button', { name: /spawn/i }).click(),
-  ]);
-  const spawn = await spawnResponse.json();
-  const sessionId = String(spawn.session_id);
+test('J8.2 withdrawn execution-control routes fail closed while governance remains available', async ({ page, consoleGuard }) => {
+  for (const route of [
+    '/app/sessions',
+    '/app/sessions/session-1',
+    '/app/labs/sessions',
+    '/app/labs/sessions/session-1',
+  ]) {
+    await page.goto(route);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await expect(page).toHaveURL(/\/app\/command-center$/);
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  }
 
-  await page.goto('/app/labs/sessions');
-  await page.locator('.card-list .softcard').first().click();
-  await page.getByRole('button', { name: /message session/i }).click();
-  await expect(page.getByText(/messaging is unavailable/i)).toBeVisible();
-  await expect(page.getByPlaceholder(/this agent cannot receive messages/i)).toBeDisabled();
-
-  const operationId = `stop-${Date.now()}`;
-  const first = await page.request.post(`/v1/sessions/${sessionId}/stop`, {
-    data: { operation_id: operationId },
-  });
-  const replay = await page.request.post(`/v1/sessions/${sessionId}/stop`, {
-    data: { operation_id: operationId },
-  });
-  expect(first.ok()).toBeTruthy();
-  expect(replay.ok()).toBeTruthy();
-  const firstBody = await first.json();
-  const replayBody = await replay.json();
-  expect(replayBody.command_id).toBe(firstBody.command_id);
+  await page.goto('/app/governance');
+  await expect(page.getByRole('heading', { name: /governance/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /verify audit chain/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  consoleGuard.assertClean();
 });
