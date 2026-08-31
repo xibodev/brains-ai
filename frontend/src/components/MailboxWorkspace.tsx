@@ -5,6 +5,7 @@ import type {
   MailboxAccess,
   MailboxAddress,
   MailMessage,
+  MailboxSmtpStatus,
   MailThread,
   OperatorWorkspace,
 } from "../api/types";
@@ -36,12 +37,19 @@ export function MailboxWorkspace() {
   const [accessError, setAccessError] = useState<string | null>(null);
   const [messageError, setMessageError] = useState<string | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
+  const [smtp, setSmtp] = useState<MailboxSmtpStatus | null>(null);
+  const [smtpLoading, setSmtpLoading] = useState(false);
+  const [smtpDestination, setSmtpDestination] = useState("");
+  const [smtpCode, setSmtpCode] = useState("");
+  const [smtpBusy, setSmtpBusy] = useState(false);
+  const [smtpError, setSmtpError] = useState<string | null>(null);
   const messageRequest = useRef(0);
   const threadRequest = useRef(0);
   const selectedAddressRef = useRef("");
 
   const selectedMailbox = mailboxes.find((row) => row.address === selectedAddress);
   const canSend = selectedMailbox?.can_send === true;
+  const canConfigureSmtp = selectedMailbox?.kind === "operator";
 
   const refreshAccess = async () => {
     const next = await api.operatorMailboxAccess();
@@ -133,6 +141,45 @@ export function MailboxWorkspace() {
       void loadThread(requestedThread).catch(() => undefined);
     }
   }, [selectedAddress, folder]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSmtp(null);
+    setSmtpDestination("");
+    setSmtpCode("");
+    setSmtpError(null);
+    if (!selectedAddress || !canConfigureSmtp) return () => { cancelled = true; };
+    setSmtpLoading(true);
+    api.operatorMailboxSmtpStatus(selectedAddress)
+      .then((next) => {
+        if (!cancelled) setSmtp(next);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setSmtpError(formatApiError("Load email copy", error));
+      })
+      .finally(() => {
+        if (!cancelled) setSmtpLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedAddress, canConfigureSmtp]);
+
+  const updateSmtp = async (action: () => Promise<MailboxSmtpStatus>, message: string) => {
+    const address = selectedAddress;
+    setSmtpBusy(true);
+    setSmtpError(null);
+    try {
+      const next = await action();
+      if (selectedAddressRef.current !== address) return;
+      setSmtp(next);
+      toast(next.superseded ? "A newer destination request replaced this one" : message);
+    } catch (error) {
+      if (selectedAddressRef.current === address) {
+        setSmtpError(formatApiError("Update email copy", error));
+      }
+    } finally {
+      if (selectedAddressRef.current === address) setSmtpBusy(false);
+    }
+  };
 
   const chooseMailbox = (address: string) => {
     messageRequest.current += 1;
@@ -269,6 +316,103 @@ export function MailboxWorkspace() {
                 {canSend ? "Compose, reply, and forward as this operator." : "Read-only browser inspection. Agent sends require adapter proof."}
               </small>
             </div>
+            {canConfigureSmtp && (
+              <div className="operator-mail-smtp" aria-label="External email copy">
+                <strong>External email copy</strong>
+                <small>One-way only. Local Brains mail stays authoritative.</small>
+                {smtp?.destination_hint && <code>{smtp.destination_hint}</code>}
+                <OperatorState loading={smtpLoading || (smtpBusy && !smtp)} error={smtpError} />
+                {!smtpLoading && smtp?.destination_state === "verified" ? (
+                  <>
+                    <label className="operator-field">
+                      <span>Copy content</span>
+                      <select
+                        value={smtp.copy_mode}
+                        disabled={smtpBusy}
+                        onChange={(event) => {
+                          const mode = event.target.value as "disabled" | "notification" | "full_body";
+                          const consent = mode !== "full_body" || window.confirm(
+                            "Full-body copies send mailbox subject and body outside Brains. Continue?",
+                          );
+                          if (!consent) return;
+                          void updateSmtp(
+                            () => api.operatorMailboxSmtpMode(selectedAddress, mode, mode === "full_body"),
+                            mode === "full_body" ? "Full-body copies enabled" : "Email copy preference updated",
+                          );
+                        }}
+                      >
+                        <option value="notification">Notification only</option>
+                        <option value="disabled">Disabled</option>
+                        <option value="full_body">Full body (opt in)</option>
+                      </select>
+                    </label>
+                    <button
+                      className="operator-button quiet"
+                      disabled={smtpBusy}
+                      onClick={() => void updateSmtp(
+                        () => api.operatorMailboxSmtpClear(selectedAddress),
+                        "Email destination removed",
+                      )}
+                    >
+                      Remove destination
+                    </button>
+                  </>
+                ) : !smtpLoading && smtp?.destination_state === "pending" ? (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void updateSmtp(
+                        () => api.operatorMailboxSmtpVerify(selectedAddress, smtpCode),
+                        "Email destination verified",
+                      );
+                    }}
+                  >
+                    <label className="operator-field">
+                      <span>6-digit code</span>
+                      <input
+                        value={smtpCode}
+                        inputMode="numeric"
+                        pattern="[0-9]{6}"
+                        maxLength={6}
+                        disabled={smtpBusy}
+                        onChange={(event) => setSmtpCode(event.target.value)}
+                      />
+                    </label>
+                    <button className="operator-button quiet" disabled={smtpBusy || smtpCode.length !== 6}>
+                      Verify destination
+                    </button>
+                  </form>
+                ) : !smtpLoading ? (
+                  <form
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void updateSmtp(
+                        () => api.operatorMailboxSmtpDestination(selectedAddress, smtpDestination),
+                        "Verification email sent",
+                      );
+                    }}
+                  >
+                    <label className="operator-field">
+                      <span>Email address</span>
+                      <input
+                        type="email"
+                        value={smtpDestination}
+                        disabled={smtpBusy}
+                        onChange={(event) => setSmtpDestination(event.target.value)}
+                      />
+                    </label>
+                    <button className="operator-button quiet" disabled={smtpBusy || !smtpDestination}>
+                      Send verification
+                    </button>
+                  </form>
+                ) : null}
+                {smtp && (
+                  <small>
+                    Queue: {smtp.outbox.open} open / {smtp.outbox.failed} failed / {smtp.outbox.uncertain} uncertain
+                  </small>
+                )}
+              </div>
+            )}
             <div className="operator-mail-addresses" aria-label="Openable addresses">
               {mailboxes.map((mailbox) => (
                 <button

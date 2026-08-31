@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T16:45:00.000-06:00
+last_verified: 2026-08-30T19:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
+verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -125,8 +125,9 @@ delivery, read, and notification state.
 **Delivery dependency:** Address registration, local direct/offline delivery, explicit
 Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state, cursors,
 and the Coordination mailbox desk are implemented. A body-free adapter notification
-protocol is implemented, but concrete harness hook/plugin installation, SMTP copy,
-adapter-native ID extraction, recovery, and two-real-harness E4 remain open. Until those
+protocol and one-way operator SMTP copy are implemented, but concrete harness hook/plugin
+installation, adapter-native ID extraction, recovery, real-provider SMTP, and
+two-real-harness E4 remain open. Until those
 slices pass, do not rely on Brains mail as the sole carrier of parallel-work ownership,
 requirements, approval, or handoff.
 
@@ -170,7 +171,8 @@ preserves the delivery cursor across incarnations. Agent actors prove the curren
 attachment and binding; human operator-mailbox reads require a browser/local channel.
 Local acceptance creates a notification attempt only when the current attachment has
 explicitly declared a supported stronger mode. Pull-only and detached recipients create
-no attempt, and acceptance never implies wakeup or SMTP state.
+no attempt. A verified operator-mailbox copy policy may enqueue separate SMTP state in
+the same transaction, but acceptance never implies wakeup or external send success.
 
 **Notification adapters:** Durable mail remains authoritative. A current proof-bound
 attachment may declare `immediate` for Claude Code/OpenCode or `turn_boundary` for
@@ -217,9 +219,22 @@ does not change local delivery, and the external message directs the operator to
 inside Brains. SMTP notification-only content is the default; copying the full body is
 an explicit operator opt-in. The verified SMTP destination and body-copy consent bind
 to that specific operator mailbox; the existing install-wide notification address is
-not reused as another operator's destination. Until per-operator binding exists, SMTP
-copy is limited to the bootstrap administrator's mailbox. There is no inbound email
-polling, webhook, reply parsing, or external-to-agent delivery.
+not reused as another operator's destination. Each operator can configure only their own
+mailbox through a browser/local human channel. The destination is encrypted, challenged
+by a short-lived verification code, and exposed only as a masked hint. Verification
+enables `notification` mode, whose subject/body are constant and contain no local mail
+metadata or content. `full_body` requires a separate explicit consent action and
+timestamp. Changing mode or destination cancels copies that have not started; a live
+SMTP claim fences those changes until it settles.
+
+The bounded scheduler claims outbox rows once, retries only failures known to occur
+before SMTP acceptance, uses a stable per-outbox `Message-ID`, and marks send-stage or
+expired-claim outcomes `uncertain` rather than risking duplicate external delivery.
+Every attempt is audit-recorded before network I/O; destination and mail content never
+enter audit/events. Local delivery/read state never changes with SMTP outcome. Synthetic
+SMTP and container browser evidence cover this contract; no real provider has been
+certified. There is no inbound email polling, webhook, reply parsing, or
+external-to-agent delivery.
 
 **Other communications:** Default guidance uses asynchronous help: file returns
 immediately, waits leave requests open, fresh eligible peers claim/release/answer with

@@ -445,6 +445,20 @@ def _dispatch_help_reviews() -> int:
     return len(scheduled)
 
 
+def _process_mailbox_smtp() -> int:
+    """Drain a bounded SMTP-copy batch without breaking scheduler maintenance."""
+    try:
+        from brains.control.durable_smtp import process_smtp_outbox
+        from brains.control.secure_settings import delete_orphaned_mailbox_smtp_settings
+
+        delete_orphaned_mailbox_smtp_settings()
+        claimed = int(process_smtp_outbox(limit=10).get("claimed", 0))
+    except Exception as exc:  # noqa: BLE001 - SMTP outage never breaks coordination
+        log.error("scheduler: mailbox SMTP outbox failed: %s", exc)
+        return 0
+    return claimed
+
+
 def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     """Evaluate every enabled recurring task and fire those that are due.
 
@@ -470,6 +484,7 @@ def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     _sweep_stale_runtimes()
     _sweep_stale_sessions()
     _dispatch_help_reviews()
+    _process_mailbox_smtp()
     if not experimental_enabled():
         return []
     fired: list[dict] = []

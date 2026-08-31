@@ -36,8 +36,10 @@ from brains.storage.models import (
     MailDelivery,
     MailMessage,
     MailNotificationAttempt,
+    MailSmtpOutbox,
     MailThread,
     Operator,
+    OperatorMailboxSetting,
     OrgMember,
     Workspace,
     WorkspaceMembership,
@@ -162,6 +164,54 @@ def _ensure_notification_in_transaction(
         )
         if existing is None:
             raise
+        return existing
+    return row
+
+
+def _ensure_smtp_outbox_in_transaction(
+    session,
+    delivery: MailDelivery,
+    recipient: Mailbox,
+) -> MailSmtpOutbox | None:
+    if recipient.kind != "operator":
+        return None
+    setting = session.get(OperatorMailboxSetting, recipient.id)
+    if (
+        setting is None
+        or setting.smtp_destination_ref is None
+        or setting.smtp_destination_verified_at is None
+        or setting.smtp_copy_mode not in {"notification", "full_body"}
+    ):
+        return None
+    key = f"mail-smtp:{delivery.id}"
+    existing = (
+        session.query(MailSmtpOutbox).filter(MailSmtpOutbox.idempotency_key == key).one_or_none()
+    )
+    if existing is not None:
+        return existing
+    row = MailSmtpOutbox(
+        outbox_id=_public_id("smtp"),
+        idempotency_key=key,
+        delivery_id=delivery.id,
+        recipient_mailbox_id=recipient.id,
+        smtp_destination_ref=setting.smtp_destination_ref,
+        copy_mode=setting.smtp_copy_mode,
+        status="queued",
+        attempt=0,
+        created_at=utc_now(),
+        updated_at=utc_now(),
+    )
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+    except IntegrityError:
+        session.expire_all()
+        existing = (
+            session.query(MailSmtpOutbox)
+            .filter(MailSmtpOutbox.idempotency_key == key)
+            .one_or_none()
+        )
         return existing
     return row
 
@@ -921,6 +971,7 @@ def _send(
                     session.add(delivery)
                     session.flush()
                     _ensure_notification_in_transaction(session, delivery, recipient)
+                    _ensure_smtp_outbox_in_transaction(session, delivery, recipient)
                 session.flush()
                 session.commit()
                 result = _message_dict(session, message)

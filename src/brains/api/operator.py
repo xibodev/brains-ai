@@ -123,6 +123,19 @@ class MailboxThreadReadBody(BaseModel):
     session_id: str | None = Field(default=None, max_length=64)
 
 
+class MailboxSmtpDestinationBody(BaseModel):
+    destination: str = Field(min_length=3, max_length=254)
+
+
+class MailboxSmtpVerificationBody(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
+
+
+class MailboxSmtpModeBody(BaseModel):
+    copy_mode: str = Field(min_length=1, max_length=16)
+    consent_full_body: bool = False
+
+
 class TopicBody(BaseModel):
     topic: str = Field(min_length=1, max_length=64)
     subject: str = Field(min_length=1, max_length=256)
@@ -640,6 +653,111 @@ def mailbox_access(
         return {"data": list_browser_mailboxes(principal=principal)}
     except MailboxUnavailableError as exc:
         raise policy.not_found("mailbox", "unavailable") from exc
+
+
+@router.get("/mailboxes/smtp")
+def mailbox_smtp_status(
+    address: str = Query(min_length=1, max_length=512),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_smtp import (
+        MailboxSmtpUnavailableError,
+        smtp_copy_status,
+    )
+
+    try:
+        return smtp_copy_status(address, principal=principal)
+    except MailboxSmtpUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+
+
+@router.post("/mailboxes/smtp/destination")
+def mailbox_smtp_destination(
+    body: MailboxSmtpDestinationBody,
+    address: str = Query(min_length=1, max_length=512),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_smtp import (
+        MailboxSmtpError,
+        MailboxSmtpUnavailableError,
+        MailboxSmtpValidationError,
+        request_smtp_destination_verification,
+    )
+
+    try:
+        return request_smtp_destination_verification(
+            address,
+            body.destination,
+            principal=principal,
+        )
+    except MailboxSmtpUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+    except (MailboxSmtpValidationError, MailboxSmtpError) as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.post("/mailboxes/smtp/verify")
+def mailbox_smtp_verify(
+    body: MailboxSmtpVerificationBody,
+    address: str = Query(min_length=1, max_length=512),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_smtp import (
+        MailboxSmtpUnavailableError,
+        MailboxSmtpValidationError,
+        verify_smtp_destination,
+    )
+
+    try:
+        return verify_smtp_destination(address, body.code, principal=principal)
+    except MailboxSmtpUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+    except MailboxSmtpValidationError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.put("/mailboxes/smtp/mode")
+def mailbox_smtp_mode(
+    body: MailboxSmtpModeBody,
+    address: str = Query(min_length=1, max_length=512),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_smtp import (
+        MailboxSmtpUnavailableError,
+        MailboxSmtpValidationError,
+        set_smtp_copy_mode,
+    )
+
+    try:
+        return set_smtp_copy_mode(
+            address,
+            body.copy_mode,
+            consent_full_body=body.consent_full_body,
+            principal=principal,
+        )
+    except MailboxSmtpUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+    except MailboxSmtpValidationError as exc:
+        raise _bad_request(exc) from exc
+
+
+@router.delete("/mailboxes/smtp/destination")
+def mailbox_smtp_destination_clear(
+    address: str = Query(min_length=1, max_length=512),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.durable_smtp import (
+        MailboxSmtpUnavailableError,
+        MailboxSmtpValidationError,
+        clear_smtp_destination,
+    )
+
+    try:
+        return clear_smtp_destination(address, principal=principal)
+    except MailboxSmtpUnavailableError as exc:
+        raise policy.not_found("mailbox", "unavailable") from exc
+    except MailboxSmtpValidationError as exc:
+        raise _bad_request(exc) from exc
 
 
 def _mailbox_binding_or_none(value: str | None) -> str | None:

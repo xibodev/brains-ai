@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import smtplib
 from email.message import EmailMessage
+from email.utils import make_msgid
 from typing import Any
 
 from brains.config import settings
@@ -29,6 +30,10 @@ from brains.control.events import append_event
 
 class MailerError(RuntimeError):
     """Raised when sending fails. Never embeds credentials."""
+
+    def __init__(self, message: str, *, delivery_uncertain: bool = False) -> None:
+        super().__init__(message)
+        self.delivery_uncertain = delivery_uncertain
 
 
 def _refresh_secure_settings() -> None:
@@ -69,6 +74,8 @@ def send_email(
     body: str,
     *,
     session_id: str | None = None,
+    message_id: str | None = None,
+    record_event: bool = True,
 ) -> dict[str, Any]:
     """Send one plain-text email through configured SMTP.
 
@@ -90,38 +97,54 @@ def send_email(
     msg["From"] = from_addr
     msg["To"] = to.strip()
     msg["Subject"] = subject.strip()
+    msg["Message-ID"] = message_id or make_msgid(domain="brains.local")
     msg.set_content(body)
 
+    stage = "connect"
     try:
         if settings.smtp_use_starttls:
             with smtplib.SMTP(
                 host, settings.smtp_port, timeout=settings.smtp_timeout_seconds
             ) as smtp:
+                stage = "handshake"
                 smtp.ehlo()
                 smtp.starttls()
                 if settings.smtp_username:
                     smtp.login(settings.smtp_username, _password())
+                stage = "send"
                 smtp.send_message(msg)
         else:
             with smtplib.SMTP(
                 host, settings.smtp_port, timeout=settings.smtp_timeout_seconds
             ) as smtp:
+                stage = "handshake"
                 if settings.smtp_username:
                     smtp.login(settings.smtp_username, _password())
+                stage = "send"
                 smtp.send_message(msg)
     except smtplib.SMTPException as exc:
-        raise MailerError(f"smtp {host}:{settings.smtp_port} failed: {type(exc).__name__}") from exc
+        raise MailerError(
+            f"smtp delivery failed during {stage}: {type(exc).__name__}",
+            delivery_uncertain=stage == "send",
+        ) from exc
     except OSError as exc:
         raise MailerError(
-            f"smtp {host}:{settings.smtp_port} unreachable: {type(exc).__name__}"
+            f"smtp delivery failed during {stage}: {type(exc).__name__}",
+            delivery_uncertain=stage == "send",
+        ) from exc
+    except Exception as exc:
+        raise MailerError(
+            f"smtp delivery failed during {stage}: {type(exc).__name__}",
+            delivery_uncertain=stage == "send",
         ) from exc
 
-    append_event(
-        "email_sent",
-        f"to {to.strip()}: {subject.strip()}",
-        metadata={"to": to.strip(), "subject": subject.strip(), "host": host},
-        session_id=session_id,
-    )
+    if record_event:
+        append_event(
+            "email_sent",
+            f"to {to.strip()}: {subject.strip()}",
+            metadata={"to": to.strip(), "subject": subject.strip(), "host": host},
+            session_id=session_id,
+        )
     return {"sent": True, "to": to.strip(), "subject": subject.strip()}
 
 

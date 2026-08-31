@@ -480,3 +480,40 @@ def test_notification_state_migration_rejects_contradictory_rows() -> None:
             """,
             (delivery_id,),
         )
+
+
+def test_smtp_state_migration_rejects_missing_consent_and_impossible_outbox() -> None:
+    conn = _connection()
+    state_migration = importlib.import_module("brains.storage.sql_migrations.152_mail_smtp_state")
+    state_migration.upgrade(conn)
+    mailbox_id = _agent_mailbox(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO operator_mailbox_settings (
+                mailbox_id, smtp_destination_ref, smtp_destination_verified_at,
+                smtp_copy_mode, updated_at
+            ) VALUES (?, 'mailbox.smtp.1.ref', CURRENT_TIMESTAMP,
+                      'full_body', CURRENT_TIMESTAMP)
+            """,
+            (mailbox_id,),
+        )
+
+
+def test_smtp_state_migration_refuses_contradictory_existing_rows() -> None:
+    conn = _connection()
+    mailbox_id = _agent_mailbox(conn)
+    conn.execute(
+        """
+        INSERT INTO operator_mailbox_settings (
+            mailbox_id, smtp_destination_ref, smtp_destination_verified_at,
+            smtp_copy_mode, updated_at
+        ) VALUES (?, 'mailbox.smtp.1.ref', CURRENT_TIMESTAMP,
+                  'full_body', CURRENT_TIMESTAMP)
+        """,
+        (mailbox_id,),
+    )
+    state_migration = importlib.import_module("brains.storage.sql_migrations.152_mail_smtp_state")
+
+    with pytest.raises(sqlite3.IntegrityError, match="existing operator mailbox SMTP"):
+        state_migration.upgrade(conn)
