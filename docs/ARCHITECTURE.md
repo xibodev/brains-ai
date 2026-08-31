@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Architecture
@@ -198,6 +198,25 @@ changes fence live sends and cancel work that has not started. Neither SMTP outc
 configuration changes modify the local message/delivery/read record. No destination or
 mail content enters audit/event metadata, and no inbound email path exists. Synthetic
 SMTP evidence does not certify a real provider.
+
+Durable-mail readiness is a count-only projection over those authoritative rows. It
+checks active registration shape, live attachment consistency, unread age, body-free
+notification progress, and SMTP backlog/failure/uncertainty separately. A detached
+active mailbox with unread mail remains healthy until the mail crosses the declared age
+threshold; offline acceptance is the feature, not an outage. Withdrawn Runtime lifecycle
+does not affect normal-product readiness, and the migration's explicit unverified legacy
+inventory is reported without being mistaken for a broken active registration.
+
+The adoption trial suppresses small welcome/session/event aggregates and separately
+aggregates registration, acceptance/refusal, wakeup, read, reply, forward, broadcast,
+and SMTP-copy outcomes over explicit time windows. Refusals remain attributed to their
+send, reply, forward, or broadcast family; malformed historical attribution is separate.
+Incomplete windows are right-censored. Every outcome family uses the semantic result
+vocabulary and minimum group size; if a small bucket could be recovered by subtraction,
+its denominator and non-zero peers are suppressed too. Generic event totals are
+allowlisted and cannot reveal a suppressed feature bucket. The projection contains no
+subject, body, address, source path, native Session ID, message/delivery/notification/
+outbox ID, or raw error. Lifecycle events used by the projection follow the same rule.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate

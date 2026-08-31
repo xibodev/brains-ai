@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Traceability
@@ -47,7 +47,7 @@ The user-centered outcome and evidence view of this matrix is
 | B5 Storage/recovery | P6 | J10, J11; AC-B5-01..05 | Initialize, migrate, back up, verify, diagnose, repair, restore SQLite | `/app/operations` read posture; CLI/MCP mutation contracts | SQLite storage, migrations, integrity, backup, encrypted settings | frozen baseline + numbered deltas, checksummed ledger, `secure_settings`, manifest-2 archives; 141 | Advertised/partial for SQLite. Browser destructive actions and E4 recovery drill remain absent; alternate backend code is withdrawn compatibility. |
 | B6 CLI/wiring/service | P1, P4, P6 | J1, J2, J9, J11; AC-B6-01..04 | Install, setup, serve, wire, manage service | `brains-ai`; PyPI; Copilot/Claude/Codex/OpenCode wire adapters; `/app/operations` posture | exact-interpreter verifier, persisted endpoints/probes, native MCP renderers, supervisor bind preflight | package metadata, agent config, service endpoint config, PID state | Advertised/partial. Config-preservation and service tests exist; listener-aware recovery and clean-host E4 remain open. |
 | B7 Authenticated external events | P2, P5, P6 | J8, J9; AC-B7-01..04 | Accept signed GitHub delivery; later approve exact public defect payload | `/hooks/github` and Config; generic triggers, relay, bridges, and wa-web remain source containment debt | GitHub scope/signature/delivery controls; planned governed defect relay | `integration_deliveries` plus withdrawn trigger/bridge compatibility rows | Advertised only for GitHub ingress. BL-P1-19 is active outbound-relay work; other webhooks/bridges are withdrawn. |
-| B8 Observability/readiness | P4, P6 | J7, J11; AC-B8-01..04 | Probe liveness/readiness, inspect bounded posture, diagnose queues and stale presence | `/app/operations`, `/health`, protected admin/operator projections, logs | health, readiness, queue diagnosis/repair, recovery policy, BL-P1-16 analytics, supervisor | typed events, usage, process log files, compatibility traces | Advertised/partial. `/health` is liveness only; child protocol/listener, scheduler, registry, and cross-process failure coverage remain open. |
+| B8 Observability/readiness | P4, P6 | J7, J11; AC-B8-01..04 | Probe liveness/readiness, inspect durable-mail outcome posture, diagnose queues and stale presence | `/app/operations`, `/health`, protected admin/operator projections, logs | health, count-only durable-mail readiness, queue diagnosis/repair, recovery policy, minimum-group-suppressed BL-P1-16 analytics, supervisor | typed privacy-safe events, durable mailbox lifecycle rows, usage, process log files, compatibility traces | Advertised/partial. `/health` is liveness only; mail registration/attachment/unread/notification/SMTP classes and suppressed outcome analytics have E3 evidence. Child protocol/listener, scheduler, registry, and cross-process failure coverage remain open. |
 | B9 Legacy surfaces | P1, P2, P6 | J9-J11; AC-B9-01..03 | Use `/app`; verify retired HTML is unreachable | `/dashboard*`, legacy `/admin*`, templates, and static assets remain in source | retired dashboard/admin apps plus shared `authz` | shared compatibility DB/config | Withdrawn. Authentication consistency is source evidence, not support; BL-P0-09/BL-P2-01 require zero launch, route, and static exposure. |
 
 ## Modern SPA route inventory
@@ -155,7 +155,7 @@ contract.
 | UM-09 | Roles restrict native API access. | Resolved: `owner`/`admin`/`member` are enforced per route against one resolved Org, including the Org-scoped `GET /v1/orgs/{org}/usage`; the residual gap is browser-session E4 evidence for AC-F9-05. | F9, J10, J11 |
 | UM-10 | Skills affect Persona or Project execution. | Withdrawn. Skill attachment/context code and migration 138 remain compatibility inventory; reusable advertised guidance is Workspace knowledge and coordination patterns. | F10, J10 |
 | UM-11 | Scheduled execution uses the same approval gate. | Withdrawn. No scheduled auto-fire is a supported path, regardless of source-level governed-action integration. | F10, B4, J10 |
-| UM-12 | Readiness indicates candidate operability. | Partly resolved: `/health` remains liveness-only; protected readiness reports bounded storage/migration, queue, compatibility-state, and recovery posture. BL-P1-09 must add child protocol/listener, scheduler, registry, package/schema, and supported-transport checks while excluding withdrawn dependencies. | B8, J11 |
+| UM-12 | Readiness indicates candidate operability. | Partly resolved: `/health` remains liveness-only; protected readiness reports bounded storage/migration, queue, durable-mail, and recovery posture while excluding withdrawn Runtime state. BL-P1-09 must add child protocol/listener, scheduler, registry, package/schema, and supported-transport checks. | B8, J11 |
 
 ## MCP and CLI surface mapping
 

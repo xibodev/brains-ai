@@ -22,6 +22,8 @@ Surface → follow-up event kind:
 
 All follow-up event sites now thread ``session_id`` through; without it the
 self-join cannot tie the action back to the session that was offered the cue.
+Every externally returned aggregate enforces a minimum group size; this module
+never returns a per-session row or native identifier.
 """
 
 from __future__ import annotations
@@ -36,6 +38,8 @@ from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import Event, Workspace
 
+MINIMUM_ANALYTICS_GROUP_SIZE = 3
+
 # Stable list so callers and tests have a single source of truth.
 SURFACES: list[tuple[str, str]] = [
     ("unread_messages", "message_read"),
@@ -44,10 +48,20 @@ SURFACES: list[tuple[str, str]] = [
     ("tools_missing", "tool_verified"),
     ("tools_unverified", "tool_verified"),
 ]
+AGGREGATED_EVENT_KINDS = frozenset(
+    {"session_start", *(follow_kind for _key, follow_kind in SURFACES)}
+)
 
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _suppress_related_counts(*counts: int) -> tuple[list[int | None], bool]:
+    suppressed = any(0 < count < MINIMUM_ANALYTICS_GROUP_SIZE for count in counts)
+    if not suppressed:
+        return list(counts), False
+    return [0 if count == 0 else None for count in counts], True
 
 
 def adoption_report(
@@ -76,17 +90,17 @@ def adoption_report(
           "window_minutes": int,
           "since_days": int,
           "workspace": str | None,
-          "sessions_started": int,           # total session_start events in window
+          "sessions_started": int | None,    # suppressed below the minimum group size
           "surfaces": {
             "<surface_key>": {
               "follow_kind": str,
-              "offered": int,                # sessions where this surface was non-zero
-              "acted":   int,                # of those, how many called follow_kind in window
+               "offered": int | None,         # sessions where this surface was non-zero
+               "acted":   int | None,         # matching follow-up in the window
               "rate":    float | None,       # acted / offered, None if offered == 0
             },
             ...
           },
-          "totals_by_kind": [{"kind": str, "count": int}, ...],  # all events in window
+          "totals_by_kind": [{"kind": str, "count": int | None}, ...],
         }
     """
     if window_minutes <= 0:
@@ -155,6 +169,7 @@ def adoption_report(
                     "offered": 0,
                     "acted": 0,
                     "rate": None,
+                    "suppressed": False,
                 }
                 continue
             session_ids = list(start_by_session.keys())
@@ -178,25 +193,56 @@ def adoption_report(
                 if offered_at <= normalized_follow <= offered_at + window:
                     acted.add(sid)
             acted_count = len(acted)
+            visible_counts, suppressed = _suppress_related_counts(offered_count, acted_count)
+            visible_offered, visible_acted = visible_counts
             surface_results[key] = {
                 "follow_kind": follow_kind,
-                "offered": offered_count,
-                "acted": acted_count,
-                "rate": (acted_count / offered_count) if offered_count else None,
+                "offered": visible_offered,
+                "acted": visible_acted,
+                "rate": (
+                    (acted_count / offered_count) if offered_count and not suppressed else None
+                ),
+                "suppressed": suppressed,
             }
 
         totals_q = session.query(Event.kind, func.count(Event.id)).filter(
-            Event.created_at >= cutoff
+            Event.created_at >= cutoff,
+            Event.kind.in_(AGGREGATED_EVENT_KINDS),
         )
         if workspace_id is not None:
             totals_q = totals_q.filter(Event.workspace_id == workspace_id)
         totals_rows = totals_q.group_by(Event.kind).all()
-        totals = sorted(
-            [{"kind": k, "count": int(c)} for k, c in totals_rows],
-            key=lambda r: r["count"],
-            reverse=True,
-        )
+        totals = [
+            {
+                "kind": kind,
+                "count": None if 0 < int(count) < MINIMUM_ANALYTICS_GROUP_SIZE else int(count),
+                "suppressed": 0 < int(count) < MINIMUM_ANALYTICS_GROUP_SIZE,
+            }
+            for kind, count in totals_rows
+        ]
+        totals.sort(key=lambda row: int(row["count"] or 0), reverse=True)
 
+    from brains.control.mailbox_observability import mailbox_outcome_report
+
+    mailbox_outcomes = mailbox_outcome_report(
+        window_minutes=window_minutes,
+        since_days=since_days,
+        workspace=workspace,
+    )
+    session_counts, sessions_suppressed = _suppress_related_counts(
+        sessions_observed,
+        len(eligible_starts),
+        sessions_excluded_incomplete_window,
+    )
+    suppressed_total_kinds = {
+        follow_kind for key, follow_kind in SURFACES if surface_results[key]["suppressed"]
+    }
+    if sessions_suppressed:
+        suppressed_total_kinds.add("session_start")
+    for total in totals:
+        if total["kind"].startswith("mailbox_") or total["kind"] in suppressed_total_kinds:
+            total["count"] = None
+            total["suppressed"] = True
     return {
         "window_minutes": window_minutes,
         "since_days": since_days,
@@ -204,9 +250,11 @@ def adoption_report(
         "observed_at": now.isoformat(),
         "observation_started_at": cutoff.isoformat(),
         "eligible_before": eligible_before.isoformat(),
-        "sessions_started": sessions_observed,
-        "sessions_eligible": len(eligible_starts),
-        "sessions_excluded_incomplete_window": sessions_excluded_incomplete_window,
+        "minimum_group_size": MINIMUM_ANALYTICS_GROUP_SIZE,
+        "sessions_started": session_counts[0],
+        "sessions_eligible": session_counts[1],
+        "sessions_excluded_incomplete_window": session_counts[2],
+        "sessions_suppressed": sessions_suppressed,
         "interpretation": {
             "unit": "session_start event",
             "rate": "sessions with a matching follow-up event divided by eligible sessions offered the surface",
@@ -219,4 +267,5 @@ def adoption_report(
         },
         "surfaces": surface_results,
         "totals_by_kind": totals,
+        "mailbox_outcomes": mailbox_outcomes,
     }

@@ -802,11 +802,11 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
     Distinct from ``GET /health``, which stays open and liveness-only: this
     is a protected, redacted readiness contract reporting one overall
     ``ready``/``degraded`` verdict plus bounded per-component state for
-    storage/migration access, coordination-queue health, Runtime lifecycle/
-    staleness, and recovery-policy configuration/readiness. No component
+    storage/migration access, coordination-queue health, durable mailbox
+    delivery/wakeup/SMTP state, and recovery-policy readiness. No component
     ever returns a secret or a raw exception message - only its type name.
 
-    Live provider readiness is deliberately NOT part of this contract: a
+    Withdrawn Runtime and live provider state are deliberately NOT part of this contract: a
     simulated/unconfigured model provider is a routing fact (see BL-P1-11),
     not an operational outage, and folding it in here would make every
     lean-core install without a configured provider permanently "degraded"

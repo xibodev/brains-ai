@@ -612,9 +612,10 @@ def test_send_is_idempotent_and_replay_mismatch_is_refused(tmp_path) -> None:
         event
         for event in list_events(limit=100)
         if event.kind == "mailbox_message_sent"
-        and first["message_id"] in (event.metadata_json or "")
+        and event.session_id == sender["session"]["session_id"]
     ]
     assert len(events) == 1
+    assert first["message_id"] not in (events[0].metadata_json or "")
 
 
 def test_threads_reply_forward_sent_and_per_recipient_read_state(tmp_path) -> None:

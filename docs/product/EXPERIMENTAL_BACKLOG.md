@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T12:28:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus static inspection of implemented feedback, adoption, and ephemeral-review surfaces and the approved future durable-mailbox measurement boundary; real field outcomes remain under observation; deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-outcome analytics candidate inspection and isolated Docker suppression, censoring, lifecycle, privacy, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Experimental Feature Backlog
@@ -53,7 +53,11 @@ discard, duplicate, and recovery; periodic privacy review over redacted samples.
 without storing prompts, arguments, source, logs, or raw outputs.
 
 **Implemented trial:** Operations reports welcome offers and nearby follow-up events
-with eligible/right-censored denominators.
+with eligible/right-censored, minimum-group-suppressed denominators. Durable-mail outcomes
+separately aggregate address registration, local acceptance/refusal, adapter wakeup, read, reply, forward,
+explicit broadcast, and SMTP copy over the same exact window. Each family uses
+`success`, `empty`, `refused`, `timeout`, `failed`, and `uncertain`; unavailable results
+remain zero rather than being silently omitted.
 
 **Observation backlog:** Add canonical tool and raw-adapter identity, transport, feature
 family, duration, semantic result (`success`, `empty`, `refused`, `timeout`, `failed`),
@@ -63,7 +67,11 @@ reduce normal-product adoption. Legacy Session-addressed mail and `state='runnin
 presence data are not valid baselines for durable mailbox adoption. After BL-P1-12 and
 BL-P1-14 land, measure address registration, accepted mail, wakeup, read, reply,
 forward, explicit broadcast, rejection reason, and SMTP-copy outcome as separate local
-events; no message subject, body, address path, or native Session ID enters analytics.
+events; no message subject, body, address path, native Session ID, or native mailbox
+object ID enters analytics. A minimum group of three is required before a non-zero bucket
+is shown; denominators and non-zero peer buckets are suppressed whenever subtraction
+could reveal a smaller bucket. Generic event totals are allowlisted and cannot bypass a
+suppressed session, welcome, or mailbox bucket.
 
 **Safety boundary:** Record no prompt, argument, secret, source path, output, customer
 data, or machine identity. Aggregation must enforce minimum group size before anything

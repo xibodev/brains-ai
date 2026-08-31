@@ -46,7 +46,7 @@ export function Operations() {
               ],
               ["Storage", data.readiness.components.storage.state],
               ["Queues", data.readiness.components.queue.state],
-              ["Runtimes", `${data.runtimes.length} known`],
+              ["Durable mail", data.readiness.components.durable_mail.state],
               ["Tools", `${data.tools.length} registered`],
               ["Recovery", data.recovery.ready ? "ready" : "incomplete"],
             ].map(([name, value]) => <div key={name}><span>+</span><strong>{name}</strong><small>{value}</small></div>)}
@@ -55,7 +55,7 @@ export function Operations() {
           <div className="operator-operations-grid">
             <OperatorCard kicker="Protected readiness" title="Dependencies" action={<OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{Object.values(data.readiness.components).filter((row) => row.state === "ready").length} / {Object.keys(data.readiness.components).length}</div>
-              <p>Bounded storage, queue, Runtime-lifecycle, and recovery-policy checks.</p>
+              <p>Bounded storage, queue, durable-mail, and recovery-policy checks.</p>
               <OperatorMiniList rows={Object.entries(data.readiness.components).map(([name, row]) => ({ label: name.replaceAll("_", " "), value: <OperatorStatus tone={row.state === "ready" ? "ready" : "warning"}>{row.state}</OperatorStatus> }))} />
             </OperatorCard>
 
@@ -80,13 +80,19 @@ export function Operations() {
             </OperatorCard>
 
             <OperatorCard kicker="Observed adoption" title="Welcome follow-through" action={<OperatorStatus tone="adapter">Telemetry only</OperatorStatus>} className="operator-operation-card">
-              <div className="operator-op-number">{data.adoption.sessions_eligible} eligible sessions</div>
+              <div className="operator-op-number">{data.adoption.sessions_suppressed ? "Suppressed" : `${data.adoption.sessions_eligible ?? 0} eligible sessions`}</div>
               <p>Follow-up events within {data.adoption.window_minutes} minutes. This measures recorded use, not task success, user value, or causal impact.</p>
               <OperatorMiniList rows={Object.entries(data.adoption.surfaces).map(([name, row]) => ({
                 label: name.replaceAll("_", " "),
-                value: row.offered ? `${row.acted} / ${row.offered} (${Math.round((row.rate ?? 0) * 100)}%)` : "No eligible offers",
+                value: row.suppressed ? "Suppressed (< minimum group)" : row.offered ? `${row.acted ?? 0} / ${row.offered} (${Math.round((row.rate ?? 0) * 100)}%)` : "No eligible offers",
               }))} />
-              <small className="operator-muted">{data.adoption.sessions_excluded_incomplete_window} recent session(s) excluded until their full follow-up window closes. Observation started {relativeTime(data.adoption.observation_started_at)}.</small>
+              <small className="operator-muted">{data.adoption.sessions_suppressed ? "Recent session totals are suppressed." : `${data.adoption.sessions_excluded_incomplete_window ?? 0} recent session(s) excluded until their full follow-up window closes.`} Observation started {relativeTime(data.adoption.observation_started_at)}.</small>
+              <h3 style={{ margin: "16px 0 8px" }}>Mailbox outcomes</h3>
+              <OperatorMiniList rows={Object.entries(data.adoption.mailbox_outcomes.outcomes).map(([name, row]) => ({
+                label: name.replaceAll("_", " "),
+                value: row.eligible.suppressed ? "Suppressed (< minimum group)" : `${row.eligible.count ?? 0} eligible`,
+              }))} />
+              <small className="operator-muted">Counts smaller than {data.adoption.mailbox_outcomes.minimum_group_size} are suppressed. No mail content, address, path, native Session ID, or native object ID enters this projection.</small>
             </OperatorCard>
 
             <OperatorCard kicker="Storage and recovery" title="Durability policy" action={<OperatorStatus tone={data.recovery.ready ? "ready" : "warning"}>{data.recovery.ready ? "ready" : "incomplete"}</OperatorStatus>} className="operator-operation-card">

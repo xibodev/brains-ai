@@ -181,11 +181,17 @@ def test_operations_is_install_admin_only(client, auth_headers):
 def test_operations_exposes_bounded_adoption_denominators(client, auth_headers):
     body = client.get("/v1/operator/operations", headers=auth_headers).json()
     adoption = body["adoption"]
-    assert adoption["sessions_started"] >= adoption["sessions_eligible"]
-    assert adoption["sessions_excluded_incomplete_window"] == (
-        adoption["sessions_started"] - adoption["sessions_eligible"]
-    )
+    if not adoption["sessions_suppressed"]:
+        assert adoption["sessions_started"] >= adoption["sessions_eligible"]
+        assert adoption["sessions_excluded_incomplete_window"] == (
+            adoption["sessions_started"] - adoption["sessions_eligible"]
+        )
+    else:
+        assert adoption["sessions_started"] is None
     assert "causal impact" in adoption["interpretation"]["not_measured"]
+    outcomes = adoption["mailbox_outcomes"]
+    assert outcomes["minimum_group_size"] >= 2
+    assert outcomes["privacy"]["contains_address"] is False
 
 
 def test_capability_catalog_never_presents_shell_execution(client, auth_headers):

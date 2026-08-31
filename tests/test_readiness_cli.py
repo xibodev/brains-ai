@@ -18,7 +18,7 @@ def test_readiness_cli_prints_status_and_components():
     assert set(payload["components"]) == {
         "storage",
         "queue",
-        "runtime_lifecycle",
+        "durable_mail",
         "recovery_policy",
     }
     # Exit code mirrors the overall verdict so it composes in scripts.

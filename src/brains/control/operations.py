@@ -43,23 +43,15 @@ def readiness_report() -> dict[str, Any]:
         components["queue"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
 
     try:
-        from brains.control.runtimes import count_stale, list_runtimes
-        from brains.mcp.server import _runtime_stale_ttl_seconds
+        from brains.control.mailbox_observability import mailbox_health_report
 
-        ttl = _runtime_stale_ttl_seconds()
-        runtimes = list_runtimes()
-        stale = count_stale(ttl)
-        components["runtime_lifecycle"] = {
-            "state": "ready" if stale == 0 else "degraded",
-            "detail": {
-                "total": len(runtimes),
-                "online": len([row for row in runtimes if row.get("status") == "online"]),
-                "stale_pending_sweep": stale,
-                "stale_sweep_ttl_seconds": ttl,
-            },
+        mailbox = mailbox_health_report()
+        components["durable_mail"] = {
+            "state": mailbox["state"],
+            "detail": mailbox,
         }
     except Exception as exc:  # pragma: no cover - readiness must remain bounded
-        components["runtime_lifecycle"] = {
+        components["durable_mail"] = {
             "state": "degraded",
             "detail": {"error": type(exc).__name__},
         }
@@ -97,7 +89,6 @@ def operations_snapshot() -> dict[str, Any]:
     from brains.control.operators import list_operators
     from brains.control.queue_health import diagnose, summarize
     from brains.control.recovery_policy import recovery_readiness
-    from brains.control.runtimes import list_runtimes
     from brains.control.tool_registry import list_registered_tools
     from brains.experimental import ui_labs_enabled
 
@@ -106,7 +97,6 @@ def operations_snapshot() -> dict[str, Any]:
         "queue": {"summary": summarize(), "diagnosis": diagnose()},
         "recovery": recovery_readiness(),
         "service": service.status(),
-        "runtimes": list_runtimes(),
         "tools": list_registered_tools(verify_now=False),
         "adoption": adoption_report(),
         "operators": list_operators(),

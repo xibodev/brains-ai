@@ -1437,11 +1437,9 @@ def adoption_report_tool(
 ):
     """Per-surface adoption hit-rates for what the welcome packet offered.
 
-    Joins ``session_start`` events (which carry a snapshot of the welcome
-    counts in metadata) against follow-up events (``message_read``,
-    ``pattern_used``, ``memory_retrieved``, ``tool_verified``) tied to the
-    same session, within ``window_minutes`` of the start. The result tells
-    you which welcome surfaces actually move the agent.
+    Joins ``session_start`` offers to nearby follow-up events and includes
+    minimum-group-suppressed durable-mail lifecycle outcomes. No mail content,
+    address, source path, or native tool Session ID enters the report.
     """
     return adoption_report(
         window_minutes=window_minutes,
