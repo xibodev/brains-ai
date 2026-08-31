@@ -692,6 +692,27 @@ class OperatorMailboxSetting(Base):
     """Per-operator SMTP destination reference and explicit copy consent."""
 
     __tablename__ = "operator_mailbox_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "smtp_copy_mode IN ('disabled', 'notification', 'full_body')",
+            name="ck_operator_mailbox_smtp_copy_mode",
+        ),
+        CheckConstraint(
+            "(smtp_destination_ref IS NULL AND smtp_destination_verified_at IS NULL "
+            "AND smtp_copy_mode = 'disabled' AND smtp_consented_at IS NULL "
+            "AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NULL "
+            "AND smtp_copy_mode = 'disabled' AND smtp_consented_at IS NULL "
+            "AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NOT NULL "
+            "AND smtp_copy_mode IN ('disabled', 'notification') "
+            "AND smtp_consented_at IS NULL AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NOT NULL "
+            "AND smtp_copy_mode = 'full_body' AND smtp_consented_at IS NOT NULL "
+            "AND smtp_consented_by_operator_id IS NOT NULL)",
+            name="ck_operator_mailbox_smtp_state",
+        ),
+    )
     mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), primary_key=True)
     smtp_destination_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
     smtp_destination_verified_at: Mapped[datetime | None] = mapped_column(
@@ -717,6 +738,41 @@ class MailSmtpOutbox(Base):
         UniqueConstraint("outbox_id", name="uq_mail_smtp_outbox_id"),
         UniqueConstraint("idempotency_key", name="uq_mail_smtp_outbox_idempotency_key"),
         UniqueConstraint("delivery_id", name="uq_mail_smtp_outbox_delivery"),
+        CheckConstraint(
+            "copy_mode IN ('notification', 'full_body')",
+            name="ck_mail_smtp_outbox_copy_mode",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'sending', 'retry', 'sent', 'failed', 'uncertain', 'cancelled')",
+            name="ck_mail_smtp_outbox_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_mail_smtp_outbox_attempt"),
+        CheckConstraint(
+            "(status = 'queued' AND attempt = 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NULL) OR "
+            "(status = 'sending' AND attempt > 0 AND lease_owner IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NULL) OR "
+            "(status = 'retry' AND attempt > 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND sent_at IS NULL) OR "
+            "(status = 'sent' AND attempt > 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NOT NULL) OR "
+            "(status = 'failed' AND attempt > 0 "
+            "AND lease_owner IS NULL AND lease_expires_at IS NULL "
+            "AND next_attempt_at IS NULL AND error_code IS NOT NULL "
+            "AND sent_at IS NULL) OR "
+            "(status = 'uncertain' AND attempt >= 0 "
+            "AND lease_owner IS NULL AND lease_expires_at IS NULL "
+            "AND next_attempt_at IS NULL AND error_code IS NOT NULL "
+            "AND sent_at IS NULL) OR "
+            "(status = 'cancelled' AND attempt >= 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NOT NULL AND sent_at IS NULL)",
+            name="ck_mail_smtp_outbox_state",
+        ),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     outbox_id: Mapped[str] = mapped_column(String(40), index=True)

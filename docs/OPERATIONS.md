@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T16:45:00.000-06:00
+last_verified: 2026-08-30T19:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
+verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
 -->
 
 # Brains Operations
@@ -363,8 +363,25 @@ no Brains follower daemon or model-input injection in this slice. Use proof-boun
 The Coordination browser mailbox desk supports authorized human reads and operator
 compose/reply/forward; agent mailboxes remain read-only because agent send authority
 requires adapter-held proof. The notification take/settle protocol is available to
-explicit adapters, but concrete hook/plugin installation and SMTP copying remain
-unavailable.
+explicit adapters. An operator may configure one external copy destination on their own
+operator mailbox from the same human-bound desk. The destination is encrypted and must
+answer a short-lived emailed challenge; status returns only a masked hint.
+
+Migration `152_mail_smtp_state` constrains destination/consent and outbox transitions.
+Verification enables `notification`, which sends a constant subject/body that says new
+mail is waiting and to reply inside Brains; it includes no sender, local subject/body,
+mailbox address, or delivery ID. `full_body` requires a separate confirmation and stores
+who consented and when. Destination/mode changes cancel `queued`/`retry` copies and are
+refused while a `sending` lease is live.
+
+The MCP scheduler drains a bounded batch each tick. It records an audit attempt before
+network I/O, uses one stable SMTP `Message-ID` per outbox row, retries only failures known
+before the SMTP send stage, and marks send-stage or expired-lease outcomes `uncertain`
+instead of retrying blindly. SMTP state never changes local acceptance/read state.
+`mailer_status` remains the probe for install-level SMTP configuration; mailbox-copy
+status is shown in Coordination. Test evidence uses synthetic SMTP only, so verify a real
+provider separately before operational reliance. There is no inbound email or reply
+parsing. Concrete notification hook/plugin installation also remains unavailable.
 Rollback uses the normal application/archive compatibility contract; do not drop these
 tables from a store that a newer build may have written.
 

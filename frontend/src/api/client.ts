@@ -55,6 +55,7 @@ import type {
   OperatorWorkspace,
   OperatorWorkspaceDetail,
   MailboxAccess,
+  MailboxSmtpStatus,
   MailboxAddress,
   MailboxMessageList,
   MailMessage,
@@ -411,6 +412,31 @@ export const api = {
   operatorCoordination: () => request<OperatorCoordination>("/operator/coordination"),
   operatorMailboxAccess: () =>
     request<{ data: MailboxAccess[] }>("/operator/mailboxes/access").then((body) => body.data),
+  operatorMailboxSmtpStatus: (address: string) =>
+    request<MailboxSmtpStatus>(`/operator/mailboxes/smtp${qs({ address })}`),
+  operatorMailboxSmtpDestination: (address: string, destination: string) =>
+    request<MailboxSmtpStatus>(`/operator/mailboxes/smtp/destination${qs({ address })}`, {
+      method: "POST",
+      body: JSON.stringify({ destination }),
+    }),
+  operatorMailboxSmtpVerify: (address: string, code: string) =>
+    request<MailboxSmtpStatus>(`/operator/mailboxes/smtp/verify${qs({ address })}`, {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  operatorMailboxSmtpMode: (
+    address: string,
+    copyMode: "disabled" | "notification" | "full_body",
+    consentFullBody = false,
+  ) =>
+    request<MailboxSmtpStatus>(`/operator/mailboxes/smtp/mode${qs({ address })}`, {
+      method: "PUT",
+      body: JSON.stringify({ copy_mode: copyMode, consent_full_body: consentFullBody }),
+    }),
+  operatorMailboxSmtpClear: (address: string) =>
+    request<MailboxSmtpStatus>(`/operator/mailboxes/smtp/destination${qs({ address })}`, {
+      method: "DELETE",
+    }),
   operatorMailboxPhonebook: (workspace: string) =>
     request<{ data: MailboxAddress[] }>(
       `/operator/mailboxes${qs({ workspace })}`,

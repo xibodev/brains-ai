@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T16:45:00.000-06:00
+last_verified: 2026-08-30T19:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
+verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
 -->
 
 # Brains Architecture
@@ -181,8 +181,23 @@ atomically claim it, receive only a constant body-free nudge, and settle the obs
 result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
 local delivery. Brains does not retain a generic live model-input channel, and current
 `wire` installs no notification hook/plugin, so this protocol is not evidence that an
-external running model was awakened. Concrete harness integration and SMTP remain later
-slices.
+external running model was awakened. Concrete harness integration remains a later slice.
+
+Migration 152 activates the reserved per-operator SMTP setting and outbox rows. The
+human-bound mailbox owner stores a destination as AES-GCM ciphertext behind a versioned
+reference, proves control through a short-lived emailed challenge, and receives only a
+masked hint on reads. Verification defaults to a constant content-free notification;
+full subject/body forwarding is a distinct explicit consent state. The local delivery
+transaction snapshots only destination reference and copy mode into one outbox row.
+
+The scheduler leases that row after commit. A required audit attempt precedes SMTP I/O,
+and the outbox ID supplies a stable RFC Message-ID. Known pre-send failures back off and
+retry; any send-stage exception, lost outcome audit, or expired send lease is terminally
+uncertain so Brains does not knowingly duplicate an external copy. Mode/destination
+changes fence live sends and cancel work that has not started. Neither SMTP outcome nor
+configuration changes modify the local message/delivery/read record. No destination or
+mail content enters audit/event metadata, and no inbound email path exists. Synthetic
+SMTP evidence does not certify a real provider.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate

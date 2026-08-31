@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T16:45:00.000-06:00
+last_verified: 2026-08-30T19:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin and SMTP journeys not verified; deployment not verified
+verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -362,7 +362,10 @@ action.
 6. An explicitly installed harness adapter may claim only a fixed body-free nudge and
    settle its observed result; regardless of that result, the agent pulls durable mail
    with current attachment and binding proof.
-7. Unsupported running-agent steering or process stop is refused explicitly.
+7. A human may verify a mailbox-specific external email destination, keep the default
+   content-free notification copy, or explicitly consent to full-body copies. SMTP sends
+   after local commit and never accepts replies into Brains.
+8. Unsupported running-agent steering or process stop is refused explicitly.
 
 **UX states:** new, awaiting human, approved, rejected, deferred, consumed, timed out,
 message unread/read, help open/claimed/answered, unsupported.
@@ -380,6 +383,8 @@ message unread/read, help open/claimed/answered, unsupported.
   proof-bound incarnation resumes from its cursor.
 - Missing or failed notification adapter: preserve local acceptance and expose pull
   fallback; never inject peer-controlled mail text into model input.
+- SMTP unavailable: preserve local acceptance, retry only known pre-send failures, and
+  mark ambiguous send-stage outcomes uncertain rather than duplicate them.
 
 **Success:** The human decision or coordination message is durable, scoped, attributable,
 and represented no more strongly than its observed result.
@@ -392,7 +397,9 @@ Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
 reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
 refusal, and accepted/read state. E3 also covers fixed body-free notification claims,
 mode restrictions, concurrent claim/settle, detach/read fallback, and binding proof.
-Concrete hook/plugin installation, external harness wakeup, SMTP copy, two-real-harness
+Synthetic SMTP E3 and container browser E4 cover encrypted verification, notification
+redaction, explicit full-body consent, retry/uncertain outcomes, and revocation. Concrete
+hook/plugin installation, external harness wakeup, real-provider SMTP, two-real-harness
 E4, and the residual in-process governance boundary remain open.
 
 ## J9 - Configure Brains and GitHub linkage

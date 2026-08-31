@@ -814,6 +814,23 @@ export interface MailboxAccess {
   deep_link: string;
 }
 
+export interface MailboxSmtpStatus {
+  mailbox: string;
+  destination_state: "unconfigured" | "pending" | "verified" | "unavailable";
+  superseded?: boolean;
+  destination_hint: string | null;
+  copy_mode: "disabled" | "notification" | "full_body";
+  verified_at: string | null;
+  full_body_consented_at: string | null;
+  outbox: {
+    open: number;
+    sent: number;
+    failed: number;
+    uncertain: number;
+    cancelled: number;
+  };
+}
+
 export interface MailboxAddress {
   address: string;
   kind: "agent" | "operator";

@@ -2117,6 +2117,34 @@ body {
   display: block;
 }
 
+.operator-mail-smtp {
+  padding: 14px 17px;
+  border-bottom: 1px solid var(--control-line);
+  display: grid;
+  gap: 9px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.operator-mail-smtp > strong {
+  font: 14px var(--font-serif);
+}
+
+.operator-mail-smtp > small,
+.operator-mail-smtp code {
+  color: var(--control-muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.operator-mail-smtp form {
+  display: grid;
+  gap: 8px;
+}
+
+.operator-mail-smtp .operator-button {
+  width: 100%;
+}
+
 .operator-mail-identity strong {
   font: 16px var(--font-serif);
 }
@@ -2138,7 +2166,7 @@ body {
 }
 
 .operator-mail-addresses {
-  max-height: 430px;
+  max-height: 300px;
   overflow-y: auto;
 }
 

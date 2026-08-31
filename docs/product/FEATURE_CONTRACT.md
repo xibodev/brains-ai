@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T16:45:00.000-06:00
+last_verified: 2026-08-30T19:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD e94772812aad9edae20607a08a8acbf45d648352 plus notification protocol candidate inspection and isolated Docker lint, type, migration, lifecycle, and adapter evidence; concrete harness hook/plugin installation, SMTP, and deployment not verified
+verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
 -->
 
 # Brains Feature Contract
@@ -275,8 +275,11 @@ idempotent operation IDs, and cursor continuity now use migration 150 rows. Agen
 operations require current attachment plus binding; operator-inbox reads require a
 browser/local human channel. A proof-bound, body-free notification take/settle protocol
 now records idempotent `queued -> claimed -> delivered|failed` attempts while preserving
-pull fallback. Cross-harness native-ID extraction, concrete hook/plugin installation,
-SMTP, recovery, real-provider review, and broad per-tool authorization remain open. The
+pull fallback. Per-operator one-way SMTP copy now uses encrypted verified destinations,
+notification-only default content, explicit full-body consent, a leased retry outbox,
+and conservative uncertain outcomes. Cross-harness native-ID extraction, concrete
+hook/plugin installation, recovery, real-provider review, and broad per-tool
+authorization remain open. The
 Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
@@ -287,10 +290,12 @@ operator inbox provisioning, authorized phonebook/lookup, and non-enumerating co
 refusal. The threaded message and per-recipient delivery/read rows are now active for
 durable local mail. Notification attempt state is active through migration 151 and the
 CLI/MCP adapter protocol; the fixed nudge carries no mail metadata or content, and `wire`
-truthfully reports pull until it installs a stronger adapter. Per-operator SMTP
-setting/outbox and unverified legacy-inventory state remain reserved; concrete external
-harness wakeup, SMTP, rotation/recovery, and two-real-harness acceptance remain missing
-until later slices land.
+truthfully reports pull until it installs a stronger adapter. Migration 152 activates
+and constrains per-operator SMTP consent/outbox rows; destination ciphertext is
+mailbox-bound and excluded from generic configuration projection, local delivery is
+authoritative, and only pre-send failures retry. Concrete external harness wakeup,
+real-provider SMTP, binding rotation/recovery, and two-real-harness acceptance remain
+missing until later slices land.
 
 ### B3 - Workspace knowledge and repository lookup
 
