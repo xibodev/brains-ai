@@ -713,10 +713,10 @@ def record_agent_mailbox_registration(
     created = bool(result["created"])
     append_event(
         "mailbox_registered" if created else "mailbox_attached",
-        f"mailbox {'registered' if created else 'attached'}: {result['address']}",
+        f"durable mailbox {'registered' if created else 'attached'}",
         workspace_id=workspace_id,
         session_id=session_id,
-        metadata={"mailbox_id": result["mailbox_id"], "tool": result["tool"]},
+        metadata={"tool": result["tool"], "result": "success"},
     )
 
 

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -401,6 +401,12 @@ Synthetic SMTP E3 and container browser E4 cover encrypted verification, notific
 redaction, explicit full-body consent, retry/uncertain outcomes, and revocation. Concrete
 hook/plugin installation, external harness wakeup, real-provider SMTP, two-real-harness
 E4, and the residual in-process governance boundary remain open.
+
+Operations E3 additionally distinguishes malformed registrations/live attachments,
+aged unread delivery, notification fallback/failure, and SMTP backlog/failure without
+making detached unread mail an outage. J11 shows the count-only readiness and
+minimum-group-suppressed mailbox outcomes; the projection contains no content, address,
+path, native Session ID, or native mailbox object ID.
 
 ## J9 - Configure Brains and GitHub linkage
 

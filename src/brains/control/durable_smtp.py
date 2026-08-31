@@ -834,7 +834,7 @@ def process_smtp_outbox(
                 append_event(
                     f"mailbox_smtp_{status}",
                     f"durable mailbox SMTP copy {status}",
-                    metadata={"outbox_id": outbox_id, "copy_mode": copy_mode},
+                    metadata={"copy_mode": copy_mode, "result": status},
                     renew_session=False,
                 )
         else:

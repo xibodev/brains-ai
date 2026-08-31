@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Operations
@@ -269,8 +269,12 @@ Operate them only under the audience, privacy, observation, and stop rules in
 
 Feedback reporting stores redacted Workspace-scoped records. Triage/promotion is human
 only and cannot edit the roadmap or authorize release. Adoption reports describe
-eligible, right-censored `acted / offered` observations; they do not measure task
-success or user value. Ephemeral review uses a temporary tracked snapshot, bounded
+eligible, right-censored `acted / offered` welcome observations and separately suppressed
+durable-mail lifecycle outcomes; they do not measure task success or user value. Counts
+below the minimum group size across allowlisted welcome and mailbox metrics, plus any denominator or
+peer bucket that would reveal them by subtraction, are hidden. Reports and their source
+events contain no mail content,
+address, path, native Session ID, or native mailbox object ID. Ephemeral review uses a temporary tracked snapshot, bounded
 runtime/output, source-fingerprint checks, and no automatic merge or execution.
 
 ## Health and readiness
@@ -292,10 +296,12 @@ brains-ai readiness
 GET /v1/admin/readiness
 ```
 
-At HEAD, readiness reports bounded storage/migration, coordination queue,
-Runtime-compatibility lifecycle, and recovery-policy checks. The Runtime component is
-a lifecycle mismatch: Runtime execution is withdrawn and normal-product readiness must
-not depend on it after BL-P0-09/BL-P1-09. The active backlog also requires child
+At HEAD, readiness reports bounded storage/migration, coordination queue, durable-mail,
+and recovery-policy checks. Durable mail separates invalid registration/live attachment,
+aged unread, stalled/failed notification, and SMTP retry/failure/uncertainty. A detached
+mailbox with unread accepted mail is reported but is not degraded until the unread-age
+threshold is crossed. Runtime execution is withdrawn and does not affect normal-product
+readiness. The active backlog still requires child
 listener/protocol health, scheduler progress, registry freshness, installed package and
 migration/schema identity, and configured wire transport checks.
 

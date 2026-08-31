@@ -557,8 +557,8 @@ export interface ConfigSummary {
 
 // --- operational health (B8, BL-P1-09, BL-P1-12) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
-// protected ready/degraded verdict for storage/migration, coordination-queue
-// health, Runtime lifecycle/staleness, and recovery-policy configuration.
+// protected ready/degraded verdict for storage/migration, coordination queues,
+// durable mailbox state, and recovery-policy configuration.
 
 export type HealthState = "ready" | "degraded";
 
@@ -572,7 +572,7 @@ export interface ReadinessReport {
   components: {
     storage: ReadinessComponent;
     queue: ReadinessComponent;
-    runtime_lifecycle: ReadinessComponent;
+    durable_mail: ReadinessComponent;
     recovery_policy: ReadinessComponent;
   };
 }
@@ -931,7 +931,6 @@ export interface OperatorOperations {
     listeners?: { gateway?: boolean; mcp?: boolean };
     service_pid?: Record<string, unknown>;
   };
-  runtimes: Runtime[];
   tools: OperatorTool[];
   adoption: {
     window_minutes: number;
@@ -939,9 +938,11 @@ export interface OperatorOperations {
     observed_at: string;
     observation_started_at: string;
     eligible_before: string;
-    sessions_started: number;
-    sessions_eligible: number;
-    sessions_excluded_incomplete_window: number;
+    minimum_group_size: number;
+    sessions_started: number | null;
+    sessions_eligible: number | null;
+    sessions_excluded_incomplete_window: number | null;
+    sessions_suppressed: boolean;
     interpretation: {
       unit: string;
       rate: string;
@@ -949,10 +950,36 @@ export interface OperatorOperations {
     };
     surfaces: Record<string, {
       follow_kind: string;
-      offered: number;
-      acted: number;
+      offered: number | null;
+      acted: number | null;
       rate: number | null;
+      suppressed: boolean;
     }>;
+    mailbox_outcomes: {
+      window_minutes: number;
+      since_days: number;
+      observed_at: string;
+      observation_started_at: string;
+      eligible_before: string;
+      minimum_group_size: number;
+      privacy: {
+        suppressed_groups: number;
+        contains_content: false;
+        contains_address: false;
+        contains_source_path: false;
+        contains_native_session_id: false;
+        contains_native_object_id: false;
+      };
+      outcomes: Record<string, {
+        transport: string;
+        eligible: { count: number | null; suppressed: boolean };
+        results: Record<string, { count: number | null; suppressed: boolean }>;
+        refusal_reasons?: {
+          suppressed: boolean;
+          counts: Record<string, { count: number | null; suppressed: boolean }> | null;
+        };
+      }>;
+    };
   };
   operators: Array<Record<string, unknown>>;
   labs_enabled: boolean;

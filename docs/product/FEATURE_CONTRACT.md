@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Feature Contract
@@ -399,11 +399,15 @@ dependency failure, stale coordination state, and recovery posture.
 - AC-B8-03: logs/metrics are redacted and identify process boundaries.
 - AC-B8-04: multi-process failures and stale coordination presence are observable.
 
-Protected readiness currently reports bounded storage/migration, queue,
-Runtime-compatibility, and recovery policy. Child listener/protocol health, scheduler
+Protected readiness currently reports bounded storage/migration, queue, durable-mail,
+and recovery policy. Durable mail distinguishes invalid registration/attachment, aged
+unread, notification failure, and SMTP backlog/failure without treating ordinary offline
+mail as degraded. Privacy-safe right-censored mailbox outcome analytics is available to
+the install admin with minimum-group and complementary suppression. Child
+listener/protocol health, scheduler
 progress, registry/package/schema convergence, supported wire transport, and
-cross-process failure remain open. Withdrawn Runtime/provider/Postgres state must not
-degrade normal readiness after containment.
+cross-process failure remain open. Withdrawn Runtime/provider/Postgres state does not
+degrade normal readiness.
 
 ### B9 - Retired legacy browser surfaces
 

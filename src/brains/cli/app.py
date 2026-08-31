@@ -4496,85 +4496,18 @@ def daemon_start_cli(
 
 @app.command("readiness")
 def readiness_cli() -> None:
-    """Report operational readiness: storage/migration, queue, Runtime
-    lifecycle/staleness, and recovery-policy component state (B8).
+    """Report storage, queue, durable-mail, and recovery readiness (B8).
 
     Distinct from ``brains-ai health`` style liveness checks — this reports
     one overall ready/degraded verdict plus bounded, redacted per-component
     detail, and never fabricates a passing recovery-policy or queue state.
     Exits 1 when the overall verdict is degraded, so it composes in scripts.
     """
-    from brains.control.queue_health import summarize as queue_summarize
-    from brains.control.recovery_policy import recovery_readiness
-    from brains.control.runtimes import count_stale, list_runtimes
-    from brains.mcp.server import _runtime_stale_ttl_seconds
-    from brains.storage.migrations import migration_status
+    from brains.control.operations import readiness_report
 
-    components: dict[str, dict] = {}
-    try:
-        status = migration_status()
-        healthy = bool(status.get("healthy")) and bool(status.get("schema_verified"))
-        components["storage"] = {
-            "state": "ready" if healthy else "degraded",
-            "detail": {
-                "backend": status.get("backend"),
-                "healthy": status.get("healthy"),
-                "schema_verified": status.get("schema_verified"),
-                "pending": len(status.get("pending") or []),
-                "failed": len(status.get("failed") or []),
-            },
-        }
-    except Exception as exc:
-        components["storage"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        queue = queue_summarize()
-        stale_total = sum(f["stale_or_expired"] for f in queue["families"].values())
-        components["queue"] = {
-            "state": "ready" if stale_total == 0 else "degraded",
-            "detail": {"stale_or_expired_total": stale_total, "families": len(queue["families"])},
-        }
-    except Exception as exc:
-        components["queue"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        ttl = _runtime_stale_ttl_seconds()
-        runtimes_list = list_runtimes()
-        stale = count_stale(ttl)
-        components["runtime_lifecycle"] = {
-            "state": "ready" if stale == 0 else "degraded",
-            "detail": {
-                "total": len(runtimes_list),
-                "online": len([r for r in runtimes_list if r.get("status") == "online"]),
-                "stale_pending_sweep": stale,
-                "stale_sweep_ttl_seconds": ttl,
-            },
-        }
-    except Exception as exc:
-        components["runtime_lifecycle"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    try:
-        recovery = recovery_readiness()
-        components["recovery_policy"] = {
-            "state": "ready" if recovery["ready"] else "degraded",
-            "detail": {
-                "complete": recovery["policy"]["complete"],
-                "missing_fields": recovery["policy"]["missing_fields"],
-                "reasons": recovery["reasons"],
-            },
-        }
-    except Exception as exc:
-        components["recovery_policy"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    overall = "ready" if all(c["state"] == "ready" for c in components.values()) else "degraded"
-    _print_json({"status": overall, "components": components})
-    if overall != "ready":
+    report = readiness_report()
+    _print_json(report)
+    if report["status"] != "ready":
         raise typer.Exit(code=1)
 
 

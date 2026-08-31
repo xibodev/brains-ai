@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus Coordination mailbox SMTP source inspection, TypeScript checks, and isolated Docker browser evidence; real SMTP provider, external harness notification, and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus Operations mailbox-readiness/analytics candidate source inspection and isolated Docker type, suppression, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains operator SPA
@@ -54,6 +54,8 @@ The complete route and client/server contract is in [Traceability](../docs/produ
 - The Coordination mailbox desk commits and reads durable local mail and configures a
   verified one-way SMTP copy; live harness notification and real-provider SMTP evidence
   remain separate gaps.
+- Operations shows count-only durable-mail readiness and right-censored outcome families;
+  small buckets and complementary totals are suppressed before browser projection.
 - Host-level Operations actions remain disabled until typed preview/confirmation contracts exist.
 - Some request failures can appear as empty lists.
 

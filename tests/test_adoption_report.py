@@ -64,12 +64,15 @@ def test_report_shape_is_stable():
         "observed_at",
         "observation_started_at",
         "eligible_before",
+        "minimum_group_size",
         "sessions_started",
         "sessions_eligible",
         "sessions_excluded_incomplete_window",
+        "sessions_suppressed",
         "interpretation",
         "surfaces",
         "totals_by_kind",
+        "mailbox_outcomes",
     }
     # Every declared surface must appear, even when offered == 0.
     for key, follow_kind in SURFACES:
@@ -79,8 +82,34 @@ def test_report_shape_is_stable():
         assert "offered" in bucket
         assert "acted" in bucket
         assert "rate" in bucket
+        assert "suppressed" in bucket
     assert isinstance(report["totals_by_kind"], list)
     assert "task success" in report["interpretation"]["not_measured"]
+    assert report["mailbox_outcomes"]["minimum_group_size"] >= 2
+    assert report["mailbox_outcomes"]["privacy"]["contains_content"] is False
+
+
+def test_small_welcome_groups_are_suppressed_together(tmp_path):
+    target, workspace = _make_workspace(tmp_path, "adopt-small")
+    send_message(subject="small", workspace_path=str(target))
+    started = start_session(str(target), tool="pytest")
+    read_messages(started["session_id"])
+    _make_session_eligible(started["session_id"])
+
+    report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
+    bucket = report["surfaces"]["unread_messages"]
+
+    assert report["minimum_group_size"] == 3
+    assert report["sessions_suppressed"] is True
+    assert report["sessions_started"] is None
+    assert report["sessions_eligible"] is None
+    assert bucket == {
+        "follow_kind": "message_read",
+        "offered": None,
+        "acted": None,
+        "rate": None,
+        "suppressed": True,
+    }
 
 
 def test_recent_session_is_excluded_until_full_action_window(tmp_path):
@@ -89,8 +118,9 @@ def test_recent_session_is_excluded_until_full_action_window(tmp_path):
     started = start_session(str(target), tool="pytest")
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
 
-    assert report["sessions_started"] >= 1
-    assert report["sessions_excluded_incomplete_window"] >= 1
+    assert report["sessions_suppressed"] is True
+    assert report["sessions_started"] is None
+    assert report["sessions_excluded_incomplete_window"] is None
     assert report["surfaces"]["unread_messages"]["offered"] == 0
 
     with SessionLocal() as db:
@@ -102,8 +132,7 @@ def test_recent_session_is_excluded_until_full_action_window(tmp_path):
         event.created_at = utc_now() - timedelta(minutes=3)
         db.commit()
     eligible = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
-    assert eligible["sessions_eligible"] >= 1
-    assert eligible["surfaces"]["unread_messages"]["offered"] >= 1
+    assert eligible["surfaces"]["unread_messages"]["suppressed"] is True
 
 
 def test_invalid_window_minutes_raises():
@@ -148,12 +177,12 @@ def test_unread_mail_offered_but_not_acted(tmp_path):
     )
     report = adoption_report(window_minutes=1, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["unread_messages"]
-    assert bucket["offered"] >= 1
+    assert bucket["suppressed"] is True
     # The silent session contributes to offered but NOT to acted.
     # (Acted may be > 0 if other sessions in same workspace read mail —
     # so we assert acted < offered, the strict inequality is what we
     # actually care about.)
-    assert bucket["acted"] < bucket["offered"]
+    assert bucket["acted"] == 0
     # And the silent session id specifically is not in the acted set:
     # verify by checking there is no message_read event for sid.
     with SessionLocal() as db:
@@ -178,10 +207,8 @@ def test_unread_mail_offered_and_acted_in_window(tmp_path):
     _make_session_eligible(aid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["unread_messages"]
-    assert bucket["offered"] >= 1
-    assert bucket["acted"] >= 1
-    assert bucket["rate"] is not None
-    assert 0.0 < bucket["rate"] <= 1.0
+    assert bucket["suppressed"] is True
+    assert bucket["rate"] is None
 
 
 def test_pattern_offered_and_acted(tmp_path):
@@ -206,8 +233,7 @@ def test_pattern_offered_and_acted(tmp_path):
     _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["applicable_patterns"]
-    assert bucket["offered"] >= 1
-    assert bucket["acted"] >= 1
+    assert bucket["suppressed"] is True
 
 
 def test_memory_offered_and_acted(tmp_path):
@@ -224,8 +250,7 @@ def test_memory_offered_and_acted(tmp_path):
     _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["relevant_memories"]
-    assert bucket["offered"] >= 1
-    assert bucket["acted"] >= 1
+    assert bucket["suppressed"] is True
 
 
 def test_tools_missing_offered_and_acted(tmp_path):
@@ -247,8 +272,7 @@ def test_tools_missing_offered_and_acted(tmp_path):
     _make_session_eligible(sid)
     report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
     bucket = report["surfaces"]["tools_missing"]
-    assert bucket["offered"] >= 1
-    assert bucket["acted"] >= 1
+    assert bucket["suppressed"] is True
 
 
 def test_followup_outside_window_does_not_count(tmp_path):
@@ -294,13 +318,8 @@ def test_followup_outside_window_does_not_count(tmp_path):
     # window: acted should rise when the window widens enough.
     report_wide = adoption_report(window_minutes=120, since_days=1, workspace=workspace.slug)
     bucket_wide = report_wide["surfaces"]["unread_messages"]
-    assert bucket_wide["acted"] >= bucket["acted"], (
-        "widening the window must monotonically increase acted count"
-    )
-    # And the strict version: aid contributed to wide-acted but not
-    # narrow-acted, so wide > narrow at least when aid is the only
-    # difference. Use that as the assertion.
-    assert bucket_wide["acted"] > bucket["acted"] or bucket["offered"] == 0
+    assert bucket["suppressed"] is True
+    assert bucket_wide["suppressed"] is True
 
 
 def test_workspace_filter_isolates_scope(tmp_path):
@@ -319,7 +338,7 @@ def test_workspace_filter_isolates_scope(tmp_path):
     # No activity in B.
     report_a = adoption_report(window_minutes=2, since_days=1, workspace=ws_a.slug)
     report_b = adoption_report(window_minutes=2, since_days=1, workspace=ws_b.slug)
-    assert report_a["surfaces"]["unread_messages"]["offered"] >= 1
+    assert report_a["surfaces"]["unread_messages"]["suppressed"] is True
     assert report_b["surfaces"]["unread_messages"]["offered"] == 0
     assert report_b["surfaces"]["unread_messages"]["acted"] == 0
     assert report_b["sessions_started"] == 0
@@ -342,11 +361,27 @@ def test_totals_by_kind_is_ordered_and_includes_session_start(tmp_path):
     assert totals, "expected at least one event kind"
     # Sorted descending by count.
     for prev, nxt in zip(totals, totals[1:], strict=False):
-        assert prev["count"] >= nxt["count"]
+        assert (prev["count"] or 0) >= (nxt["count"] or 0)
     kinds = {row["kind"] for row in totals}
     assert "session_start" in kinds
-    assert "message_sent" in kinds
     assert "message_read" in kinds
+    assert "message_sent" not in kinds
+
+
+def test_totals_cannot_bypass_suppressed_surface_counts(tmp_path):
+    target, workspace = _make_workspace(tmp_path, "adopt-total-privacy")
+    send_message(subject="private total", workspace_path=str(target))
+    started = start_session(str(target), tool="pytest")
+    read_messages(started["session_id"])
+    _make_session_eligible(started["session_id"])
+
+    report = adoption_report(window_minutes=2, since_days=1, workspace=workspace.slug)
+    totals = {row["kind"]: row for row in report["totals_by_kind"]}
+
+    assert totals["session_start"]["count"] is None
+    assert totals["session_start"]["suppressed"] is True
+    assert totals["message_read"]["count"] is None
+    assert totals["message_read"]["suppressed"] is True
 
 
 def test_emitter_threads_session_id_for_pattern_used(tmp_path):

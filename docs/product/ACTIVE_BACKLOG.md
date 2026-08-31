@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T19:30:00.000-06:00
+last_verified: 2026-08-30T22:45:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD ea15b51a3868434f2f2081b71da48126818007b3 plus one-way SMTP candidate inspection and isolated Docker lint, type, migration, authorization, redaction, retry, and browser evidence; real SMTP provider and deployment not verified
+verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -169,6 +169,11 @@ IDs, accepts mail for detached/offline active addresses, returns filtered Inbox/
 thread timelines, records per-recipient reads, retains reply/forward provenance, and
 preserves the delivery cursor across incarnations. Agent actors prove the current
 attachment and binding; human operator-mailbox reads require a browser/local channel.
+Count-only observability now reports registration, attachment, delivery/read,
+notification, and SMTP state without exposing address, content, path, native Session ID,
+or native mailbox object IDs. Outcome analytics uses right-censored windows and
+minimum-group suppression across registration, acceptance/refusal, wakeup, read, reply,
+forward, broadcast, and SMTP families.
 Local acceptance creates a notification attempt only when the current attachment has
 explicitly declared a supported stronger mode. Pull-only and detached recipients create
 no attempt. A verified operator-mailbox copy policy may enqueue separate SMTP state in
@@ -304,6 +309,13 @@ order are explicit. Mail readiness reports invalid/ambiguous address registratio
 conflicting live attachments, aged accepted-but-unread mail, wakeup failures, and SMTP
 outbox backlog/failure separately; an offline registered mailbox with accepted mail is
 not itself degraded.
+
+Current E3 now implements the mail-specific readiness projection and excludes withdrawn
+Runtime state from the normal verdict. It reports invalid active registration, invalid or
+conflicting live attachment, aged unread, stalled/wakeup-failed notification, and SMTP
+retry/backlog/failure/uncertainty as separate count-only classes; a fresh retry is
+reported but degrades readiness only after the bounded backlog threshold. Child protocols/listeners,
+scheduler heartbeat, registry/package identity, and the recovery drill remain open.
 
 **Evidence:** E3 child, scheduler, transport, schema, registry, backup-compatibility,
 and stale-state tests; E4 service failure/recovery plus isolated backup/restore/rollback.

@@ -103,7 +103,7 @@ def test_readiness_reports_overall_status_and_every_component(client, auth_heade
     assert set(body["components"]) == {
         "storage",
         "queue",
-        "runtime_lifecycle",
+        "durable_mail",
         "recovery_policy",
     }
     for component in body["components"].values():
@@ -151,6 +151,31 @@ def test_readiness_degrades_by_default_when_recovery_policy_is_unconfigured(clie
         assert body["components"]["recovery_policy"]["detail"]["complete"] is False
     finally:
         settings.backup_scope = original
+
+
+def test_readiness_never_depends_on_withdrawn_runtime_state(client, auth_headers, monkeypatch):
+    import brains.control.runtimes as runtimes_module
+
+    monkeypatch.setattr(
+        runtimes_module,
+        "list_runtimes",
+        lambda: (_ for _ in ()).throw(AssertionError("withdrawn runtime queried")),
+    )
+    monkeypatch.setattr(
+        runtimes_module,
+        "count_stale",
+        lambda _ttl: (_ for _ in ()).throw(AssertionError("withdrawn runtime queried")),
+    )
+
+    response = client.get("/v1/admin/readiness", headers=auth_headers)
+
+    assert response.status_code == 200, response.text
+    assert "durable_mail" in response.json()["components"]
+    assert "runtime_lifecycle" not in response.json()["components"]
+
+    operations = client.get("/v1/operator/operations", headers=auth_headers)
+    assert operations.status_code == 200, operations.text
+    assert "runtimes" not in operations.json()
 
 
 # --------------------------------------------------------------------------- #
