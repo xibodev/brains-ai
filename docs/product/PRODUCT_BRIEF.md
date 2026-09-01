@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:26:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static inspection of advertised surfaces and approved current/experimental/withdrawn lifecycle decisions; withdrawal implementation not verified; deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree experimental-label, ordinary-feedback, and durable-mail evidence correction; installed-service recovery and deployment not verified
 -->
 
 # Brains Product Brief
@@ -79,7 +79,7 @@ The normal installation currently claims only:
   access, supported configuration, and scoped usage;
 - signed GitHub event linkage;
 - bounded Workspace knowledge and non-semantic repository lookup;
-- the active experiments explicitly listed in
+- experimental behavior explicitly labelled in
   [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md).
 
 Execution-model, model-gateway, semantic/graph, automation, alternate-storage,
@@ -197,6 +197,6 @@ Brains succeeds when the following can be demonstrated for one exact candidate:
     merely a build or process check.
 
 Current HEAD does not meet that complete definition. Current schedulable gaps are in
-[ACTIVE_BACKLOG.md](ACTIVE_BACKLOG.md); implemented field trials are in
+[ACTIVE_BACKLOG.md](ACTIVE_BACKLOG.md); experimental uncertainty labels are in
 [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md); stable ID and withdrawal
 disposition are indexed in [BACKLOG.md](BACKLOG.md).

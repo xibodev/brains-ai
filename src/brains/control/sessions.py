@@ -1204,40 +1204,18 @@ def _session_registration_result(
     # status and indexed-source status without having to call five tools.
     # Defensive: a welcome failure must never block session start.
     #
-    # Built BEFORE the ``session_start`` event so the event's metadata
-    # can carry a snapshot of the offered counts. That snapshot is the
-    # join key for adoption queries — e.g. "of the sessions where
-    # welcome.unread_messages > 0, how many fired a read_messages event
-    # within 2 minutes?" — without inventing a new telemetry table.
     try:
         from brains.control.welcome import build_welcome
 
         welcome = build_welcome(workspace, session_id)
     except Exception:
         welcome = None
-    welcome_metadata: dict[str, Any] = {
-        "tool": tool,
-        "operator": operator_record["slug"],
-    }
-    if welcome is not None:
-        tool_status = welcome.get("tool_status") or {}
-        index_status = welcome.get("index_status") or {}
-        welcome_metadata["welcome"] = {
-            "unread_messages": int((welcome.get("unread_messages") or {}).get("count", 0)),
-            "applicable_patterns": len(welcome.get("applicable_patterns") or []),
-            "knowledge": int((welcome.get("knowledge") or {}).get("count", 0)),
-            "relevant_memories": len(welcome.get("relevant_memories") or []),
-            "tools_missing": int(tool_status.get("missing", 0)),
-            "tools_unverified": int(tool_status.get("unverified", 0)),
-            "index_sources": int(index_status.get("sources", 0)),
-            "hints": len(welcome.get("hints") or []),
-        }
     append_event(
         "session_reused" if reused else "session_start",
         f"{tool} session {'reused' if reused else 'started'}",
         workspace_id=workspace.id,
         session_id=session_id,
-        metadata=welcome_metadata,
+        metadata={"tool": tool, "operator": operator_record["slug"]},
     )
     if predecessor_session_id and not reused:
         append_event(

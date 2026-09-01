@@ -14,6 +14,9 @@ DOWN = ROOT / "sandbox" / "pivot" / "try" / "down.ps1"
 STACK = ROOT / "tests" / "e2e" / "fixtures" / "stack.ts"
 GLOBAL_SETUP = ROOT / "tests" / "e2e" / "fixtures" / "global-setup.ts"
 DOCKER_E2E = ROOT / "scripts" / "run_docker_e2e.ps1"
+DOCKER_CLI_UAT = ROOT / "scripts" / "run_docker_cli_uat.ps1"
+DOCKER_CLI_UAT_FILE = ROOT / "docker" / "Dockerfile.cli-uat"
+REAL_CLI_ACTOR = ROOT / "tests" / "uat" / "real_cli_actor.py"
 DOCKER_QUALITY = ROOT / "scripts" / "run_docker_quality.ps1"
 DOCKER_QUALITY_FILE = ROOT / "docker" / "Dockerfile.quality"
 DOCKERIGNORE = ROOT / ".dockerignore"
@@ -162,6 +165,57 @@ def test_docker_quality_has_no_network_mount_or_capabilities() -> None:
     assert "uv sync --extra dev --python 3.12" in dockerfile
     assert 'uv pip install "setuptools==84.0.0" "wheel==0.48.0"' in dockerfile
     assert "uv build --no-build-isolation" in _text(ROOT / "docker" / "run-quality-gates.sh")
+
+
+def test_real_cli_uat_uses_owned_isolation_and_real_resume_contracts() -> None:
+    script = _text(DOCKER_CLI_UAT)
+    dockerfile = _text(DOCKER_CLI_UAT_FILE)
+    actor = _text(REAL_CLI_ACTOR)
+
+    assert "network create --internal" in script
+    assert "Refusing to reuse pre-existing Docker" in script
+    assert "type=bind,source=$primary,target=/run/credentials/primary,readonly" in script
+    assert "type=volume,source=$stateVolume,target=/data" in script
+    assert '"/home/node:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700"' in script
+    assert "PortBindings" in script
+    assert "published a host port" in script
+    assert "teardown_verified" in script
+    assert "Real-CLI UAT changed the candidate worktree" in script
+    assert "candidate_worktree_hash" in script
+    assert "beforeUntracked" in script
+    assert '2 "mailbox_registration"' in script
+    assert "maximum_attempts" in script
+    assert "docker volume rm $stateVolume" in script
+    assert "docker network rm $controlNetwork" in script
+    assert "docker image rm $cliImage" in script
+    assert '"-p"' not in script and '"--publish"' not in script
+    assert "source=$root" not in script
+
+    for package in (
+        "@anthropic-ai/claude-code",
+        "@github/copilot",
+        "opencode-ai",
+        "@openai/codex",
+    ):
+        assert package in dockerfile
+    for token in ("PELICAN", "KIWI", "MANGO", "ZEBRA"):
+        assert token in script
+    for native_key in ("session_id", "sessionId", "sessionID", "thread_id"):
+        assert native_key in actor
+    assert '"--resume", session_id' in actor
+    assert '"--session-id", session_id' in actor
+    assert '"--session", session_id' in actor
+    assert '"exec",\n                "resume"' in actor
+    assert actor.count('"--dangerously-bypass-approvals-and-sandbox"') == 2
+    assert '"features.shell_tool=false"' in actor
+    assert '"features.apps=false"' in actor
+    assert "brains_mailbox_send" in actor
+    assert "brains_mailbox_inbox" in actor
+    assert "brains_mailbox_reply" in actor
+    assert 'transport="stdio"' in actor
+    assert '"BRAINS_DB_URL": os.environ["BRAINS_DB_URL"]' in actor
+    assert "shutil.copyfile(source, target)" in actor
+    assert '_copy_secret(primary, HOME / ".copilot/config.json")' in actor
 
 
 def test_docker_context_excludes_private_host_state_and_linux_script_keeps_lf() -> None:

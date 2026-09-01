@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T09:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus candidate inspection of Docker-only quality and browser UAT runner contracts; deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree Docker full-quality, packaged-browser, and real-CLI UAT runner execution; installed-service recovery and deployment not verified
 -->
 
 # Brains Quality Gates
@@ -43,7 +43,7 @@ Current canonical feature status uses only E1 and E2 unless a newer evidence rec
 - Name the product outcome being changed.
 - Identify affected `F*` or `B*` feature IDs.
 - Identify affected `AC-*`, Persona, and `J*` journey IDs.
-- State whether each affected capability is advertised, an active experiment,
+- State whether each affected capability is advertised, experimental,
   target-only, or withdrawn.
 - Identify security, data, operations, and recovery implications.
 - Update [TRACEABILITY.md](product/TRACEABILITY.md) when a route, component, API, model, migration, CLI, MCP tool family, or test family changes.
@@ -128,6 +128,24 @@ in tmpfs, passes only a synthetic manifest to Playwright, and tears down only ar
 it created. `scripts/run_quality_gates.py` remains a CI-command enumerator and
 compatibility fallback, not the isolated operator-machine path.
 
+Run real coding-harness durable-mail UAT separately:
+
+```text
+pwsh -File scripts/run_docker_cli_uat.ps1
+```
+
+That runner builds pinned Claude, Copilot, OpenCode, and Codex CLIs. The default journey
+uses OpenCode and Claude; `-Tool` may select other pairs when their credentials are
+portable into Linux. Each selected CLI gets a separate tmpfs home and read-only
+credential-file mount, and runs the exact candidate's stdio MCP server against the same
+disposable SQLite volume while a separate `serve-all` container passes gateway/MCP
+health. The runner extracts each real native Session ID, resumes the same harness
+conversation, registers proof-bound mailboxes,
+delivers while recipients are offline, resumes through explicit successors, exchanges
+threaded replies, verifies the candidate worktree is unchanged, and removes its
+containers, networks, volume, and images. It publishes no host port and records only a
+sanitized machine report outside the repository.
+
 Candidate evidence must state the exact SHA, which gates ran, and on what platform. A local run is E3 evidence for the gates it actually executed and for nothing else.
 
 ### 5. Isolated UAT gate
@@ -155,8 +173,8 @@ Acceptance requires:
 - every in-scope AC has E3 or E4 evidence;
 - P0 backlog items affecting the candidate are closed or explicitly block promotion;
 - withdrawn surfaces have no discovery or activation path in the supported candidate;
-- active experiments satisfy their bounded activation, privacy, disable, rollback, and
-  stop rules without widening normal-product readiness;
+- experimental features satisfy the same automated and isolated-UAT gates as other
+  release candidates, plus their feedback, disable, rollback, and revision rules;
 - no unmatched frontend route remains;
 - no cross-Org authorization or realtime subscription escape is open;
 - backup and rollback have been rehearsed for the exact candidate;

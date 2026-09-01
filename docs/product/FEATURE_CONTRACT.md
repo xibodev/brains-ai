@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T22:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains Feature Contract
@@ -14,7 +14,7 @@ does not by itself advertise a feature.
 | Lifecycle | Meaning |
 |---|---|
 | Advertised | Supported in the normal installation. Evidence level is stated separately. |
-| Active experiment | Implemented bounded field trial listed in [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md). |
+| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, listed in [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md); full UAT still applies. |
 | Target-only | Future product contract with no current product surface. |
 | Withdrawn | Known-faulty or retired implementation, unadvertised and non-activatable by contract. |
 | Source compatibility | Code or data remains temporarily for existing stores or until BL-P0-09 removes exposure. Presence is not availability. |
@@ -39,7 +39,8 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
    Coordination, Governance, Operations, and Act.
 9. Withdrawn features have no supported flag, route, command, extra, tool allowlist, or
    direct-call activation. Remaining source/data is compatibility inventory only.
-10. Only the field trials in the experimental backlog may be called active experiments.
+10. Experimental labels state uncertainty; they do not authorize analytics or replace
+    automated and isolated end-to-end UAT.
 
 ## Core Brains features
 
@@ -102,8 +103,8 @@ inventory, not an authentication identity or user path.
 **Promise:** Workspace-scoped coordination Sessions preserve lifecycle, events, asks,
 decisions, ownership, and resume context. Unsupported execution steering is refused.
 
-**Lifecycle:** advertised/partial. BL-P1-15 and BL-P1-16 add bounded active
-experiments. BL-P1-20 is an implemented candidate blocked from experimental admission
+**Lifecycle:** advertised/partial. BL-P1-15 provides ordinary feedback. BL-P1-16's
+analytics interpretation is removed. BL-P1-20 is an implemented candidate blocked from admission
 until activation and worker transport are independently bounded. Running-agent
 delivery, Runtime stop, and execution supervision are withdrawn.
 
@@ -212,7 +213,7 @@ Org/Workspace state and explicitly scoped usage.
 | AC-F9-01 | Org create/read/update and active-Org switching are durable. | Advertised at E1/E2. |
 | AC-F9-02 | Owners/admins manage members without role escalation or last-owner loss. | Advertised at E1/E2/E3 for API paths. |
 | AC-F9-03 | HTTP reads/writes enforce principal plus Org/Workspace scope. | Advertised at E1/E2/E3 for covered routes; withdrawn routes remain containment debt. |
-| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Advertised/partial; Org-scoped SQL attribution exists, BL-P1-16 experiments remain separate. |
+| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Advertised/partial; Org-scoped SQL attribution exists. |
 | AC-F9-05 | Two-user/two-Org denial covers native APIs and browser sessions. | Partial; API/cookie tests exist, browser E4 is absent. |
 
 ### F10 - Autopilots and managed Skills
@@ -252,8 +253,8 @@ LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility on
 topics, peer help, decisions, knowledge, patterns, tool records, and checkpoints through
 stable scoped MCP/CLI/browser surfaces.
 
-**Lifecycle:** advertised/partial, with BL-P1-15 as an active field trial and BL-P1-20
-blocked from experimental admission.
+**Lifecycle:** advertised/partial, with BL-P1-15 as the ordinary feedback path and
+BL-P1-20 blocked from experimental admission.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
@@ -277,9 +278,11 @@ browser/local human channel. A proof-bound, body-free notification take/settle p
 now records idempotent `queued -> claimed -> delivered|failed` attempts while preserving
 pull fallback. Per-operator one-way SMTP copy now uses encrypted verified destinations,
 notification-only default content, explicit full-body consent, a leased retry outbox,
-and conservative uncertain outcomes. Cross-harness native-ID extraction, concrete
-hook/plugin installation, recovery, real-provider review, and broad per-tool
-authorization remain open. The
+and conservative uncertain outcomes. Isolated UAT covers explicit real native-ID
+extraction, offline delivery, successor recovery, and threaded replies for
+OpenCode/Codex and OpenCode/Claude. Automatic extraction, concrete hook/plugin
+installation, abrupt-exit recovery, Copilot container credentials, real-provider review,
+and broad per-tool authorization remain open. The
 Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
@@ -294,8 +297,8 @@ truthfully reports pull until it installs a stronger adapter. Migration 152 acti
 and constrains per-operator SMTP consent/outbox rows; destination ciphertext is
 mailbox-bound and excluded from generic configuration projection, local delivery is
 authoritative, and only pre-send failures retry. Concrete external harness wakeup,
-real-provider SMTP, binding rotation/recovery, and two-real-harness acceptance remain
-missing until later slices land.
+real-provider SMTP, binding rotation/recovery, and abrupt-exit/host-restart acceptance
+remain missing until later slices land.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -370,8 +373,10 @@ gateway/MCP ports, and either refuses an unavailable explicit gateway port or pe
 a bindable fallback. The supervisor preflights every enabled listener on its actual bind
 host, holds a bounded degraded state while a bind is blocked, then exits with code 3;
 the systemd unit suppresses restart for that configuration exit. Service status combines
-PID identity with bounded endpoint probes. Windowless Windows operation, child-protocol
-readiness, and clean-host E4 remain active backlog work.
+PID identity with bounded endpoint probes. Per-child protocol-aware watchdogs terminate
+an owned process tree that never serves or survives listener loss so the existing
+bounded restart loop can recover it. Deep child-protocol readiness and clean-host Windows
+E4 remain active backlog work.
 
 ### B7 - Authenticated external events
 
@@ -392,7 +397,8 @@ Telegram, Slack, WhatsApp, and WhatsApp Web are withdrawn.
 **Promise:** Operators distinguish process liveness, supported-feature readiness,
 dependency failure, stale coordination state, and recovery posture.
 
-**Lifecycle:** advertised/partial, with BL-P1-16 as an observational field trial.
+**Lifecycle:** advertised/partial. The mis-scoped BL-P1-16 behavioral analytics surface
+is removed.
 
 - AC-B8-01: `/health` remains an open liveness/inventory endpoint.
 - AC-B8-02: readiness checks supported dependencies, storage writes/migrations, service children, scheduler, wiring, and recovery.
@@ -402,9 +408,8 @@ dependency failure, stale coordination state, and recovery posture.
 Protected readiness currently reports bounded storage/migration, queue, durable-mail,
 and recovery policy. Durable mail distinguishes invalid registration/attachment, aged
 unread, notification failure, and SMTP backlog/failure without treating ordinary offline
-mail as degraded. Privacy-safe right-censored mailbox outcome analytics is available to
-the install admin with minimum-group and complementary suppression. Child
-listener/protocol health, scheduler
+mail as degraded. Readiness reports operational state only and does not infer adoption,
+behavior, or value. Child listener/protocol health, scheduler
 progress, registry/package/schema convergence, supported wire transport, and
 cross-process failure remain open. Withdrawn Runtime/provider/Postgres state does not
 degrade normal readiness.

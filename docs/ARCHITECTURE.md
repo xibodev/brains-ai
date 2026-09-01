@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T22:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains Architecture
@@ -25,7 +25,7 @@ Architecture descriptions use four lifecycle states:
 | State | Architectural meaning |
 |---|---|
 | Advertised | Part of the supported normal-install topology. |
-| Active experiment | Implemented, independently bounded field trial listed in `EXPERIMENTAL_BACKLOG.md`. |
+| Experimental | Implemented behavior whose normal-use ergonomics or edge cases remain uncertain; full UAT still applies. |
 | Target-only | Stable future contract with no current product surface. |
 | Withdrawn | Frozen or retired implementation. Source/data may remain for compatibility, but there is no supported activation path. |
 
@@ -85,7 +85,8 @@ The supported processes have separate memory and one shared SQLite store.
 - SQLite uses WAL, a bounded busy timeout, and a one-writer model. Sustained lock
   failure is an outage, not evidence that retry will eventually succeed.
 - PID identity is not readiness. Service status must also prove the expected listener
-  and protocol response.
+  and protocol response. The supervisor independently probes each owned child's HTTP
+  listener and restarts its process tree when the process survives listener loss.
 - `GET /health` proves only process liveness and bounded inventory. Protected readiness
   is a separate contract and remains incomplete for child protocol health, scheduler
   progress, registry freshness, and cross-process failure.
@@ -103,8 +104,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
 | Advertised | Service operations | CLI, wiring, service renderers, supervisor, readiness | `src/brains/cli`, `src/brains/wire`, `src/brains/service` |
 | Advertised | GitHub ingress | Signature, repository scope, delivery identity, replay refusal | `src/brains/api/webhooks.py` |
-| Active experiment | Agent feedback inbox | Redacted agent reports and human-only triage/promotion | `src/brains/control` |
-| Active experiment | Adoption analytics | Privacy-safe offered/acted observation with censoring | `src/brains/control`, operator projections |
+| Advertised | Agent feedback inbox | Redacted ordinary feedback and human-only triage/promotion | `src/brains/control` |
 | Admission candidate | Ephemeral peer review | Fenced disposable tracked snapshot; not field-active until default activation and worker transport are corrected | `src/brains/control`, Runtime compatibility endpoints |
 | Withdrawn | Execution model | Runtimes, Personas, Pods, Projects, Issues, execution onboarding/Sessions | `src/brains/api`, `src/brains/daemon`, execution-model frontend screens |
 | Withdrawn | Automation | Managed Skills, recurring definitions, generic triggers, scheduled auto-fire | `src/brains/control`, `src/brains/mcp`, Automation frontend |
@@ -199,7 +199,8 @@ configuration changes modify the local message/delivery/read record. No destinat
 mail content enters audit/event metadata, and no inbound email path exists. Synthetic
 SMTP evidence does not certify a real provider.
 
-Durable-mail readiness is a count-only projection over those authoritative rows. It
+Durable-mail readiness is a bootstrap-admin-only count projection over those
+authoritative rows. It
 checks active registration shape, live attachment consistency, unread age, body-free
 notification progress, and SMTP backlog/failure/uncertainty separately. A detached
 active mailbox with unread mail remains healthy until the mail crosses the declared age
@@ -207,16 +208,10 @@ threshold; offline acceptance is the feature, not an outage. Withdrawn Runtime l
 does not affect normal-product readiness, and the migration's explicit unverified legacy
 inventory is reported without being mistaken for a broken active registration.
 
-The adoption trial suppresses small welcome/session/event aggregates and separately
-aggregates registration, acceptance/refusal, wakeup, read, reply, forward, broadcast,
-and SMTP-copy outcomes over explicit time windows. Refusals remain attributed to their
-send, reply, forward, or broadcast family; malformed historical attribution is separate.
-Incomplete windows are right-censored. Every outcome family uses the semantic result
-vocabulary and minimum group size; if a small bucket could be recovered by subtraction,
-its denominator and non-zero peers are suppressed too. Generic event totals are
-allowlisted and cannot reveal a suppressed feature bucket. The projection contains no
-subject, body, address, source path, native Session ID, message/delivery/notification/
-outbox ID, or raw error. Lifecycle events used by the projection follow the same rule.
+Operational readiness aggregates only current mailbox registration, attachment, unread,
+notification, and SMTP failure state. It is not behavioral analytics and makes no claim
+about adoption, task success, or product value. Ordinary feedback, automated contracts,
+and isolated end-to-end UAT drive engineering revision.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
@@ -260,8 +255,10 @@ launched a process.
    subscriptions, and mailbox attachment/cursor continuity once; mailbox inheritance
    requires the same binding proof and rolls back the whole transfer on failure.
 
-Cross-harness abrupt-exit/restart evidence and adapter-native ID extraction remain open.
-Scheduler-driven lease expiry itself does not depend on an operator read.
+Isolated OpenCode/Codex and OpenCode/Claude journeys prove explicit native-ID extraction,
+offline mail, successor reattachment, and threaded replies. Automatic adapter extraction,
+abrupt process exit, and host restart remain open. Scheduler-driven lease expiry itself
+does not depend on an operator read.
 
 ### Queue semantics
 
@@ -312,21 +309,19 @@ mutation, insertion, deletion, truncation, missing/forged heads, and count diver
 under the stated key model. A stolen audit key can forge history; an in-process action
 gate cannot contain an external harness that bypasses it. Both limits remain explicit.
 
-## Active experiments
+## Experimental features
 
-Only these experiments in `docs/product/EXPERIMENTAL_BACKLOG.md` are intentionally
-under field observation:
+The experimental label records uncertainty in normal-use behavior. It does not start a
+field trial or create a telemetry requirement. BL-P1-15 is the advertised ordinary
+feedback path; the mis-scoped BL-P1-16 analytics projection is removed.
 
-- agent feedback inbox;
-- adoption and outcome analytics.
-
-Ephemeral peer review is an implemented admission candidate, not an active experiment,
+Ephemeral peer review is an implemented admission candidate, not a supported experiment,
 until normal peer help defaults to existing peers and its worker transport is separated
 from withdrawn Runtime execution.
 
-Each trial has a hypothesis, bounded activation, privacy restrictions, a feedback path,
-disable/rollback behavior, and a continue/revise/withdraw rule. None may silently widen
-normal-product readiness or authority.
+Each experimental feature needs a user promise, full UAT, truthful activation, a feedback
+path, disable/rollback behavior, and revision/withdrawal criteria. None may silently
+widen normal-product readiness or authority.
 
 Ephemeral peer review may reuse narrowly scoped Runtime compatibility endpoints while
 BL-P0-09 separates them from withdrawn Runtime execution. The reviewer receives a

@@ -200,8 +200,7 @@ def read_messages(
             if mark_read:
                 row.read_at = now
         session.commit()
-    # An adoption event means a message was actually returned. Empty polling
-    # attempts are not user movement and previously dominated the event log.
+    # Empty polling is routine and should not dominate the operational event log.
     if results:
         append_event(
             "message_read",

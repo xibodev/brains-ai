@@ -71,12 +71,12 @@ test('J11 workspace-first shell is responsive and keeps Labs fail-closed', async
   consoleGuard.assertClean();
 });
 
-test('J11 Operations separates durable-mail readiness from privacy-safe outcomes', async ({ page, consoleGuard }) => {
+test('J11 Operations exposes durable-mail readiness without embedded usage analytics', async ({ page, consoleGuard }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/app/operations');
   await expect(page.getByText('Durable mail', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Mailbox outcomes' })).toBeVisible();
-  await expect(page.getByText(/No mail content, address, path, native Session ID, or native object ID/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Welcome follow-through' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Mailbox outcomes' })).toHaveCount(0);
   const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   expect(hasOverflow).toBe(false);
   consoleGuard.assertClean();

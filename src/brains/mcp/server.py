@@ -159,7 +159,6 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "register_tool": tools.register_tool_tool,
     "list_registered_tools": tools.list_registered_tools_tool,
     "verify_tool": tools.verify_tool_tool,
-    "adoption_report": tools.adoption_report_tool,
     "create_recurring_task": tools.create_recurring_task_tool,
     "list_recurring_tasks": tools.list_recurring_tasks_tool,
     "set_recurring_enabled": tools.set_recurring_enabled_tool,

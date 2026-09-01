@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T22:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains Active Feature Backlog
@@ -30,16 +30,20 @@ supported harness reaches one healthy shared coordination service.
 
 **Owned items:** BL-P0-06, BL-P1-09, BL-P1-10, BL-P1-18.
 
-**Open requirements:** The Windows user service must be windowless and preserve user
-HOME/OAuth access; child health must be listener/protocol-aware rather than PID-only;
-an alive-but-unserving child must be fenced and restarted with bounded backoff; wiring
-must select a transport the harness actually supports and readiness can prove; package
-build, migration corpus, database schema, endpoint configuration, and wire metadata
-must be compatible; restart and rollback must preserve the invariant.
+**Implemented foundation:** The Windows user service is hidden and preserves user
+HOME/OAuth access. Every owned child has a protocol-aware listener watchdog; a process
+that never serves or survives listener loss has its process tree terminated so the
+bounded restart loop can recover it.
 
-**Evidence:** E3 hung-listener, transport mismatch, package/schema/wiring identity,
-restart, and config-preservation tests; E4 clean-host Windows plus Linux/macOS service,
-wire, restart, persistence, and rollback journeys.
+**Open requirements:** Wiring must select a transport the harness actually supports and
+readiness can prove; package build, migration corpus, database schema, endpoint
+configuration, and wire metadata must be compatible; clean-host Windows service restart
+and rollback must preserve the invariant.
+
+**Evidence:** E3 startup timeout, alive-but-unserving process-group termination,
+transport mismatch, package/schema/wiring identity, restart, and config-preservation
+tests; E4 clean-host Windows plus Linux/macOS service, wire, restart, persistence, and
+rollback journeys.
 
 ### Workspace-First Console
 
@@ -112,7 +116,7 @@ returns the mailbox address, unread count, and cursor. Successor/resume preserve
 durable address and mailbox history without copying messages between Session IDs.
 
 **Evidence:** E3 lifecycle, concurrent ownership, duplicate, reload, and refusal tests;
-E4 two-harness interruption and resume journey.
+E4 OpenCode/Codex and OpenCode/Claude offline-mail, successor-resume, and reply journeys.
 
 ### Agent Communications and Durable Mailboxes
 
@@ -125,11 +129,12 @@ delivery, read, and notification state.
 **Delivery dependency:** Address registration, local direct/offline delivery, explicit
 Workspace broadcast, Inbox/Sent, thread/reply/forward, per-recipient read state, cursors,
 and the Coordination mailbox desk are implemented. A body-free adapter notification
-protocol and one-way operator SMTP copy are implemented, but concrete harness hook/plugin
-installation, adapter-native ID extraction, recovery, real-provider SMTP, and
-two-real-harness E4 remain open. Until those
-slices pass, do not rely on Brains mail as the sole carrier of parallel-work ownership,
-requirements, approval, or handoff.
+protocol and one-way operator SMTP copy are implemented. Real OpenCode/Codex and
+OpenCode/Claude UAT covers explicit native-ID extraction, offline delivery, successor
+recovery, and threaded replies. Concrete hook/plugin installation, automatic adapter
+extraction, abrupt process exit, Copilot container credentials, and real-provider SMTP
+remain open. Until those slices pass, do not rely on Brains mail as the sole carrier of
+parallel-work ownership, requirements, approval, or handoff.
 
 **Address and registration:** An agent address is
 `tool:native-tool-session-id@workspace-slug`, backed by the unique canonical key
@@ -150,7 +155,8 @@ explicit local-human administrative flow.
 
 Current E3 implements registration, reattachment, operator inbox provisioning,
 visibility-filtered phonebook/lookup, fixed unavailable refusal, binding-file/header
-adapters, and lifecycle proof/detach. Per-adapter native-ID extraction plus binding
+adapters, and lifecycle proof/detach. Isolated E4 extracts real OpenCode, Codex, and
+Claude native IDs from their machine outputs. Automatic adapter extraction plus binding
 rotation, revocation/loss diagnosis, and local-human recovery remain open.
 
 **Delivery and authorization:** A message commits directly to a registered durable
@@ -169,11 +175,9 @@ IDs, accepts mail for detached/offline active addresses, returns filtered Inbox/
 thread timelines, records per-recipient reads, retains reply/forward provenance, and
 preserves the delivery cursor across incarnations. Agent actors prove the current
 attachment and binding; human operator-mailbox reads require a browser/local channel.
-Count-only observability now reports registration, attachment, delivery/read,
+Count-only operational readiness now reports registration, attachment, delivery/read,
 notification, and SMTP state without exposing address, content, path, native Session ID,
-or native mailbox object IDs. Outcome analytics uses right-censored windows and
-minimum-group suppression across registration, acceptance/refusal, wakeup, read, reply,
-forward, broadcast, and SMTP families.
+or native mailbox object IDs. It does not infer adoption, behavior, or value.
 Local acceptance creates a notification attempt only when the current attachment has
 explicitly declared a supported stronger mode. Pull-only and detached recipients create
 no attempt. A verified operator-mailbox copy policy may enqueue separate SMTP state in
@@ -192,8 +196,8 @@ proof-bound inbox pull.
 Current M5 evidence covers this secure adapter-facing protocol and reports `pull` from
 `wire` for every harness because wiring does not yet install a notification hook/plugin.
 It does not prove that a running external model was interrupted, prompted, or awakened.
-Concrete hook/plugin assets, explicit installation/consent, and real-harness E4 remain
-open; no follower daemon, shell relay, or model-input channel is part of this slice.
+Concrete hook/plugin assets, explicit installation/consent, and real-harness wakeup E4
+remain open; no follower daemon, shell relay, or model-input channel is part of this slice.
 
 **Threads and browser:** Messages retain a durable sender mailbox, point-in-time sender
 Session, durable recipients, originating Workspace, `thread_id`, `in_reply_to`, and
@@ -253,9 +257,10 @@ claims, handoffs, requests, aliases, and missing roots without deleting unresolv
 **Evidence:** E3 address validation/uniqueness, idempotent registration, offline accept,
 unknown/ambiguous/unauthorized refusal, send/end race, explicit broadcast,
 cross-Workspace disclosure, thread/reply/forward, operator mailbox, cursor, notification,
-read, SMTP outbox/retry/redaction, asynchronous-help lifecycle, and repair tests; E4
-two-real-harness and one-operator browser journey covering restart/resume, offline mail,
-threaded reply/forward, phonebook state, one-way SMTP copy, and recovery.
+read, SMTP outbox/retry/redaction, asynchronous-help lifecycle, and repair tests. E4
+OpenCode/Codex and OpenCode/Claude journeys cover real native IDs, session resume,
+offline mail, successor reattachment, threaded reply, sender reconciliation, and teardown;
+the operator browser separately covers phonebook, forwarding, and synthetic SMTP state.
 
 ### Knowledge and Coordination Patterns
 
@@ -373,7 +378,7 @@ after a human approves the exact outgoing payload.
 
 **Owned items:** BL-P1-19.
 
-**Open requirements:** Cluster and deduplicate local feedback/usage defects; redact
+**Open requirements:** Cluster and deduplicate local feedback defects; redact
 secrets, customer data, prompts, source, logs, identities, hostnames, and local paths;
 search existing public issues before proposing; show exact title/body/metadata;
 support discard, link-existing, or create; rate-limit per install and feature/build;
@@ -382,8 +387,27 @@ public link. No background upload or automatic issue creation.
 
 **Evidence:** E3 redaction, dedupe, existing-issue, preview, separation-of-duty,
 governed-effect, retry, and rate-limit tests; E4 local proposal through approved public
-issue in a disposable test repository. After safe implementation, field observation
-moves to the experimental backlog.
+issue in a disposable test repository. After safe implementation, ordinary feedback
+drives engineering revision.
+
+### Agent Feedback
+
+**Outcome:** Agents can report reproducible product friction without turning reports
+into authority, analytics, or automatic public disclosure.
+
+**Owned items:** BL-P1-15.
+
+**Implemented foundation:** Live Workspace Sessions can report and enrich redacted
+canonical records; same-surface duplicates link; browser/local humans triage and promote
+exactly once into a Task, knowledge entry, or existing backlog reference.
+
+**Open requirements:** Keep reports privacy-safe, preserve human-only triage and
+promotion, and let engineers reproduce and revise experimental or established behavior
+from ordinary feedback. Agents cannot approve roadmap, authorize effects, or create
+public issues through this surface.
+
+**Evidence:** E3 redaction, dedupe, authorization, triage, and promotion tests; E4
+two-agent report/enrichment plus human triage, discard, promotion, and recovery.
 
 ## Cross-Cutting Foundations
 

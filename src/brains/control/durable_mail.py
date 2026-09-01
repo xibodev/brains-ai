@@ -1000,58 +1000,6 @@ def _send(
     return result
 
 
-def _record_delivery_refusal(
-    workspace_path: str,
-    action: str,
-    reason: str,
-    principal: Principal | None,
-) -> None:
-    """Record only the refusal class and operation family, never caller input."""
-    try:
-        from brains.control.sessions import _resolve_workspace_path
-
-        resolved = _principal_or_local(principal)
-        with _db_module.SessionLocal() as session:
-            workspace = _resolve_workspace_path(session, workspace_path)
-            if (
-                workspace is None
-                or not policy.can_see_workspace(resolved, workspace.id)
-                or not resolved.has_capability(CAP_ORG_WRITE, workspace.org_id)
-            ):
-                return
-        append_event(
-            "mailbox_delivery_refused",
-            "durable mailbox delivery refused",
-            workspace_id=workspace.id,
-            metadata={"action": action, "reason": reason, "result": "refused"},
-            renew_session=False,
-        )
-    except Exception:
-        # Refusal telemetry is observational and must never replace the refusal.
-        return
-
-
-def _observed_send(workspace_path: str, *, action: str, **kwargs: Any) -> dict[str, Any]:
-    try:
-        return _send(workspace_path, action=action, **kwargs)
-    except MailboxValidationError:
-        _record_delivery_refusal(
-            workspace_path,
-            action,
-            "validation",
-            kwargs.get("principal"),
-        )
-        raise
-    except MailboxUnavailableError:
-        _record_delivery_refusal(
-            workspace_path,
-            action,
-            "unavailable",
-            kwargs.get("principal"),
-        )
-        raise
-
-
 def send_mailbox_message(
     workspace_path: str,
     recipients: list[str],
@@ -1066,7 +1014,7 @@ def send_mailbox_message(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Commit one idempotent direct message to explicit durable addresses."""
-    return _observed_send(
+    return _send(
         workspace_path,
         action="send",
         audience="direct",
@@ -1096,7 +1044,7 @@ def broadcast_mailbox_message(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Explicitly deliver to every other active agent address in one Workspace."""
-    return _observed_send(
+    return _send(
         workspace_path,
         action="broadcast",
         audience="broadcast",
@@ -1127,7 +1075,7 @@ def reply_mailbox_message(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Reply in the source thread to the referenced message's sender."""
-    return _observed_send(
+    return _send(
         workspace_path,
         action="reply",
         audience="direct",
@@ -1159,7 +1107,7 @@ def forward_mailbox_message(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Start a new thread retaining authorized forward provenance."""
-    return _observed_send(
+    return _send(
         workspace_path,
         action="forward",
         audience="direct",

@@ -123,12 +123,7 @@ def list_patterns(
 
 
 def use_pattern(name: str, session_id: str | None = None) -> dict:
-    """Record that ``name`` was used. ``session_id`` is optional but
-    strongly recommended — adoption queries join ``pattern_used`` events
-    back to ``session_start`` events via ``session_id`` to compute the
-    "of sessions offered an applicable pattern, how many actually used
-    one?" rate.
-    """
+    """Record that an approved pattern was used, with optional Session attribution."""
     init_db()
     with SessionLocal() as session:
         row = (

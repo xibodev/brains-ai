@@ -110,12 +110,7 @@ def list_registered_tools(verify_now: bool = False) -> list[dict]:
 
 
 def verify_tool(name: str, session_id: str | None = None) -> dict:
-    """Re-check ``name`` against ``PATH`` and update its row. ``session_id``
-    is optional but strongly recommended — adoption queries join
-    ``tool_verified`` events back to ``session_start`` events via
-    ``session_id`` to compute the "of sessions told tools were
-    missing/unverified, how many actually re-checked?" rate.
-    """
+    """Re-check ``name`` against ``PATH`` and record optional Session attribution."""
     now = utc_now()
     init_db()
     with SessionLocal() as session:

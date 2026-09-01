@@ -15,7 +15,6 @@ from brains.context.pack_builder import build_context_pack
 from brains.context.planner import plan
 from brains.context.repo_indexer import search_repo
 from brains.context.semantic import ORIENT_DOC_EXCLUDES, semantic_search_with_status
-from brains.control.adoption import adoption_report
 from brains.control.claims import (
     claim_workspace,
     list_workspace_claims,
@@ -1428,24 +1427,6 @@ def list_registered_tools_tool(verify_now: bool = False):
 
 def verify_tool_tool(name: str, session_id: str | None = None):
     return verify_tool(name, session_id=session_id)
-
-
-def adoption_report_tool(
-    window_minutes: int = 2,
-    since_days: int = 14,
-    workspace: str | None = None,
-):
-    """Per-surface adoption hit-rates for what the welcome packet offered.
-
-    Joins ``session_start`` offers to nearby follow-up events and includes
-    minimum-group-suppressed durable-mail lifecycle outcomes. No mail content,
-    address, source path, or native tool Session ID enters the report.
-    """
-    return adoption_report(
-        window_minutes=window_minutes,
-        since_days=since_days,
-        workspace=workspace,
-    )
 
 
 def _auto_fire_notice(cron_expr: str) -> dict[str, Any] | None:
