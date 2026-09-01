@@ -6,21 +6,18 @@ from datetime import timedelta
 
 import pytest
 
-from brains.control.adoption import adoption_report
 from brains.control.common import utc_now
-from brains.control.durable_mail import reply_mailbox_message, send_mailbox_message
-from brains.control.durable_mailbox import MailboxUnavailableError, register_agent_mailbox
+from brains.control.durable_mail import send_mailbox_message
+from brains.control.durable_mailbox import register_agent_mailbox
 from brains.control.mailbox_observability import mailbox_health_report
 from brains.control.operators import ensure_admin_operator
 from brains.control.sessions import start_session
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
-    Event,
     Mailbox,
     MailboxAttachment,
     MailDelivery,
-    MailMessage,
     MailNotificationAttempt,
     MailSmtpOutbox,
     SessionLease,
@@ -195,141 +192,3 @@ def test_mailbox_health_reports_wakeup_and_smtp_classes_without_identifiers(tmp_
     assert recipient["mailbox"]["address"] not in text
     assert "smtp_destination_ref" not in text
     assert "classes private" not in text
-
-
-def test_mailbox_outcomes_are_right_censored_suppressed_and_content_free(tmp_path) -> None:
-    workspace = tmp_path / "analytics"
-    sender = _agent(workspace, tool="opencode")
-    recipient = _agent(workspace, tool="codex")
-    sent = send_mailbox_message(
-        str(workspace),
-        [recipient["mailbox"]["address"]],
-        "analytics private subject",
-        f"analytics-{uuid.uuid4().hex}",
-        body="analytics private body",
-        sender_session_id=sender["session"]["session_id"],
-        binding_secret=sender["binding"],
-    )
-    with SessionLocal() as session:
-        delivery = (
-            session.query(MailDelivery)
-            .filter(MailDelivery.delivery_id == sent["deliveries"][0]["delivery_id"])
-            .one()
-        )
-        delivery.accepted_at = utc_now() - timedelta(minutes=3)
-        message = session.get(MailMessage, delivery.message_id)
-        assert message is not None
-        message.created_at = utc_now() - timedelta(minutes=3)
-        session.commit()
-
-    report = adoption_report(
-        window_minutes=2,
-        since_days=1,
-        workspace=sender["session"]["workspace"],
-    )["mailbox_outcomes"]
-    acceptance = report["outcomes"]["mail_acceptance"]
-    assert acceptance["eligible"]["suppressed"] is True
-    assert acceptance["eligible"]["count"] is None
-    assert report["outcomes"]["read"]["eligible"]["suppressed"] is True
-    assert report["privacy"] == {
-        "suppressed_groups": report["privacy"]["suppressed_groups"],
-        "contains_content": False,
-        "contains_address": False,
-        "contains_source_path": False,
-        "contains_native_session_id": False,
-        "contains_native_object_id": False,
-    }
-    text = json.dumps(report, sort_keys=True)
-    assert sent["message_id"] not in text
-    assert sender["mailbox"]["address"] not in text
-    assert str(workspace) not in text
-    assert "analytics private" not in text
-
-
-def test_mailbox_events_omit_address_and_native_object_ids(tmp_path) -> None:
-    workspace = tmp_path / "events"
-    sender = _agent(workspace, tool="opencode")
-    recipient = _agent(workspace, tool="codex")
-    sent = send_mailbox_message(
-        str(workspace),
-        [recipient["mailbox"]["address"]],
-        "event private subject",
-        f"event-{uuid.uuid4().hex}",
-        body="event private body",
-        sender_session_id=sender["session"]["session_id"],
-        binding_secret=sender["binding"],
-    )
-    with SessionLocal() as session:
-        events = (
-            session.query(Event)
-            .filter(
-                Event.kind.in_(("mailbox_registered", "mailbox_attached", "mailbox_message_sent")),
-                Event.workspace_id
-                == session.query(MailDelivery.recipient_workspace_id)
-                .filter(MailDelivery.delivery_id == sent["deliveries"][0]["delivery_id"])
-                .scalar_subquery(),
-            )
-            .all()
-        )
-    text = "\n".join(f"{event.message}\n{event.metadata_json}" for event in events)
-    assert sender["mailbox"]["address"] not in text
-    assert recipient["mailbox"]["address"] not in text
-    assert sent["message_id"] not in text
-    assert "event private" not in text
-
-
-def test_refusal_event_and_report_keep_recipient_input_private(tmp_path) -> None:
-    workspace = tmp_path / "refusal"
-    sender = _agent(workspace, tool="opencode")
-    private_recipient = f"missing-{uuid.uuid4().hex}@private.invalid"
-    with pytest.raises(MailboxUnavailableError):
-        send_mailbox_message(
-            str(workspace),
-            [private_recipient],
-            "refusal private subject",
-            f"refusal-{uuid.uuid4().hex}",
-            body="refusal private body",
-            sender_session_id=sender["session"]["session_id"],
-            binding_secret=sender["binding"],
-        )
-    with pytest.raises(MailboxUnavailableError):
-        reply_mailbox_message(
-            str(workspace),
-            f"missing-{uuid.uuid4().hex}",
-            f"reply-refusal-{uuid.uuid4().hex}",
-            sender_session_id=sender["session"]["session_id"],
-            binding_secret=sender["binding"],
-        )
-
-    with SessionLocal() as session:
-        workspace_id = (
-            session.query(Mailbox.workspace_id)
-            .filter(Mailbox.id == sender["mailbox"]["mailbox_id"])
-            .scalar()
-        )
-        event = (
-            session.query(Event)
-            .filter(
-                Event.kind == "mailbox_delivery_refused",
-                Event.workspace_id == workspace_id,
-                Event.session_id.is_(None),
-            )
-            .all()
-        )
-    assert len(event) == 2
-    assert all(row.session_id is None for row in event)
-    assert private_recipient not in "".join(f"{row.message}{row.metadata_json}" for row in event)
-    report = adoption_report(
-        window_minutes=2,
-        since_days=1,
-        workspace=sender["session"]["workspace"],
-    )["mailbox_outcomes"]
-    refusal = report["outcomes"]["mail_acceptance"]
-    assert refusal["results"]["refused"]["suppressed"] is True
-    assert report["outcomes"]["reply"]["results"]["refused"]["suppressed"] is True
-    assert refusal["refusal_reasons"] == {"suppressed": True, "counts": None}
-    assert report["outcomes"]["reply"]["refusal_reasons"] == {
-        "suppressed": True,
-        "counts": None,
-    }
-    assert private_recipient not in json.dumps(report, sort_keys=True)

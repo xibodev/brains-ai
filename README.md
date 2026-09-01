@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T11:25:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 2630f04e31ca47ff93eda1e2b616b3e657b0c877 plus static inspection of the normal console, CLI/MCP wiring, and approved capability lifecycle; withdrawal implementation not verified; deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains
@@ -22,17 +22,21 @@ python -m pipx ensurepath
 pipx install brains-ai
 ```
 
-Initialize Brains for the project you want it to coordinate, then start the supervised gateway, browser console, and MCP server:
+Initialize Brains for the project you want it to coordinate and install the supervised
+user service:
 
 ```text
 cd <project>
-brains-ai setup --path .
-brains-ai serve-all
+brains-ai setup --path . --service
 ```
 
-Open `http://127.0.0.1:8787/app`. The setup command prints the generated admin-key location; reveal it only when needed with `brains-ai admin-key show --reveal`.
+The service starts without a terminal window, restarts on failure, and starts again at
+login. Verify it with `brains-ai service status`, then open
+`http://127.0.0.1:8787/app`. The setup command prints the generated admin-key location;
+reveal it only when needed with `brains-ai admin-key show --reveal`.
 
-To start Brains automatically at login, use `brains-ai setup --path . --service`. Upgrade an existing isolated installation with `pipx upgrade brains-ai`.
+Use `brains-ai serve-all` only when foreground logs are useful for diagnosis or
+development. Upgrade an existing isolated installation with `pipx upgrade brains-ai`.
 
 ## Canonical documentation
 

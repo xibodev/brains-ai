@@ -24,6 +24,5 @@ def test_coordination_and_email_live_in_canonical_app() -> None:
     assert "Secret values are never returned" in config
     assert "Live agents" in coordination
     assert "Protected readiness" in operations
-    assert "Welcome follow-through" in operations
-    assert "Telemetry only" in operations
-    assert "not task success" in operations
+    assert "Welcome follow-through" not in operations
+    assert "Mailbox outcomes" not in operations

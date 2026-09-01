@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T22:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains Operations
@@ -40,17 +40,18 @@ python -m pipx ensurepath
 pipx install brains-ai
 ```
 
-Initialize and start one Workspace:
+Initialize one Workspace and install the supervised user service:
 
 ```text
 cd <project>
-brains-ai setup --path .
-brains-ai serve-all
+brains-ai setup --path . --service
 ```
 
-Open `http://127.0.0.1:8787/app`. `setup` prints the generated admin-key location; use
-`brains-ai admin-key show --reveal` only when the key is needed. Never place it in a
-URL, log, issue, fixture, or repository.
+The service runs without a terminal window, restarts on failure, and starts at login.
+Run `brains-ai service status`, then open `http://127.0.0.1:8787/app`. `setup` prints the
+generated admin-key location; use `brains-ai admin-key show --reveal` only when the key
+is needed. Never place it in a URL, log, issue, fixture, or repository. Use foreground
+`brains-ai serve-all` only for diagnosis or development.
 
 The supported installed executable is `brains-ai`. Helpers that invoke `brains` are
 obsolete.
@@ -202,6 +203,13 @@ listener on its actual bind host. A blocked bind holds a bounded degraded state
 when the window closes it exits with code 3, which the systemd unit excludes
 from restart (`RestartPreventExitStatus`) instead of relaunching forever.
 
+After startup, each owned child has a protocol-aware listener watchdog. Gateway must
+answer `/health`; MCP and any explicitly enabled dashboard child must complete a bounded
+HTTP response. A child that never becomes ready or stays alive after losing its listener
+has its owned process tree terminated, allowing the supervisor's existing bounded
+restart loop to recover it. On Windows the tree is stopped with Task Scheduler-compatible
+`taskkill /T`; on POSIX each child uses its own process group.
+
 A healthy status requires all of the following:
 
 1. the recorded PID belongs to the expected Brains command and process instance;
@@ -214,7 +222,13 @@ verified owned process. An explicit busy gateway port is refused; when the defau
 is unavailable, installation may persist a bindable loopback fallback and must report
 the resulting console/MCP endpoints.
 
-Windowless Windows operation and clean-host restart/rollback remain E4 requirements.
+Clean-host Windows restart/rollback remains an E4 requirement.
+
+`brains-ai setup --path . --service` or `brains-ai service install` is the supported
+way to avoid keeping a `serve-all` terminal open. Windows uses a hidden per-user Task
+Scheduler task; macOS uses launchd and Linux uses a systemd user service. Inspect it with
+`brains-ai service status`. Do not run a second foreground `serve-all` against the same
+ports or state directory.
 
 ## Coordination operation
 
@@ -253,29 +267,25 @@ other human-owned work.
 Running-agent message delivery and Runtime process stop are withdrawn. Use harness-native
 interaction outside Brains and record only what can be truthfully observed.
 
-## Active experiments
+## Experimental features and feedback
 
-The only active experiments are:
+Experimental is a support label for behavior whose normal-use ergonomics or edge cases
+remain uncertain. It is not a running field trial and does not enable embedded analytics.
+All release candidates still require automated contracts and isolated end-to-end UAT.
 
-- agent feedback inbox (BL-P1-15);
-- adoption and outcome analytics (BL-P1-16).
+The agent feedback inbox (BL-P1-15) is the ordinary feedback path. Humans triage reports,
+and engineers reproduce and revise behavior as appropriate. BL-P1-16's welcome and
+mailbox behavioral analytics surface is removed.
 
 Ephemeral peer review (BL-P1-20) is implemented but not admitted: normal help currently
 defaults to auto-launch and remote execution still overlaps withdrawn Runtime surfaces.
-Do not field-observe it as an active experiment until both boundaries are corrected.
-
-Operate them only under the audience, privacy, observation, and stop rules in
-`docs/product/EXPERIMENTAL_BACKLOG.md`.
+Do not advertise it as experimental until both boundaries are corrected and its isolated
+UAT passes.
 
 Feedback reporting stores redacted Workspace-scoped records. Triage/promotion is human
-only and cannot edit the roadmap or authorize release. Adoption reports describe
-eligible, right-censored `acted / offered` welcome observations and separately suppressed
-durable-mail lifecycle outcomes; they do not measure task success or user value. Counts
-below the minimum group size across allowlisted welcome and mailbox metrics, plus any denominator or
-peer bucket that would reveal them by subtraction, are hidden. Reports and their source
-events contain no mail content,
-address, path, native Session ID, or native mailbox object ID. Ephemeral review uses a temporary tracked snapshot, bounded
-runtime/output, source-fingerprint checks, and no automatic merge or execution.
+only and cannot edit the roadmap or authorize release. Ephemeral review uses a temporary
+tracked snapshot, bounded runtime/output, source-fingerprint checks, and no automatic
+merge or execution.
 
 ## Health and readiness
 
@@ -503,7 +513,7 @@ withdrawn source are test-debt inputs, not acceptance evidence.
 ## Known gaps
 
 - BL-P0-09 withdrawal containment is not implemented.
-- Windows service windowless operation and listener-aware restart need clean-host E4.
+- Windows service listener recovery needs clean-host E4 after package upgrade.
 - Session end/detach and liveness renewal are not reliable across every harness.
 - Cross-process realtime live fan-out is absent.
 - Governed action confinement is cooperative and in-process.

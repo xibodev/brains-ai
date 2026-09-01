@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-30T22:45:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD eedab318896d87fa9520f92736e42445383b2c6f plus mailbox-readiness and privacy-safe analytics candidate inspection and isolated Docker lint, type, suppression, lifecycle, API, and packaged browser evidence; real field outcomes and deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains Personas and Journeys
@@ -337,11 +337,11 @@ false claim about process execution.
 
 **Acceptance IDs:** AC-F3-01, AC-F3-02, AC-F4-03, AC-F4-04, AC-F1-06.
 
-**Evidence gaps:** E3 now covers mailbox identity validation, proof-bound
+**Evidence gaps:** E3 covers mailbox identity validation, proof-bound
 start/reuse/heartbeat/resume/successor transitions, cursor continuity, scope, and
-terminal detach. Browser coverage exercises durable task/handoff coordination on
-advertised surfaces. Adapter-native ID extraction plus multi-hour, abrupt-exit,
-restart, and cross-harness E4 remain open.
+terminal detach. Isolated E4 additionally covers real native-ID extraction and
+cross-harness offline mail/resume between OpenCode/Codex and OpenCode/Claude. Automatic
+adapter extraction, multi-hour idle, abrupt process exit, and host restart remain open.
 
 ## J8 - Ask, approve, steer, chat, and stop
 
@@ -399,14 +399,15 @@ refusal, and accepted/read state. E3 also covers fixed body-free notification cl
 mode restrictions, concurrent claim/settle, detach/read fallback, and binding proof.
 Synthetic SMTP E3 and container browser E4 cover encrypted verification, notification
 redaction, explicit full-body consent, retry/uncertain outcomes, and revocation. Concrete
-hook/plugin installation, external harness wakeup, real-provider SMTP, two-real-harness
-E4, and the residual in-process governance boundary remain open.
+hook/plugin installation, external harness wakeup, real-provider SMTP, Copilot container
+credentials, abrupt process exit, and the residual in-process governance boundary remain
+open.
 
 Operations E3 additionally distinguishes malformed registrations/live attachments,
 aged unread delivery, notification fallback/failure, and SMTP backlog/failure without
-making detached unread mail an outage. J11 shows the count-only readiness and
-minimum-group-suppressed mailbox outcomes; the projection contains no content, address,
-path, native Session ID, or native mailbox object ID.
+making detached unread mail an outage. J11 shows count-only readiness without embedded
+behavioral analytics; the projection contains no content, address, path, native Session
+ID, or native mailbox object ID.
 
 ## J9 - Configure Brains and GitHub linkage
 

@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-29T12:28:00.000-06:00
+last_verified: 2026-08-31T18:30:00.000-06:00
 verified_by: OpenCode
-verification_basis: HEAD 92ebf88d5942ec143931303ba3f00df3a151583d plus static reconciliation of active/experimental ownership and the approved durable mailbox contract; implementation not changed; deployment not verified
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree experimental-label, ordinary-feedback, and durable-mail evidence reconciliation; installed-service recovery and deployment not verified
 -->
 
 # Brains Backlog Registry
@@ -13,8 +13,8 @@ schedulable requirements live in two feature-oriented documents:
 
 - [Active backlog](ACTIVE_BACKLOG.md) contains normal-install features and
   cross-cutting foundations eligible for feature-branch delivery into `staging`.
-- [Experimental backlog](EXPERIMENTAL_BACKLOG.md) contains implemented field trials
-  whose real behavior is intentionally under observation.
+- [Experimental backlog](EXPERIMENTAL_BACKLOG.md) marks implemented behavior whose
+  normal-use ergonomics or edge cases remain uncertain and need ordinary feedback.
 
 Known-faulty withdrawn implementations appear in neither backlog. Their lifecycle,
 containment boundary, and re-entry rule are recorded in
@@ -28,12 +28,12 @@ that containment work is active backlog item BL-P0-09.
 - Active work uses one short-lived feature branch from current `staging`, merges to
   `staging` after its own acceptance gates, and reaches `main` only through promotion
   of an exact integrated candidate.
-- Active experiments are implemented, independently activatable trials. They collect
-  privacy-safe usage and defect evidence and remain subject to human authority.
+- Experimental features pass the same automated and isolated-UAT gates as other release
+  candidates; the label does not create an analytics or field-trial requirement.
 - A withdrawn implementation is not schedulable feature work. Only containment,
   shared-data compatibility, approved removal, or replacement research may touch it.
-- A replacement enters the experimental backlog only after a separately reviewed
-  implementation is admitted as a field trial.
+- A replacement enters the experimental backlog only after its implementation, UAT,
+  feedback path, rollback, and revision boundaries are reviewed.
 - Dated measurements remain outside canonical docs; backlog items record repeatable
   probes, unhealthy conditions, required outcomes, and evidence.
 
@@ -107,6 +107,10 @@ that containment work is active backlog item BL-P0-09.
 - **Maps to:** F3, B2, B8; J7, J8, J11.
 - **Requirement:** [Workspace portfolio and presence](ACTIVE_BACKLOG.md#workspace-portfolio-and-presence).
 
+### BL-P1-15 - Agent-experience feedback
+- **Maps to:** F3, B2, B4, B8; J7, J8, J11.
+- **Requirement:** [Agent feedback](ACTIVE_BACKLOG.md#agent-feedback).
+
 ### BL-P1-17 - Coordination-pattern and workflow routing
 - **Maps to:** F3, B2, B6, B8; J7, J10, J11.
 - **Requirement:** [Knowledge and patterns](ACTIVE_BACKLOG.md#knowledge-and-coordination-patterns). Managed Persona/Project Skills are withdrawn.
@@ -137,13 +141,9 @@ that containment work is active backlog item BL-P0-09.
 
 ## Experimental Backlog Registry
 
-### BL-P1-15 - Agent-experience feedback field trial
-- **Maps to:** F3, B2, B4, B8; J7, J8, J11.
-- **Requirement:** [Agent feedback inbox](EXPERIMENTAL_BACKLOG.md#agent-feedback-inbox).
-
-### BL-P1-16 - Adoption and outcome analytics field trial
+### BL-P1-16 - Removed adoption/outcome analytics interpretation
 - **Maps to:** F3, B2, B8; J7, J8, J11.
-- **Requirement:** [Adoption and outcome analytics](EXPERIMENTAL_BACKLOG.md#adoption-and-outcome-analytics).
+- **Disposition:** [Feedback and evidence boundary](EXPERIMENTAL_BACKLOG.md#feedback-and-evidence-boundary).
 
 ### BL-P1-20 - Ephemeral peer-review admission blocker
 - **Maps to:** F3, B2, B4, B8; J7, J8, J11.
