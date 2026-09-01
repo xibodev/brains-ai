@@ -21,7 +21,7 @@ from brains.control.sessions import (
 )
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
-from brains.storage.models import Workspace
+from brains.storage.models import Workspace, WorkspaceAlias
 
 
 @pytest.fixture(autouse=True)
@@ -35,9 +35,25 @@ def _clean_doctor_rows():
         # belt + braces.
         session.execute(
             text(
+                "DELETE FROM event_contexts WHERE event_id IN ("
+                "SELECT id FROM events WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ") OR message LIKE '%doctor-%'"
+                ")"
+            )
+        )
+        session.execute(
+            text(
                 "DELETE FROM events WHERE workspace_id IN ("
                 "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
                 ") OR message LIKE '%doctor-%'"
+            )
+        )
+        session.execute(
+            text(
+                "DELETE FROM workspace_aliases WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ")"
             )
         )
         session.execute(text("DELETE FROM workspaces WHERE slug LIKE 'doctor-%'"))
@@ -46,9 +62,25 @@ def _clean_doctor_rows():
     with SessionLocal() as session:
         session.execute(
             text(
+                "DELETE FROM event_contexts WHERE event_id IN ("
+                "SELECT id FROM events WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ") OR message LIKE '%doctor-%'"
+                ")"
+            )
+        )
+        session.execute(
+            text(
                 "DELETE FROM events WHERE workspace_id IN ("
                 "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
                 ") OR message LIKE '%doctor-%'"
+            )
+        )
+        session.execute(
+            text(
+                "DELETE FROM workspace_aliases WHERE workspace_id IN ("
+                "SELECT id FROM workspaces WHERE slug LIKE 'doctor-%'"
+                ")"
             )
         )
         session.execute(text("DELETE FROM workspaces WHERE slug LIKE 'doctor-%'"))
@@ -220,3 +252,93 @@ def test_doctor_does_not_prune_no_marker_rows(tmp_path):
             .all()
         )
         assert len(rows) == 1, "no_marker row must not be pruned by --prune-missing"
+
+
+def test_doctor_archives_missing_without_deleting_history(tmp_path):
+    missing_path = tmp_path / "doctor-archive-gone"
+    workspace_id = _seed("doctor-archive-missing", str(missing_path))
+    with SessionLocal() as session:
+        session.execute(
+            text(
+                "INSERT INTO events (workspace_id, kind, message, created_at) "
+                "VALUES (:workspace_id, 'workspace_archived_probe', 'kept', CURRENT_TIMESTAMP)"
+            ),
+            {"workspace_id": workspace_id},
+        )
+        session.commit()
+
+    result = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--apply"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["archived_missing"]["archived"] >= 1
+    with SessionLocal() as session:
+        workspace = session.get(Workspace, workspace_id)
+        assert workspace is not None
+        assert workspace.status == "archived"
+        assert (
+            session.execute(
+                text("SELECT COUNT(*) FROM events WHERE workspace_id = :workspace_id"),
+                {"workspace_id": workspace_id},
+            ).scalar_one()
+            == 1
+        )
+
+    repeated = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--apply"],
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert "doctor-archive-missing" not in {
+        row["slug"] for row in json.loads(repeated.stdout)["missing"]
+    }
+
+
+@pytest.mark.parametrize("mode", ["--archive-missing", "--prune-missing"])
+def test_doctor_preserves_workspace_with_usable_alias_and_promotes_it(tmp_path, mode):
+    missing_path = tmp_path / f"doctor-primary-gone-{mode.removeprefix('--')}"
+    alias_path = tmp_path / f"doctor-alias-live-{mode.removeprefix('--')}"
+    alias_path.mkdir()
+    (alias_path / "pyproject.toml").write_text("")
+    workspace_id = _seed(f"doctor-alias-{mode.removeprefix('--')}", str(missing_path))
+    with SessionLocal() as session:
+        archived = Workspace(
+            slug=f"doctor-archived-{mode.removeprefix('--')}",
+            path=str(alias_path),
+            status="archived",
+        )
+        session.add(archived)
+        session.flush()
+        session.add(
+            WorkspaceAlias(
+                workspace_id=workspace_id,
+                path=str(alias_path),
+                identity_key=f"path:{alias_path}",
+            )
+        )
+        session.commit()
+
+    result = CliRunner().invoke(app, ["workspaces", "doctor", mode, "--apply"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert f"doctor-alias-{mode.removeprefix('--')}" not in {
+        row["slug"] for row in payload["missing"]
+    }
+    with SessionLocal() as session:
+        workspace = session.get(Workspace, workspace_id)
+        assert workspace is not None
+        assert workspace.status == "active"
+        assert workspace.path == str(alias_path)
+        assert session.query(Workspace).filter_by(id=archived.id).one().path == str(missing_path)
+
+
+def test_doctor_refuses_archive_and_prune_together():
+    result = CliRunner().invoke(
+        app,
+        ["workspaces", "doctor", "--archive-missing", "--prune-missing"],
+    )
+    assert result.exit_code == 2
+    assert "choose --archive-missing or --prune-missing" in (result.stderr or result.output)

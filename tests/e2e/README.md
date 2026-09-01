@@ -1,61 +1,60 @@
 <!--
-last_verified: 2026-08-02T00:24:58.901-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: candidate tree based on HEAD 7903eb55ce5fbe6e115169a90263d209e59e4fa4; static inspection and local simulated-harness verification; deployment not verified
+last_verified: 2026-08-30T09:45:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 4e4819f02c621db5ceb75a13328a741208abdf42 plus Docker-only J1-J11 browser evidence over a private internal network with synthetic state; deployment not verified
 -->
 
 # Brains browser journey contracts
 
-This Playwright suite exercises the workspace-first `/app` console. Execution-model journeys use `/app/labs/*` and the isolated harness explicitly sets `BRAINS_UI_LABS=1`; that does not promote those screens into the normal product surface. Test files are contract presence (E2), not proof that the current SHA passed.
+This Playwright suite exercises the Workspace-first `/app` console in a normal install (Labs disabled). Withdrawn journeys retain one spec file per stable `J*` ID, and those specs assert containment/fail-closed behavior rather than activation. Test files are contract presence (E2), not proof that the current SHA passed.
 
 ## Current spec coverage
 
 | Journey | Spec |
 |---|---|
+| J1 | `specs/j01-first-run.spec.ts` |
 | J2 | `specs/j02-connect-machine.spec.ts` |
 | J3 | `specs/j03-personas.spec.ts` |
 | J4 | `specs/j04-pods.spec.ts` |
+| J5 | `specs/j05-project-workspace.spec.ts` |
 | J6 | `specs/j06-issues.spec.ts` |
 | J7 | `specs/j07-sessions.spec.ts` |
+| J8 | `specs/j08-governance-session-control.spec.ts` |
 | J9 | `specs/j09-config-settings.spec.ts` |
 | J10 | `specs/j10-automation.spec.ts` |
 | J11 | `specs/j11-console-clean.spec.ts` |
 
-Dedicated J1, J5, and J8 specs are missing. The full mapping and evidence gaps are in [Traceability](../../docs/product/TRACEABILITY.md).
+J2-J6 and J10 are withdrawn and prove no normal discovery/navigation/activation path. J1 and J7-J11 cover advertised Command Center, Workspaces, Coordination, Governance, Operations/Access/Configuration, Act, and cross-cutting hygiene states. The full mapping and evidence gaps are in [Traceability](../../docs/product/TRACEABILITY.md).
 
-## Run against an isolated stack
+## Run in isolated Docker containers
 
 ```text
-cd tests/e2e
-npm ci
-npm run install:browsers
-$env:BRAINS_E2E_AUTO_STACK="1"
-npm test
+pwsh -File scripts/run_docker_e2e.ps1
 ```
 
-Configuration:
+The runner builds the exact candidate app and a lockfile-defined Playwright image,
+connects them only through a private internal Docker network, publishes no host port,
+uses tmpfs for Brains state, and removes its owned containers, network, and images in
+`finally`. It refuses pre-existing artifact names rather than deleting or reusing them.
+
+Container configuration:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `BRAINS_E2E_BASE_URL` | `http://127.0.0.1:8810` | Isolated gateway origin |
-| `BRAINS_E2E_KEY` | `try-brains` | Sign-in key expected by fixtures |
-| `BRAINS_E2E_AUTO_STACK` | unset | When `1`, uses the Windows PowerShell global setup/teardown |
-| `BRAINS_E2E_STACK_NAME` | `trystack` | Lowercase slug for the owned temporary stack |
-| `BRAINS_E2E_SEED_CONTAINER` | unset | Docker container in which direct setup helpers run |
-| `BRAINS_E2E_SEED_STATE_DIR` | local temporary state | State path as seen inside that container |
+| `BRAINS_E2E_BASE_URL` | `http://<app-container>:8787` | Private Docker-network gateway origin. |
+| `BRAINS_E2E_KEY` | generated per run | Synthetic sign-in key shared only by the disposable app and browser containers. |
+| `BRAINS_E2E_SEED_MANIFEST` | generated | Synthetic IDs and addresses prepared inside the disposable app container. |
 
-Auto-stack mode rejects non-loopback URLs and passes the configured port, key,
-and stack name to setup/teardown as one contract.
+The older `BRAINS_E2E_AUTO_STACK=1` PowerShell harness remains compatibility inventory
+for environments that explicitly choose a host process. It is not the default isolated
+UAT path. Auto-stack mode rejects non-loopback URLs; Docker mode accepts only a plain
+internal HTTP origin without embedded credentials.
 
-When testing an already-running Docker stack, set both seed variables so setup
-helpers use the container's filesystem view. Do not open a bind-mounted SQLite
-WAL database from the host while the container is running.
-
-The repository's Windows auto-stack scripts:
+The compatibility Windows auto-stack scripts:
 
 - resolve the repository from the script location;
-- create temporary state and seeded product data;
-- launch only the gateway and register a simulated Runtime;
+- create temporary state and isolated compatibility seed data;
+- launch only the gateway with Labs disabled; specs seed required Workspace data;
 - never launch a real agent CLI or read the operator's `~/.brains` state;
 - stop only the recorded hub process tree;
 - compare Git status before and after the run and fail if the worktree changed;
@@ -63,7 +62,7 @@ The repository's Windows auto-stack scripts:
 
 Do not edit the worktree while the auto-stack is running because the mutation
 guard intentionally treats any repository change as a failed test. The harness
-is deterministic browser evidence, not proof of a real Runtime daemon lifecycle.
+is deterministic browser evidence, not proof of Runtime execution-model lifecycle behavior.
 
 ## Acceptance rules
 
@@ -74,4 +73,4 @@ is deterministic browser evidence, not proof of a real Runtime daemon lifecycle.
 - Cover error, authorization, disconnect/reconnect, retry, and recovery states.
 - Do not commit screenshots or reports as current product proof.
 
-The `brains-e2e` workflow job is advisory at current HEAD. The target hard-gate contract is [QUALITY_GATES.md](../../docs/QUALITY_GATES.md).
+The `brains-e2e` workflow job is part of the blocking quality gate described in [QUALITY_GATES.md](../../docs/QUALITY_GATES.md).

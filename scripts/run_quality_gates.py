@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+CI_PYTHON = "3.12"
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,11 @@ class Gate:
 def _runner() -> list[str]:
     """The prefix that runs a command inside the project environment."""
 
-    return ["uv", "run"] if shutil.which("uv") else []
+    return (
+        ["uv", "run", "--extra", "dev", "--python", CI_PYTHON, "--no-sync"]
+        if shutil.which("uv")
+        else []
+    )
 
 
 def _npm() -> str | None:
@@ -95,7 +100,9 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
         plan.append(
             Gate(
                 "committed spa bundle",
-                [sys.executable, "scripts/check_spa_bundle.py", "--no-install"],
+                [*runner, "python", "scripts/check_spa_bundle.py", "--no-install"]
+                if runner
+                else [sys.executable, "scripts/check_spa_bundle.py", "--no-install"],
             )
         )
 
@@ -104,9 +111,7 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
     # gate is reported as unavailable rather than silently passed.
     if shutil.which("uv"):
         plan.append(Gate("build wheel + sdist", ["uv", "build"]))
-        plan.append(
-            Gate("distribution contents", [sys.executable, "scripts/check_distribution.py"])
-        )
+        plan.append(Gate("distribution contents", script("scripts/check_distribution.py")))
     return plan
 
 
@@ -135,6 +140,13 @@ def main(argv: list[str] | None = None) -> int:
         for gate in plan:
             print(f"{gate.name}: {' '.join(gate.command)} (cwd={gate.cwd.name})")
         return 0
+
+    if shutil.which("uv"):
+        sync = ["uv", "sync", "--extra", "dev", "--python", CI_PYTHON]
+        print(f"$ {' '.join(sync)}", flush=True)
+        if subprocess.run(sync, cwd=str(ROOT), check=False).returncode != 0:
+            print("failed to prepare the locked CI Python/dev environment")
+            return 1
 
     failures: list[str] = []
     for gate in plan:

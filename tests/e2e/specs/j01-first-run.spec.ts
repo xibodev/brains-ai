@@ -1,12 +1,16 @@
 import { test, expect, signIn } from '../fixtures/console.js';
+import { seedWorkspace } from '../fixtures/seed.js';
 
 /**
  * J1 — Sign in and complete first run.
  *
  * Authority: F0/F6 and AC-F0-01/02 plus AC-F6-01 through AC-F6-05.
- * The isolated harness has a simulated Runtime, so this drives the complete
- * durable onboarding flow without launching an external agent CLI.
+ * The normal install contract is Workspace-first and does not require Labs.
  */
+
+test.beforeAll(() => {
+  seedWorkspace();
+});
 
 test('J1.1 invalid credentials remain signed out and allow retry', async ({ page }) => {
   await page.goto('/app');
@@ -18,42 +22,27 @@ test('J1.1 invalid credentials remain signed out and allow retry', async ({ page
   await expect(page).toHaveURL(/admin\/login|\/app/);
 });
 
-test('J1.2 onboarding persists real entities and completes with a session', async ({ page, consoleGuard }) => {
+test('J1.2 successful sign-in lands on Command Center and a Workspace control room', async ({ page, consoleGuard }) => {
   await signIn(page);
-  await page.goto('/app/labs/onboarding');
+  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: /use it/i }).click();
-  await expect(page.getByRole('heading', { name: /connect a machine/i, level: 1 })).toBeVisible();
+  await page.goto('/app/workspaces/e2e-workspace');
+  await expect(page.getByRole('heading', { name: /E2E Workspace/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /create task/i })).toBeVisible();
+  consoleGuard.assertClean();
+});
 
-  await page.getByRole('button', { name: /connect a machine/i }).click();
-  const command = await page.locator('[data-testid="connect-command"]').innerText();
-  const token = command.match(/--enrol\s+(\S+)/)?.[1];
-  expect(token, 'onboarding enrol token').toBeTruthy();
-  const redeem = await page.request.post('/v1/runtimes/enrol/redeem', {
-    data: {
-      token,
-      machine_id: `onboarding-${Date.now()}`,
-      clis: [{ tool: 'copilot', version: 'e2e' }],
-    },
-  });
-  expect(redeem.ok(), `redeem failed: ${redeem.status()}`).toBeTruthy();
+test('J1.3 withdrawn onboarding URLs fail closed to Command Center', async ({ page, consoleGuard }) => {
+  await signIn(page);
 
-  await expect(page.getByRole('heading', { name: /create your first persona/i })).toBeVisible({
-    timeout: 7000,
-  });
-  await page.locator('select').first().selectOption({ index: 1 });
-  const personaName = `Onboarding ${Date.now()}`;
-  await page.getByLabel(/persona name/i).fill(personaName);
-  await page.getByRole('button', { name: /continue/i }).click();
+  for (const route of ['/app/onboarding', '/app/labs/onboarding']) {
+    await page.goto(route);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await expect(page).toHaveURL(/\/app\/command-center$/);
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  }
 
-  await expect(page.getByRole('heading', { name: /create a project/i })).toBeVisible();
-  await page.getByLabel(/project name/i).fill(`First run ${Date.now()}`);
-  await page.getByLabel(/issue title/i).fill('Prove the complete first run');
-  await page.getByRole('button', { name: /continue/i }).click();
-
-  await expect(page.getByRole('heading', { name: /dispatch to your persona/i })).toBeVisible();
-  await page.getByRole('button', { name: /dispatch/i }).click();
-  await expect(page.getByRole('heading', { name: /you're set up/i })).toBeVisible();
-  await expect(page.locator('[data-testid="onboarding-steps"]')).toContainText('dispatch: done');
   consoleGuard.assertClean();
 });

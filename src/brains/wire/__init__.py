@@ -205,6 +205,7 @@ class ToolAdapter:
     json_servers_key: str = "mcpServers"
     supports_sse: bool = True
     sse_experimental: bool = False
+    mailbox_notification_mode: str = "pull"
 
     def mcp_path(self, home: Path) -> Path:
         return self._mcp_path(home)
@@ -547,6 +548,7 @@ def wire(
             "display": adapter.display,
             "detected": detected,
             "mcp": mcp,
+            "mailbox_notification_mode": adapter.mailbox_notification_mode,
         }
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
@@ -609,6 +611,7 @@ def status(home: Path) -> dict[str, Any]:
                 "mcp_transport": transport,
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
+                "mailbox_notification_mode": adapter.mailbox_notification_mode,
             }
         )
     return {"tools": out}

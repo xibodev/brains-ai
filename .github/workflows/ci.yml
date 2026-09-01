@@ -1,7 +1,7 @@
 name: ci
 
-# The blocking quality gate for every push to main and every pull request
-# (BL-P1-01). Every job below fails the workflow when it fails: there is no
+# The blocking quality gate for every push and pull request targeting the
+# integration or promotion branch (BL-P1-01). Every job below fails the workflow when it fails: there is no
 # `continue-on-error` on a required gate, and no gate reports success on a
 # command that did not run. The release workflow (release.yml) does NOT re-run
 # this — tag pushes are expected to be on commits that already passed ci.
@@ -20,10 +20,11 @@ name: ci
 #   gate        one required status that depends on all of the above
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 permissions:
   contents: read
@@ -374,7 +375,6 @@ jobs:
       BRAINS_E2E_BASE_URL: http://127.0.0.1:8810
       BRAINS_E2E_KEY: ci-e2e-key
       BRAINS_PREWARM_INDEX_ON_SESSION: "0"
-      BRAINS_UI_LABS: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -413,32 +413,25 @@ jobs:
             cat hub.log
             exit 1
           fi
-          org_json=$(curl -fsS -X POST http://127.0.0.1:8810/v1/orgs \
+          curl -fsS -X POST http://127.0.0.1:8810/v1/orgs \
             -H "x-api-key: $BRAINS_API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"slug":"demo","name":"Demo Org"}')
-          org_id=$(printf '%s' "$org_json" | uv run python -c \
-            'import json,sys; print(json.load(sys.stdin)["id"])')
+            -d '{"slug":"demo","name":"Demo Org"}' >/dev/null
 
-          runtime_json=$(curl -fsS -X POST http://127.0.0.1:8810/v1/runtimes/register \
-            -H "x-api-key: $BRAINS_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"machine_id\":\"ci-machine\",\"machine_label\":\"CI Runtime\",\"org_id\":$org_id,\"tools\":[{\"tool\":\"copilot\",\"display_name\":\"Copilot\",\"capabilities\":{\"models\":[\"claude-sonnet-4.5\",\"gpt-4o\"],\"commands\":[\"copilot\"]}}]}")
-          runtime_id=$(printf '%s' "$runtime_json" | uv run python -c \
-            'import json,sys; print(json.load(sys.stdin)["runtimes"][0]["id"])')
+          uv run python - <<'PY'
+          import os
+          from brains.control.orgs import get_org
+          from brains.control.sessions import register_workspace
 
-          curl -fsS -X POST http://127.0.0.1:8810/v1/orgs/demo/personas \
-            -H "x-api-key: $BRAINS_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"slug\":\"mason\",\"name\":\"Mason\",\"model\":\"claude-sonnet-4.5\",\"tool\":\"copilot\",\"default_runtime_id\":$runtime_id}"
-          curl -fsS -X POST http://127.0.0.1:8810/v1/orgs/demo/projects \
-            -H "x-api-key: $BRAINS_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"slug":"apollo","name":"Apollo Launch"}'
-          curl -fsS -X POST http://127.0.0.1:8810/v1/projects/apollo/issues \
-            -H "x-api-key: $BRAINS_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{"title":"Seed issue","body":"Exercise the Brains operator journey.","priority":"p1"}'
+          state_dir = os.environ["BRAINS_STATE_DIR"]
+          org = get_org("demo")
+          register_workspace(
+              f"{state_dir}/workspace",
+              slug="e2e-workspace",
+              name="E2E Workspace",
+              org_id=int(org["id"]),
+          )
+          PY
 
       - uses: actions/setup-node@v4
         with:
@@ -449,10 +442,11 @@ jobs:
         working-directory: tests/e2e
         run: |
           npm ci
+          npm run typecheck
           npx playwright install --with-deps chromium
 
       # Blocking: every J1-J11 browser journey contract must pass on the exact
-      # candidate. Remaining real-runtime/provider limitations stay explicit in
+      # candidate. Remaining browser evidence gaps stay explicit in
       # docs/product/TRACEABILITY.md rather than being hidden by the harness.
       - name: Run Brains E2E
         working-directory: tests/e2e

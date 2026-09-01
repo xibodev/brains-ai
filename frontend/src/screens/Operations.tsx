@@ -46,7 +46,7 @@ export function Operations() {
               ],
               ["Storage", data.readiness.components.storage.state],
               ["Queues", data.readiness.components.queue.state],
-              ["Runtimes", `${data.runtimes.length} known`],
+              ["Durable mail", data.readiness.components.durable_mail.state],
               ["Tools", `${data.tools.length} registered`],
               ["Recovery", data.recovery.ready ? "ready" : "incomplete"],
             ].map(([name, value]) => <div key={name}><span>+</span><strong>{name}</strong><small>{value}</small></div>)}
@@ -55,7 +55,7 @@ export function Operations() {
           <div className="operator-operations-grid">
             <OperatorCard kicker="Protected readiness" title="Dependencies" action={<OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{Object.values(data.readiness.components).filter((row) => row.state === "ready").length} / {Object.keys(data.readiness.components).length}</div>
-              <p>Bounded storage, queue, Runtime-lifecycle, and recovery-policy checks.</p>
+              <p>Bounded storage, queue, durable-mail, and recovery-policy checks.</p>
               <OperatorMiniList rows={Object.entries(data.readiness.components).map(([name, row]) => ({ label: name.replaceAll("_", " "), value: <OperatorStatus tone={row.state === "ready" ? "ready" : "warning"}>{row.state}</OperatorStatus> }))} />
             </OperatorCard>
 

@@ -6,12 +6,21 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 UP = ROOT / "sandbox" / "pivot" / "try" / "up.ps1"
 DOWN = ROOT / "sandbox" / "pivot" / "try" / "down.ps1"
 STACK = ROOT / "tests" / "e2e" / "fixtures" / "stack.ts"
 GLOBAL_SETUP = ROOT / "tests" / "e2e" / "fixtures" / "global-setup.ts"
+DOCKER_E2E = ROOT / "scripts" / "run_docker_e2e.ps1"
+DOCKER_CLI_UAT = ROOT / "scripts" / "run_docker_cli_uat.ps1"
+DOCKER_CLI_UAT_FILE = ROOT / "docker" / "Dockerfile.cli-uat"
+REAL_CLI_ACTOR = ROOT / "tests" / "uat" / "real_cli_actor.py"
+DOCKER_QUALITY = ROOT / "scripts" / "run_docker_quality.ps1"
+DOCKER_QUALITY_FILE = ROOT / "docker" / "Dockerfile.quality"
+DOCKERIGNORE = ROOT / ".dockerignore"
+GITATTRIBUTES = ROOT / ".gitattributes"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 
@@ -19,7 +28,7 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_windows_e2e_stack_uses_a_simulated_runtime() -> None:
+def test_windows_e2e_stack_keeps_labs_disabled() -> None:
     script = _text(UP)
 
     assert "$PSScriptRoot" in script
@@ -40,13 +49,21 @@ def test_windows_e2e_stack_uses_a_simulated_runtime() -> None:
     assert "UVICORN_" in script
     assert "WEB_CONCURRENCY" in script
     assert '"--workers", "1"' in script
-    assert '$env:BRAINS_UI_LABS = "1"' in script
+    assert "BRAINS_UI_LABS" not in script
 
 
-def test_ci_e2e_stack_enables_the_labs_routes_the_suite_exercises() -> None:
+def test_ci_e2e_stack_uses_the_normal_install_contract() -> None:
     workflow = _text(CI)
 
-    assert 'BRAINS_UI_LABS: "1"' in workflow
+    assert "BRAINS_UI_LABS" not in workflow
+    assert "/v1/runtimes/register" not in workflow
+    assert "/v1/orgs/demo/personas" not in workflow
+    assert "/v1/orgs/demo/projects" not in workflow
+    assert "npm run typecheck" in workflow
+
+
+def test_ci_workflow_is_valid_yaml() -> None:
+    assert isinstance(yaml.safe_load(_text(CI)), dict)
 
 
 def test_windows_e2e_stack_guards_the_worktree() -> None:
@@ -104,6 +121,114 @@ def test_windows_auto_stack_rejects_non_loopback_targets() -> None:
     assert "'-Key'" not in setup
 
 
+def test_docker_e2e_is_private_owned_and_volume_free() -> None:
+    script = _text(DOCKER_E2E)
+
+    assert "network create --internal" in script
+    assert "PowerShell 7 or newer is required" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert '--tmpfs "/tmp:rw,nosuid,nodev,mode=1777"' in script
+    assert "PortBindings" in script
+    assert "unexpectedly publishes a host port" in script
+    assert "unexpectedly uses a persistent or host mount" in script
+    assert '--tmpfs "/data:' in script
+    assert "BRAINS_DB_URL=sqlite:////data/brains.db" in script
+    assert "BRAINS_STATE_DIR=/data/.brains" in script
+    assert '-e "HOME=/tmp"' in script
+    assert "Refusing to reuse pre-existing container" in script
+    assert "Refusing to reuse pre-existing network" in script
+    assert "Refusing to overwrite pre-existing image" in script
+    assert "docker network rm $network" in script
+    assert "Container teardown was incomplete" in script
+    assert "Network teardown was incomplete" in script
+    assert "Image teardown was incomplete" in script
+    assert "--mount" not in script and "--volume" not in script
+    assert "-p " not in script and "--publish" not in script
+
+
+def test_docker_quality_has_no_network_mount_or_capabilities() -> None:
+    script = _text(DOCKER_QUALITY)
+    dockerfile = _text(DOCKER_QUALITY_FILE)
+
+    assert "--network none" in script
+    assert "PowerShell 7 or newer is required" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert '--tmpfs "/tmp:rw,exec,nosuid,nodev,mode=1777"' in script
+    assert "--mount" not in script and "--volume" not in script
+    assert "Refusing to reuse pre-existing container" in script
+    assert "Refusing to overwrite pre-existing image" in script
+    assert "Quality container teardown was incomplete" in script
+    assert "Quality image teardown was incomplete" in script
+    assert "COPY . ." in dockerfile
+    assert "uv sync --extra dev --python 3.12" in dockerfile
+    assert 'uv pip install "setuptools==84.0.0" "wheel==0.48.0"' in dockerfile
+    assert "uv build --no-build-isolation" in _text(ROOT / "docker" / "run-quality-gates.sh")
+
+
+def test_real_cli_uat_uses_owned_isolation_and_real_resume_contracts() -> None:
+    script = _text(DOCKER_CLI_UAT)
+    dockerfile = _text(DOCKER_CLI_UAT_FILE)
+    actor = _text(REAL_CLI_ACTOR)
+
+    assert "network create --internal" in script
+    assert "Refusing to reuse pre-existing Docker" in script
+    assert "type=bind,source=$primary,target=/run/credentials/primary,readonly" in script
+    assert "type=volume,source=$stateVolume,target=/data" in script
+    assert '"/home/node:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700"' in script
+    assert "PortBindings" in script
+    assert "published a host port" in script
+    assert "teardown_verified" in script
+    assert "Real-CLI UAT changed the candidate worktree" in script
+    assert "candidate_worktree_hash" in script
+    assert "beforeUntracked" in script
+    assert '2 "mailbox_registration"' in script
+    assert "maximum_attempts" in script
+    assert "docker volume rm $stateVolume" in script
+    assert "docker network rm $controlNetwork" in script
+    assert "docker image rm $cliImage" in script
+    assert '"-p"' not in script and '"--publish"' not in script
+    assert "source=$root" not in script
+
+    for package in (
+        "@anthropic-ai/claude-code",
+        "@github/copilot",
+        "opencode-ai",
+        "@openai/codex",
+    ):
+        assert package in dockerfile
+    for token in ("PELICAN", "KIWI", "MANGO", "ZEBRA"):
+        assert token in script
+    for native_key in ("session_id", "sessionId", "sessionID", "thread_id"):
+        assert native_key in actor
+    assert '"--resume", session_id' in actor
+    assert '"--session-id", session_id' in actor
+    assert '"--session", session_id' in actor
+    assert '"exec",\n                "resume"' in actor
+    assert actor.count('"--dangerously-bypass-approvals-and-sandbox"') == 2
+    assert '"features.shell_tool=false"' in actor
+    assert '"features.apps=false"' in actor
+    assert "brains_mailbox_send" in actor
+    assert "brains_mailbox_inbox" in actor
+    assert "brains_mailbox_reply" in actor
+    assert 'transport="stdio"' in actor
+    assert '"BRAINS_DB_URL": os.environ["BRAINS_DB_URL"]' in actor
+    assert "shutil.copyfile(source, target)" in actor
+    assert '_copy_secret(primary, HOME / ".copilot/config.json")' in actor
+
+
+def test_docker_context_excludes_private_host_state_and_linux_script_keeps_lf() -> None:
+    ignored = _text(DOCKERIGNORE)
+
+    assert "brains.db-*" in ignored
+    assert "*.pem" in ignored
+    assert "*.key" in ignored
+    assert ".brains" in ignored
+    assert ".opencode" in ignored
+    assert "docker/run-quality-gates.sh text eol=lf" in _text(GITATTRIBUTES)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell harness")
 def test_windows_e2e_stack_rejects_path_traversal_names() -> None:
     powershell = shutil.which("powershell")
@@ -130,4 +255,4 @@ def test_windows_e2e_stack_rejects_path_traversal_names() -> None:
     )
 
     assert result.returncode != 0
-    assert "Harness name must be a lowercase slug" in (result.stdout + result.stderr)
+    assert "Harness name must be a lowercase slug" in result.stdout + result.stderr

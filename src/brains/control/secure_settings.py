@@ -13,6 +13,7 @@ failed re-key refuses rotation, so ciphertext is never orphaned silently.
 from __future__ import annotations
 
 import os
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -62,6 +63,7 @@ ENV_TO_SETTING = {
     "OPENAI_API_KEY": "openai_compatible_api_key",
 }
 _INJECTED_ENV: set[str] = set()
+_SCOPED_SETTING_RE = re.compile(r"^mailbox\.smtp\.[1-9][0-9]*\.[0-9a-f]{32}$")
 
 
 class SecureSettingError(RuntimeError):
@@ -106,22 +108,33 @@ def _validate_name(name: str) -> str:
     return normalized
 
 
-def set_value(name: str, value: str, *, admin_key: str) -> dict[str, Any]:
-    normalized = _validate_name(name)
+def _validate_scoped_name(name: str) -> str:
+    normalized = (name or "").strip()
+    if not _SCOPED_SETTING_RE.fullmatch(normalized):
+        raise ValueError("unsupported scoped encrypted setting")
+    return normalized
+
+
+def _set_encrypted_row(session, name: str, value: str, admin_key: str) -> None:
     if not isinstance(value, str) or value == "":
         raise ValueError("secure setting value must be a non-empty string")
-    ciphertext, nonce, salt = _encrypt(normalized, value, admin_key)
+    ciphertext, nonce, salt = _encrypt(name, value, admin_key)
+    row = session.get(SecureSetting, name)
+    if row is None:
+        row = SecureSetting(name=name)
+        session.add(row)
+    row.ciphertext = ciphertext
+    row.nonce = nonce
+    row.salt = salt
+    row.version = FORMAT_VERSION
+    row.updated_at = datetime.now(UTC)
+
+
+def set_value(name: str, value: str, *, admin_key: str) -> dict[str, Any]:
+    normalized = _validate_name(name)
     init_db()
     with SessionLocal() as session:
-        row = session.get(SecureSetting, normalized)
-        if row is None:
-            row = SecureSetting(name=normalized)
-            session.add(row)
-        row.ciphertext = ciphertext
-        row.nonce = nonce
-        row.salt = salt
-        row.version = FORMAT_VERSION
-        row.updated_at = datetime.now(UTC)
+        _set_encrypted_row(session, normalized, value, admin_key)
         session.commit()
     return {"name": normalized, "set": True}
 
@@ -147,17 +160,60 @@ def get_value(name: str, *, admin_key: str) -> str | None:
         return _decrypt(row, admin_key) if row else None
 
 
+def set_scoped_value_in_transaction(
+    session,
+    name: str,
+    value: str,
+    *,
+    admin_key: str,
+) -> None:
+    """Write one mailbox-scoped encrypted value in the caller's transaction."""
+    _set_encrypted_row(session, _validate_scoped_name(name), value, admin_key)
+
+
+def get_scoped_value_in_transaction(
+    session,
+    name: str,
+    *,
+    admin_key: str,
+) -> str | None:
+    """Decrypt one mailbox-scoped value without exposing generic dynamic names."""
+    normalized = _validate_scoped_name(name)
+    row = session.get(SecureSetting, normalized)
+    return _decrypt(row, admin_key) if row else None
+
+
+def clear_scoped_value_in_transaction(session, name: str) -> bool:
+    """Delete one mailbox-scoped ciphertext row in the caller's transaction."""
+    normalized = _validate_scoped_name(name)
+    return bool(
+        session.query(SecureSetting)
+        .filter(SecureSetting.name == normalized)
+        .delete(synchronize_session=False)
+    )
+
+
 def values(admin_key: str) -> dict[str, str]:
     init_db()
     with SessionLocal() as session:
-        rows = session.query(SecureSetting).order_by(SecureSetting.name).all()
+        rows = (
+            session.query(SecureSetting)
+            .filter(SecureSetting.name.in_(ALLOWED_NAMES))
+            .order_by(SecureSetting.name)
+            .all()
+        )
         return {row.name: _decrypt(row, admin_key) for row in rows}
 
 
 def status(admin_key: str) -> dict[str, Any]:
     init_db()
     with SessionLocal() as session:
-        names = {row[0] for row in session.query(SecureSetting.name).all()}
+        names = {
+            row[0]
+            for row in session.query(SecureSetting.name)
+            .filter(SecureSetting.name.in_(ALLOWED_NAMES))
+            .all()
+        }
     return {
         "encrypted_store": "brains-db/aes-256-gcm+scrypt/admin-key",
         "settings": {
@@ -237,6 +293,27 @@ def rekey_all(old_key: str, new_key: str) -> int:
         return len(rows)
 
 
+def delete_orphaned_mailbox_smtp_settings() -> int:
+    """Remove dynamic destination ciphertext no mailbox setting references."""
+    init_db()
+    from brains.storage.models import OperatorMailboxSetting
+
+    with SessionLocal() as session:
+        references = session.query(OperatorMailboxSetting.smtp_destination_ref).filter(
+            OperatorMailboxSetting.smtp_destination_ref.isnot(None)
+        )
+        removed = (
+            session.query(SecureSetting)
+            .filter(
+                SecureSetting.name.like("mailbox.smtp.%"),
+                ~SecureSetting.name.in_(references),
+            )
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return int(removed)
+
+
 __all__ = [
     "ALLOWED_NAMES",
     "PLAIN_NAMES",
@@ -247,9 +324,13 @@ __all__ = [
     "SecureSettingError",
     "apply_to_settings",
     "clear_value",
+    "clear_scoped_value_in_transaction",
+    "delete_orphaned_mailbox_smtp_settings",
+    "get_scoped_value_in_transaction",
     "get_value",
     "rekey_all",
     "set_value",
+    "set_scoped_value_in_transaction",
     "status",
     "source_for",
     "values",

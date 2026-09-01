@@ -77,15 +77,32 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "store_memory": tools.store_memory_tool,
     "explain_route": tools.explain_route,
     "get_state": tools.get_state_tool,
+    "mailbox_register": tools.mailbox_register_tool,
+    "mailbox_phonebook": tools.mailbox_phonebook_tool,
+    "mailbox_lookup": tools.mailbox_lookup_tool,
+    "mailbox_send": tools.mailbox_send_tool,
+    "mailbox_broadcast": tools.mailbox_broadcast_tool,
+    "mailbox_reply": tools.mailbox_reply_tool,
+    "mailbox_forward": tools.mailbox_forward_tool,
+    "mailbox_inbox": tools.mailbox_inbox_tool,
+    "mailbox_sent": tools.mailbox_sent_tool,
+    "mailbox_thread": tools.mailbox_thread_tool,
+    "mailbox_notification_take": tools.mailbox_notification_take_tool,
+    "mailbox_notification_settle": tools.mailbox_notification_settle_tool,
     "start_session": tools.start_session_tool,
+    "heartbeat_session": tools.heartbeat_session_tool,
     "link_session_successor": tools.link_session_successor_tool,
     "end_session": tools.end_session_tool,
     "session_message": tools.session_message_tool,
     "session_stop": tools.session_stop_tool,
     "session_commands": tools.session_commands_tool,
     "append_event": tools.append_event_tool,
+    "event_context": tools.event_context_tool,
+    "event_scope_report": tools.event_scope_report_tool,
     "file_decision_request": tools.file_decision_request_tool,
     "resolve_decision": tools.resolve_decision_tool,
+    "route_decision": tools.route_decision_tool,
+    "escalate_decision": tools.escalate_decision_tool,
     "list_open_decisions": tools.list_open_decisions_tool,
     "set_handoff": tools.set_handoff_tool,
     "pick_handoff": tools.pick_handoff_tool,
@@ -117,10 +134,22 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "topic_post": tools.topic_post_tool,
     "topic_read": tools.topic_read_tool,
     "topic_list": tools.topic_list_tool,
+    "topic_subscribe": tools.topic_subscribe_tool,
+    "topic_unsubscribe": tools.topic_unsubscribe_tool,
+    "topic_subscriptions": tools.topic_subscriptions_tool,
     "ask_peer": tools.ask_peer_tool,
+    "file_help_request": tools.file_help_request_tool,
+    "get_help_request": tools.get_help_request_tool,
+    "wait_help_request": tools.wait_help_request_tool,
+    "cancel_help_request": tools.cancel_help_request_tool,
+    "release_help_request": tools.release_help_request_tool,
     "wait_for_request": tools.wait_for_request_tool,
     "answer_request": tools.answer_request_tool,
     "list_open_help_requests": tools.list_open_help_requests_tool,
+    "feedback_report": tools.feedback_report_tool,
+    "feedback_enrich": tools.feedback_enrich_tool,
+    "feedback_get": tools.feedback_get_tool,
+    "feedback_list": tools.feedback_list_tool,
     "capture_snapshot": tools.capture_snapshot_tool,
     "latest_snapshot": tools.latest_snapshot_tool,
     "propose_pattern": tools.propose_pattern_tool,
@@ -130,7 +159,6 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "register_tool": tools.register_tool_tool,
     "list_registered_tools": tools.list_registered_tools_tool,
     "verify_tool": tools.verify_tool_tool,
-    "adoption_report": tools.adoption_report_tool,
     "create_recurring_task": tools.create_recurring_task_tool,
     "list_recurring_tasks": tools.list_recurring_tasks_tool,
     "set_recurring_enabled": tools.set_recurring_enabled_tool,
@@ -172,9 +200,8 @@ mcp = FastMCP("Brains v2", transport_security=_build_mcp_transport_security())
 # See tests/test_mcp_server.py::test_registered_mcp_tool_names_are_anthropic_safe.
 TOOL_PREFIX = "brains_"
 
-# A v1.0 efficiency lever: the MCP tool surface is configurable so a client only
-# pays the context cost of the tools it needs. Measured: the full 86-tool surface
-# adds ~4.2k tokens of definitions per prompt; the lean core below is ~460 (-89%).
+# The MCP tool surface is configurable so a client only pays the context cost
+# of the tools it needs. The lean core keeps the normal coordination contract.
 #   BRAINS_MCP_TOOLS unset | "full" | "all"  -> all tools (back-compat default)
 #   BRAINS_MCP_TOOLS = "lean"                 -> the curated core set below
 #   BRAINS_MCP_TOOLS = "a,b,c"                -> an explicit allowlist
@@ -182,8 +209,23 @@ TOOL_PREFIX = "brains_"
 LEAN_TOOLS = frozenset(
     {
         "start_session",
+        "mailbox_register",
+        "mailbox_phonebook",
+        "mailbox_lookup",
+        "mailbox_send",
+        "mailbox_broadcast",
+        "mailbox_reply",
+        "mailbox_forward",
+        "mailbox_inbox",
+        "mailbox_sent",
+        "mailbox_thread",
+        "mailbox_notification_take",
+        "mailbox_notification_settle",
+        "heartbeat_session",
         "end_session",
         "append_event",
+        "event_context",
+        "event_scope_report",
         "set_handoff",
         "pick_handoff",
         "list_handoffs",
@@ -192,7 +234,18 @@ LEAN_TOOLS = frozenset(
         "search_semantic",
         "orient",
         "file_decision_request",
+        "file_help_request",
+        "get_help_request",
+        "wait_help_request",
+        "cancel_help_request",
+        "release_help_request",
+        "feedback_report",
+        "feedback_enrich",
+        "feedback_get",
+        "feedback_list",
         "resolve_decision",
+        "route_decision",
+        "escalate_decision",
         "claim_workspace",
         "read_messages",
         "inbox_wait",
@@ -201,6 +254,9 @@ LEAN_TOOLS = frozenset(
         "topic_post",
         "topic_read",
         "topic_list",
+        "topic_subscribe",
+        "topic_unsubscribe",
+        "topic_subscriptions",
         "plan_request",
         "get_context_pack",
     }
@@ -363,6 +419,45 @@ def _sweep_governed_actions() -> int:
     return swept
 
 
+def _sweep_stale_sessions() -> int:
+    """Expire PID-less coordination leases without ending their history."""
+    try:
+        from brains.control.sessions import sweep_stale_session_leases
+
+        dormant = sweep_stale_session_leases()
+    except Exception as exc:  # noqa: BLE001 - maintenance never gates a fire
+        log.error("scheduler: session lease sweep failed: %s", exc)
+        return 0
+    if dormant:
+        log.info("scheduler: made %d stale coordination Session(s) dormant", len(dormant))
+    return len(dormant)
+
+
+def _dispatch_help_reviews() -> int:
+    try:
+        from brains.control.help_execution import dispatch_due_help_reviews
+
+        scheduled = dispatch_due_help_reviews()
+    except Exception as exc:  # noqa: BLE001 - maintenance must not break scheduler
+        log.error("scheduler: ephemeral help review dispatch failed: %s", exc)
+        return 0
+    return len(scheduled)
+
+
+def _process_mailbox_smtp() -> int:
+    """Drain a bounded SMTP-copy batch without breaking scheduler maintenance."""
+    try:
+        from brains.control.durable_smtp import process_smtp_outbox
+        from brains.control.secure_settings import delete_orphaned_mailbox_smtp_settings
+
+        delete_orphaned_mailbox_smtp_settings()
+        claimed = int(process_smtp_outbox(limit=10).get("claimed", 0))
+    except Exception as exc:  # noqa: BLE001 - SMTP outage never breaks coordination
+        log.error("scheduler: mailbox SMTP outbox failed: %s", exc)
+        return 0
+    return claimed
+
+
 def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     """Evaluate every enabled recurring task and fire those that are due.
 
@@ -386,6 +481,9 @@ def _scheduler_tick(now: datetime | None = None) -> list[dict]:
     now = now or datetime.now(UTC)
     _sweep_governed_actions()
     _sweep_stale_runtimes()
+    _sweep_stale_sessions()
+    _dispatch_help_reviews()
+    _process_mailbox_smtp()
     if not experimental_enabled():
         return []
     fired: list[dict] = []
@@ -431,9 +529,11 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
     ensure_admin_key(print_banner=mode == "sse")
     # Make sure the admin operator row exists before any tool can be
     # invoked over either transport. Idempotent and cheap.
+    from brains.control.durable_mailbox import ensure_operator_mailboxes
     from brains.control.operators import ensure_admin_operator
 
     ensure_admin_operator()
+    ensure_operator_mailboxes()
 
     if mode == "sse":
         # Load the persisted admin key into settings so the SSE auth

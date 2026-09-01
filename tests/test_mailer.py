@@ -75,6 +75,8 @@ def test_smtp_failure_raises_safe_message_without_password(fake_smtp):
     with pytest.raises(MailerError) as excinfo:
         send_email("dest@example.com", "s", "b")
     assert "s3cret" not in str(excinfo.value)
+    assert "smtp.example.com" not in str(excinfo.value)
+    assert excinfo.value.delivery_uncertain is True
 
 
 def test_notify_ask_sends_copy_but_never_blocks_on_failure(fake_smtp):

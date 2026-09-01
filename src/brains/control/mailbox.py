@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from sqlalchemy import or_
-
 from brains.control.common import utc_now
 from brains.control.events import append_event
 from brains.control.sessions import register_workspace, require_live_session
@@ -69,7 +67,12 @@ def send_message(
             require_live_session(session, from_session_id, action="send_message")
         if to_session_id:
             try:
-                require_live_session(session, to_session_id, action="send_message")
+                require_live_session(
+                    session,
+                    to_session_id,
+                    action="send_message",
+                    renew_lease=False,
+                )
             except ValueError:
                 recipient = (
                     session.query(AgentSession)
@@ -87,7 +90,12 @@ def send_message(
                 else:
                     from brains.control.sessions import require_live_session as _rls
 
-                    _rls(session, to_session_id, action="send_message")
+                    _rls(
+                        session,
+                        to_session_id,
+                        action="send_message",
+                        renew_lease=False,
+                    )
         if workspace_id is None:
             workspace_id = _workspace_id_for_session(session, from_session_id)
             if workspace_id is not None:
@@ -134,6 +142,7 @@ def read_messages(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = None,
 ) -> list[dict]:
     # Layer 2 visibility filter — see ``brains.control.memberships``.
     # ``read_messages`` is session-scoped, so the workspace context is
@@ -162,6 +171,8 @@ def read_messages(
         if visible is not None and workspace_id is not None and workspace_id not in visible:
             return []
         query = session.query(MailboxMessage)
+        if after_id is not None:
+            query = query.filter(MailboxMessage.id > max(0, int(after_id)))
         if not include_read:
             query = query.filter(MailboxMessage.read_at.is_(None))
         if workspace_id is None:
@@ -174,7 +185,7 @@ def read_messages(
                     & (MailboxMessage.workspace_id == workspace_id)
                 )
             )
-        rows = query.order_by(MailboxMessage.created_at.asc()).limit(limit).all()
+        rows = query.order_by(MailboxMessage.id.asc()).limit(limit).all()
         results = []
         workspace_slugs = {
             row.id: (
@@ -188,49 +199,54 @@ def read_messages(
             results.append(_message_to_dict(row, workspace_slugs[row.id]))
             if mark_read:
                 row.read_at = now
-        if session.dirty:
-            session.commit()
-    # Audit / adoption signal: every read_messages call emits a
-    # ``message_read`` event tied to the caller session. Always emit (not
-    # just on non-empty), so the adoption query can ask "of sessions
-    # where welcome offered unread mail, what fraction even checked?"
-    # without the polling-vs-result-count confound.
-    append_event(
-        "message_read",
-        f"{len(results)} message(s) read",
-        workspace_id=workspace_id,
-        session_id=session_id,
-        metadata={
-            "count": len(results),
-            "marked_read": bool(mark_read),
-            "include_read": bool(include_read),
-        },
-    )
+        session.commit()
+    # Empty polling is routine and should not dominate the operational event log.
+    if results:
+        append_event(
+            "message_read",
+            f"{len(results)} message(s) read",
+            workspace_id=workspace_id,
+            session_id=session_id,
+            metadata={
+                "count": len(results),
+                "marked_read": bool(mark_read),
+                "include_read": bool(include_read),
+                "after_id": after_id,
+                "cursor": max(row["id"] for row in results),
+            },
+        )
     return results
 
 
 def inbox_wait(
     session_id: str,
     timeout_ms: int = 25000,
+    after_message_id: int | None = None,
 ) -> dict:
     """Block until this session has something worth waking for, or timeout.
 
-    The one poll primitive (comms slice 2): collapses the two loops an agent
-    otherwise runs — periodic ``read_messages`` and ``wait_for_request`` —
-    into a single long-poll that returns when EITHER arrives:
+    The one poll primitive collapses periodic mailbox, topic, and peer-help
+    checks into a single long-poll that returns when work arrives:
 
     * ``{"wakeup": "mail", ...}``          — unread inbox traffic exists;
+    * ``{"wakeup": "topic", ...}``         — a subscribed topic advanced;
     * ``{"wakeup": "peer_request", ...}``  — a claimable peer-help request
       matches this session/workspace/harness;
     * ``{"wakeup": None}``                 — quiet for the whole timeout.
 
-    Cadence stays the agent's policy; this only makes each tick cheap and
-    latency-bounded instead of a sleep-poll guess.
+    ``after_message_id`` lets a client exclude its already-processed mailbox
+    prefix. A topic wake repeats until ``read_topic(..., session_id=...)``
+    advances that subscription cursor, so delivery is acknowledged explicitly.
     """
     import time as _time
 
-    from brains.control.help import _poll_interval_seconds as _help_poll
-    from brains.control.help import tool_matches_requirement
+    from brains.control.help import (
+        _claimable_request_query,
+        _expire_due,
+    )
+    from brains.control.help import (
+        _poll_interval_seconds as _help_poll,
+    )
 
     if not session_id:
         raise ValueError("inbox_wait requires session_id")
@@ -251,8 +267,7 @@ def inbox_wait(
         if workspace_id is not None:
             ws = session.query(Workspace).filter(Workspace.id == workspace_id).one_or_none()
             resolved_slug = ws.slug if ws else None
-        if session.dirty:
-            session.commit()
+        session.commit()
     from brains.control.memberships import visible_workspace_ids_for_current
 
     visible = visible_workspace_ids_for_current()
@@ -260,6 +275,8 @@ def inbox_wait(
     def _unread_exists() -> bool:
         with SessionLocal() as session:
             q = session.query(MailboxMessage.id).filter(MailboxMessage.read_at.is_(None))
+            if after_message_id is not None:
+                q = q.filter(MailboxMessage.id > max(0, int(after_message_id)))
             if workspace_id is None:
                 q = q.filter(MailboxMessage.to_session_id.in_(recipient_ids))
             else:
@@ -272,32 +289,26 @@ def inbox_wait(
                 )
             return session.query(q.exists()).scalar()
 
+    def _topic_updates() -> list[dict]:
+        from brains.control.topics import pending_topic_updates
+
+        return pending_topic_updates(session_id, limit=5)
+
     def _claimable_request() -> dict | None:
         with SessionLocal() as session:
-            from brains.storage.models import HelpRequest, HelpRequestConstraint
-
-            filters = [HelpRequest.to_session_id == session_id]
-            if resolved_slug:
-                filters.append(HelpRequest.to_workspace == resolved_slug)
-            q = (
-                session.query(HelpRequest, HelpRequestConstraint.required_tool)
-                .outerjoin(
-                    HelpRequestConstraint,
-                    HelpRequestConstraint.request_code == HelpRequest.code,
-                )
-                .filter(HelpRequest.status == "open", or_(*filters))
-                .order_by(HelpRequest.created_at.asc())
-                .limit(10)
-            )
-            if visible is not None:
-                q = q.filter(
-                    (HelpRequest.from_workspace_id.is_(None))
-                    | (HelpRequest.from_workspace_id.in_(visible))
-                )
-            for row, required_tool in q.all():
-                if tool_matches_requirement(required_tool, my_tool):
-                    return {"code": row.code, "subject": row.subject}
-            return None
+            _expire_due(session)
+            match = _claimable_request_query(
+                session,
+                session_id=session_id,
+                workspace_slug=resolved_slug,
+                tool=my_tool,
+                visible_workspace_ids=visible,
+            ).first()
+            session.commit()
+            if match is None:
+                return None
+            row, _required_tool = match
+            return {"code": row.code, "subject": row.subject}
 
     deadline = _time.monotonic() + (timeout_ms / 1000.0)
     while True:
@@ -318,6 +329,19 @@ def inbox_wait(
                 metadata={"wakeup": "mail"},
             )
             return {"wakeup": "mail"}
+        topic_updates = _topic_updates()
+        if topic_updates:
+            append_event(
+                "inbox_wait",
+                f"wake: topic {topic_updates[0]['topic']}",
+                session_id=session_id,
+                metadata={
+                    "wakeup": "topic",
+                    "topics": list(dict.fromkeys(row["topic"] for row in topic_updates)),
+                    "latest_post_id": max(row["id"] for row in topic_updates),
+                },
+            )
+            return {"wakeup": "topic", "posts": topic_updates}
         if _time.monotonic() >= deadline:
             return {"wakeup": None, "timeout": True}
         _time.sleep(_help_poll())

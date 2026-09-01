@@ -162,6 +162,51 @@ class Daemon:
                 acted.append(self._execute(rt["id"], assignment, claim))
         return acted
 
+    def poll_help_reviews(self) -> list[dict]:
+        """Claim and run bounded read-only reviews for this machine's tools."""
+        from brains.control.help_execution import run_read_only_review
+
+        acted: list[dict] = []
+        for runtime in self.my_runtimes():
+            if runtime.get("status") != "online" or runtime.get("health") != "healthy":
+                continue
+            if self._cap_reached(len(acted)):
+                break
+            try:
+                reviews = self.client.get_help_reviews(runtime["id"])
+            except Exception as exc:
+                acted.append(self._diagnostic(runtime, "help_review_poll_failed", exc))
+                continue
+            for queued in reviews:
+                if self._cap_reached(len(acted)):
+                    break
+                try:
+                    claimed = self.client.claim_help_review(runtime["id"], queued["code"])
+                    review = claimed.get("review") if claimed.get("claimed") else None
+                    if review is None:
+                        continue
+                    result = run_read_only_review(
+                        review,
+                        source_path=str(review["workspace_path"]),
+                        workspace_id=int(review["workspace_id"]),
+                        session_id=str(review["session_id"]),
+                        runtime_id=int(runtime["id"]),
+                    )
+                    completed = self.client.complete_help_review(
+                        runtime["id"],
+                        queued["code"],
+                        session_id=review["session_id"],
+                        answer=result.answer,
+                        evidence=result.evidence,
+                        returncode=result.returncode,
+                        source_unchanged=result.source_unchanged,
+                        error_code=result.error_code,
+                    )
+                    acted.append({"code": queued["code"], **completed})
+                except Exception as exc:
+                    acted.append(self._diagnostic(runtime, "help_review_failed", exc))
+        return acted
+
     def _cap_reached(self, spawned_this_cycle: int) -> bool:
         with self._active_lock:
             return (self._active + spawned_this_cycle) >= self.config.max_concurrent
@@ -483,12 +528,14 @@ class Daemon:
         heartbeat = self.heartbeat_once()
         reconciled = self.reconcile_sessions()
         commands = self.poll_session_commands()
+        reviews = self.poll_help_reviews()
         acted = self.poll_and_execute()
         return {
             "register": register,
             "heartbeat": heartbeat,
             "reconciled": reconciled,
             "commands": commands,
+            "reviews": reviews,
             "acted": acted,
         }
 
@@ -513,6 +560,8 @@ class Daemon:
         if once:
             with contextlib.suppress(Exception):
                 self.poll_session_commands()
+            with contextlib.suppress(Exception):
+                self.poll_help_reviews()
             self.poll_and_execute()
             return
         hb = threading.Thread(target=self._heartbeat_loop, name="brains-daemon-hb", daemon=True)
@@ -530,6 +579,8 @@ class Daemon:
         last_detect = time.monotonic()
         try:
             while not self._stop.is_set():
+                with contextlib.suppress(Exception):
+                    self.poll_help_reviews()
                 with contextlib.suppress(Exception):
                     self.poll_and_execute()
                 if time.monotonic() - last_detect > self.config.detect_interval_s:

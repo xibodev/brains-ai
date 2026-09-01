@@ -25,7 +25,14 @@ from brains.control.handoffs import set_handoff
 from brains.control.mailbox import send_message
 from brains.control.sessions import start_session
 from brains.storage.db import SessionLocal
-from brains.storage.models import AgentSession, Handoff, HelpRequest, WorkspaceClaim
+from brains.storage.models import (
+    AgentSession,
+    Handoff,
+    HelpRequest,
+    HelpRequestExecution,
+    SessionLease,
+    WorkspaceClaim,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -59,8 +66,12 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
         "handoffs",
         "mailbox",
         "help_requests",
+        "feedback",
+        "event_contexts",
         "workspace_claims",
+        "session_leases",
         "session_commands",
+        "topic_delivery",
         "checkpoints",
     }
     handoffs = result["families"]["handoffs"]
@@ -69,6 +80,11 @@ def test_summarize_reports_every_family_with_metadata(tmp_path):
     assert handoffs["owner"]
     assert handoffs["lifecycle"]
     assert "generated_at" in result
+    assert set(result["families"]["help_requests"]["review_executions"]) == {
+        "total",
+        "open",
+        "stale",
+    }
 
 
 def test_summarize_counts_stale_handoffs_before_any_sweep_runs(tmp_path):
@@ -247,6 +263,25 @@ def test_apply_repair_releases_expired_workspace_claim(tmp_path):
         )
 
 
+def test_apply_repair_makes_expired_coordination_session_dormant(tmp_path):
+    started = start_session(str(tmp_path / "lease"), tool="pytest")
+    with SessionLocal() as session:
+        lease = session.get(SessionLease, started["session_id"])
+        assert lease is not None
+        lease.lease_expires_at = utc_now() - timedelta(seconds=1)
+        session.commit()
+
+    plan = queue_health.plan_repair()
+    action = next(a for a in plan["actions"] if a["code"] == "expired_session_leases")
+    assert action["would_affect_rows"] >= 1
+
+    applied = queue_health.apply_repair()
+    action = next(a for a in applied["actions"] if a["code"] == "expired_session_leases")
+    assert action["applied_rows"] >= 1
+    with SessionLocal() as session:
+        assert session.get(AgentSession, started["session_id"]).state == "dormant"
+
+
 def test_apply_repair_expires_a_past_deadline_help_request(tmp_path):
     started = start_session(str(tmp_path), tool="pytest")
     with SessionLocal() as session:
@@ -274,6 +309,70 @@ def test_apply_repair_expires_a_past_deadline_help_request(tmp_path):
     with SessionLocal() as session:
         refreshed = session.query(HelpRequest).filter(HelpRequest.code == "HR-qhtest1").one()
         assert refreshed.status == "expired"
+
+
+def test_help_expiry_prediction_matches_claim_grace_and_live_review(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAINS_HELP_CLAIM_GRACE_SECONDS", "60")
+    baseline = queue_health._predict_expired_help_requests()
+    workspace = start_session(str(tmp_path), tool="pytest")
+    now = utc_now()
+    with SessionLocal() as session:
+        session.add_all(
+            [
+                HelpRequest(
+                    code="HR-qh-claimed-fresh",
+                    from_session_id=workspace["session_id"],
+                    to_session_id="peer",
+                    subject="fresh",
+                    question="inspect",
+                    status="claimed",
+                    claimed_at=now - timedelta(seconds=30),
+                    ask_depth=1,
+                    created_at=now - timedelta(minutes=5),
+                    expires_at=now - timedelta(minutes=1),
+                ),
+                HelpRequest(
+                    code="HR-qh-review-live",
+                    from_session_id=workspace["session_id"],
+                    to_session_id="peer",
+                    subject="live review",
+                    question="inspect",
+                    status="claimed",
+                    claimed_at=now - timedelta(minutes=5),
+                    ask_depth=1,
+                    created_at=now - timedelta(minutes=6),
+                    expires_at=now - timedelta(minutes=1),
+                ),
+                HelpRequest(
+                    code="HR-qh-claimed-stale",
+                    from_session_id=workspace["session_id"],
+                    to_session_id="peer",
+                    subject="stale",
+                    question="inspect",
+                    status="claimed",
+                    claimed_at=now - timedelta(minutes=5),
+                    ask_depth=1,
+                    created_at=now - timedelta(minutes=6),
+                    expires_at=now + timedelta(minutes=5),
+                ),
+            ]
+        )
+        session.flush()
+        source_workspace_id = session.get(AgentSession, workspace["session_id"]).workspace_id
+        session.add(
+            HelpRequestExecution(
+                request_code="HR-qh-review-live",
+                mode="ephemeral",
+                source_workspace_id=source_workspace_id,
+                required_tool="copilot",
+                status="running",
+                launch_after=now - timedelta(minutes=5),
+                lease_expires_at=now + timedelta(minutes=5),
+            )
+        )
+        session.commit()
+
+    assert queue_health._predict_expired_help_requests() == baseline + 1
 
 
 def test_apply_repair_is_idempotent_on_repeated_runs(tmp_path):

@@ -65,3 +65,31 @@ def test_planner_prefers_active_handoff(tmp_path):
     classification = classify([{"role": "user", "content": "Fix bug in file"}])
     result = plan(classification, workspace_path=str(tmp_path))
     assert result["strategy"] == "handoff_resume"
+
+
+def test_handoff_reuses_only_the_active_exact_payload(tmp_path):
+    from brains.control.sessions import get_workspace
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import Event, Handoff
+
+    workspace = str(tmp_path)
+    started = start_session(workspace, tool="pytest")
+    session_id = started["session_id"]
+
+    first = set_handoff(workspace, "Continue", "same body", session_id=session_id)
+    retry = set_handoff(workspace, "Continue", "same body", session_id=session_id)
+    changed = set_handoff(workspace, "Continue", "new body", session_id=session_id)
+    repeated_later = set_handoff(workspace, "Continue", "same body", session_id=session_id)
+
+    assert first["duplicate"] is False
+    assert retry["duplicate"] is True
+    assert retry["handoff_id"] == first["handoff_id"]
+    assert changed["duplicate"] is False
+    assert repeated_later["duplicate"] is False
+    assert repeated_later["handoff_id"] != first["handoff_id"]
+    workspace_id = get_workspace(path=workspace).id
+    with SessionLocal() as session:
+        assert session.query(Handoff).filter(Handoff.workspace_id == workspace_id).count() == 3
+        assert (
+            session.query(Event).filter_by(session_id=session_id, kind="handoff_set").count() == 3
+        )

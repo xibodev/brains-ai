@@ -109,6 +109,26 @@ class HubClient:
         data = self._json(self._http.get(f"/v1/runtimes/{runtime_id}/assignments"))
         return data.get("assignments", [])
 
+    def get_help_reviews(self, runtime_id: int | str) -> list[dict]:
+        data = self._json(self._http.get(f"/v1/runtimes/{runtime_id}/help-reviews"))
+        return data.get("reviews", [])
+
+    def claim_help_review(self, runtime_id: int | str, code: str) -> dict:
+        return self._json(self._http.post(f"/v1/runtimes/{runtime_id}/help-reviews/{code}/claim"))
+
+    def complete_help_review(
+        self,
+        runtime_id: int | str,
+        code: str,
+        **body: Any,
+    ) -> dict:
+        return self._json(
+            self._http.post(
+                f"/v1/runtimes/{runtime_id}/help-reviews/{code}/complete",
+                json=body,
+            )
+        )
+
     def claim(self, runtime_id: int | str, assignment_id: str) -> dict:
         return self._json(
             self._http.post(f"/v1/runtimes/{runtime_id}/assignments/{assignment_id}/claim")

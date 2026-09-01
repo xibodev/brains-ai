@@ -154,6 +154,15 @@ class SessionReconcileBody(BaseModel):
     reason: str | None = None
 
 
+class HelpReviewResultBody(BaseModel):
+    session_id: str
+    answer: str
+    evidence: str
+    returncode: int
+    source_unchanged: bool
+    error_code: str | None = None
+
+
 class EnrolBody(BaseModel):
     label: str | None = None
     org_id: int | None = None
@@ -708,6 +717,67 @@ def get_assignments(
     except ValueError as exc:
         raise _not_found(exc) from exc
     return {"assignments": items}
+
+
+@router.get("/{runtime_id}/help-reviews")
+def get_help_reviews(
+    runtime_id: str,
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    runtime = _authorize_runtime(
+        principal, runtime_id, operation="runtime.claim", capability=CAP_ORG_READ
+    )
+    from brains.control.help_execution import list_reviews_for_runtime
+
+    try:
+        return {"reviews": list_reviews_for_runtime(runtime["id"])}
+    except ValueError as exc:
+        raise _not_found(exc) from exc
+
+
+@router.post("/{runtime_id}/help-reviews/{code}/claim")
+def claim_help_review(
+    runtime_id: str,
+    code: str,
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    runtime = _authorize_runtime(
+        principal, runtime_id, operation="runtime.claim", capability=CAP_ORG_WRITE
+    )
+    from brains.control.help_execution import claim_review_for_runtime
+
+    try:
+        review = claim_review_for_runtime(runtime["id"], code)
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
+    return {"claimed": review is not None, "review": review}
+
+
+@router.post("/{runtime_id}/help-reviews/{code}/complete")
+def complete_help_review(
+    runtime_id: str,
+    code: str,
+    body: HelpReviewResultBody,
+    principal: Principal = Depends(require_console_principal),
+) -> dict:
+    runtime = _authorize_runtime(
+        principal, runtime_id, operation="runtime.execute", capability=CAP_ORG_WRITE
+    )
+    from brains.control.help_execution import complete_review
+
+    try:
+        return complete_review(
+            code,
+            session_id=body.session_id,
+            answer=body.answer,
+            evidence=body.evidence,
+            returncode=body.returncode,
+            source_unchanged=body.source_unchanged,
+            error_code=body.error_code,
+            runtime_id=int(runtime["id"]),
+        )
+    except ValueError as exc:
+        raise _bad_request(exc) from exc
 
 
 @router.post("/{runtime_id}/assignments/{aid}/claim")

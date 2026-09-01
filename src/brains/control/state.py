@@ -37,7 +37,7 @@ def get_state(
         "active_sessions": [
             row
             for row in list_sessions(workspace_path=workspace_path, limit=limit)
-            if row["ended_at"] is None
+            if row["ended_at"] is None and row.get("state") != "dormant"
         ],
         "active_claims": list_workspace_claims(workspace_path=workspace_path),
         "open_decisions": list_open_decisions(workspace_path=workspace_path, limit=limit),

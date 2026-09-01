@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-04T08:00:00.000-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: candidate tree based on HEAD c21a15db3859e6b9f147260a38a7a0d6fe2533b2 plus the local blocking-quality-gates change; local Windows execution of scripts/check_docs.py, scripts/check_traceability.py, ruff check/format, mypy, the full SQLite pytest suite and the acceptance subset, npm ci, the SPA typecheck, the committed-bundle comparison, uv build, scripts/check_distribution.py, the runtime image build with its container health smoke, and the Playwright journey suite against an isolated local hub; a GitHub-hosted workflow run, live Postgres, and deployment not verified
+last_verified: 2026-08-31T18:30:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree Docker full-quality, packaged-browser, and real-CLI UAT runner execution; installed-service recovery and deployment not verified
 -->
 
 # Brains Quality Gates
@@ -43,6 +43,8 @@ Current canonical feature status uses only E1 and E2 unless a newer evidence rec
 - Name the product outcome being changed.
 - Identify affected `F*` or `B*` feature IDs.
 - Identify affected `AC-*`, Persona, and `J*` journey IDs.
+- State whether each affected capability is advertised, experimental,
+  target-only, or withdrawn.
 - Identify security, data, operations, and recovery implications.
 - Update [TRACEABILITY.md](product/TRACEABILITY.md) when a route, component, API, model, migration, CLI, MCP tool family, or test family changes.
 
@@ -51,6 +53,8 @@ Current canonical feature status uses only E1 and E2 unless a newer evidence rec
 - Keep Brains product, package, namespace, CLI, MCP, state, and browser language consistent.
 - Do not bypass `require_api_key` or `require_console_auth` on protected `/v1/*` routes.
 - Do not add an execution, recurring, pattern, or tool-spawn path that evades required human control.
+- Do not add discovery, configuration, installation, or activation for a withdrawn
+  capability; persisted-data compatibility is not an activation contract.
 - Preserve SQLite as the default source of truth; generated Markdown views are optional projections.
 - Add migrations and rollback or compatibility behavior for persistent schema changes.
 - Keep failure behavior explicit and fail closed where the acceptance contract requires authorization or approval.
@@ -86,24 +90,61 @@ The target hard gate includes:
 
 Current workflow facts at HEAD:
 
-- Every job in `.github/workflows/ci.yml` is blocking. No required gate carries `continue-on-error`, and the `quality gate` job fails when any dependency failed, was cancelled, or was skipped.
+- Every job in `.github/workflows/ci.yml` is blocking for pushes and pull requests
+  targeting `staging` or `main`, and the same workflow is manually dispatchable. No
+  required gate carries `continue-on-error`, and the `quality gate` job fails when any
+  dependency failed, was cancelled, or was skipped.
 - The blocking jobs are: documentation and generated traceability contract; Ruff lint and format; mypy; pytest (Python 3.11 and 3.12, acceptance subset then the full unit/integration suite); migration and frozen-baseline contract; SPA typecheck, production build and committed-bundle comparison; wheel/sdist build with shipped-data assertions; the privacy scan; the runtime image build and container health smoke; and the Playwright journey suite.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
 - Failing jobs upload their diagnostics: pytest and migration JUnit XML plus coverage, the rebuilt SPA bundle, container logs, and the Playwright report and hub log.
-- A blocking gate is not an evidence claim. J1-J11 all have Playwright contracts, but simulated Runtime/provider paths remain distinct from real external execution and stay recorded as gaps in [TRACEABILITY.md](product/TRACEABILITY.md) and [BACKLOG.md](product/BACKLOG.md).
+- A blocking gate is not an evidence claim. J1-J11 retain Playwright files; J2-J6 and
+  J10 now assert withdrawn containment/fail-closed behavior, while J1 and J7-J11 cover
+  Workspace-first advertised surfaces. Remaining withdrawn source modules stay
+  compatibility inventory and are not product activation evidence.
 
-### Local gate command
+### Docker-only gate commands
 
-The exact local equivalent of the workflow, in CI order:
+Run the complete candidate quality gate in Docker:
 
 ```text
-python scripts/run_quality_gates.py
+pwsh -File scripts/run_docker_quality.ps1
 ```
 
-It runs the documentation contract, the generated traceability contract, Ruff lint and format, mypy, the acceptance subset, the full pytest suite, `npm ci`, the SPA typecheck, the committed-bundle comparison, the distribution build, and the shipped-data assertions. `--fast` swaps the full sweep for the contract self-tests; `--no-spa` skips the Node gates; `--list` prints the commands without running them.
+The runner bakes source plus locked Python/Node dependencies into a disposable image,
+then runs without a network, host mount, Linux capabilities, or published port. It runs
+the documentation and traceability contracts, Ruff, mypy, acceptance and full pytest,
+SPA and E2E TypeScript checks, the committed-bundle comparison, distribution build, and
+shipped-data assertions.
 
-The Docker smoke and Playwright gates are deliberately not run by that script: they need a Docker daemon, browsers, and an ephemeral hub. Run them explicitly when the change touches those surfaces, and record which of them actually ran when reporting evidence.
+Run browser UAT separately:
+
+```text
+pwsh -File scripts/run_docker_e2e.ps1
+```
+
+That runner uses a private internal Docker network, publishes no host port, stores state
+in tmpfs, passes only a synthetic manifest to Playwright, and tears down only artifacts
+it created. `scripts/run_quality_gates.py` remains a CI-command enumerator and
+compatibility fallback, not the isolated operator-machine path.
+
+Run real coding-harness durable-mail UAT separately:
+
+```text
+pwsh -File scripts/run_docker_cli_uat.ps1
+```
+
+That runner builds pinned Claude, Copilot, OpenCode, and Codex CLIs. The default journey
+uses OpenCode and Claude; `-Tool` may select other pairs when their credentials are
+portable into Linux. Each selected CLI gets a separate tmpfs home and read-only
+credential-file mount, and runs the exact candidate's stdio MCP server against the same
+disposable SQLite volume while a separate `serve-all` container passes gateway/MCP
+health. The runner extracts each real native Session ID, resumes the same harness
+conversation, registers proof-bound mailboxes,
+delivers while recipients are offline, resumes through explicit successors, exchanges
+threaded replies, verifies the candidate worktree is unchanged, and removes its
+containers, networks, volume, and images. It publishes no host port and records only a
+sanitized machine report outside the repository.
 
 Candidate evidence must state the exact SHA, which gates ran, and on what platform. A local run is E3 evidence for the gates it actually executed and for nothing else.
 
@@ -112,7 +153,9 @@ Candidate evidence must state the exact SHA, which gates ran, and on what platfo
 UAT must:
 
 - use an isolated HOME, state directory, database, ports, and credentials;
-- use simulated tool execution for browser journeys unless real Runtime behavior is explicitly under test;
+- keep coding-harness execution outside the UI harness unless a supported governed
+  boundary is explicitly under test; never require a withdrawn Runtime path for
+  advertised-product acceptance;
 - run against a disposable or read-only source tree and fail if the candidate worktree changes;
 - stop and verify the complete process tree created by the harness;
 - identify the exact SHA and built artifact;
@@ -128,7 +171,10 @@ No UAT result is implied by the presence of `sandbox/`, `sandbox/battle/`, or Pl
 Acceptance requires:
 
 - every in-scope AC has E3 or E4 evidence;
-- P0 backlog items affecting the candidate are closed or explicitly block acceptance;
+- P0 backlog items affecting the candidate are closed or explicitly block promotion;
+- withdrawn surfaces have no discovery or activation path in the supported candidate;
+- experimental features satisfy the same automated and isolated-UAT gates as other
+  release candidates, plus their feedback, disable, rollback, and revision rules;
 - no unmatched frontend route remains;
 - no cross-Org authorization or realtime subscription escape is open;
 - backup and rollback have been rehearsed for the exact candidate;
@@ -163,7 +209,15 @@ A change is done only when:
 
 ## Branch policy
 
-`main` is the sole integration and truth branch for the product. Work may use short-lived branches, but documentation and acceptance decisions describe the candidate by exact SHA and must converge on `main`.
+`staging` is the integration branch. Every delivery slice starts from current `staging`
+on one short-lived feature branch, carries its code/tests/docs/traceability contract,
+passes the slice's required gates, and merges back to `staging` for integrated
+validation.
+
+`main` receives only promotion of an exact integrated staging candidate. Promotion must
+identify the exact staging SHA/artifact and preserve that candidate without assembling
+new feature work in the promotion change. Documentation and acceptance decisions always
+name the exact candidate; neither branch name is evidence by itself.
 
 Until an explicit first release decision is recorded outside these current-state docs:
 

@@ -75,6 +75,22 @@ def test_tool_registry_register_list_and_verify(monkeypatch):
     assert verified["on_path_now"] is False
 
 
+def test_list_verify_now_persists_local_readiness(monkeypatch):
+    name = f"pytest-refresh-tool-{uuid.uuid4().hex}"
+    availability = {"refresh-tool": "C:/fake/refresh-tool.exe"}
+    monkeypatch.setattr(
+        "brains.control.tool_registry.shutil.which",
+        lambda command: availability.get(command),
+    )
+    register_tool(name, "Refresh Tool", "refresh-tool", verify=False)
+
+    refreshed = next(row for row in list_registered_tools(verify_now=True) if row["name"] == name)
+    assert refreshed["is_available"] is True
+    assert refreshed["last_verified_at"] is not None
+    persisted = next(row for row in list_registered_tools() if row["name"] == name)
+    assert persisted["is_available"] is True
+
+
 def test_tool_registry_handles_quoted_commands_and_unverified_state(monkeypatch):
     quoted_name = f"pytest-quoted-tool-{uuid.uuid4().hex}"
     unchecked_name = f"pytest-unchecked-tool-{uuid.uuid4().hex}"

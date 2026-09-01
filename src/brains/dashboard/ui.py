@@ -723,7 +723,9 @@ def render_workspaces(
 
     cleanup_hint = (
         '<p class="muted" style="margin-top:8px;font-size:12px;">'
-        "Polluted by old test runs? Run "
+        "Polluted by old test runs? Preview and archive stale paths with "
+        "<code>brains workspaces doctor --archive-missing</code>. "
+        "For explicit fixture deletion, run "
         "<code>brains workspaces prune --slug-prefix test- --slug-prefix adopt- "
         "--path-contains pytest --apply</code> "
         "to clean up. Existing tests now write to a tmp DB so this won't recur."

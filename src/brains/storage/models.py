@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -135,6 +136,19 @@ class Workspace(Base):
     )
 
 
+class WorkspaceAlias(Base):
+    """A filesystem spelling that resolves to one durable Workspace identity."""
+
+    __tablename__ = "workspace_aliases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    path: Mapped[str] = mapped_column(String(1024), unique=True, index=True)
+    identity_key: Mapped[str] = mapped_column(String(1100), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 class Operator(Base):
     """A named human (or robot) principal that owns one or more sessions.
 
@@ -213,7 +227,7 @@ class AgentSession(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # F3.2 explicit lifecycle: spawning -> running -> blocked | completed | failed.
+    # F3.2 lifecycle: spawning -> running -> dormant | blocked | completed | failed.
     # Defaults to ``running`` so pre-F3.2 rows (and create_all on fresh DBs) keep
     # the prior implied semantics; the 123 disk migration patches existing SQLite.
     state: Mapped[str] = mapped_column(String(16), default="running", index=True)
@@ -255,6 +269,17 @@ class SessionSuccessor(Base):
     )
 
 
+class SessionLease(Base):
+    """Renewable liveness for coordination Sessions without an owned PID."""
+
+    __tablename__ = "session_leases"
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), primary_key=True)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    renewed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
 class Event(Base):
     __tablename__ = "events"
     __table_args__ = (Index("ix_events_ws_created", "workspace_id", "created_at"),)
@@ -271,6 +296,17 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
+
+
+class EventContext(Base):
+    """Typed taxonomy and scope provenance for one durable event."""
+
+    __tablename__ = "event_contexts"
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), primary_key=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    scope: Mapped[str] = mapped_column(String(16), index=True)
+    scope_source: Mapped[str] = mapped_column(String(64), index=True)
+    taxonomy_version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class ApprovalRequest(Base):
@@ -292,6 +328,30 @@ class ApprovalRequest(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ApprovalRouting(Base):
+    """Human-owned assignment and escalation metadata for an approval."""
+
+    __tablename__ = "approval_routing"
+    approval_request_id: Mapped[int] = mapped_column(
+        ForeignKey("approval_requests.id"), primary_key=True
+    )
+    assigned_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True, index=True
+    )
+    priority: Mapped[str] = mapped_column(String(16), default="p2", index=True)
+    due_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    escalation_level: Mapped[int] = mapped_column(Integer, default=0)
+    escalation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
 
 
 class ApprovalDecision(Base):
@@ -365,6 +425,8 @@ class WorkspaceClaim(Base):
 
 
 class MailboxMessage(Base):
+    """Legacy Session-addressed mail retained for compatibility."""
+
     __tablename__ = "mailbox_messages"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int | None] = mapped_column(
@@ -379,6 +441,377 @@ class MailboxMessage(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class Mailbox(Base):
+    """One durable agent or operator mailbox (BL-P1-12/BL-P1-14).
+
+    Agent mailboxes are addressed by canonical Workspace, tool, and validated
+    tool-native Session id. The native id is an address component, never an
+    authentication principal: ``owner_operator_id`` and the hash-only binding
+    prove who may attach a new ephemeral Brains Session. ``operator_slot`` is
+    ``1`` only for an operator mailbox; its nullable unique tuple permits an
+    operator to own many agent addresses but only one human inbox.
+    """
+
+    __tablename__ = "mailboxes"
+    __table_args__ = (
+        UniqueConstraint("address", name="uq_mailbox_address"),
+        UniqueConstraint(
+            "workspace_id",
+            "tool",
+            "native_tool_session_id",
+            name="uq_mailbox_agent_address",
+        ),
+        UniqueConstraint("owner_operator_id", "operator_slot", name="uq_mailbox_operator_slot"),
+        UniqueConstraint("binding_key_hash", name="uq_mailbox_binding_key_hash"),
+        CheckConstraint(
+            "operator_slot IS NULL OR operator_slot = 1",
+            name="ck_mailbox_operator_slot",
+        ),
+        CheckConstraint(
+            "binding_key_version IS NULL OR binding_key_version > 0",
+            name="ck_mailbox_binding_version",
+        ),
+        CheckConstraint(
+            "(kind = 'agent' AND workspace_id IS NOT NULL AND tool IS NOT NULL "
+            "AND native_tool_session_id IS NOT NULL AND binding_key_hash IS NOT NULL "
+            "AND binding_key_version IS NOT NULL AND operator_slot IS NULL) OR "
+            "(kind = 'operator' AND workspace_id IS NULL AND tool IS NULL "
+            "AND native_tool_session_id IS NULL AND binding_key_hash IS NULL "
+            "AND binding_key_version IS NULL AND binding_rotated_at IS NULL "
+            "AND operator_slot = 1)",
+            name="ck_mailbox_identity_shape",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    address: Mapped[str] = mapped_column(String(512), index=True)
+    kind: Mapped[str] = mapped_column(String(16), index=True)
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    tool: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    native_tool_session_id: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, index=True
+    )
+    owner_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"), index=True)
+    operator_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    binding_key_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    binding_key_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    binding_rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailboxAttachment(Base):
+    """One ephemeral Brains Session incarnation attached to a mailbox."""
+
+    __tablename__ = "mailbox_attachments"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_mailbox_attachment_session"),
+        UniqueConstraint("mailbox_id", "active_slot", name="uq_mailbox_attachment_current"),
+        CheckConstraint(
+            "active_slot IS NULL OR active_slot = 1",
+            name="ck_mailbox_attachment_active_slot",
+        ),
+        CheckConstraint(
+            "(active_slot IS NOT NULL AND active_slot = 1 "
+            "AND detached_at IS NULL AND detach_reason IS NULL) OR "
+            "(active_slot IS NULL AND detached_at IS NOT NULL AND detach_reason IS NOT NULL)",
+            name="ck_mailbox_attachment_state",
+        ),
+        CheckConstraint(
+            "last_seen_delivery_id >= 0",
+            name="ck_mailbox_attachment_cursor",
+        ),
+        CheckConstraint(
+            "notification_mode IN ('pull', 'turn_boundary', 'immediate')",
+            name="ck_mailbox_attachment_notification_mode",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
+    active_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notification_mode: Mapped[str] = mapped_column(String(24), default="pull", index=True)
+    last_seen_delivery_id: Mapped[int] = mapped_column(Integer, default=0)
+    attached_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    detached_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    detach_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MailThread(Base):
+    """A durable local conversation rooted in one originating Workspace."""
+
+    __tablename__ = "mail_threads"
+    __table_args__ = (UniqueConstraint("thread_id", name="uq_mail_thread_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(40), index=True)
+    origin_workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    started_by_mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    subject: Mapped[str] = mapped_column(String(256))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class MailMessage(Base):
+    """One message in a thread; recipient state lives in ``mail_deliveries``."""
+
+    __tablename__ = "mail_messages"
+    __table_args__ = (
+        UniqueConstraint("message_id", name="uq_mail_message_id"),
+        UniqueConstraint("operation_key", name="uq_mail_message_operation_key"),
+        CheckConstraint(
+            "audience IN ('direct', 'broadcast')",
+            name="ck_mail_message_audience",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[str] = mapped_column(String(40), index=True)
+    operation_key: Mapped[str] = mapped_column(String(160), index=True)
+    thread_id: Mapped[int] = mapped_column(ForeignKey("mail_threads.id"), index=True)
+    sender_mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    sender_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    origin_workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    audience: Mapped[str] = mapped_column(String(16), index=True)
+    in_reply_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mail_messages.id"), nullable=True, index=True
+    )
+    forwarded_from_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mail_messages.id"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), default="info", index=True)
+    subject: Mapped[str] = mapped_column(String(256))
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class MailDelivery(Base):
+    """Local acceptance and read state for one message/recipient pair."""
+
+    __tablename__ = "mail_deliveries"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", name="uq_mail_delivery_id"),
+        UniqueConstraint("message_id", "recipient_mailbox_id", name="uq_mail_delivery_recipient"),
+        CheckConstraint(
+            "(read_at IS NULL AND read_by_session_id IS NULL "
+            "AND read_by_operator_id IS NULL AND read_channel IS NULL) OR "
+            "(read_at IS NOT NULL AND read_channel IS NOT NULL AND "
+            "((read_by_session_id IS NOT NULL AND read_by_operator_id IS NULL) OR "
+            "(read_by_session_id IS NULL AND read_by_operator_id IS NOT NULL)))",
+            name="ck_mail_delivery_read_attribution",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    delivery_id: Mapped[str] = mapped_column(String(40), index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("mail_messages.id"), index=True)
+    recipient_mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    recipient_workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    read_by_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    read_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True, index=True
+    )
+    read_channel: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class MailNotificationAttempt(Base):
+    """Best-effort body-free nudge after a local delivery has committed."""
+
+    __tablename__ = "mail_notification_attempts"
+    __table_args__ = (
+        UniqueConstraint("notification_id", name="uq_mail_notification_id"),
+        UniqueConstraint("idempotency_key", name="uq_mail_notification_idempotency_key"),
+        CheckConstraint(
+            "status IN ('queued', 'claimed', 'delivered', 'failed')",
+            name="ck_mail_notification_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_mail_notification_attempt"),
+        CheckConstraint(
+            "(status = 'queued' AND attempt = 0 AND error_code IS NULL "
+            "AND started_at IS NULL AND completed_at IS NULL) OR "
+            "(status = 'claimed' AND attempt > 0 AND error_code IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NULL) OR "
+            "(status = 'delivered' AND attempt > 0 AND error_code IS NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL) OR "
+            "(status = 'failed' AND attempt > 0 AND error_code IS NOT NULL "
+            "AND started_at IS NOT NULL AND completed_at IS NOT NULL)",
+            name="ck_mail_notification_state",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    notification_id: Mapped[str] = mapped_column(String(40), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), index=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("mail_deliveries.id"), index=True)
+    attachment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("mailbox_attachments.id"), nullable=True, index=True
+    )
+    adapter: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OperatorMailboxSetting(Base):
+    """Per-operator SMTP destination reference and explicit copy consent."""
+
+    __tablename__ = "operator_mailbox_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "smtp_copy_mode IN ('disabled', 'notification', 'full_body')",
+            name="ck_operator_mailbox_smtp_copy_mode",
+        ),
+        CheckConstraint(
+            "(smtp_destination_ref IS NULL AND smtp_destination_verified_at IS NULL "
+            "AND smtp_copy_mode = 'disabled' AND smtp_consented_at IS NULL "
+            "AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NULL "
+            "AND smtp_copy_mode = 'disabled' AND smtp_consented_at IS NULL "
+            "AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NOT NULL "
+            "AND smtp_copy_mode IN ('disabled', 'notification') "
+            "AND smtp_consented_at IS NULL AND smtp_consented_by_operator_id IS NULL) OR "
+            "(smtp_destination_ref IS NOT NULL AND smtp_destination_verified_at IS NOT NULL "
+            "AND smtp_copy_mode = 'full_body' AND smtp_consented_at IS NOT NULL "
+            "AND smtp_consented_by_operator_id IS NOT NULL)",
+            name="ck_operator_mailbox_smtp_state",
+        ),
+    )
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), primary_key=True)
+    smtp_destination_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    smtp_destination_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    smtp_copy_mode: Mapped[str] = mapped_column(String(16), default="disabled", index=True)
+    smtp_consented_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    smtp_consented_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
+class MailSmtpOutbox(Base):
+    """Retryable SMTP copy derived only after local operator delivery."""
+
+    __tablename__ = "mail_smtp_outbox"
+    __table_args__ = (
+        UniqueConstraint("outbox_id", name="uq_mail_smtp_outbox_id"),
+        UniqueConstraint("idempotency_key", name="uq_mail_smtp_outbox_idempotency_key"),
+        UniqueConstraint("delivery_id", name="uq_mail_smtp_outbox_delivery"),
+        CheckConstraint(
+            "copy_mode IN ('notification', 'full_body')",
+            name="ck_mail_smtp_outbox_copy_mode",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'sending', 'retry', 'sent', 'failed', 'uncertain', 'cancelled')",
+            name="ck_mail_smtp_outbox_status",
+        ),
+        CheckConstraint("attempt >= 0", name="ck_mail_smtp_outbox_attempt"),
+        CheckConstraint(
+            "(status = 'queued' AND attempt = 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NULL) OR "
+            "(status = 'sending' AND attempt > 0 AND lease_owner IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NULL) OR "
+            "(status = 'retry' AND attempt > 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NOT NULL "
+            "AND error_code IS NOT NULL AND sent_at IS NULL) OR "
+            "(status = 'sent' AND attempt > 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NULL AND sent_at IS NOT NULL) OR "
+            "(status = 'failed' AND attempt > 0 "
+            "AND lease_owner IS NULL AND lease_expires_at IS NULL "
+            "AND next_attempt_at IS NULL AND error_code IS NOT NULL "
+            "AND sent_at IS NULL) OR "
+            "(status = 'uncertain' AND attempt >= 0 "
+            "AND lease_owner IS NULL AND lease_expires_at IS NULL "
+            "AND next_attempt_at IS NULL AND error_code IS NOT NULL "
+            "AND sent_at IS NULL) OR "
+            "(status = 'cancelled' AND attempt >= 0 AND lease_owner IS NULL "
+            "AND lease_expires_at IS NULL AND next_attempt_at IS NULL "
+            "AND error_code IS NOT NULL AND sent_at IS NULL)",
+            name="ck_mail_smtp_outbox_state",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    outbox_id: Mapped[str] = mapped_column(String(40), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), index=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("mail_deliveries.id"), index=True)
+    recipient_mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), index=True)
+    smtp_destination_ref: Mapped[str] = mapped_column(String(160))
+    copy_mode: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    lease_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailLegacyRecord(Base):
+    """Non-destructive disposition of a pre-mailbox link or message row."""
+
+    __tablename__ = "mail_legacy_records"
+    __table_args__ = (UniqueConstraint("source_table", "source_pk", name="uq_mail_legacy_source"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_table: Mapped[str] = mapped_column(String(64), index=True)
+    source_pk: Mapped[str] = mapped_column(String(64))
+    disposition: Mapped[str] = mapped_column(String(24), default="unverified", index=True)
+    reason_code: Mapped[str] = mapped_column(String(64), index=True)
+    target_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    classified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
     )
 
@@ -644,6 +1077,39 @@ class HelpRequestConstraint(Base):
     required_tool: Mapped[str] = mapped_column(String(64))
 
 
+class HelpRequestExecution(Base):
+    """Fenced execution state for an on-demand ephemeral help reviewer."""
+
+    __tablename__ = "help_request_executions"
+    request_code: Mapped[str] = mapped_column(ForeignKey("help_requests.code"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16), index=True)
+    source_workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    required_tool: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    runtime_id: Mapped[int | None] = mapped_column(
+        ForeignKey("runtimes.id"), nullable=True, index=True
+    )
+    review_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    attempt: Mapped[int] = mapped_column(Integer, default=0)
+    launch_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
 class SecureSetting(Base):
     """Encrypted local configuration value.
 
@@ -667,10 +1133,8 @@ class TopicPost(Base):
     """One post on a named agent topic (message board, comms slice 1).
 
     Topics are install-wide and flat: any live session may post, replies
-    reference their parent via ``reply_to_id``, and delivery to busy agents
-    happens through the mailbox — posting blasts one notification per other
-    workspace with live sessions (see ``brains.control.topics``), so an
-    agent only ever polls its own inbox.
+    reference their parent via ``reply_to_id``, and one optional announcement
+    row wakes Sessions whose durable subscription cursor is behind the post.
     """
 
     __tablename__ = "topic_posts"
@@ -690,6 +1154,37 @@ class TopicPost(Base):
     required_tool: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class TopicAnnouncement(Base):
+    """One topic post that should wake interested live subscribers."""
+
+    __tablename__ = "topic_announcements"
+    post_id: Mapped[int] = mapped_column(ForeignKey("topic_posts.id"), primary_key=True)
+    excluded_workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class TopicSubscription(Base):
+    """Per-Session topic interest and durable announcement cursor."""
+
+    __tablename__ = "topic_subscriptions"
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), primary_key=True)
+    topic: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    last_seen_post_id: Mapped[int] = mapped_column(Integer, default=0)
+    subscribed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        index=True,
     )
 
 
@@ -911,6 +1406,86 @@ class KnowledgeEntry(Base):
         onupdate=lambda: datetime.now(UTC),
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class FeedbackReport(Base):
+    """Canonical, redacted agent-experience report for one Workspace."""
+
+    __tablename__ = "feedback_reports"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_feedback_workspace_fingerprint"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    reporter_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(16), index=True)
+    summary: Mapped[str] = mapped_column(String(500))
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    reproduction: Mapped[str] = mapped_column(Text, default="")
+    affected_version: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    surface: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="open", index=True)
+    triage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triaged_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True, index=True
+    )
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        index=True,
+    )
+
+
+class FeedbackEnrichment(Base):
+    """Append-only evidence or context linked to a canonical feedback report."""
+
+    __tablename__ = "feedback_enrichments"
+    __table_args__ = (
+        UniqueConstraint("feedback_report_id", "fingerprint", name="uq_feedback_enrichment"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    feedback_report_id: Mapped[int] = mapped_column(ForeignKey("feedback_reports.id"), index=True)
+    reporter_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), default="enrichment", index=True)
+    note: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    reproduction: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
+
+
+class FeedbackPromotion(Base):
+    """Exactly-once promotion of feedback into owned work or a backlog reference."""
+
+    __tablename__ = "feedback_promotions"
+    feedback_report_id: Mapped[int] = mapped_column(
+        ForeignKey("feedback_reports.id"), primary_key=True
+    )
+    target_kind: Mapped[str] = mapped_column(String(16), index=True)
+    target_ref: Mapped[str] = mapped_column(String(128), index=True)
+    promoted_by_operator_id: Mapped[int | None] = mapped_column(
+        ForeignKey("operators.id"), nullable=True
+    )
+    audit_entry_id: Mapped[int] = mapped_column(ForeignKey("audit_log.id"), unique=True)
+    promoted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
 
 
 class Squad(Base):

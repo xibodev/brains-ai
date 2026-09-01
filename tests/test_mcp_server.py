@@ -220,6 +220,28 @@ def test_scheduler_tick_calls_the_runtime_staleness_sweep(
     assert calls == [1]
 
 
+def test_scheduler_tick_calls_the_session_lease_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "list_recurring_tasks", lambda **_kw: [])
+    calls: list[int] = []
+    monkeypatch.setattr(
+        mcp_server,
+        "_sweep_stale_sessions",
+        lambda: calls.append(1) or 0,
+    )
+    mcp_server._scheduler_tick(now=_now())
+    assert calls == [1]
+
+
+def test_scheduler_tick_processes_mailbox_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_server, "list_recurring_tasks", lambda **_kw: [])
+    calls: list[int] = []
+    monkeypatch.setattr(mcp_server, "_process_mailbox_smtp", lambda: calls.append(1) or 0)
+
+    mcp_server._scheduler_tick(now=_now())
+
+    assert calls == [1]
+
+
 def test_scheduler_tick_runs_the_runtime_sweep_even_when_fire_list_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -386,6 +408,14 @@ def test_registered_mcp_tool_names_are_anthropic_safe() -> None:
 def test_tool_registry_every_value_is_callable() -> None:
     for name, fn in mcp_server.TOOL_REGISTRY.items():
         assert callable(fn), f"TOOL_REGISTRY[{name!r}] is not callable"
+
+
+def test_topic_subscription_tools_are_registered() -> None:
+    assert {
+        "topic_subscribe",
+        "topic_unsubscribe",
+        "topic_subscriptions",
+    } <= set(mcp_server.TOOL_REGISTRY)
 
 
 def test_call_tool_normalizes_brains_prefix(

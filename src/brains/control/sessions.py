@@ -6,22 +6,33 @@ import os
 import platform
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import func
+from sqlalchemy import func, update
 
 from brains.control.common import normalize_path, slug_from_path, unique_slug, utc_now
-from brains.control.events import append_event
+from brains.control.events import TAXONOMY_VERSION, append_event
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
     AgentSession,
     AgentTask,
+    Event,
+    EventContext,
     Handoff,
+    MailboxAttachment,
     Org,
+    SessionLease,
+    SessionSuccessor,
+    TopicSubscription,
     Workspace,
+    WorkspaceAlias,
     WorkspaceClaim,
 )
+
+if TYPE_CHECKING:
+    from brains.control.operators import OperatorRecord
 
 
 class WorkspaceNotFoundError(ValueError):
@@ -55,6 +66,7 @@ WORKSPACE_PROJECT_MARKERS: tuple[str, ...] = (
 )
 
 STALE_SESSION_TTL_SECONDS = 30 * 60
+DORMANT_SESSION_STATE = "dormant"
 
 
 def _fallback_machine_id() -> str:
@@ -104,6 +116,75 @@ def has_project_marker(path: str) -> bool:
         if lowered.endswith((".csproj", ".sln", ".fsproj", ".vbproj")):
             return True
     return False
+
+
+def workspace_identity(path: str) -> str:
+    """Return a stable local identity shared by linked Git worktrees."""
+    normalized = normalize_path(path)
+    try:
+        git_entry = Path(normalized, ".git")
+        if git_entry.is_dir():
+            common_dir = git_entry
+        elif git_entry.is_file():
+            marker = git_entry.read_text(encoding="utf-8").strip()
+            if not marker.startswith("gitdir:"):
+                raise ValueError("invalid .git pointer")
+            git_dir = Path(marker.removeprefix("gitdir:").strip())
+            if not git_dir.is_absolute():
+                git_dir = git_entry.parent / git_dir
+            git_dir = git_dir.resolve()
+            common_marker = git_dir / "commondir"
+            if common_marker.is_file():
+                common_dir = (git_dir / common_marker.read_text(encoding="utf-8").strip()).resolve()
+            else:
+                common_dir = git_dir
+        else:
+            common_dir = None
+    except (OSError, UnicodeError, ValueError):
+        common_dir = None
+    if common_dir is not None:
+        return f"git:{os.path.normcase(str(common_dir.resolve()))}"
+    return f"path:{os.path.normcase(normalized)}"
+
+
+def _git_worktree_paths(path: str) -> tuple[str, ...]:
+    """Return linked worktree roots from Git's local metadata."""
+    identity = workspace_identity(path)
+    if not identity.startswith("git:"):
+        return ()
+    common_dir = Path(identity.removeprefix("git:"))
+    roots: set[str] = set()
+    try:
+        if common_dir.name == ".git":
+            roots.add(normalize_path(str(common_dir.parent)))
+        worktrees_dir = common_dir / "worktrees"
+        if worktrees_dir.is_dir():
+            for entry in worktrees_dir.iterdir():
+                gitdir_file = entry / "gitdir"
+                if not gitdir_file.is_file():
+                    continue
+                git_entry = Path(gitdir_file.read_text(encoding="utf-8").strip())
+                roots.add(normalize_path(str(git_entry.parent)))
+    except (OSError, UnicodeError, ValueError):
+        return ()
+    return tuple(sorted(roots))
+
+
+def _record_workspace_alias(session, workspace: Workspace, path: str, identity_key: str) -> None:
+    alias = session.query(WorkspaceAlias).filter(WorkspaceAlias.path == path).one_or_none()
+    if alias is None:
+        session.add(WorkspaceAlias(workspace_id=workspace.id, path=path, identity_key=identity_key))
+    else:
+        alias.workspace_id = workspace.id
+        alias.identity_key = identity_key
+
+
+def _resolve_workspace_path(session, path: str) -> Workspace | None:
+    normalized = normalize_path(path)
+    alias = session.query(WorkspaceAlias).filter(WorkspaceAlias.path == normalized).one_or_none()
+    if alias is not None:
+        return session.get(Workspace, alias.workspace_id)
+    return session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -202,6 +283,15 @@ def reap_zombie_sessions() -> list[str]:
         for row in live_rows:
             pid = row.pid
             note: str
+            if (
+                pid is None
+                and row.runtime_id is None
+                and row.issue_id is None
+                and row.persona_id is None
+            ):
+                # Coordination handles use renewable leases and become dormant;
+                # only process-bound execution Sessions are terminally reaped.
+                continue
             if row.machine_id and row.machine_id != machine_id:
                 last_activity = row.last_activity_at
                 if last_activity is None:
@@ -242,6 +332,9 @@ def reap_zombie_sessions() -> list[str]:
                 # Sessions that read as running forever (BL-P0-07).
                 row.state = "failed"
             row.summary = f"{row.summary}\n{note}".strip() if row.summary else note
+            from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+            detach_session_mailbox_in_transaction(session, row.id, reason="reaped")
             session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == row.id).delete(
                 synchronize_session=False
             )
@@ -268,6 +361,174 @@ def reap_zombie_sessions() -> list[str]:
             session_id=sid,
         )
     return reaped
+
+
+def _release_session_ownership(session, session_id: str) -> None:
+    session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == session_id).delete(
+        synchronize_session=False
+    )
+    session.query(AgentTask).filter(
+        AgentTask.claimed_by_session_id == session_id,
+        AgentTask.status == "in_progress",
+    ).update(
+        {"status": "available", "claimed_by_session_id": None, "claimed_at": None},
+        synchronize_session=False,
+    )
+
+
+def _supersede_coordination_handle(
+    session,
+    predecessor: AgentSession,
+    successor: AgentSession,
+) -> None:
+    """Move one active coordination handle's ownership to its successor."""
+    coordination_handle = (
+        predecessor.pid is None
+        and predecessor.runtime_id is None
+        and predecessor.issue_id is None
+        and predecessor.persona_id is None
+    )
+    if not coordination_handle or session.get(SessionLease, predecessor.id) is None:
+        return
+    for subscription in (
+        session.query(TopicSubscription)
+        .filter(TopicSubscription.session_id == predecessor.id)
+        .all()
+    ):
+        existing = session.get(TopicSubscription, (successor.id, subscription.topic))
+        if existing is None:
+            subscription.session_id = successor.id
+        else:
+            existing.last_seen_post_id = max(
+                existing.last_seen_post_id,
+                subscription.last_seen_post_id,
+            )
+            existing.subscribed_at = min(existing.subscribed_at, subscription.subscribed_at)
+            existing.updated_at = max(existing.updated_at, subscription.updated_at)
+            session.delete(subscription)
+    if predecessor.ended_at is not None:
+        return
+    predecessor.state = DORMANT_SESSION_STATE
+    from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+    detach_session_mailbox_in_transaction(session, predecessor.id, reason="superseded")
+    session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == predecessor.id).update(
+        {"session_id": successor.id}, synchronize_session=False
+    )
+    session.query(AgentTask).filter(
+        AgentTask.claimed_by_session_id == predecessor.id,
+        AgentTask.status == "in_progress",
+    ).update({"claimed_by_session_id": successor.id}, synchronize_session=False)
+
+
+def _lock_session_lifecycle(session, session_id: str) -> AgentSession | None:
+    """Serialize lease-driven state transitions on SQLite and PostgreSQL."""
+    query = session.query(AgentSession).filter(AgentSession.id == session_id)
+    if session.get_bind().dialect.name == "postgresql":
+        return query.with_for_update().one_or_none()
+    session.execute(
+        update(AgentSession).where(AgentSession.id == session_id).values(state=AgentSession.state)
+    )
+    return query.one_or_none()
+
+
+def sweep_stale_session_leases() -> list[str]:
+    """Make expired PID-less coordination Sessions dormant and release ownership."""
+    init_db()
+    now = utc_now()
+    dormant: list[tuple[str, int]] = []
+    with SessionLocal() as session:
+        rows = (
+            session.query(AgentSession.id, AgentSession.workspace_id)
+            .join(SessionLease, SessionLease.session_id == AgentSession.id)
+            .filter(
+                AgentSession.ended_at.is_(None),
+                AgentSession.pid.is_(None),
+                AgentSession.runtime_id.is_(None),
+                AgentSession.issue_id.is_(None),
+                AgentSession.persona_id.is_(None),
+                AgentSession.state != DORMANT_SESSION_STATE,
+                SessionLease.lease_expires_at < now,
+            )
+            .all()
+        )
+        lease_is_still_expired = (
+            session.query(SessionLease)
+            .filter(
+                SessionLease.session_id == AgentSession.id,
+                SessionLease.lease_expires_at < now,
+            )
+            .exists()
+        )
+        for session_id, workspace_id in rows:
+            agent = _lock_session_lifecycle(session, session_id)
+            lease = session.get(SessionLease, session_id)
+            lease_expires_at = _aware(lease.lease_expires_at) if lease is not None else None
+            if (
+                agent is None
+                or agent.ended_at is not None
+                or agent.pid is not None
+                or agent.runtime_id is not None
+                or agent.issue_id is not None
+                or agent.persona_id is not None
+                or agent.state == DORMANT_SESSION_STATE
+                or lease_expires_at is None
+                or lease_expires_at >= now
+            ):
+                continue
+            updated = (
+                session.query(AgentSession)
+                .filter(AgentSession.id == session_id, lease_is_still_expired)
+                .update({"state": DORMANT_SESSION_STATE}, synchronize_session=False)
+            )
+            if not updated:
+                continue
+            _release_session_ownership(session, session_id)
+            from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+            detach_session_mailbox_in_transaction(session, session_id, reason="lease_expired")
+            from brains.control.session_commands import OPEN_STATUSES
+            from brains.storage.models import SessionCommand
+
+            session.query(SessionCommand).filter(
+                SessionCommand.session_id == session_id,
+                SessionCommand.status.in_(sorted(OPEN_STATUSES)),
+            ).update(
+                {
+                    "status": "cancelled",
+                    "result": "session_dormant",
+                    "error": (
+                        "the coordination Session lease expired before the command was delivered"
+                    ),
+                    "completed_at": now,
+                    "updated_at": now,
+                    "lease_expires_at": None,
+                },
+                synchronize_session=False,
+            )
+            event = Event(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                kind="session_dormant",
+                message="coordination session lease expired",
+                metadata_json="{}",
+                created_at=now,
+            )
+            session.add(event)
+            session.flush()
+            session.add(
+                EventContext(
+                    event_id=event.id,
+                    category="session",
+                    scope="workspace",
+                    scope_source="explicit",
+                    taxonomy_version=TAXONOMY_VERSION,
+                )
+            )
+            dormant.append((session_id, workspace_id))
+        if dormant:
+            session.commit()
+    return [session_id for session_id, _workspace_id in dormant]
 
 
 SESSION_LIVE_TTL_SECONDS = 60 * 60
@@ -318,10 +579,27 @@ def live_replacement_session_ids(
     if exclude_session_id:
         q = q.filter(AgentSession.id != exclude_session_id)
     q = q.order_by(AgentSession.last_activity_at.desc().nullslast()).limit(5)
-    return [row.id for row in q.all() if not _terminal_or_ended(row)]
+    from brains.control.session_liveness import lease_is_current
+
+    out: list[str] = []
+    for row in q.all():
+        if _terminal_or_ended(row) or row.state == DORMANT_SESSION_STATE:
+            continue
+        if row.pid is None:
+            lease = session.get(SessionLease, row.id)
+            if lease is not None and not lease_is_current(lease):
+                continue
+        out.append(row.id)
+    return out
 
 
-def require_live_session(session, session_id: str | None, *, action: str) -> AgentSession:
+def require_live_session(
+    session,
+    session_id: str | None,
+    *,
+    action: str,
+    renew_lease: bool = True,
+) -> AgentSession:
     """Raise a loud, actionable error unless ``session_id`` names a live session.
 
     Every agent-facing surface that takes a session handle as *attribution*
@@ -336,7 +614,40 @@ def require_live_session(session, session_id: str | None, *, action: str) -> Age
     row = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
     if row is None:
         raise ValueError(f"unknown session: {session_id} ({action})")
-    if not _terminal_or_ended(row):
+    from brains.storage.models import MailboxAttachment
+
+    mailbox_bound = (
+        session.query(MailboxAttachment.id).filter(MailboxAttachment.session_id == row.id).first()
+        is not None
+    )
+    terminal = _terminal_or_ended(row) or (
+        mailbox_bound and (row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES)
+    )
+    if not terminal:
+        if row.pid is None:
+            from brains.control.session_liveness import lease_is_current, renew_session_lease
+
+            lease = session.get(SessionLease, row.id)
+            if row.state == DORMANT_SESSION_STATE or (
+                lease is not None and not lease_is_current(lease)
+            ):
+                successor = session.get(SessionSuccessor, row.id)
+                replacements = live_replacement_session_ids(
+                    session, row.workspace_id, exclude_session_id=row.id
+                )
+                successor_note = (
+                    f"; explicit successor: {successor.successor_session_id}"
+                    if successor is not None
+                    else ""
+                )
+                raise ValueError(
+                    f"session {session_id} is dormant or expired; refusing {action} against a "
+                    "stale handle. "
+                    f"live replacement candidates in the same workspace: "
+                    f"{replacements if replacements else '[]'}{successor_note}"
+                )
+            if renew_lease:
+                renew_session_lease(session, row)
         if row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES:
             row.ended_at = None
             row.state = "running"
@@ -361,9 +672,66 @@ def register_workspace(
 ) -> Workspace:
     init_db()
     normalized = normalize_path(path)
+    identity_key = workspace_identity(normalized)
+    archived_duplicate_ids: list[int] = []
     with SessionLocal() as session:
-        existing = session.query(Workspace).filter(Workspace.path == normalized).one_or_none()
-        if existing:
+        aliases = (
+            session.query(WorkspaceAlias, Workspace)
+            .join(Workspace, Workspace.id == WorkspaceAlias.workspace_id)
+            .filter(WorkspaceAlias.identity_key == identity_key)
+            .order_by(Workspace.created_at.asc(), Workspace.id.asc())
+            .all()
+        )
+        candidates = [workspace for _alias, workspace in aliases]
+        if identity_key.startswith("git:"):
+            worktree_paths = _git_worktree_paths(normalized)
+            if worktree_paths:
+                linked = (
+                    session.query(Workspace)
+                    .filter(Workspace.path.in_(worktree_paths))
+                    .order_by(Workspace.created_at.asc(), Workspace.id.asc())
+                    .all()
+                )
+                for candidate in linked:
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+        exact = _resolve_workspace_path(session, normalized)
+        if exact is not None and exact not in candidates:
+            candidates.append(exact)
+        if candidates:
+            org_ids = {candidate.org_id for candidate in candidates}
+            if len(org_ids) > 1:
+                raise ValueError("repository paths are registered to multiple organizations")
+            existing = min(candidates, key=lambda row: (row.created_at, row.id))
+            if org_id is not None and existing.org_id != org_id:
+                raise ValueError("repository is already registered to another organization")
+            if os.path.isdir(normalized):
+                existing.status = "active"
+            _record_workspace_alias(session, existing, existing.path, identity_key)
+            _record_workspace_alias(session, existing, normalized, identity_key)
+            for duplicate in candidates:
+                if duplicate.id != existing.id:
+                    session.query(WorkspaceAlias).filter(
+                        WorkspaceAlias.workspace_id == duplicate.id
+                    ).update(
+                        {
+                            WorkspaceAlias.workspace_id: existing.id,
+                            WorkspaceAlias.identity_key: identity_key,
+                        },
+                        synchronize_session=False,
+                    )
+                    if duplicate.status != "archived":
+                        duplicate.status = "archived"
+                        archived_duplicate_ids.append(duplicate.id)
+            session.commit()
+            session.refresh(existing)
+            if archived_duplicate_ids:
+                append_event(
+                    "workspace_alias_converged",
+                    f"workspace aliases converged on {existing.slug}",
+                    workspace_id=existing.id,
+                    metadata={"archived_workspace_ids": archived_duplicate_ids},
+                )
             return existing
         all_slugs = {row.slug for row in session.query(Workspace.slug).all()}
         final_slug = slug or unique_slug(slug_from_path(normalized), all_slugs)
@@ -387,6 +755,8 @@ def register_workspace(
             org_id=resolved_org_id,
         )
         session.add(workspace)
+        session.flush()
+        _record_workspace_alias(session, workspace, normalized, identity_key)
         session.commit()
         session.refresh(workspace)
     has_marker = has_project_marker(normalized)
@@ -406,7 +776,7 @@ def register_workspace(
             (
                 f"workspace registered without project marker: {final_slug} "
                 f"({normalized}) — looks like an umbrella folder or empty "
-                "directory; consider pruning with `brains-ai workspaces prune`."
+                "directory; inspect it with `brains-ai workspaces doctor`."
             ),
             workspace_id=workspace.id,
             metadata={"path": normalized},
@@ -425,7 +795,7 @@ def get_workspace(
         elif slug is not None:
             row = query.filter(Workspace.slug == slug).one_or_none()
         elif path is not None:
-            row = query.filter(Workspace.path == normalize_path(path)).one_or_none()
+            row = _resolve_workspace_path(session, path)
         else:
             row = None
         if row is None:
@@ -466,7 +836,31 @@ def start_session(
     metadata: dict[str, Any] | None = None,
     operator: str | None = None,
     predecessor_session_id: str | None = None,
+    reuse_existing: bool = False,
+    auto_link_predecessor: bool = False,
+    lease_session: bool = True,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ) -> dict:
+    if bool(native_tool_session_id) != bool(mailbox_binding_secret):
+        raise ValueError(
+            "native_tool_session_id and mailbox_binding_secret must be supplied together"
+        )
+    if native_tool_session_id is not None:
+        from brains.control.durable_mailbox import (
+            validate_mailbox_registration_inputs,
+        )
+
+        if not lease_session:
+            raise ValueError("mailbox registration requires a renewable Session lease")
+        assert mailbox_binding_secret is not None
+        from brains.control.durable_mailbox import validate_notification_mode
+
+        validate_mailbox_registration_inputs(tool, native_tool_session_id, mailbox_binding_secret)
+        mailbox_notification_mode = validate_notification_mode(
+            tool, mailbox_notification_mode or "pull"
+        )
     workspace = register_workspace(workspace_path)
     # Resolve who owns this session before we open it so the row can be
     # stamped with ``created_by_operator_id``. Defaults to the auto-
@@ -478,6 +872,7 @@ def start_session(
     # Sweep zombies before opening a new session so the new agent inherits
     # a clean view of workspace claims and task locks.
     reap_zombie_sessions()
+    sweep_stale_session_leases()
     # Decay stale handoffs so the welcome packet never advertises an
     # ancient "active" handoff as something the new session should pick.
     try:
@@ -486,9 +881,160 @@ def start_session(
         mark_stale_handoffs()
     except Exception:
         pass
+    if reuse_existing and predecessor_session_id is None and pid is None:
+        from brains.control.session_liveness import lease_is_current, renew_session_lease
+
+        with SessionLocal() as db_session:
+            has_successor = (
+                db_session.query(SessionSuccessor)
+                .filter(SessionSuccessor.predecessor_session_id == AgentSession.id)
+                .exists()
+            )
+            has_lease = (
+                db_session.query(SessionLease)
+                .filter(SessionLease.session_id == AgentSession.id)
+                .exists()
+            )
+            candidates = (
+                db_session.query(AgentSession)
+                .filter(
+                    AgentSession.workspace_id == workspace.id,
+                    AgentSession.tool == tool,
+                    AgentSession.created_by_operator_id == operator_record["id"],
+                    AgentSession.pid.is_(None),
+                    AgentSession.runtime_id.is_(None),
+                    AgentSession.issue_id.is_(None),
+                    AgentSession.persona_id.is_(None),
+                    AgentSession.ended_at.is_(None),
+                    ~has_successor,
+                    has_lease,
+                )
+                .order_by(
+                    AgentSession.last_activity_at.desc().nullslast(),
+                    AgentSession.started_at.desc(),
+                )
+                .all()
+            )
+            current = [
+                row
+                for row in candidates
+                if row.state != DORMANT_SESSION_STATE
+                and lease_is_current(db_session.get(SessionLease, row.id))
+            ]
+            if len(current) > 1:
+                raise ValueError(
+                    "multiple live coordination sessions match this workspace/tool/operator: "
+                    f"{[row.id for row in current]}; resume one explicitly"
+                )
+            reusable = current[0] if current else (candidates[0] if candidates else None)
+            if reusable is not None:
+                reusable = _lock_session_lifecycle(db_session, reusable.id)
+                if reusable is None:
+                    raise ValueError("reusable Session disappeared during registration")
+                from brains.authz.resolver import principal_for_operator_slug
+                from brains.control.durable_mailbox import (
+                    MailboxUnavailableError,
+                    prove_session_mailbox_binding_in_transaction,
+                )
+
+                principal = principal_for_operator_slug(operator_record["slug"])
+                if principal is None:
+                    raise MailboxUnavailableError("mailbox unavailable")
+                reusable_mailbox_id = prove_session_mailbox_binding_in_transaction(
+                    db_session,
+                    workspace,
+                    reusable,
+                    tool=tool,
+                    native_tool_session_id=native_tool_session_id,
+                    binding_secret=mailbox_binding_secret,
+                    principal=principal,
+                )
+                renew_session_lease(
+                    db_session,
+                    reusable,
+                    mailbox_verified=reusable_mailbox_id is not None,
+                )
+                mailbox = _register_session_mailbox_in_transaction(
+                    db_session,
+                    workspace,
+                    reusable,
+                    tool,
+                    operator_record,
+                    native_tool_session_id=native_tool_session_id,
+                    mailbox_binding_secret=mailbox_binding_secret,
+                    mailbox_notification_mode=mailbox_notification_mode,
+                )
+                db_session.commit()
+                result = _session_registration_result(
+                    workspace,
+                    reusable.id,
+                    tool,
+                    operator_record,
+                    predecessor_session_id=None,
+                    reused=True,
+                )
+                if mailbox is not None:
+                    from brains.control.durable_mailbox import record_agent_mailbox_registration
+
+                    record_agent_mailbox_registration(mailbox, reusable.id, workspace.id)
+                    result["mailbox"] = mailbox
+                return result
+
     session_id = f"ses_{uuid.uuid4().hex[:12]}"
     init_db()
     with SessionLocal() as db_session:
+        if auto_link_predecessor and predecessor_session_id is None:
+            has_successor = (
+                db_session.query(SessionSuccessor)
+                .filter(SessionSuccessor.predecessor_session_id == AgentSession.id)
+                .exists()
+            )
+            has_lease = (
+                db_session.query(SessionLease)
+                .filter(SessionLease.session_id == AgentSession.id)
+                .exists()
+            )
+            predecessors = (
+                db_session.query(AgentSession)
+                .filter(
+                    AgentSession.workspace_id == workspace.id,
+                    AgentSession.tool == tool,
+                    AgentSession.created_by_operator_id == operator_record["id"],
+                    AgentSession.pid.is_(None),
+                    AgentSession.runtime_id.is_(None),
+                    AgentSession.issue_id.is_(None),
+                    AgentSession.persona_id.is_(None),
+                    AgentSession.id != session_id,
+                    ~has_successor,
+                    has_lease,
+                )
+                .order_by(
+                    AgentSession.last_activity_at.desc().nullslast(),
+                    AgentSession.started_at.desc(),
+                )
+                .all()
+            )
+            from brains.control.session_liveness import lease_is_current
+
+            current_predecessors = [
+                candidate
+                for candidate in predecessors
+                if candidate.ended_at is None
+                and candidate.state != DORMANT_SESSION_STATE
+                and lease_is_current(db_session.get(SessionLease, candidate.id))
+            ]
+            if len(current_predecessors) > 1:
+                raise ValueError(
+                    "multiple live coordination sessions match this workspace/tool/operator: "
+                    f"{[candidate.id for candidate in current_predecessors]}; "
+                    "resume or end one explicitly"
+                )
+            predecessor = (
+                current_predecessors[0]
+                if current_predecessors
+                else (predecessors[0] if predecessors else None)
+            )
+            predecessor_session_id = predecessor.id if predecessor is not None else None
         row = AgentSession(
             id=session_id,
             workspace_id=workspace.id,
@@ -504,24 +1050,137 @@ def start_session(
             metadata_json=json.dumps(metadata or {}),
         )
         db_session.add(row)
+        db_session.flush()
+        from brains.control.session_liveness import renew_session_lease
+
+        if lease_session:
+            renew_session_lease(db_session, row, create=True)
         if predecessor_session_id:
-            predecessor = db_session.get(AgentSession, predecessor_session_id)
+            predecessor = _lock_session_lifecycle(db_session, predecessor_session_id)
             if predecessor is None:
                 raise ValueError(f"unknown predecessor session: {predecessor_session_id}")
             if predecessor.workspace_id != workspace.id:
                 raise ValueError("predecessor and successor must belong to the same workspace")
             if predecessor.id == session_id:
                 raise ValueError("a session cannot supersede itself")
-            from brains.storage.models import SessionSuccessor
+            from brains.authz.resolver import principal_for_operator_slug
+            from brains.control.durable_mailbox import (
+                MailboxUnavailableError,
+                mailbox_attachment_is_current_in_transaction,
+                prove_session_mailbox_binding_in_transaction,
+            )
 
+            principal = principal_for_operator_slug(operator_record["slug"])
+            if principal is None:
+                raise MailboxUnavailableError("mailbox unavailable")
+            predecessor_mailbox_id = prove_session_mailbox_binding_in_transaction(
+                db_session,
+                workspace,
+                predecessor,
+                tool=tool,
+                native_tool_session_id=native_tool_session_id,
+                binding_secret=mailbox_binding_secret,
+                principal=principal,
+            )
+            if predecessor_mailbox_id is not None and mailbox_attachment_is_current_in_transaction(
+                db_session, predecessor
+            ):
+                raise MailboxUnavailableError("mailbox unavailable")
+            _supersede_coordination_handle(db_session, predecessor, row)
             link = db_session.get(SessionSuccessor, predecessor_session_id)
             if link is None:
                 link = SessionSuccessor(predecessor_session_id=predecessor_session_id)
                 db_session.add(link)
+            elif link.successor_session_id != session_id:
+                raise ValueError(
+                    f"session {predecessor_session_id} already has successor "
+                    f"{link.successor_session_id}; refusing conflicting relink"
+                )
             link.successor_session_id = session_id
             link.linked_at = utc_now()
+        mailbox = _register_session_mailbox_in_transaction(
+            db_session,
+            workspace,
+            row,
+            tool,
+            operator_record,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
+        )
+        if (
+            predecessor_session_id
+            and predecessor_mailbox_id is not None
+            and (mailbox is None or mailbox["mailbox_id"] != predecessor_mailbox_id)
+        ):
+            from brains.control.durable_mailbox import MailboxUnavailableError
+
+            raise MailboxUnavailableError("mailbox unavailable")
         db_session.commit()
         db_session.refresh(row)
+    if predecessor_session_id:
+        _cancel_open_commands(
+            predecessor_session_id,
+            reason=f"the Session was superseded by {session_id}",
+            result="superseded",
+        )
+    result = _session_registration_result(
+        workspace,
+        session_id,
+        tool,
+        operator_record,
+        predecessor_session_id=predecessor_session_id,
+        reused=False,
+    )
+    if mailbox is not None:
+        from brains.control.durable_mailbox import record_agent_mailbox_registration
+
+        record_agent_mailbox_registration(mailbox, session_id, workspace.id)
+        result["mailbox"] = mailbox
+    return result
+
+
+def _register_session_mailbox_in_transaction(
+    db_session,
+    workspace: Workspace,
+    row: AgentSession,
+    tool: str,
+    operator_record: OperatorRecord,
+    *,
+    native_tool_session_id: str | None,
+    mailbox_binding_secret: str | None,
+    mailbox_notification_mode: str | None,
+) -> dict[str, Any] | None:
+    if native_tool_session_id is None or mailbox_binding_secret is None:
+        return None
+    from brains.authz.resolver import principal_for_operator_slug
+    from brains.control.durable_mailbox import register_agent_mailbox_in_transaction
+
+    principal = principal_for_operator_slug(operator_record["slug"])
+    if principal is None:
+        raise ValueError("mailbox owner is unavailable")
+    return register_agent_mailbox_in_transaction(
+        db_session,
+        workspace,
+        row,
+        tool,
+        native_tool_session_id,
+        mailbox_binding_secret,
+        notification_mode=mailbox_notification_mode or "pull",
+        principal=principal,
+    )
+
+
+def _session_registration_result(
+    workspace: Workspace,
+    session_id: str,
+    tool: str,
+    operator_record: OperatorRecord,
+    *,
+    predecessor_session_id: str | None,
+    reused: bool,
+) -> dict[str, Any]:
+    with SessionLocal() as db_session:
         active = (
             db_session.query(Handoff)
             .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
@@ -538,52 +1197,44 @@ def start_session(
             if active
             else None
         )
+        lease = db_session.get(SessionLease, session_id)
+        lease_expires_at = lease.lease_expires_at.isoformat() if lease else None
     # Build the discoverability welcome packet so the agent sees unread
     # mail, applicable patterns, workspace memory keys, registered-tool
     # status and indexed-source status without having to call five tools.
     # Defensive: a welcome failure must never block session start.
     #
-    # Built BEFORE the ``session_start`` event so the event's metadata
-    # can carry a snapshot of the offered counts. That snapshot is the
-    # join key for adoption queries — e.g. "of the sessions where
-    # welcome.unread_messages > 0, how many fired a read_messages event
-    # within 2 minutes?" — without inventing a new telemetry table.
     try:
         from brains.control.welcome import build_welcome
 
         welcome = build_welcome(workspace, session_id)
     except Exception:
         welcome = None
-    welcome_metadata: dict[str, Any] = {
-        "tool": tool,
-        "operator": operator_record["slug"],
-    }
-    if welcome is not None:
-        tool_status = welcome.get("tool_status") or {}
-        index_status = welcome.get("index_status") or {}
-        welcome_metadata["welcome"] = {
-            "unread_messages": int((welcome.get("unread_messages") or {}).get("count", 0)),
-            "applicable_patterns": len(welcome.get("applicable_patterns") or []),
-            "knowledge": int((welcome.get("knowledge") or {}).get("count", 0)),
-            "relevant_memories": len(welcome.get("relevant_memories") or []),
-            "tools_missing": int(tool_status.get("missing", 0)),
-            "tools_unverified": int(tool_status.get("unverified", 0)),
-            "index_sources": int(index_status.get("sources", 0)),
-            "hints": len(welcome.get("hints") or []),
-        }
     append_event(
-        "session_start",
-        f"{tool} session started",
+        "session_reused" if reused else "session_start",
+        f"{tool} session {'reused' if reused else 'started'}",
         workspace_id=workspace.id,
         session_id=session_id,
-        metadata=welcome_metadata,
+        metadata={"tool": tool, "operator": operator_record["slug"]},
     )
+    if predecessor_session_id and not reused:
+        append_event(
+            "session_superseded",
+            f"{predecessor_session_id} -> {session_id}",
+            workspace_id=workspace.id,
+            session_id=session_id,
+            metadata={
+                "from_session_id": predecessor_session_id,
+                "to_session_id": session_id,
+                "automatic": True,
+            },
+        )
     # Best-effort: warm the code graph + embeddings in the background so the first
     # retrieval call this session makes is instant. Never blocks session start.
     try:
         from brains.context.prewarm import schedule_prewarm
 
-        schedule_prewarm(workspace_path)
+        schedule_prewarm(workspace.path)
     except Exception:
         pass
     return {
@@ -593,33 +1244,220 @@ def start_session(
         "active_handoff": active_handoff,
         "welcome": welcome,
         "predecessor_session_id": predecessor_session_id,
+        "lease_expires_at": lease_expires_at,
+        "reused": reused,
     }
 
 
-def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str, Any]:
+def heartbeat_session(
+    session_id: str,
+    *,
+    allow_ended: bool = False,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
+) -> dict[str, Any]:
+    """Renew a PID-less coordination Session without writing a journal event."""
+    if bool(native_tool_session_id) != bool(mailbox_binding_secret):
+        raise ValueError(
+            "native_tool_session_id and mailbox_binding_secret must be supplied together"
+        )
+    if native_tool_session_id and not tool:
+        raise ValueError("mailbox heartbeat requires the canonical tool name")
+    if mailbox_notification_mode is not None:
+        from brains.control.durable_mailbox import validate_notification_mode
+
+        validate_notification_mode(tool or "", mailbox_notification_mode)
+    from brains.control.session_liveness import renew_session_lease
+
+    init_db()
+    with SessionLocal() as session:
+        row = _lock_session_lifecycle(session, session_id)
+        if row is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        if row.ended_at is not None and not allow_ended:
+            raise ValueError(f"session already ended: {session_id}")
+        workspace = session.get(Workspace, row.workspace_id)
+        if workspace is None:
+            raise AgentSessionNotFoundError(f"unknown session: {session_id}")
+        from brains.control.durable_mailbox import prove_session_mailbox_binding_in_transaction
+
+        mailbox_id = prove_session_mailbox_binding_in_transaction(
+            session,
+            workspace,
+            row,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            binding_secret=mailbox_binding_secret,
+        )
+        lease = session.get(SessionLease, row.id)
+        if row.ended_at is None:
+            lease = renew_session_lease(
+                session,
+                row,
+                mailbox_verified=mailbox_id is not None,
+            )
+        if mailbox_id is not None and row.ended_at is None and row.pid is None and lease is None:
+            from brains.control.durable_mailbox import MailboxUnavailableError
+
+            raise MailboxUnavailableError("mailbox unavailable")
+        if mailbox_id is not None and row.ended_at is None:
+            assert tool is not None
+            assert native_tool_session_id is not None
+            assert mailbox_binding_secret is not None
+            from brains.control.durable_mailbox import register_agent_mailbox_in_transaction
+
+            existing_attachment = (
+                session.query(MailboxAttachment)
+                .filter(MailboxAttachment.session_id == row.id)
+                .one()
+            )
+
+            register_agent_mailbox_in_transaction(
+                session,
+                workspace,
+                row,
+                tool,
+                native_tool_session_id,
+                mailbox_binding_secret,
+                notification_mode=(
+                    mailbox_notification_mode or existing_attachment.notification_mode
+                ),
+            )
+        if row.ended_at is None and lease is None:
+            row.last_activity_at = utc_now()
+        session.commit()
+        return {
+            "session_id": row.id,
+            "state": row.state,
+            "lease_expires_at": lease.lease_expires_at.isoformat() if lease else None,
+        }
+
+
+def link_session_successor(
+    from_session_id: str,
+    to_session_id: str,
+    *,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
+) -> dict[str, Any]:
     """Explicitly link a predecessor handle to one same-workspace successor."""
     if from_session_id == to_session_id:
         raise ValueError("a session cannot supersede itself")
+    if bool(native_tool_session_id) != bool(mailbox_binding_secret):
+        raise ValueError(
+            "native_tool_session_id and mailbox_binding_secret must be supplied together"
+        )
+    if native_tool_session_id and not tool:
+        raise ValueError("mailbox successor linkage requires the canonical tool name")
+    if mailbox_notification_mode is not None:
+        from brains.control.durable_mailbox import validate_notification_mode
+
+        validate_notification_mode(tool or "", mailbox_notification_mode)
     init_db()
     with SessionLocal() as session:
-        predecessor = session.get(AgentSession, from_session_id)
-        successor = session.get(AgentSession, to_session_id)
+        locked = {
+            session_id: _lock_session_lifecycle(session, session_id)
+            for session_id in sorted((from_session_id, to_session_id))
+        }
+        predecessor = locked[from_session_id]
+        successor = locked[to_session_id]
         if predecessor is None:
             raise ValueError(f"unknown predecessor session: {from_session_id}")
         if successor is None:
             raise ValueError(f"unknown successor session: {to_session_id}")
         if predecessor.workspace_id != successor.workspace_id:
             raise ValueError("predecessor and successor must belong to the same workspace")
-        require_live_session(session, to_session_id, action="link_session_successor")
-        from brains.storage.models import SessionSuccessor
-
+        workspace = session.get(Workspace, predecessor.workspace_id)
+        if workspace is None:
+            raise ValueError("predecessor workspace is unavailable")
         link = session.get(SessionSuccessor, from_session_id)
-        if link is None:
-            link = SessionSuccessor(predecessor_session_id=from_session_id)
-            session.add(link)
+        if link is not None and link.successor_session_id != to_session_id:
+            raise ValueError(
+                f"session {from_session_id} already has successor "
+                f"{link.successor_session_id}; refusing conflicting relink"
+            )
+        duplicate = link is not None
+        from brains.control.durable_mailbox import (
+            MailboxUnavailableError,
+            mailbox_attachment_is_current_in_transaction,
+            prove_session_mailbox_binding_in_transaction,
+            register_agent_mailbox_in_transaction,
+        )
+
+        predecessor_mailbox_id = prove_session_mailbox_binding_in_transaction(
+            session,
+            workspace,
+            predecessor,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            binding_secret=mailbox_binding_secret,
+        )
+        successor_mailbox_id = prove_session_mailbox_binding_in_transaction(
+            session,
+            workspace,
+            successor,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            binding_secret=mailbox_binding_secret,
+        )
+        if predecessor_mailbox_id is not None and mailbox_attachment_is_current_in_transaction(
+            session, predecessor
+        ):
+            raise MailboxUnavailableError("mailbox unavailable")
+        if (
+            predecessor_mailbox_id is not None
+            and successor_mailbox_id is not None
+            and predecessor_mailbox_id != successor_mailbox_id
+        ):
+            raise MailboxUnavailableError("mailbox unavailable")
+        if duplicate:
+            session.commit()
+            return {
+                "from_session_id": from_session_id,
+                "to_session_id": to_session_id,
+                "linked": True,
+                "duplicate": True,
+                "mailbox": None,
+            }
+        require_live_session(session, to_session_id, action="link_session_successor")
+        _supersede_coordination_handle(session, predecessor, successor)
+        link = SessionSuccessor(predecessor_session_id=from_session_id)
+        session.add(link)
         link.successor_session_id = successor.id
         link.linked_at = utc_now()
+        mailbox = None
+        if predecessor_mailbox_id is not None:
+            assert tool is not None
+            assert native_tool_session_id is not None
+            assert mailbox_binding_secret is not None
+            predecessor_attachment = (
+                session.query(MailboxAttachment)
+                .filter(MailboxAttachment.session_id == predecessor.id)
+                .one()
+            )
+            mailbox = register_agent_mailbox_in_transaction(
+                session,
+                workspace,
+                successor,
+                tool,
+                native_tool_session_id,
+                mailbox_binding_secret,
+                notification_mode=(
+                    mailbox_notification_mode or predecessor_attachment.notification_mode
+                ),
+            )
+            if mailbox["mailbox_id"] != predecessor_mailbox_id:
+                raise MailboxUnavailableError("mailbox unavailable")
         session.commit()
+    _cancel_open_commands(
+        from_session_id,
+        reason=f"the Session was superseded by {to_session_id}",
+        result="superseded",
+    )
     append_event(
         "session_superseded",
         f"{from_session_id} -> {to_session_id}",
@@ -627,7 +1465,13 @@ def link_session_successor(from_session_id: str, to_session_id: str) -> dict[str
         session_id=to_session_id,
         metadata={"from_session_id": from_session_id, "to_session_id": to_session_id},
     )
-    return {"from_session_id": from_session_id, "to_session_id": to_session_id, "linked": True}
+    return {
+        "from_session_id": from_session_id,
+        "to_session_id": to_session_id,
+        "linked": True,
+        "duplicate": False,
+        "mailbox": mailbox,
+    }
 
 
 def predecessor_session_ids(session, session_id: str) -> list[str]:
@@ -732,11 +1576,18 @@ def _agent_session_to_dict(row: AgentSession) -> dict:
     ended = row.ended_at
     duration_seconds = None
     if started is not None and ended is not None:
-        duration_seconds = max(0.0, (ended - started).total_seconds())
+        started_utc = started if started.tzinfo else started.replace(tzinfo=UTC)
+        ended_utc = ended if ended.tzinfo else ended.replace(tzinfo=UTC)
+        duration_seconds = max(0.0, (ended_utc - started_utc).total_seconds())
     return {
         "id": row.id,
-        "status": "ended" if row.ended_at is not None else "running",
-        # F3.2 explicit lifecycle (spawning/running/blocked/completed/failed).
+        "status": (
+            "ended"
+            if row.ended_at is not None
+            else (DORMANT_SESSION_STATE if row.state == DORMANT_SESSION_STATE else "running")
+        ),
+        # F3.2 explicit lifecycle
+        # (spawning/running/dormant/blocked/completed/failed).
         "state": getattr(row, "state", None) or ("completed" if ended else "running"),
         "tool": row.tool,
         "workspace_id": row.workspace_id,
@@ -767,8 +1618,15 @@ def _message_capability(tool: str | None) -> dict:
         return {"supported": False, "reason": "the message capability could not be determined"}
 
 
-# Terminal session states stamp ``ended_at`` + a duration.
-SESSION_STATES = {"spawning", "running", "blocked", "completed", "failed"}
+# Public execution states. ``dormant`` is maintained by the coordination
+# lease/successor lifecycle rather than accepted as an arbitrary state update.
+SESSION_STATES = {
+    "spawning",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+}
 _TERMINAL_SESSION_STATES = {"completed", "failed"}
 
 
@@ -783,7 +1641,7 @@ def set_session_state(session_id: str, state: str, *, summary: str | None = None
         raise ValueError(f"invalid session state: {state!r}")
     init_db()
     with SessionLocal() as session:
-        row = session.get(AgentSession, session_id)
+        row = _lock_session_lifecycle(session, session_id)
         if row is None:
             raise AgentSessionNotFoundError(f"unknown session: {session_id}")
         row.state = state
@@ -791,6 +1649,10 @@ def set_session_state(session_id: str, state: str, *, summary: str | None = None
             row.summary = summary
         if state in _TERMINAL_SESSION_STATES and row.ended_at is None:
             row.ended_at = utc_now()
+        if state in _TERMINAL_SESSION_STATES:
+            from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+            detach_session_mailbox_in_transaction(session, row.id, reason=state)
         session.commit()
         session.refresh(row)
         result = _agent_session_to_dict(row)
@@ -836,7 +1698,12 @@ def list_agent_sessions(
         if machine_id is not None:
             query = query.filter(AgentSession.machine_id == machine_id)
         if status == "running":
-            query = query.filter(AgentSession.ended_at.is_(None))
+            query = query.filter(
+                AgentSession.ended_at.is_(None),
+                AgentSession.state != DORMANT_SESSION_STATE,
+            )
+        elif status == DORMANT_SESSION_STATE:
+            query = query.filter(AgentSession.state == DORMANT_SESSION_STATE)
         elif status == "ended":
             query = query.filter(AgentSession.ended_at.isnot(None))
         rows = (
@@ -882,7 +1749,7 @@ def list_agent_session_events(session_id: str, *, limit: int = 100) -> list[dict
 def end_session(session_id: str, summary: str = "") -> dict:
     init_db()
     with SessionLocal() as session:
-        row = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+        row = _lock_session_lifecycle(session, session_id)
         if row is None:
             raise AgentSessionNotFoundError(f"unknown session: {session_id}")
         if row.ended_at is not None:
@@ -895,6 +1762,9 @@ def end_session(session_id: str, summary: str = "") -> dict:
         workspace = session.query(Workspace).filter(Workspace.id == row.workspace_id).one()
         workspace.last_touched_at = now
         workspace.last_summary = summary
+        from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+        detach_session_mailbox_in_transaction(session, row.id, reason="session_ended")
         session.commit()
         workspace_id = row.workspace_id
     append_event(
@@ -992,6 +1862,9 @@ def finalize_session(
             )
         )
         if updated:
+            from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
+
+            detach_session_mailbox_in_transaction(session, session_id, reason=state)
             session.query(WorkspaceClaim).filter(WorkspaceClaim.session_id == session_id).delete(
                 synchronize_session=False
             )
@@ -1121,7 +1994,10 @@ def list_sessions(workspace_path: str | None = None, limit: int = 50) -> list[di
             Workspace, Workspace.id == AgentSession.workspace_id
         )
         if workspace_path:
-            query = query.filter(Workspace.path == normalize_path(workspace_path))
+            workspace = _resolve_workspace_path(session, workspace_path)
+            if workspace is None:
+                return []
+            query = query.filter(AgentSession.workspace_id == workspace.id)
         if visible is not None:
             query = query.filter(AgentSession.workspace_id.in_(visible))
         rows = (
@@ -1134,8 +2010,12 @@ def list_sessions(workspace_path: str | None = None, limit: int = 50) -> list[di
                 "id": row.id,
                 "workspace": workspace.slug,
                 "tool": row.tool,
+                "state": row.state,
                 "started_at": row.started_at.isoformat(),
                 "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+                "last_activity_at": (
+                    row.last_activity_at.isoformat() if row.last_activity_at else None
+                ),
                 "summary": row.summary,
             }
             for row, workspace in rows

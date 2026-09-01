@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from sqlalchemy import update
 
@@ -18,7 +19,10 @@ from brains.storage.models import (
     AgentSession,
     ApprovalDecision,
     ApprovalRequest,
+    ApprovalRouting,
     GovernedAction,
+    Operator,
+    OrgMember,
     Persona,
     Workspace,
 )
@@ -27,6 +31,7 @@ from brains.storage.models import (
 #: the single-use rule is a state transition the database can enforce with a
 #: conditional update rather than a read-then-write race.
 CONSUMED_STATUS = "consumed"
+APPROVAL_PRIORITIES = {"p0", "p1", "p2", "p3"}
 
 
 class ApprovalAuthorizationError(PermissionError):
@@ -293,20 +298,313 @@ def file_decision_request(
     return {"code": code, "status": "open", "workspace": workspace.slug}
 
 
-def list_open_decisions(workspace_path: str | None = None, limit: int = 50) -> list[dict]:
+def _routing_to_dict(
+    routing: ApprovalRouting | None,
+    assigned_slug: str | None = None,
+    *,
+    now=None,
+) -> dict:
+    current = now or utc_now()
+    due_at = routing.due_at if routing is not None else None
+    if due_at is not None and due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=current.tzinfo)
+    return {
+        "assigned_operator": assigned_slug,
+        "priority": routing.priority if routing is not None else "p2",
+        "due_at": due_at.isoformat() if due_at else None,
+        "overdue": bool(due_at and due_at < current),
+        "escalation_level": routing.escalation_level if routing is not None else 0,
+        "escalation_reason": routing.escalation_reason if routing is not None else None,
+        "routing_updated_at": routing.updated_at.isoformat() if routing is not None else None,
+    }
+
+
+def _normalize_due_at(value: datetime | str | None) -> datetime | None:
+    if value is None:
+        return value
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    raw = value.strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    except ValueError as exc:
+        raise ValueError("due_at must be an ISO-8601 timestamp") from exc
+
+
+def _approval_metadata(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _assert_human_router(principal) -> None:
+    if getattr(principal, "is_runtime", False) or not getattr(principal, "is_human_channel", False):
+        raise ApprovalAuthorizationError(
+            "approval routing requires a human-bound browser or local CLI principal"
+        )
+
+
+def _routing_target(session, ask: ApprovalRequest, operator_slug: str | None) -> Operator | None:
+    if operator_slug is None:
+        return None
+    target = (
+        session.query(Operator).filter(Operator.slug == operator_slug.strip().lower()).one_or_none()
+    )
+    if target is None:
+        raise ValueError(f"unknown operator: {operator_slug!r}")
+    workspace = session.get(Workspace, ask.workspace_id)
+    if workspace is None or workspace.org_id is None:
+        raise ValueError(f"approval {ask.code} has no resolvable Org")
+    if target.slug == "admin":
+        return target
+    member = (
+        session.query(OrgMember)
+        .filter(OrgMember.org_id == workspace.org_id, OrgMember.operator_id == target.id)
+        .one_or_none()
+    )
+    if member is None:
+        raise ValueError(f"operator {target.slug!r} is not a member of the approval's Org")
+    return target
+
+
+def route_decision(
+    code: str,
+    *,
+    assigned_operator: str | None = None,
+    clear_assignment: bool = False,
+    priority: str | None = None,
+    due_at: datetime | str | None = None,
+    clear_due: bool = False,
+    escalation_level: int | None = None,
+    escalation_reason: str = "",
+    increment_escalation: bool = False,
+    principal=None,
+) -> dict:
+    """Assign or escalate one open approval through a human-bound principal."""
+    if priority is not None and priority not in APPROVAL_PRIORITIES:
+        raise ValueError(f"priority must be one of {sorted(APPROVAL_PRIORITIES)}")
+    if escalation_level is not None and escalation_level < 0:
+        raise ValueError("escalation_level must be non-negative")
+    if clear_assignment and assigned_operator is not None:
+        raise ValueError("assigned_operator and clear_assignment are mutually exclusive")
+    if clear_due and due_at is not None:
+        raise ValueError("due_at and clear_due are mutually exclusive")
+    if increment_escalation and escalation_level is not None:
+        raise ValueError("set escalation_level or increment it, not both")
+    if increment_escalation and not escalation_reason.strip():
+        raise ValueError("escalation_reason is required when escalating")
+    normalized_due_at = _normalize_due_at(due_at)
+    if principal is None:
+        from brains.authz.resolver import resolve_local_principal
+
+        principal = resolve_local_principal()
+    _assert_human_router(principal)
+    init_db()
+    with SessionLocal() as session:
+        ask_query = session.query(ApprovalRequest).filter(ApprovalRequest.code == code)
+        if session.get_bind().dialect.name == "postgresql":
+            ask = ask_query.with_for_update().one_or_none()
+        else:
+            # The approval is the stable serialization row even before routing
+            # metadata exists. A no-op write takes SQLite's writer lock before
+            # the escalation level is read, preventing two N -> N+1 updates.
+            session.execute(
+                update(ApprovalRequest)
+                .where(ApprovalRequest.code == code)
+                .values(status=ApprovalRequest.status)
+            )
+            ask = ask_query.one_or_none()
+        if ask is None:
+            raise ValueError(f"unknown decision request: {code}")
+        if ask.status != "open":
+            raise ValueError(f"decision request {code} is {ask.status}, not open")
+        workspace = session.get(Workspace, ask.workspace_id)
+        if workspace is None or workspace.org_id is None:
+            raise ValueError(f"approval {code} has no resolvable Org")
+        if not principal.has_capability("org.write", workspace.org_id):
+            raise ApprovalAuthorizationError(f"principal cannot route approval {code}")
+        from brains.authz.policy import visible_workspace_ids
+
+        visible = visible_workspace_ids(principal)
+        if visible is not None and ask.workspace_id not in visible:
+            raise ApprovalAuthorizationError(f"principal cannot route approval {code}")
+        routing = session.get(ApprovalRouting, ask.id)
+        if (
+            routing is None
+            and assigned_operator is None
+            and not clear_assignment
+            and priority is None
+            and due_at is None
+            and not clear_due
+            and escalation_level is None
+            and not increment_escalation
+            and not escalation_reason.strip()
+        ):
+            raise ValueError("routing update must assign, prioritize, deadline, or escalate")
+        now = utc_now()
+        if clear_assignment:
+            target = None
+        elif assigned_operator is not None:
+            target = _routing_target(session, ask, assigned_operator)
+        elif routing is not None and routing.assigned_operator_id is not None:
+            target = session.get(Operator, routing.assigned_operator_id)
+        else:
+            target = None
+        effective_priority = priority or (routing.priority if routing is not None else "p2")
+        effective_due_at = (
+            None
+            if clear_due
+            else (
+                normalized_due_at
+                if due_at is not None
+                else (routing.due_at if routing is not None else None)
+            )
+        )
+        if effective_due_at is not None and effective_due_at.tzinfo is None:
+            effective_due_at = effective_due_at.replace(tzinfo=UTC)
+        current_level = routing.escalation_level if routing is not None else 0
+        requested_level = (
+            current_level + 1
+            if increment_escalation
+            else (escalation_level if escalation_level is not None else current_level)
+        )
+        if routing is not None and requested_level < routing.escalation_level:
+            raise ValueError("escalation_level cannot decrease")
+        if requested_level > current_level and not escalation_reason.strip():
+            raise ValueError("escalation_reason is required when increasing escalation")
+        normalized_reason = escalation_reason.strip() or (
+            routing.escalation_reason if routing is not None else None
+        )
+        existing_due_at = routing.due_at if routing is not None else None
+        if existing_due_at is not None and existing_due_at.tzinfo is None:
+            existing_due_at = existing_due_at.replace(tzinfo=UTC)
+        duplicate = routing is not None and (
+            routing.assigned_operator_id,
+            routing.priority,
+            existing_due_at,
+            routing.escalation_level,
+            routing.escalation_reason,
+        ) == (
+            target.id if target is not None else None,
+            effective_priority,
+            effective_due_at,
+            requested_level,
+            normalized_reason,
+        )
+        if not duplicate:
+            if routing is None:
+                routing = ApprovalRouting(approval_request_id=ask.id)
+                session.add(routing)
+            routing.assigned_operator_id = target.id if target is not None else None
+            routing.priority = effective_priority
+            routing.due_at = effective_due_at
+            routing.escalation_level = requested_level
+            routing.escalation_reason = normalized_reason
+            routing.updated_by_operator_id = principal.operator_id
+            routing.updated_at = now
+            escalated = requested_level > current_level
+            audit.append_in_session(
+                session,
+                actor=principal.describe(),
+                action="approval.escalated" if escalated else "approval.routed",
+                payload={
+                    "code": code,
+                    "assigned_operator": target.slug if target is not None else None,
+                    "priority": effective_priority,
+                    "due_at": effective_due_at.isoformat() if effective_due_at else None,
+                    "escalation_level": requested_level,
+                    "escalation_reason": normalized_reason,
+                },
+                workspace_id=ask.workspace_id,
+            )
+        else:
+            escalated = False
+        session.commit()
+        assert routing is not None
+        session.refresh(routing)
+        workspace_id = ask.workspace_id
+        assigned_slug = target.slug if target is not None else None
+        result = {
+            "code": code,
+            "status": ask.status,
+            **_routing_to_dict(routing, assigned_slug, now=now),
+            "duplicate": duplicate,
+        }
+    if not duplicate:
+        append_event(
+            "decision_escalated" if escalated else "decision_routed",
+            f"{code}: {assigned_slug or 'unassigned'} {effective_priority}",
+            workspace_id=workspace_id,
+            metadata={
+                "code": code,
+                "assigned_operator": assigned_slug,
+                "priority": effective_priority,
+                "escalation_level": requested_level,
+            },
+        )
+    return result
+
+
+def escalate_decision(
+    code: str,
+    *,
+    reason: str,
+    assigned_operator: str | None = None,
+    due_at: datetime | str | None = None,
+    principal=None,
+) -> dict:
+    """Atomically increment an approval's escalation level with a reason."""
+    return route_decision(
+        code,
+        assigned_operator=assigned_operator,
+        due_at=due_at,
+        escalation_reason=reason,
+        increment_escalation=True,
+        principal=principal,
+    )
+
+
+def count_overdue_decisions() -> int:
+    init_db()
+    now = utc_now()
+    with SessionLocal() as session:
+        return (
+            session.query(ApprovalRouting)
+            .join(ApprovalRequest, ApprovalRequest.id == ApprovalRouting.approval_request_id)
+            .filter(ApprovalRequest.status == "open", ApprovalRouting.due_at < now)
+            .count()
+        )
+
+
+def list_open_decisions(
+    workspace_path: str | None = None,
+    limit: int = 50,
+    *,
+    workspace_id: int | None = None,
+) -> list[dict]:
     # Layer 2 visibility filter — see ``brains.control.memberships``.
     from brains.control.memberships import visible_workspace_ids_for_current
 
     visible = visible_workspace_ids_for_current()
     init_db()
     with SessionLocal() as session:
-        query = session.query(ApprovalRequest, Workspace).join(
-            Workspace, Workspace.id == ApprovalRequest.workspace_id
+        query = (
+            session.query(ApprovalRequest, Workspace, ApprovalRouting, Operator.slug)
+            .join(Workspace, Workspace.id == ApprovalRequest.workspace_id)
+            .outerjoin(ApprovalRouting, ApprovalRouting.approval_request_id == ApprovalRequest.id)
+            .outerjoin(Operator, Operator.id == ApprovalRouting.assigned_operator_id)
         )
         query = query.filter(ApprovalRequest.status == "open")
         if workspace_path:
             workspace = register_workspace(workspace_path)
             query = query.filter(ApprovalRequest.workspace_id == workspace.id)
+        if workspace_id is not None:
+            query = query.filter(ApprovalRequest.workspace_id == workspace_id)
         if visible is not None:
             query = query.filter(ApprovalRequest.workspace_id.in_(visible))
         rows = (
@@ -314,18 +612,26 @@ def list_open_decisions(workspace_path: str | None = None, limit: int = 50) -> l
             .limit(limit)
             .all()
         )
-        return [
-            {
-                "code": row.code,
-                "workspace": workspace.slug,
-                "title": row.title,
-                "body": row.body,
-                "proposed_answer": row.proposed_answer,
-                "created_at": row.created_at.isoformat(),
-                "status": row.status,
-            }
-            for row, workspace in rows
-        ]
+        result: list[dict] = []
+        for row, workspace, routing, assigned_slug in rows:
+            metadata = _approval_metadata(row.metadata_json)
+            result.append(
+                {
+                    "code": row.code,
+                    "workspace": workspace.slug,
+                    "workspace_id": workspace.id,
+                    "session_id": row.session_id,
+                    "title": row.title,
+                    "body": row.body,
+                    "proposed_answer": row.proposed_answer,
+                    "created_at": row.created_at.isoformat(),
+                    "status": row.status,
+                    "kind": metadata.get("kind"),
+                    "metadata": metadata,
+                    **_routing_to_dict(routing, assigned_slug),
+                }
+            )
+        return result
 
 
 def resolve_decision(
@@ -480,10 +786,19 @@ def get_decision(code: str) -> dict | None:
             if dec is not None:
                 chosen = dec.chosen
                 reasoning = dec.reasoning
+        routing = session.get(ApprovalRouting, ask.id)
+        assigned_slug = None
+        if routing is not None and routing.assigned_operator_id is not None:
+            assigned_slug = (
+                session.query(Operator.slug)
+                .filter(Operator.id == routing.assigned_operator_id)
+                .scalar()
+            )
         return {
             "code": ask.code,
             "status": ask.status,
             "title": ask.title,
             "chosen": chosen,
             "reasoning": reasoning,
+            **_routing_to_dict(routing, assigned_slug),
         }

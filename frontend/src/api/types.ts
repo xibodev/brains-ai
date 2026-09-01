@@ -557,8 +557,8 @@ export interface ConfigSummary {
 
 // --- operational health (B8, BL-P1-09, BL-P1-12) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
-// protected ready/degraded verdict for storage/migration, coordination-queue
-// health, Runtime lifecycle/staleness, and recovery-policy configuration.
+// protected ready/degraded verdict for storage/migration, coordination queues,
+// durable mailbox state, and recovery-policy configuration.
 
 export type HealthState = "ready" | "degraded";
 
@@ -572,7 +572,7 @@ export interface ReadinessReport {
   components: {
     storage: ReadinessComponent;
     queue: ReadinessComponent;
-    runtime_lifecycle: ReadinessComponent;
+    durable_mail: ReadinessComponent;
     recovery_policy: ReadinessComponent;
   };
 }
@@ -714,6 +714,8 @@ export interface OperatorAgent {
   started_at?: string;
   last_activity_at?: string | null;
   interactive_input?: boolean;
+  mailbox_address?: string;
+  mailbox_deep_link?: string;
 }
 
 export interface OperatorKnowledge {
@@ -800,6 +802,105 @@ export interface OperatorCoordination {
   live_agents: OperatorAgent[];
 }
 
+export interface MailboxAccess {
+  address: string;
+  kind: "agent" | "operator";
+  workspace: string | null;
+  tool: string | null;
+  owner_operator: string | null;
+  unread_count: number;
+  can_open: boolean;
+  can_send: boolean;
+  deep_link: string;
+}
+
+export interface MailboxSmtpStatus {
+  mailbox: string;
+  destination_state: "unconfigured" | "pending" | "verified" | "unavailable";
+  superseded?: boolean;
+  destination_hint: string | null;
+  copy_mode: "disabled" | "notification" | "full_body";
+  verified_at: string | null;
+  full_body_consented_at: string | null;
+  outbox: {
+    open: number;
+    sent: number;
+    failed: number;
+    uncertain: number;
+    cancelled: number;
+  };
+}
+
+export interface MailboxAddress {
+  address: string;
+  kind: "agent" | "operator";
+  workspace: string | null;
+  tool: string | null;
+  owner_operator: string | null;
+}
+
+export interface MailDeliveryState {
+  cursor: number;
+  delivery_id: string;
+  recipient: string | null;
+  recipient_workspace: string | null;
+  state: "accepted" | "read";
+  accepted_at: string;
+  read_at: string | null;
+  read_by_session_id: string | null;
+  read_by_operator: string | null;
+  read_channel: string | null;
+}
+
+export interface MailMessage {
+  cursor: number;
+  message_id: string;
+  thread_id: string;
+  sender: string;
+  sender_session_id: string | null;
+  origin_workspace: string;
+  audience: "direct" | "broadcast";
+  in_reply_to: string | null;
+  forwarded_from: string | null;
+  forwarded_message: {
+    message_id: string;
+    forwarded_from: string | null;
+    sender: string | null;
+    origin_workspace: string | null;
+    kind: string;
+    subject: string;
+    body: string;
+    created_at: string;
+  } | null;
+  kind: string;
+  subject: string;
+  body: string;
+  created_at: string;
+  deliveries: MailDeliveryState[];
+  inbox_delivery?: MailDeliveryState | null;
+  created?: boolean;
+}
+
+export interface MailboxMessageList {
+  mailbox: string;
+  cursor: number;
+  unread_count?: number;
+  messages: MailMessage[];
+}
+
+export interface MailThread {
+  thread_id: string;
+  origin_workspace: string;
+  started_by: string;
+  subject: string;
+  created_at: string;
+  updated_at: string;
+  mailbox: string;
+  unread_count: number;
+  cursor: number;
+  messages: MailMessage[];
+}
+
 export interface OperatorGovernance {
   decisions: OperatorDecision[];
   actions: Array<Record<string, unknown>>;
@@ -830,7 +931,6 @@ export interface OperatorOperations {
     listeners?: { gateway?: boolean; mcp?: boolean };
     service_pid?: Record<string, unknown>;
   };
-  runtimes: Runtime[];
   tools: OperatorTool[];
   operators: Array<Record<string, unknown>>;
   labs_enabled: boolean;

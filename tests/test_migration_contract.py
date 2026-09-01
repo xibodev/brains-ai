@@ -117,6 +117,16 @@ POST_CHECKSUM_DELTAS = (
     "140_agent_comms_repair",
     "141_secure_settings",
     "142_session_successor",
+    "143_session_leases",
+    "144_topic_subscriptions",
+    "145_approval_routing",
+    "146_feedback_inbox",
+    "147_event_contexts",
+    "148_workspace_aliases",
+    "149_ephemeral_help_review",
+    "150_durable_mailboxes",
+    "151_mail_notification_state",
+    "152_mail_smtp_state",
 )
 
 _LEGACY_LEDGER_DDL = """

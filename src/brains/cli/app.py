@@ -28,6 +28,13 @@ from brains.control.decisions import (
     list_open_decisions,
     resolve_decision,
 )
+from brains.control.durable_mailbox import (
+    ensure_operator_mailboxes,
+    list_phonebook,
+    lookup_mailbox,
+    read_mailbox_binding_file,
+    register_agent_mailbox,
+)
 from brains.control.events import append_event, list_events
 from brains.control.handoffs import (
     clear_handoff,
@@ -105,12 +112,16 @@ credentials_app = typer.Typer(
     "accepts. Every accepted key resolves to one principal; raw secrets are "
     "never stored or printed."
 )
+mailbox_app = typer.Typer(
+    help="Register durable agent mailboxes and inspect the authorized phonebook."
+)
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(admin_key_app, name="admin-key")
 app.add_typer(operator_app, name="operator")
 app.add_typer(workspace_app, name="workspace")
 app.add_typer(service_app, name="service")
 app.add_typer(credentials_app, name="credentials")
+app.add_typer(mailbox_app, name="mailbox")
 
 daemon_app = typer.Typer(
     help="Run the brains daemon — one process per machine that detects coding "
@@ -490,6 +501,20 @@ def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
 
 @service_app.command("install")
 def service_install_cli(
+    gateway_port: int | None = typer.Option(
+        None,
+        "--gateway-port",
+        min=1,
+        max=65535,
+        help="Gateway port. Omit to reuse the persisted port or select a safe local default.",
+    ),
+    mcp_port: int | None = typer.Option(
+        None,
+        "--mcp-port",
+        min=1,
+        max=65535,
+        help="MCP SSE port. Omit to reuse the persisted port or default to 9877.",
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show the unit definition + commands; write nothing."
     ),
@@ -507,7 +532,13 @@ def service_install_cli(
             f"No service backend for platform {service_mod.current_platform()!r} "
             "(supported: windows, macos, linux)."
         )
-    _print_json(service_mod.install(dry_run=dry_run))
+    _print_json(
+        service_mod.install(
+            dry_run=dry_run,
+            gateway_port=gateway_port,
+            mcp_port=mcp_port,
+        )
+    )
 
 
 @service_app.command("uninstall")
@@ -1911,7 +1942,7 @@ def topic_post_cli(
     reply_to: int | None = typer.Option(None, "--reply-to"),
     no_blast: bool = typer.Option(False, "--no-blast"),
 ):
-    """Post to a topic board; notifies other live workspaces via their inbox."""
+    """Post to a topic board; wakes interested live subscribers."""
     from brains.control.topics import post_topic
 
     _print_json(
@@ -1933,11 +1964,21 @@ def topic_read_cli(
     topic: str | None = typer.Argument(None),
     limit: int = typer.Option(50, "--limit"),
     reply_to: int | None = typer.Option(None, "--reply-to"),
+    session: str | None = typer.Option(None, "--session"),
+    after_post_id: int | None = typer.Option(None, "--after-post-id"),
 ):
-    """Read a topic board (or every board) — newest posts first."""
+    """Read a board; a Session-scoped read advances its subscription cursor."""
     from brains.control.topics import read_topic
 
-    _print_json(read_topic(topic, limit=limit, reply_to=reply_to))
+    _print_json(
+        read_topic(
+            topic,
+            limit=limit,
+            reply_to=reply_to,
+            session_id=session,
+            after_post_id=after_post_id,
+        )
+    )
 
 
 @app.command("topic-list")
@@ -1946,6 +1987,34 @@ def topic_list_cli(limit: int = typer.Option(100, "--limit")):
     from brains.control.topics import list_topics
 
     _print_json(list_topics(limit=limit))
+
+
+@app.command("topic-subscribe")
+def topic_subscribe_cli(
+    topic: str,
+    session: str = typer.Option(..., "--session"),
+    include_existing: bool = typer.Option(False, "--include-existing"),
+):
+    """Subscribe a Session to topic wakeups."""
+    from brains.control.topics import subscribe_topic
+
+    _print_json(subscribe_topic(topic, session, include_existing=include_existing))
+
+
+@app.command("topic-unsubscribe")
+def topic_unsubscribe_cli(topic: str, session: str = typer.Option(..., "--session")):
+    """Remove a Session's topic subscription."""
+    from brains.control.topics import unsubscribe_topic
+
+    _print_json(unsubscribe_topic(topic, session))
+
+
+@app.command("topic-subscriptions")
+def topic_subscriptions_cli(session: str = typer.Option(..., "--session")):
+    """List one Session's topic cursors and pending counts."""
+    from brains.control.topics import list_topic_subscriptions
+
+    _print_json(list_topic_subscriptions(session))
 
 
 @app.command("mail-send")
@@ -1977,11 +2046,284 @@ def mail_status_cli():
 def inbox_wait_cli(
     session: str = typer.Option(...),
     timeout_ms: int = typer.Option(25000, "--timeout-ms"),
+    after_message_id: int | None = typer.Option(None, "--after-message-id"),
 ):
-    """Block until unread mail or a claimable peer request arrives (long-poll)."""
+    """Block until mail, a subscribed topic, or a peer request arrives."""
     from brains.control.mailbox import inbox_wait
 
-    _print_json(inbox_wait(session, timeout_ms=timeout_ms))
+    _print_json(
+        inbox_wait(
+            session,
+            timeout_ms=timeout_ms,
+            after_message_id=after_message_id,
+        )
+    )
+
+
+@app.command("help-file")
+def help_file_cli(
+    subject: str = typer.Option(..., "--subject"),
+    question: str = typer.Option(..., "--question"),
+    from_session: str | None = typer.Option(None, "--from-session"),
+    to_workspace: str | None = typer.Option(None, "--to-workspace"),
+    to_session: str | None = typer.Option(None, "--to-session"),
+    context: str = typer.Option("", "--context"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+    required_tool: str | None = typer.Option(None, "--required-tool"),
+    execution_mode: str = typer.Option("auto", "--execution-mode"),
+):
+    """File durable peer help and return immediately."""
+    from brains.control.help import file_help_request
+
+    _print_json(
+        file_help_request(
+            subject,
+            question,
+            from_session_id=from_session,
+            to_workspace=to_workspace,
+            to_session_id=to_session,
+            context=context,
+            timeout_ms=timeout_ms,
+            required_tool=required_tool,
+            execution_mode=execution_mode,
+        )
+    )
+
+
+@app.command("help-get")
+def help_get_cli(
+    code: str,
+    session: str | None = typer.Option(None, "--session"),
+):
+    """Read one peer-help request without blocking."""
+    from brains.control.help import get_help_request
+
+    _print_json(get_help_request(code, session_id=session))
+
+
+@app.command("help-wait")
+def help_wait_cli(
+    code: str,
+    session: str | None = typer.Option(None, "--session"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+):
+    """Wait briefly for one request without expiring it on timeout."""
+    from brains.control.help import wait_help_request
+
+    _print_json(wait_help_request(code, session_id=session, timeout_ms=timeout_ms))
+
+
+@app.command("help-claim")
+def help_claim_cli(
+    session: str = typer.Option(..., "--session"),
+    workspace: str | None = typer.Option(None, "--workspace"),
+    timeout_ms: int = typer.Option(30000, "--timeout-ms"),
+):
+    """Wait for and claim peer help routed to this Session or Workspace."""
+    from brains.control.help import wait_for_request
+
+    _print_json(
+        wait_for_request(
+            session_id=session,
+            workspace_slug=workspace,
+            timeout_ms=timeout_ms,
+        )
+    )
+
+
+@app.command("help-answer")
+def help_answer_cli(
+    code: str,
+    answer: str = typer.Option(..., "--answer"),
+    evidence: str = typer.Option(..., "--evidence"),
+    session: str = typer.Option(..., "--session"),
+):
+    """Answer help claimed by this Session with required evidence."""
+    from brains.control.help import answer_request
+
+    _print_json(answer_request(code, answer, evidence, session_id=session))
+
+
+@app.command("help-cancel")
+def help_cancel_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+):
+    """Cancel help as the Session that filed it."""
+    from brains.control.help import cancel_help_request
+
+    _print_json(cancel_help_request(code, session_id=session))
+
+
+@app.command("help-release")
+def help_release_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+    retry_timeout_ms: int = typer.Option(30000, "--retry-timeout-ms"),
+):
+    """Release claimed help back to the open queue."""
+    from brains.control.help import release_help_request
+
+    _print_json(
+        release_help_request(
+            code,
+            session_id=session,
+            retry_timeout_ms=retry_timeout_ms,
+        )
+    )
+
+
+@app.command("help-list")
+def help_list_cli(
+    to_workspace: str | None = typer.Option(None, "--to-workspace"),
+    to_session: str | None = typer.Option(None, "--to-session"),
+    include_answered: bool = typer.Option(False, "--include-answered"),
+    limit: int = typer.Option(50, "--limit"),
+):
+    """List visible peer-help requests."""
+    from brains.control.help import list_open_help_requests
+
+    _print_json(
+        list_open_help_requests(
+            to_workspace=to_workspace,
+            to_session_id=to_session,
+            include_answered=include_answered,
+            limit=limit,
+        )
+    )
+
+
+def _feedback_metadata(raw: str) -> dict[str, Any]:
+    if not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter("metadata must be a JSON object") from exc
+    if not isinstance(value, dict):
+        raise typer.BadParameter("metadata must be a JSON object")
+    return value
+
+
+@app.command("feedback-report")
+def feedback_report_cli(
+    category: str = typer.Option(..., "--category"),
+    severity: str = typer.Option(..., "--severity"),
+    summary: str = typer.Option(..., "--summary"),
+    workspace: str = typer.Option(".", "--workspace"),
+    evidence: str = typer.Option("", "--evidence"),
+    reproduction: str = typer.Option("", "--reproduction"),
+    affected_version: str | None = typer.Option(None, "--affected-version"),
+    surface: str | None = typer.Option(None, "--surface"),
+    session: str = typer.Option(..., "--session"),
+    metadata: str = typer.Option("", "--metadata"),
+):
+    """File a redacted Workspace-scoped agent-experience report."""
+    from brains.control.feedback import file_feedback
+
+    _print_json(
+        file_feedback(
+            workspace,
+            category,
+            severity,
+            summary,
+            evidence=evidence,
+            reproduction=reproduction,
+            affected_version=affected_version,
+            surface=surface,
+            reporter_session_id=session,
+            metadata=_feedback_metadata(metadata),
+        )
+    )
+
+
+@app.command("feedback-enrich")
+def feedback_enrich_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+    kind: str = typer.Option("enrichment", "--kind"),
+    note: str = typer.Option("", "--note"),
+    evidence: str = typer.Option("", "--evidence"),
+    reproduction: str = typer.Option("", "--reproduction"),
+    metadata: str = typer.Option("", "--metadata"),
+):
+    """Add redacted evidence from a live Session in the report's Workspace."""
+    from brains.control.feedback import enrich_feedback
+
+    _print_json(
+        enrich_feedback(
+            code,
+            reporter_session_id=session,
+            kind=kind,
+            note=note,
+            evidence=evidence,
+            reproduction=reproduction,
+            metadata=_feedback_metadata(metadata),
+        )
+    )
+
+
+@app.command("feedback-get")
+def feedback_get_cli(code: str):
+    """Read one visible feedback report."""
+    from brains.control.feedback import get_feedback
+
+    _print_json(get_feedback(code))
+
+
+@app.command("feedback-list")
+def feedback_list_cli(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    status: str | None = typer.Option(None, "--status"),
+    category: str | None = typer.Option(None, "--category"),
+    limit: int = typer.Option(100, "--limit"),
+):
+    """List visible feedback reports."""
+    from brains.control.feedback import list_feedback
+
+    _print_json(list_feedback(workspace, status=status, category=category, limit=limit))
+
+
+@app.command("feedback-triage")
+def feedback_triage_cli(
+    code: str,
+    status: str = typer.Option(..., "--status"),
+    note: str = typer.Option("", "--note"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Human-only feedback lifecycle transition."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.feedback import triage_feedback
+
+    _print_json(
+        triage_feedback(
+            code,
+            status,
+            note=note,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
+@app.command("feedback-promote")
+def feedback_promote_cli(
+    code: str,
+    target: str = typer.Option(..., "--target"),
+    backlog_ref: str | None = typer.Option(None, "--backlog-ref"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Human-only exactly-once promotion to Task, knowledge, or backlog reference."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.feedback import promote_feedback
+
+    _print_json(
+        promote_feedback(
+            code,
+            target,
+            backlog_ref=backlog_ref,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
 
 
 @app.command("check-source")
@@ -2020,13 +2362,426 @@ def session_start_cli(
         help="PID of the durable agent process that owns this Session. Omit when unknown.",
     ),
     predecessor_session: str | None = typer.Option(None, "--predecessor-session"),
+    new: bool = typer.Option(
+        False,
+        "--new",
+        help="Create a distinct handle instead of reusing this workspace/tool/operator Session.",
+    ),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Adapter-owned file containing the mailbox reattachment secret.",
+    ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
 ):
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
     _print_json(
         start_session(
             workspace,
             tool=tool,
             pid=pid,
             predecessor_session_id=predecessor_session,
+            reuse_existing=not new,
+            auto_link_predecessor=True,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
+        )
+    )
+
+
+@app.command("session-heartbeat")
+def session_heartbeat_cli(
+    session: str = typer.Option(...),
+    tool: str | None = typer.Option(None, "--tool"),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
+):
+    from brains.control.sessions import heartbeat_session
+
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
+    _print_json(
+        heartbeat_session(
+            session,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
+        )
+    )
+
+
+@mailbox_app.command("register")
+def mailbox_register_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    tool: str = typer.Option(..., "--tool"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+        help="Adapter-owned file containing the mailbox reattachment secret.",
+    ),
+    notification_mode: str | None = typer.Option(None, "--notification-mode"),
+):
+    binding_secret = read_mailbox_binding_file(binding_file)
+    _print_json(
+        register_agent_mailbox(
+            workspace,
+            tool,
+            native_tool_session_id,
+            session,
+            binding_secret,
+            notification_mode=notification_mode or "pull",
+        )
+    )
+
+
+@mailbox_app.command("phonebook")
+def mailbox_phonebook_cli(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    include_paths: bool = typer.Option(False, "--include-paths"),
+    limit: int = typer.Option(500, "--limit", min=1, max=1000),
+):
+    ensure_operator_mailboxes()
+    _print_json(list_phonebook(workspace, include_paths=include_paths, limit=limit))
+
+
+@mailbox_app.command("lookup")
+def mailbox_lookup_cli(
+    address: str,
+    include_path: bool = typer.Option(False, "--include-path"),
+):
+    ensure_operator_mailboxes()
+    _print_json(lookup_mailbox(address, include_path=include_path))
+
+
+@mailbox_app.command("send")
+def mailbox_send_cli(
+    recipient: list[str] = typer.Option(..., "--to", help="Recipient address. Repeatable."),
+    subject: str = typer.Option(..., "--subject"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import send_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        send_mailbox_message(
+            workspace,
+            recipient,
+            subject,
+            operation_id,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("broadcast")
+def mailbox_broadcast_cli(
+    subject: str = typer.Option(..., "--subject"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import broadcast_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        broadcast_mailbox_message(
+            workspace,
+            subject,
+            operation_id,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("reply")
+def mailbox_reply_cli(
+    in_reply_to: str = typer.Option(..., "--in-reply-to"),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    subject: str | None = typer.Option(None, "--subject"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import reply_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        reply_mailbox_message(
+            workspace,
+            in_reply_to,
+            operation_id,
+            subject=subject,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("forward")
+def mailbox_forward_cli(
+    forwarded_from: str = typer.Option(..., "--forwarded-from"),
+    recipient: list[str] = typer.Option(..., "--to", help="Recipient address. Repeatable."),
+    operation_id: str = typer.Option(..., "--operation-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+    body: str = typer.Option("", "--body"),
+    subject: str | None = typer.Option(None, "--subject"),
+    kind: str = typer.Option("info", "--kind"),
+    sender: str | None = typer.Option(None, "--from"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+):
+    from brains.control.durable_mail import forward_mailbox_message
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        forward_mailbox_message(
+            workspace,
+            forwarded_from,
+            recipient,
+            operation_id,
+            subject=subject,
+            body=body,
+            kind=kind,
+            sender_address=sender,
+            sender_session_id=session,
+            binding_secret=binding_secret,
+        )
+    )
+
+
+@mailbox_app.command("inbox")
+def mailbox_inbox_cli(
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mark_read: bool = typer.Option(False, "--mark-read/--no-mark-read"),
+    include_read: bool = typer.Option(False, "--include-read"),
+    after_delivery_id: int | None = typer.Option(None, "--after-delivery-id", min=0),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    from brains.control.durable_mail import read_mailbox_inbox
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_inbox(
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            mark_read=mark_read,
+            include_read=include_read,
+            after_delivery_id=after_delivery_id,
+            limit=limit,
+        )
+    )
+
+
+@mailbox_app.command("sent")
+def mailbox_sent_cli(
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    after_message_id: int | None = typer.Option(None, "--after-message-id", min=0),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    from brains.control.durable_mail import read_mailbox_sent
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_sent(
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            after_message_id=after_message_id,
+            limit=limit,
+        )
+    )
+
+
+@mailbox_app.command("thread")
+def mailbox_thread_cli(
+    thread_id: str,
+    address: str | None = typer.Option(None, "--address"),
+    session: str | None = typer.Option(None, "--session"),
+    binding_file: Path | None = typer.Option(
+        None,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mark_read: bool = typer.Option(False, "--mark-read/--no-mark-read"),
+):
+    from brains.control.durable_mail import read_mailbox_thread
+
+    binding_secret = read_mailbox_binding_file(binding_file) if binding_file else None
+    _print_json(
+        read_mailbox_thread(
+            thread_id,
+            address=address,
+            session_id=session,
+            binding_secret=binding_secret,
+            mark_read=mark_read,
+        )
+    )
+
+
+@mailbox_app.command("notification-take")
+def mailbox_notification_take_cli(
+    session: str = typer.Option(..., "--session"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    notification_id: str | None = typer.Option(None, "--notification-id"),
+    wait_ms: int = typer.Option(0, "--wait-ms", min=0, max=30_000),
+):
+    from brains.control.durable_mail import take_mailbox_notification
+
+    _print_json(
+        take_mailbox_notification(
+            session,
+            read_mailbox_binding_file(binding_file),
+            notification_id=notification_id,
+            wait_ms=wait_ms,
+        )
+    )
+
+
+@mailbox_app.command("notification-settle")
+def mailbox_notification_settle_cli(
+    notification_id: str,
+    session: str = typer.Option(..., "--session"),
+    status: str = typer.Option(..., "--status"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    error_code: str | None = typer.Option(None, "--error-code"),
+):
+    from brains.control.durable_mail import settle_mailbox_notification
+
+    _print_json(
+        settle_mailbox_notification(
+            session,
+            read_mailbox_binding_file(binding_file),
+            notification_id,
+            status=status,
+            error_code=error_code,
         )
     )
 
@@ -2035,10 +2790,36 @@ def session_start_cli(
 def session_link_successor_cli(
     from_session: str = typer.Option(..., "--from-session"),
     to_session: str = typer.Option(..., "--to-session"),
+    tool: str | None = typer.Option(None, "--tool"),
+    native_tool_session_id: str | None = typer.Option(None, "--native-tool-session-id"),
+    mailbox_binding_file: Path | None = typer.Option(
+        None,
+        "--mailbox-binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    mailbox_notification_mode: str | None = typer.Option(None, "--mailbox-notification-mode"),
 ):
     from brains.control.sessions import link_session_successor
 
-    _print_json(link_session_successor(from_session, to_session))
+    mailbox_binding_secret = (
+        read_mailbox_binding_file(mailbox_binding_file)
+        if mailbox_binding_file is not None
+        else None
+    )
+    _print_json(
+        link_session_successor(
+            from_session,
+            to_session,
+            tool=tool,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
+        )
+    )
 
 
 @app.command("session-end")
@@ -2135,6 +2916,22 @@ def events_cli(limit: int = 100):
     )
 
 
+@app.command("event-context")
+def event_context_cli(event_id: int):
+    """Show one event's taxonomy and scope provenance."""
+    from brains.control.events import get_event_context
+
+    _print_json(get_event_context(event_id))
+
+
+@app.command("event-scope")
+def event_scope_cli():
+    """Show typed/global/unresolved event-scope posture."""
+    from brains.control.events import event_scope_report
+
+    _print_json(event_scope_report())
+
+
 @app.command("learn")
 def learn_cli(
     workspace: str | None = None,
@@ -2167,6 +2964,60 @@ def decision_file_cli(
 @app.command("decision-list")
 def decision_list_cli(workspace: str = ".", limit: int = 50):
     _print_json(list_open_decisions(workspace, limit=limit))
+
+
+@app.command("decision-route")
+def decision_route_cli(
+    code: str = typer.Option(...),
+    assigned_operator: str | None = typer.Option(None, "--assigned-operator"),
+    clear_assignment: bool = typer.Option(False, "--clear-assignment"),
+    priority: str | None = typer.Option(None, "--priority"),
+    due_at: str | None = typer.Option(None, "--due-at"),
+    clear_due: bool = typer.Option(False, "--clear-due"),
+    escalation_level: int | None = typer.Option(None, "--escalation-level"),
+    escalation_reason: str = typer.Option("", "--escalation-reason"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Assign, prioritize, deadline, or escalate an open approval."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.decisions import route_decision
+
+    _print_json(
+        route_decision(
+            code,
+            assigned_operator=assigned_operator,
+            clear_assignment=clear_assignment,
+            priority=priority,
+            due_at=due_at,
+            clear_due=clear_due,
+            escalation_level=escalation_level,
+            escalation_reason=escalation_reason,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
+
+
+@app.command("decision-escalate")
+def decision_escalate_cli(
+    code: str = typer.Option(...),
+    reason: str = typer.Option(..., "--reason"),
+    assigned_operator: str | None = typer.Option(None, "--assigned-operator"),
+    due_at: str | None = typer.Option(None, "--due-at"),
+    operator: str | None = typer.Option(None, "--operator"),
+):
+    """Increment an open approval's escalation level with a reason."""
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.decisions import escalate_decision
+
+    _print_json(
+        escalate_decision(
+            code,
+            reason=reason,
+            assigned_operator=assigned_operator,
+            due_at=due_at,
+            principal=resolve_local_principal(operator=operator),
+        )
+    )
 
 
 @app.command("decision-resolve")
@@ -2572,6 +3423,11 @@ def workspaces_doctor_cli(
         "--apply",
         help="Required with --prune-missing to actually delete. Without it, --prune-missing is a dry-run.",
     ),
+    archive_missing: bool = typer.Option(
+        False,
+        "--archive-missing",
+        help="Archive missing workspace identities without deleting their durable history.",
+    ),
 ) -> None:
     """Audit the workspaces table for fishy rows.
 
@@ -2581,33 +3437,71 @@ def workspaces_doctor_cli(
         pyproject.toml, package.json, Cargo.toml, go.mod, etc.). Usually an
         umbrella parent folder that an agent registered by accident.
 
-    Read-only by default. Pass ``--prune-missing --apply`` to delete the
-    ``missing`` rows (uses the same cascade as ``workspaces prune``).
+    Read-only by default. Prefer ``--archive-missing --apply`` to remove stale
+    paths from active views while preserving Sessions, events, handoffs, and
+    governance history. ``--prune-missing --apply`` remains the explicit
+    destructive cleanup path.
     """
     import os as _os
 
     from brains.control.sessions import has_project_marker
     from brains.storage.db import SessionLocal
     from brains.storage.migrations import init_db
-    from brains.storage.models import Workspace
+    from brains.storage.models import Workspace, WorkspaceAlias
+
+    def promote_primary(workspace: Workspace, path: str) -> None:
+        conflict = (
+            session.query(Workspace)
+            .filter(Workspace.path == path, Workspace.id != workspace.id)
+            .one_or_none()
+        )
+        if conflict is None:
+            workspace.path = path
+            return
+        previous = workspace.path
+        workspace.path = f"__brains_path_swap__/{workspace.id}/{conflict.id}"
+        session.flush()
+        conflict.path = previous
+        session.flush()
+        workspace.path = path
+
+    if archive_missing and prune_missing:
+        typer.echo(
+            "error: choose --archive-missing or --prune-missing, not both.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
 
     init_db()
     with SessionLocal() as session:
         rows = (
-            session.query(Workspace.id, Workspace.slug, Workspace.path)
+            session.query(Workspace)
+            .filter(Workspace.status == "active")
             .order_by(Workspace.slug.asc())
             .all()
         )
+        aliases: dict[int, list[str]] = {}
+        for workspace_id, path in session.query(
+            WorkspaceAlias.workspace_id, WorkspaceAlias.path
+        ).filter(WorkspaceAlias.workspace_id.in_([row.id for row in rows])):
+            aliases.setdefault(workspace_id, []).append(path)
         missing: list[dict[str, Any]] = []
         no_marker: list[dict[str, Any]] = []
+        primary_promotions: dict[int, str] = {}
         ok = 0
         for row in rows:
-            if not row.path or not _os.path.isdir(row.path):
+            paths = list(dict.fromkeys([row.path, *aliases.get(row.id, [])]))
+            usable = [path for path in paths if path and _os.path.isdir(path)]
+            if not usable:
                 missing.append({"id": row.id, "slug": row.slug, "path": row.path})
-            elif not has_project_marker(row.path):
-                no_marker.append({"id": row.id, "slug": row.slug, "path": row.path})
             else:
-                ok += 1
+                selected = row.path if row.path in usable else usable[0]
+                if selected != row.path:
+                    primary_promotions[row.id] = selected
+                if not any(has_project_marker(path) for path in usable):
+                    no_marker.append({"id": row.id, "slug": row.slug, "path": selected})
+                else:
+                    ok += 1
 
         report: dict[str, Any] = {
             "total": len(rows),
@@ -2617,7 +3511,29 @@ def workspaces_doctor_cli(
             "missing": missing,
             "no_marker": no_marker,
             "pruned_missing": None,
+            "archived_missing": None,
         }
+
+        if archive_missing and missing:
+            if not apply:
+                typer.echo(
+                    f"DRY-RUN: would archive {len(missing)} missing-on-disk workspaces. "
+                    "Pass --apply to commit.",
+                    err=True,
+                )
+                report["archived_missing"] = {
+                    "dry_run": True,
+                    "would_archive": len(missing),
+                }
+                _print_json(report)
+                return
+            archived = (
+                session.query(Workspace)
+                .filter(Workspace.id.in_([m["id"] for m in missing]))
+                .update({Workspace.status: "archived"}, synchronize_session=False)
+            )
+            session.commit()
+            report["archived_missing"] = {"dry_run": False, "archived": archived}
 
         if prune_missing and missing:
             if not apply:
@@ -2638,6 +3554,13 @@ def workspaces_doctor_cli(
                 "deleted": deleted_by_table["workspaces"],
                 "deleted_by_table": deleted_by_table,
             }
+
+        if apply and (archive_missing or prune_missing) and primary_promotions:
+            for workspace_id, path in primary_promotions.items():
+                workspace = session.get(Workspace, workspace_id)
+                if workspace is not None:
+                    promote_primary(workspace, path)
+            session.commit()
 
         _print_json(report)
 
@@ -2676,6 +3599,7 @@ def message_read_cli(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = typer.Option(None, "--after-id"),
 ):
     _print_json(
         read_messages(
@@ -2683,6 +3607,7 @@ def message_read_cli(
             mark_read=mark_read,
             include_read=include_read,
             limit=limit,
+            after_id=after_id,
         )
     )
 
@@ -3571,85 +4496,18 @@ def daemon_start_cli(
 
 @app.command("readiness")
 def readiness_cli() -> None:
-    """Report operational readiness: storage/migration, queue, Runtime
-    lifecycle/staleness, and recovery-policy component state (B8).
+    """Report storage, queue, durable-mail, and recovery readiness (B8).
 
     Distinct from ``brains-ai health`` style liveness checks — this reports
     one overall ready/degraded verdict plus bounded, redacted per-component
     detail, and never fabricates a passing recovery-policy or queue state.
     Exits 1 when the overall verdict is degraded, so it composes in scripts.
     """
-    from brains.control.queue_health import summarize as queue_summarize
-    from brains.control.recovery_policy import recovery_readiness
-    from brains.control.runtimes import count_stale, list_runtimes
-    from brains.mcp.server import _runtime_stale_ttl_seconds
-    from brains.storage.migrations import migration_status
+    from brains.control.operations import readiness_report
 
-    components: dict[str, dict] = {}
-    try:
-        status = migration_status()
-        healthy = bool(status.get("healthy")) and bool(status.get("schema_verified"))
-        components["storage"] = {
-            "state": "ready" if healthy else "degraded",
-            "detail": {
-                "backend": status.get("backend"),
-                "healthy": status.get("healthy"),
-                "schema_verified": status.get("schema_verified"),
-                "pending": len(status.get("pending") or []),
-                "failed": len(status.get("failed") or []),
-            },
-        }
-    except Exception as exc:
-        components["storage"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        queue = queue_summarize()
-        stale_total = sum(f["stale_or_expired"] for f in queue["families"].values())
-        components["queue"] = {
-            "state": "ready" if stale_total == 0 else "degraded",
-            "detail": {"stale_or_expired_total": stale_total, "families": len(queue["families"])},
-        }
-    except Exception as exc:
-        components["queue"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
-
-    try:
-        ttl = _runtime_stale_ttl_seconds()
-        runtimes_list = list_runtimes()
-        stale = count_stale(ttl)
-        components["runtime_lifecycle"] = {
-            "state": "ready" if stale == 0 else "degraded",
-            "detail": {
-                "total": len(runtimes_list),
-                "online": len([r for r in runtimes_list if r.get("status") == "online"]),
-                "stale_pending_sweep": stale,
-                "stale_sweep_ttl_seconds": ttl,
-            },
-        }
-    except Exception as exc:
-        components["runtime_lifecycle"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    try:
-        recovery = recovery_readiness()
-        components["recovery_policy"] = {
-            "state": "ready" if recovery["ready"] else "degraded",
-            "detail": {
-                "complete": recovery["policy"]["complete"],
-                "missing_fields": recovery["policy"]["missing_fields"],
-                "reasons": recovery["reasons"],
-            },
-        }
-    except Exception as exc:
-        components["recovery_policy"] = {
-            "state": "degraded",
-            "detail": {"error": type(exc).__name__},
-        }
-
-    overall = "ready" if all(c["state"] == "ready" for c in components.values()) else "degraded"
-    _print_json({"status": overall, "components": components})
-    if overall != "ready":
+    report = readiness_report()
+    _print_json(report)
+    if report["status"] != "ready":
         raise typer.Exit(code=1)
 
 

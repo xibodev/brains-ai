@@ -177,12 +177,7 @@ def retrieve_memory(
     limit: int = 5,
     session_id: str | None = None,
 ) -> list[dict]:
-    """Look up ``key``. ``session_id`` is optional but strongly recommended
-    — adoption queries join ``memory_retrieved`` events back to
-    ``session_start`` events via ``session_id`` to compute the "of
-    sessions offered relevant memory keys, how many actually fetched
-    one?" rate.
-    """
+    """Look up ``key`` and optionally attribute the retrieval to a Session."""
     _ensure_db()
     with SessionLocal() as session:
         rows = (

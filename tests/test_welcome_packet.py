@@ -155,113 +155,52 @@ def test_welcome_tool_status_counts(tmp_path, monkeypatch):
     assert welcome["tool_status"]["missing"] >= 1
 
 
-# ------------------------------------------------------- adoption telemetry
-#
-# The ``session_start`` event must carry a snapshot of the welcome
-# packet's counts in its ``metadata_json`` so adoption queries (did this
-# session actually call ``read_messages`` after being told there was
-# unread mail?) can be derived from the events table with a single
-# self-join — no new telemetry tables required.
+def test_welcome_auto_verifies_local_session_tool(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "brains.control.tool_registry.shutil.which",
+        lambda command: "/bin/local-tool" if command == "local-tool" else None,
+    )
+    register_tool("local-tool", "Local Tool", "local-tool", verify=False)
+    started = start_session(str(tmp_path), tool="local-tool")
+    status = started["welcome"]["tool_status"]
+    assert status["verification_scope"] == "control_plane"
+    assert status["session_ready"] is True
+    assert status["unverified"] == 0
 
 
-def _read_session_start_metadata(session_id: str) -> dict:
-    import json as _json
+def test_welcome_uses_bound_runtime_readiness_not_hub_path(tmp_path, monkeypatch):
+    from brains.control.sessions import current_machine_id
+    from brains.storage.db import SessionLocal
+    from brains.storage.models import AgentSession, Runtime
 
-    from brains.storage.db import SessionLocal as _SessionLocal
-    from brains.storage.models import Event as _Event
-
-    with _SessionLocal() as db:
-        row = (
-            db.query(_Event)
-            .filter(_Event.session_id == session_id, _Event.kind == "session_start")
-            .order_by(_Event.created_at.desc(), _Event.id.desc())
-            .first()
-        )
-        assert row is not None, "session_start event must exist"
-        return _json.loads(row.metadata_json or "{}")
-
-
-def test_session_start_event_stamps_welcome_counts(tmp_path):
+    monkeypatch.setattr(
+        "brains.control.tool_registry.shutil.which",
+        lambda _command: None,
+    )
+    register_tool("remote-tool", "Remote Tool", "remote-tool", verify=False)
     workspace = register_workspace(str(tmp_path))
-    # Seed one unread message so unread_messages count is non-zero.
-    session = start_session(str(tmp_path), tool="pytest")
-    sid = session["session_id"]
-    send_message(
-        subject=f"adopt-{uuid.uuid4().hex}",
-        body="hi",
-        to_session_id=sid,
-        workspace_path=str(tmp_path),
-    )
-    # Open a second session — its welcome packet sees zero unread (the
-    # mail is addressed to sid, not this one) but the metadata shape
-    # must be intact regardless.
-    second = start_session(str(tmp_path), tool="pytest")
-    meta = _read_session_start_metadata(second["session_id"])
-    assert meta.get("tool") == "pytest"
-    welcome_meta = meta.get("welcome")
-    assert welcome_meta is not None, "session_start event must carry welcome snapshot"
-    for key in (
-        "unread_messages",
-        "applicable_patterns",
-        "knowledge",
-        "relevant_memories",
-        "tools_missing",
-        "tools_unverified",
-        "index_sources",
-        "hints",
-    ):
-        assert key in welcome_meta, f"welcome metadata missing {key}: {welcome_meta}"
-        assert isinstance(welcome_meta[key], int)
-    # Workspace was just registered — index is empty.
-    assert welcome_meta["index_sources"] == 0
-    # Silence linter: workspace fixture exists for parity with siblings.
-    assert workspace.slug
+    with SessionLocal() as session:
+        runtime = Runtime(
+            slug=f"remote-runtime-{uuid.uuid4().hex[:8]}",
+            machine_id=f"remote-{current_machine_id()}",
+            tool="remote-tool",
+            status="online",
+            health="healthy",
+        )
+        session.add(runtime)
+        session.flush()
+        agent = AgentSession(
+            id=f"ses_{uuid.uuid4().hex[:12]}",
+            workspace_id=workspace.id,
+            tool="remote-tool",
+            machine_id=runtime.machine_id,
+            runtime_id=runtime.id,
+        )
+        session.add(agent)
+        session.commit()
+        session_id = agent.id
 
-
-def test_session_start_metadata_reflects_unread_mail_for_recipient(tmp_path):
-    leaf = f"adopt-mail-{uuid.uuid4().hex[:6]}"
-    target = tmp_path / leaf
-    target.mkdir()
-    register_workspace(str(target))
-    # First session is the recipient.
-    recipient = start_session(str(target), tool="pytest")
-    rid = recipient["session_id"]
-    send_message(
-        subject=f"please-read-{uuid.uuid4().hex}",
-        body="action required",
-        to_session_id=rid,
-        workspace_path=str(target),
-    )
-    # Restart the same recipient by opening a fresh session in the same
-    # workspace addressed to nobody specific — mail addressed to ``rid``
-    # remains targeted at ``rid``, so the FRESH session's welcome shows
-    # zero unread. The recipient's welcome (built at THEIR start_session
-    # call) was built BEFORE the mail was sent, so its metadata shows
-    # zero too. This test asserts the shape stays honest: the count is
-    # the count at start time, not a backfilled value.
-    meta = _read_session_start_metadata(rid)
-    welcome_meta = meta.get("welcome") or {}
-    assert welcome_meta.get("unread_messages") == 0
-
-
-def test_session_start_metadata_counts_pattern_offer(tmp_path):
-    leaf = f"adopt-pat-{uuid.uuid4().hex[:6]}"
-    target = tmp_path / leaf
-    target.mkdir()
-    workspace = register_workspace(str(target))
-    # Seed an approved pattern that matches this workspace BEFORE
-    # starting the session so the welcome packet picks it up.
-    name = f"adopt-pat-{uuid.uuid4().hex}"
-    propose_pattern(
-        name=name,
-        category="testing",
-        description="adoption telemetry probe",
-        applies_to=f"adopt-pat-*,{workspace.slug}",
-    )
-    approve_pattern(name)
-    session = start_session(str(target), tool="pytest")
-    meta = _read_session_start_metadata(session["session_id"])
-    welcome_meta = meta.get("welcome") or {}
-    assert welcome_meta.get("applicable_patterns", 0) >= 1
-    # At least one hint should have been generated.
-    assert welcome_meta.get("hints", 0) >= 1
+    status = build_welcome(workspace, session_id)["tool_status"]
+    assert status["verification_scope"] == "runtime"
+    assert status["session_ready"] is True
+    assert status["unverified"] >= 1

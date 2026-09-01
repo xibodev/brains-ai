@@ -78,16 +78,21 @@ SAMPLE_LIMIT = 50
 # a database without importing the control plane.
 TERMINAL_SESSION_STATES = ("completed", "failed")
 
-# Product policy, not a schema fact: ``workspace_claims`` rows are leases.
-# An expired lease, a lease held by a session that has ended, and a lease whose
-# owning row is gone are all stale lock state rather than durable history, so
-# repair may drop them - including when the missing parent is on a *required*
-# column, which is the one documented exception to needing ``--delete-orphans``
-# (``docs/OPERATIONS.md``). Durable records (events, handoffs, tasks,
+# Product policy, not a schema fact: leases and delivery cursors are ephemeral
+# state rather than durable history. Repair may drop an orphaned row even when
+# its parent column is required. Durable records (events, handoffs, tasks,
 # checkpoints, audit entries) are never deleted by repair - their dangling
 # references are nulled when the schema allows it, and reported for the
 # operator when it does not.
-LEASE_TABLES = ("workspace_claims",)
+LEASE_TABLES = (
+    "approval_routing",
+    "event_contexts",
+    "help_request_executions",
+    "session_leases",
+    "topic_announcements",
+    "topic_subscriptions",
+    "workspace_claims",
+)
 
 # Direct children of ``workspaces`` whose *optional* Workspace reference means
 # ownership: activity rows that have no meaning outside the Workspace they
@@ -105,6 +110,7 @@ LEASE_TABLES = ("workspace_claims",)
 WORKSPACE_SCOPED_TABLES = (
     "events",
     "help_requests",
+    "mailboxes",
     "mailbox_messages",
     "session_checkpoints",
     "sources",
@@ -623,15 +629,22 @@ def descendant_delete_order(
     nulls: list[CascadeStep] = []
     for (table, column), edge in sorted(null_edges.items()):
         parent_predicate, parent_distance = resolve(edge.parent_table)
+        predicate = (
+            f'"{column}" IN (SELECT "{edge.parent_column}" '
+            f'FROM "{edge.parent_table}" WHERE {parent_predicate})'
+        )
+        if table in delete_edges:
+            table_predicate, _table_distance = resolve(table)
+            # A row already scheduled for deletion does not need its optional
+            # references cleared first. Excluding it also avoids transiently
+            # violating compound checks such as mailbox read attribution.
+            predicate = f"({predicate}) AND COALESCE(({table_predicate}), 0) = 0"
         nulls.append(
             CascadeStep(
                 table=table,
                 operation="null",
                 depth=parent_distance + 1,
-                predicate=(
-                    f'"{column}" IN (SELECT "{edge.parent_column}" '
-                    f'FROM "{edge.parent_table}" WHERE {parent_predicate})'
-                ),
+                predicate=predicate,
                 columns=(column,),
             )
         )

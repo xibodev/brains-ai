@@ -2,9 +2,9 @@ import { test, expect, signIn } from '../fixtures/console.js';
 import { seedWorkspace } from '../fixtures/seed.js';
 
 /**
- * J5 — Create a Project, link a Workspace, and honor deep links.
+ * J5 — Create a Project and link a Workspace.
  *
- * Authority: F4, AC-F4-01, AC-F0-05, AC-B2-02, and AC-B5-01.
+ * Lifecycle: Project actions are withdrawn; Workspace control-room navigation is advertised.
  */
 
 test.beforeAll(() => {
@@ -15,28 +15,24 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
-test('J5.1 project creation persists the selected workspace', async ({ page }) => {
-  await page.goto('/app/labs/projects');
-  await page.getByRole('button', { name: /new project/i }).first().click();
+test('J5 withdrawn Project routes fail closed while Workspace route remains supported', async ({ page, consoleGuard }) => {
+  await page.goto('/app/workspaces/e2e-workspace');
+  await expect(page.getByRole('heading', { name: /E2E Workspace/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /create task/i })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
+  await page.waitForLoadState('networkidle').catch(() => {});
 
-  const name = `Workspace project ${Date.now()}`;
-  await page.getByLabel(/^name$/i).fill(name);
-  await page.locator('select').first().selectOption({ index: 1 });
-  const [response] = await Promise.all([
-    page.waitForResponse((resp) => resp.url().includes('/v1/orgs/demo/projects')),
-    page.getByRole('button', { name: /^create$/i }).click(),
-  ]);
-  expect(response.ok(), `project create failed: ${response.status()}`).toBeTruthy();
-  const project = await response.json();
+  for (const route of [
+    '/app/projects',
+    '/app/projects/PRJ-1',
+    '/app/labs/projects',
+    '/app/labs/projects/PRJ-1',
+  ]) {
+    await page.goto(route);
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await expect(page).toHaveURL(/\/app\/command-center$/);
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  }
 
-  await expect(page.getByText(name).first()).toBeVisible();
-  await page.goto(`/app/labs/projects/${project.code}`);
-  await expect(page.getByRole('heading', { name })).toBeVisible();
-  await expect(page.locator('[data-testid="project-workspace"]')).toContainText('E2E Workspace');
-});
-
-test('J5.2 an unknown project deep link says not found', async ({ page, consoleGuard }) => {
-  await page.goto('/app/labs/projects/PRJ-NOT-REAL');
-  await expect(page.locator('[data-testid="project-not-found"]')).toContainText('PRJ-NOT-REAL');
   consoleGuard.assertClean();
 });

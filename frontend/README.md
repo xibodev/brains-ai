@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-04T08:00:00.000-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: HEAD c21a15db3859e6b9f147260a38a7a0d6fe2533b2 plus the local blocking-quality-gates change; static source inspection with SQLite pytest (full suite), ruff check/format, mypy, scripts/check_docs.py, scripts/check_traceability.py, npm ci, the frontend TypeScript type-check and production build, and the committed-bundle comparison; cross-process realtime fan-out, the live-Postgres migration matrix, browser-session authorization evidence, the E4 disconnect/reconnect browser journey, and deployment not verified
+last_verified: 2026-08-31T18:30:00.000-06:00
+verified_by: OpenCode
+verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree analytics-card removal, SPA parity, and packaged browser UAT; installed-service recovery and deployment not verified
 -->
 
 # Brains operator SPA
@@ -51,6 +51,11 @@ The complete route and client/server contract is in [Traceability](../docs/produ
 
 - Labs Session, Persona, and Runtime deep-route parameters remain declared but unconsumed; the generated traceability gate holds that list explicit.
 - Chat is not delivered to a shipped agent CLI, because none is launched with an open input channel.
+- The Coordination mailbox desk commits and reads durable local mail and configures a
+  verified one-way SMTP copy; live harness notification and real-provider SMTP evidence
+  remain separate gaps.
+- Operations shows count-only durable-mail readiness without embedded behavioral
+  analytics.
 - Host-level Operations actions remain disabled until typed preview/confirmation contracts exist.
 - Some request failures can appear as empty lists.
 

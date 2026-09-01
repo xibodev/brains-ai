@@ -26,7 +26,12 @@ function attachConsoleGuard(page: Page): ConsoleGuard {
   });
   page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
   page.on('requestfailed', (req) => {
-    failedRequests.push(`${req.method()} ${req.url()} — ${req.failure()?.errorText}`);
+    const errorText = req.failure()?.errorText ?? '';
+    // A deliberate page navigation cancels the previous document's pending
+    // fetches. That is not an API failure; HTTP errors and every other network
+    // failure remain blocking below.
+    if (errorText.includes('ERR_ABORTED') || errorText.includes('NS_BINDING_ABORTED')) return;
+    failedRequests.push(`${req.method()} ${req.url()} — ${errorText}`);
   });
   page.on('response', (resp) => {
     // Surface 4xx/5xx on the app's own API as a failed fetch.
@@ -45,10 +50,9 @@ function attachConsoleGuard(page: Page): ConsoleGuard {
   };
 }
 
-/** Sign into the console with the try-stack admin key (idempotent). */
+/** Sign into the console with the seeded admin key (idempotent). */
 export async function signIn(page: Page): Promise<void> {
-  // Pin the active org to the seeded one BEFORE first paint, so screens that
-  // assert on seeded data (personas, issues) don't land on an empty default org.
+  // Pin the active org to the seeded one before first paint.
   await page.addInitScript((org) => {
     try {
       window.localStorage.setItem('brains.activeOrg', org as string);
@@ -66,27 +70,6 @@ export async function signIn(page: Page): Promise<void> {
       .click()
       .catch(() => {});
     await page.waitForLoadState('networkidle').catch(() => {});
-  }
-
-  // The isolated harness represents a live daemon with a simulated Runtime.
-  // Refresh its heartbeat before each journey so the production stale-runtime
-  // sweep remains enabled without turning the fixture offline mid-suite.
-  const response = await page.request.get('/v1/runtimes');
-  if (response.ok()) {
-    const body = (await response.json()) as { runtimes?: Array<{
-      id?: number;
-      machine_id?: string;
-      capabilities?: { models?: string[] };
-    }> };
-    for (const runtime of body.runtimes ?? []) {
-      if (!runtime.id || !runtime.machine_id || !runtime.capabilities?.models?.length) continue;
-      await page.request.post('/v1/runtimes/heartbeat', {
-        data: {
-          machine_id: runtime.machine_id,
-          runtimes: [{ id: runtime.id, status: 'online', health: 'healthy' }],
-        },
-      });
-    }
   }
 }
 

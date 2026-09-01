@@ -69,6 +69,12 @@ def test_detects_all_four_on_clean_slate(home: Path) -> None:
     assert by["opencode"]["detected"] is True
     # Nothing wired yet.
     assert all(not t["mcp_wired"] and not t["rule_wired"] for t in report["tools"])
+    assert {row["tool"]: row["mailbox_notification_mode"] for row in report["tools"]} == {
+        "copilot-cli": "pull",
+        "claude-code": "pull",
+        "codex": "pull",
+        "opencode": "pull",
+    }
 
 
 def test_absent_tool_is_skipped(tmp_path: Path) -> None:

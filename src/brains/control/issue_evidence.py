@@ -493,7 +493,7 @@ def rollup(issue_ref: str | int) -> dict:
             )
             sessions_view.append(view)
 
-        running = sum(1 for row in session_rows if row.ended_at is None)
+        running = sum(1 for row in session_rows if row.ended_at is None and row.state != "dormant")
         return {
             "issue_id": issue_id,
             "issue_code": issue.code,

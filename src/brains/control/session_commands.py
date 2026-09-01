@@ -90,6 +90,7 @@ STATUSES = OPEN_STATUSES | TERMINAL_STATUSES
 #: :mod:`brains.exec.session_channel` reports from an actual delivery.
 RESULT_UNSUPPORTED = "unsupported"
 RESULT_SESSION_ENDED = "session_ended"
+RESULT_SESSION_DORMANT = "session_dormant"
 RESULT_ALREADY_TERMINAL = "already_terminal"
 RESULT_ABANDONED = "abandoned"
 RESULT_SUPERSEDED = "superseded"
@@ -778,6 +779,8 @@ def settle(
             "status": status,
             "result": result,
         },
+        renew_session=result
+        not in {RESULT_SESSION_DORMANT, RESULT_SESSION_ENDED, RESULT_SUPERSEDED},
     )
     _synchronize_terminal_state(settled)
     _publish(settled, "session.command")
@@ -1023,6 +1026,7 @@ __all__ = [
     "OPEN_STATUSES",
     "RESULT_ABANDONED",
     "RESULT_ALREADY_TERMINAL",
+    "RESULT_SESSION_DORMANT",
     "RESULT_SESSION_ENDED",
     "RESULT_STOPPED",
     "RESULT_SUPERSEDED",

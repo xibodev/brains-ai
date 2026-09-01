@@ -15,18 +15,37 @@ from brains.context.pack_builder import build_context_pack
 from brains.context.planner import plan
 from brains.context.repo_indexer import search_repo
 from brains.context.semantic import ORIENT_DOC_EXCLUDES, semantic_search_with_status
-from brains.control.adoption import adoption_report
 from brains.control.claims import (
     claim_workspace,
     list_workspace_claims,
     release_workspace,
 )
 from brains.control.decisions import (
+    escalate_decision,
     file_decision_request,
     list_open_decisions,
     resolve_decision,
+    route_decision,
 )
-from brains.control.events import append_event
+from brains.control.durable_mail import (
+    broadcast_mailbox_message,
+    forward_mailbox_message,
+    read_mailbox_inbox,
+    read_mailbox_sent,
+    read_mailbox_thread,
+    reply_mailbox_message,
+    send_mailbox_message,
+    settle_mailbox_notification,
+    take_mailbox_notification,
+)
+from brains.control.durable_mailbox import (
+    list_phonebook,
+    lookup_mailbox,
+    read_mailbox_binding_file,
+    register_agent_mailbox,
+)
+from brains.control.events import append_event, event_scope_report, get_event_context
+from brains.control.feedback import enrich_feedback, file_feedback, get_feedback, list_feedback
 from brains.control.handoffs import (
     clear_handoff,
     list_handoffs,
@@ -39,8 +58,13 @@ from brains.control.help import (
 from brains.control.help import (
     answer_request,
     ask_peer,
+    cancel_help_request,
+    file_help_request,
+    get_help_request,
     list_open_help_requests,
+    release_help_request,
     wait_for_request,
+    wait_help_request,
 )
 from brains.control.knowledge import (
     add_knowledge_entry,
@@ -75,7 +99,7 @@ from brains.control.resume import (
     resume_brain_session,
 )
 from brains.control.retrieve import retrieve_original
-from brains.control.sessions import end_session, start_session
+from brains.control.sessions import end_session, heartbeat_session, start_session
 from brains.control.signals import list_signals
 from brains.control.snapshots import capture_snapshot, latest_snapshot
 from brains.control.state import get_state
@@ -92,7 +116,15 @@ from brains.control.tool_registry import (
     register_tool,
     verify_tool,
 )
-from brains.control.topics import list_topics, live_agent_sessions, post_topic, read_topic
+from brains.control.topics import (
+    list_topic_subscriptions,
+    list_topics,
+    live_agent_sessions,
+    post_topic,
+    read_topic,
+    subscribe_topic,
+    unsubscribe_topic,
+)
 from brains.control.views import refresh_views
 from brains.control.webhooks import (
     create_webhook_trigger,
@@ -479,23 +511,305 @@ def get_state_tool(
     return get_state(workspace_path=workspace_path, session_id=session_id, limit=limit)
 
 
+def mailbox_phonebook_tool(
+    workspace_path: str | None = None,
+    include_paths: bool = False,
+    limit: int = 500,
+):
+    """List active mailbox addresses visible to the current principal."""
+    return list_phonebook(workspace_path, include_paths=include_paths, limit=limit)
+
+
+def mailbox_lookup_tool(address: str, include_path: bool = False):
+    """Resolve one visible active mailbox without enumerating refusals."""
+    return lookup_mailbox(address, include_path=include_path)
+
+
+def mailbox_register_tool(
+    workspace_path: str,
+    tool: str,
+    native_tool_session_id: str,
+    session_id: str,
+    binding_file: str,
+    notification_mode: str | None = None,
+):
+    """Register/reattach using an adapter-owned local binding file."""
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return register_agent_mailbox(
+        workspace_path,
+        tool,
+        native_tool_session_id,
+        session_id,
+        binding_secret,
+        notification_mode=notification_mode or "pull",
+    )
+
+
+def mailbox_send_tool(
+    workspace_path: str,
+    recipients: list[str],
+    subject: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return send_mailbox_message(
+        workspace_path,
+        recipients,
+        subject,
+        operation_id,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_broadcast_tool(
+    workspace_path: str,
+    subject: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return broadcast_mailbox_message(
+        workspace_path,
+        subject,
+        operation_id,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_reply_tool(
+    workspace_path: str,
+    in_reply_to: str,
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    subject: str | None = None,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return reply_mailbox_message(
+        workspace_path,
+        in_reply_to,
+        operation_id,
+        subject=subject,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_forward_tool(
+    workspace_path: str,
+    forwarded_from: str,
+    recipients: list[str],
+    operation_id: str,
+    sender_session_id: str,
+    binding_file: str,
+    subject: str | None = None,
+    body: str = "",
+    kind: str = "info",
+    sender_address: str | None = None,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return forward_mailbox_message(
+        workspace_path,
+        forwarded_from,
+        recipients,
+        operation_id,
+        subject=subject,
+        body=body,
+        kind=kind,
+        sender_address=sender_address,
+        sender_session_id=sender_session_id,
+        binding_secret=binding_secret,
+    )
+
+
+def mailbox_inbox_tool(
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    mark_read: bool = False,
+    include_read: bool = False,
+    after_delivery_id: int | None = None,
+    limit: int = 50,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_inbox(
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        mark_read=mark_read,
+        include_read=include_read,
+        after_delivery_id=after_delivery_id,
+        limit=limit,
+        require_agent_proof=True,
+    )
+
+
+def mailbox_sent_tool(
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    after_message_id: int | None = None,
+    limit: int = 50,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_sent(
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        after_message_id=after_message_id,
+        limit=limit,
+        require_agent_proof=True,
+    )
+
+
+def mailbox_thread_tool(
+    thread_id: str,
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    mark_read: bool = False,
+):
+    binding_secret = _read_mailbox_binding_file(binding_file)
+    return read_mailbox_thread(
+        thread_id,
+        address=address,
+        session_id=session_id,
+        binding_secret=binding_secret,
+        mark_read=mark_read,
+        require_agent_proof=True,
+    )
+
+
+def mailbox_notification_take_tool(
+    session_id: str,
+    binding_file: str,
+    notification_id: str | None = None,
+    wait_ms: int = 0,
+):
+    """Claim only the fixed Brains mailbox nudge; pull remains authoritative."""
+    return take_mailbox_notification(
+        session_id,
+        _read_mailbox_binding_file(binding_file),
+        notification_id=notification_id,
+        wait_ms=wait_ms,
+    )
+
+
+def mailbox_notification_settle_tool(
+    session_id: str,
+    binding_file: str,
+    notification_id: str,
+    status: str,
+    error_code: str | None = None,
+):
+    """Settle an adapter-observed notification outcome without reading mail."""
+    return settle_mailbox_notification(
+        session_id,
+        _read_mailbox_binding_file(binding_file),
+        notification_id,
+        status=status,
+        error_code=error_code,
+    )
+
+
+def _read_mailbox_binding_file(binding_file: str) -> str:
+    from brains.authz.resolver import resolve_local_principal
+
+    principal = resolve_local_principal()
+    return read_mailbox_binding_file(
+        binding_file,
+        managed_only=not principal.is_human_channel,
+    )
+
+
 def start_session_tool(
     workspace_path: str = ".",
     tool: str = "codex",
     predecessor_session_id: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return start_session(
         workspace_path,
         tool=tool,
         predecessor_session_id=predecessor_session_id,
+        reuse_existing=True,
+        auto_link_predecessor=True,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
-def link_session_successor_tool(from_session_id: str, to_session_id: str):
+def heartbeat_session_tool(
+    session_id: str,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
+):
+    """Renew a PID-less coordination Session lease without journal noise."""
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
+    return heartbeat_session(
+        session_id,
+        tool=tool,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
+    )
+
+
+def link_session_successor_tool(
+    from_session_id: str,
+    to_session_id: str,
+    tool: str | None = None,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
+):
     """Link one ended/replaced handle to its explicit same-workspace successor."""
     from brains.control.sessions import link_session_successor
 
-    return link_session_successor(from_session_id, to_session_id)
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
+    return link_session_successor(
+        from_session_id,
+        to_session_id,
+        tool=tool,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
+    )
 
 
 def end_session_tool(session_id: str, summary: str = ""):
@@ -545,9 +859,39 @@ def session_commands_tool(session_id: str, limit: int = 100):
     return commands_ctl.list_for_session(session_id, limit=limit)
 
 
-def append_event_tool(kind: str, message: str, session_id: str | None = None):
-    row = append_event(kind, message, session_id=session_id)
-    return {"id": row.id, "kind": row.kind}
+def append_event_tool(
+    kind: str,
+    message: str,
+    session_id: str | None = None,
+    workspace_id: int | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    row = append_event(
+        kind,
+        message,
+        session_id=session_id,
+        workspace_id=workspace_id,
+        metadata=metadata,
+    )
+    return {"id": row.id, "kind": row.kind, "workspace_id": row.workspace_id}
+
+
+def event_context_tool(event_id: int):
+    """Return taxonomy category, scope, and scope provenance for one event."""
+    from brains.authz.policy import require_install_admin
+    from brains.authz.resolver import resolve_local_principal
+
+    require_install_admin(resolve_local_principal(), operation="event-context inspection")
+    return get_event_context(event_id)
+
+
+def event_scope_report_tool():
+    """Bounded counts and unresolved samples for the durable event ledger."""
+    from brains.authz.policy import require_install_admin
+    from brains.authz.resolver import resolve_local_principal
+
+    require_install_admin(resolve_local_principal(), operation="event-scope reporting")
+    return event_scope_report()
 
 
 def file_decision_request_tool(
@@ -594,6 +938,62 @@ def resolve_decision_tool(
 
 def list_open_decisions_tool(workspace_path: str | None = None):
     return list_open_decisions(workspace_path)
+
+
+def route_decision_tool(
+    code: str,
+    assigned_operator: str | None = None,
+    clear_assignment: bool = False,
+    priority: str | None = None,
+    due_at: str | None = None,
+    clear_due: bool = False,
+    escalation_level: int | None = None,
+    escalation_reason: str = "",
+):
+    """Assign or escalate an open approval as the calling principal.
+
+    The principal is the one the transport already authenticated: an
+    SSE caller stays its API-authenticated identity, and only a local stdio
+    invocation inherits the launching operator. A caller-supplied operator is
+    not accepted here - it would let a remote caller act as a local human and
+    walk past the human-channel gate in
+    :func:`brains.control.decisions.route_decision`.
+    """
+    from brains.authz.resolver import resolve_local_principal
+
+    return route_decision(
+        code,
+        assigned_operator=assigned_operator,
+        clear_assignment=clear_assignment,
+        priority=priority,
+        due_at=due_at,
+        clear_due=clear_due,
+        escalation_level=escalation_level,
+        escalation_reason=escalation_reason,
+        principal=resolve_local_principal(),
+    )
+
+
+def escalate_decision_tool(
+    code: str,
+    reason: str,
+    assigned_operator: str | None = None,
+    due_at: str | None = None,
+):
+    """Increment an open approval's escalation level as the calling principal.
+
+    As with :func:`route_decision_tool`, the identity comes from the
+    transport, never from a caller-supplied operator slug.
+    """
+    from brains.authz.resolver import resolve_local_principal
+
+    return escalate_decision(
+        code,
+        reason=reason,
+        assigned_operator=assigned_operator,
+        due_at=due_at,
+        principal=resolve_local_principal(),
+    )
 
 
 def set_handoff_tool(
@@ -833,22 +1233,32 @@ def read_messages_tool(
     mark_read: bool = True,
     include_read: bool = False,
     limit: int = 50,
+    after_id: int | None = None,
 ):
     return read_messages(
         session_id,
         mark_read=mark_read,
         include_read=include_read,
         limit=limit,
+        after_id=after_id,
     )
 
 
-def inbox_wait_tool(session_id: str, timeout_ms: int = 25000):
-    """Block until this session has unread mail OR a claimable peer request.
+def inbox_wait_tool(
+    session_id: str,
+    timeout_ms: int = 25000,
+    after_message_id: int | None = None,
+):
+    """Block until mail, subscribed-topic work, or a peer request arrives.
 
     The single long-poll an agent loops on instead of sleep-polling two
-    surfaces. Returns ``{"wakeup": "mail" | "peer_request" | None}``.
+    surfaces. ``after_message_id`` is a client-held mailbox high-water mark.
     """
-    return inbox_wait(session_id, timeout_ms=timeout_ms)
+    return inbox_wait(
+        session_id,
+        timeout_ms=timeout_ms,
+        after_message_id=after_message_id,
+    )
 
 
 def mail_send_tool(to: str, subject: str, body: str = "", session_id: str | None = None):
@@ -887,8 +1297,8 @@ def topic_post_tool(
 ):
     """Post to a named topic board (message board / pub-sub).
 
-    Blasts one inbox notification per other workspace with live sessions,
-    so agents only ever poll their own mailbox. ``required_tool`` is an
+    Creates one durable announcement read only by live subscribed Sessions;
+    no per-Workspace mailbox rows are synthesized. ``required_tool`` is an
     advisory harness hint ("claude" or "not:copilot").
     """
     return post_topic(
@@ -903,9 +1313,40 @@ def topic_post_tool(
     )
 
 
-def topic_read_tool(topic: str | None = None, limit: int = 50, reply_to: int | None = None):
-    """Read a topic board (or all boards) — newest posts first."""
-    return read_topic(topic, limit=limit, reply_to=reply_to)
+def topic_read_tool(
+    topic: str | None = None,
+    limit: int = 50,
+    reply_to: int | None = None,
+    session_id: str | None = None,
+    after_post_id: int | None = None,
+):
+    """Read a board and advance its subscription cursor when Session-scoped."""
+    return read_topic(
+        topic,
+        limit=limit,
+        reply_to=reply_to,
+        session_id=session_id,
+        after_post_id=after_post_id,
+    )
+
+
+def topic_subscribe_tool(
+    topic: str,
+    session_id: str,
+    include_existing: bool = False,
+):
+    """Subscribe a live Session; new posts wake its unified inbox wait."""
+    return subscribe_topic(topic, session_id, include_existing=include_existing)
+
+
+def topic_unsubscribe_tool(topic: str, session_id: str):
+    """Stop one live Session receiving wakeups for a topic."""
+    return unsubscribe_topic(topic, session_id)
+
+
+def topic_subscriptions_tool(session_id: str):
+    """List a Session's topics, cursors, and pending announcement counts."""
+    return list_topic_subscriptions(session_id)
 
 
 def topic_list_tool(limit: int = 100):
@@ -986,26 +1427,6 @@ def list_registered_tools_tool(verify_now: bool = False):
 
 def verify_tool_tool(name: str, session_id: str | None = None):
     return verify_tool(name, session_id=session_id)
-
-
-def adoption_report_tool(
-    window_minutes: int = 2,
-    since_days: int = 14,
-    workspace: str | None = None,
-):
-    """Per-surface adoption hit-rates for what the welcome packet offered.
-
-    Joins ``session_start`` events (which carry a snapshot of the welcome
-    counts in metadata) against follow-up events (``message_read``,
-    ``pattern_used``, ``memory_retrieved``, ``tool_verified``) tied to the
-    same session, within ``window_minutes`` of the start. The result tells
-    you which welcome surfaces actually move the agent.
-    """
-    return adoption_report(
-        window_minutes=window_minutes,
-        since_days=since_days,
-        workspace=workspace,
-    )
 
 
 def _auto_fire_notice(cron_expr: str) -> dict[str, Any] | None:
@@ -1111,6 +1532,7 @@ def ask_peer_tool(
     context: str = "",
     timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
+    execution_mode: str = "auto",
 ):
     """Ask another peer (session or workspace) a question and block until
     they answer or the request expires. Returns the resolved request.
@@ -1121,6 +1543,11 @@ def ask_peer_tool(
     ``required_tool`` constrains the claiming harness — exact tool name
     (``"claude"``) or ``not:<tool>`` (``"not:copilot"``) — so a session can
     route validation to a different CLI without sharing context.
+
+    ``execution_mode`` is ``existing`` (live peers only), ``ephemeral``
+    (launch a fresh read-only reviewer), or ``auto`` (offer live peers a short
+    claim window, then launch). Auto/ephemeral return the durable request
+    immediately; use ``wait_help_request`` to observe completion.
     """
     return ask_peer(
         subject,
@@ -1131,6 +1558,64 @@ def ask_peer_tool(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
+        execution_mode=execution_mode,
+    )
+
+
+def file_help_request_tool(
+    subject: str,
+    question: str,
+    from_session_id: str | None = None,
+    to_workspace: str | None = None,
+    to_session_id: str | None = None,
+    context: str = "",
+    timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+    required_tool: str | None = None,
+    execution_mode: str = "auto",
+):
+    """File peer help and return immediately with its durable code."""
+    return file_help_request(
+        subject,
+        question,
+        from_session_id=from_session_id,
+        to_workspace=to_workspace,
+        to_session_id=to_session_id,
+        context=context,
+        timeout_ms=timeout_ms,
+        required_tool=required_tool,
+        execution_mode=execution_mode,
+    )
+
+
+def get_help_request_tool(code: str, session_id: str | None = None):
+    """Read one visible peer-help request without blocking."""
+    return get_help_request(code, session_id=session_id)
+
+
+def wait_help_request_tool(
+    code: str,
+    session_id: str | None = None,
+    timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+):
+    """Wait briefly for one request; timeout leaves the durable request open."""
+    return wait_help_request(code, session_id=session_id, timeout_ms=timeout_ms)
+
+
+def cancel_help_request_tool(code: str, session_id: str):
+    """Cancel a request as the live Session that filed it."""
+    return cancel_help_request(code, session_id=session_id)
+
+
+def release_help_request_tool(
+    code: str,
+    session_id: str,
+    retry_timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
+):
+    """Release claimed help back to the open queue as its claimant."""
+    return release_help_request(
+        code,
+        session_id=session_id,
+        retry_timeout_ms=retry_timeout_ms,
     )
 
 
@@ -1187,11 +1672,82 @@ def list_open_help_requests_tool(
     )
 
 
+def feedback_report_tool(
+    workspace_path: str,
+    category: str,
+    severity: str,
+    summary: str,
+    reporter_session_id: str,
+    evidence: str = "",
+    reproduction: str = "",
+    affected_version: str | None = None,
+    surface: str | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    """File a redacted Workspace-scoped agent-experience report."""
+    return file_feedback(
+        workspace_path,
+        category,
+        severity,
+        summary,
+        evidence=evidence,
+        reproduction=reproduction,
+        affected_version=affected_version,
+        surface=surface,
+        reporter_session_id=reporter_session_id,
+        metadata=metadata,
+    )
+
+
+def feedback_enrich_tool(
+    code: str,
+    reporter_session_id: str,
+    kind: str = "enrichment",
+    note: str = "",
+    evidence: str = "",
+    reproduction: str = "",
+    metadata: dict[str, Any] | None = None,
+):
+    """Add redacted evidence from a live Session in the report's Workspace."""
+    return enrich_feedback(
+        code,
+        reporter_session_id=reporter_session_id,
+        kind=kind,
+        note=note,
+        evidence=evidence,
+        reproduction=reproduction,
+        metadata=metadata,
+    )
+
+
+def feedback_get_tool(code: str):
+    """Read one visible feedback report with enrichments and promotion."""
+    return get_feedback(code)
+
+
+def feedback_list_tool(
+    workspace_path: str | None = None,
+    status: str | None = None,
+    category: str | None = None,
+    limit: int = 100,
+):
+    """List visible feedback reports."""
+    return list_feedback(
+        workspace_path,
+        status=status,
+        category=category,
+        limit=limit,
+    )
+
+
 def link_tool_session_tool(
     brain_session_id: str,
     tool: str,
     tool_session_id: str,
     linked_by: str = "auto",
+    native_tool_session_id: str | None = None,
+    mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Bind a tool-side session id (Claude Code / Copilot CLI / Codex /
     custom) to a brain ``AgentSession``. Idempotent — the same triple
@@ -1202,11 +1758,17 @@ def link_tool_session_tool(
     is ``"auto"`` when the tool registers itself or ``"operator"`` when
     a human pinned the link via the resume flow.
     """
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return link_tool_session(
         brain_session_id,
         tool,
         tool_session_id,
         linked_by=linked_by,
+        native_tool_session_id=native_tool_session_id,
+        mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
@@ -1214,22 +1776,31 @@ def resume_brain_session_tool(
     brain_session_id: str,
     tool: str | None = None,
     tool_session_id: str | None = None,
+    native_tool_session_id: str | None = None,
     operator: bool = False,
     mail_limit: int = 10,
     event_limit: int = 20,
+    mailbox_binding_file: str | None = None,
+    mailbox_notification_mode: str | None = None,
 ):
     """Re-attach to an existing brain session and get a one-call resume
     packet — last checkpoint, active claims / handoffs / tasks, unread
     mail count + preview, every tool-side session ever linked, and the
     most recent events. Provide ``tool`` + ``tool_session_id`` to record
     the new tool-side incarnation in the same call."""
+    mailbox_binding_secret = None
+    if mailbox_binding_file is not None:
+        mailbox_binding_secret = _read_mailbox_binding_file(mailbox_binding_file)
     return resume_brain_session(
         brain_session_id,
         tool=tool,
         tool_session_id=tool_session_id,
+        native_tool_session_id=native_tool_session_id,
         operator=operator,
         mail_limit=mail_limit,
         event_limit=event_limit,
+        mailbox_binding_secret=mailbox_binding_secret,
+        mailbox_notification_mode=mailbox_notification_mode,
     )
 
 
