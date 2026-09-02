@@ -460,9 +460,7 @@ def wire_cli(
         _print_json(wire_mod.status(home))
         return
     if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
-        raise typer.BadParameter(
-            "transport must be 'streamable-http', 'stdio', or legacy 'sse'"
-        )
+        raise typer.BadParameter("transport must be 'streamable-http', 'stdio', or legacy 'sse'")
 
     default_url = (
         f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
