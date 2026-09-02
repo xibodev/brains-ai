@@ -703,6 +703,36 @@ def test_recorded_migration_order_mismatch_is_refused_without_change(isolated_db
     assert _ledger_rows(isolated_db) == before
 
 
+def test_checksummed_row_without_migration_order_is_refused_without_change(isolated_db):
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "UPDATE schema_versions SET migration_order = NULL "
+            "WHERE version = '125_skills'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    before = _ledger_rows(isolated_db)
+    with pytest.raises(MigrationLedgerStateError, match="migration_order_mismatch"):
+        run_migrations()
+    assert _ledger_rows(isolated_db) == before
+
+    status = migration_status()
+    mismatches = [
+        f for f in status["findings"] if f["code"] == "migration_order_mismatch"
+    ]
+    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [
+        ("125_skills", "error")
+    ]
+    assert "records no migration order" in mismatches[0]["detail"]
+    assert status["healthy"] is False
+    assert _ledger_rows(isolated_db) == before
+
+
 def test_migration_status_does_not_create_a_missing_sqlite_database(isolated_db):
     assert isolated_db.exists() is False
 

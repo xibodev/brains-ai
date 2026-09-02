@@ -543,7 +543,19 @@ def _analyze_ledger(
         if row is None:
             continue
         status = row.effective_status
-        if row.migration_order is not None and row.migration_order != spec.order:
+        if row.migration_order is None and row.checksum is not None:
+            findings.append(
+                MigrationFinding(
+                    code="migration_order_mismatch",
+                    severity=SEVERITY_ERROR,
+                    migration_id=spec.migration_id,
+                    detail=(
+                        "the checksummed ledger row records no migration order, but this "
+                        f"build's immutable corpus records order {spec.order}"
+                    ),
+                )
+            )
+        elif row.migration_order is not None and row.migration_order != spec.order:
             findings.append(
                 MigrationFinding(
                     code="migration_order_mismatch",
