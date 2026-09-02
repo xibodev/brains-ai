@@ -290,6 +290,37 @@ jobs:
           path: dist/
           retention-days: 7
 
+  native-installation-probe:
+    name: native package/wire probe (${{ matrix.os }}, py${{ matrix.python }})
+    needs: [package]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Install the built wheel into the clean runner environment
+        shell: bash
+        run: python -m pip install "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+      - name: Probe clean-home setup, native rendering, and every wire adapter
+        run: python scripts/probe_native_installation.py
+      - name: Prove Windows managed-binding DPAPI and owner-only DACL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_durable_mailbox_registration.py \
+            -k windows_managed_binding_is_dpapi_protected_and_acl_verified
+
   privacy:
     name: privacy gate
     runs-on: ubuntu-latest
@@ -490,6 +521,7 @@ jobs:
       - migrations
       - spa
       - package
+      - native-installation-probe
       - privacy
       - docker-smoke
       - brains-e2e

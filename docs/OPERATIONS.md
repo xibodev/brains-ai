@@ -454,7 +454,9 @@ withdrawn source are test-debt inputs, not acceptance evidence.
 
 ## Known gaps
 
-- Windows service listener recovery needs clean-host E4 after package upgrade.
+- Native Task Scheduler, launchd, and systemd-user lifecycle execution still needs
+  clean-host E4 after package installation; current native CI stops at definition
+  rendering and reversible wiring rather than mutating the runner's service manager.
 - Session end/detach and liveness renewal are not reliable across every harness.
 - Cross-process realtime live fan-out is absent.
 - Governed action confinement is cooperative and in-process.

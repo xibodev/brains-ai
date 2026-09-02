@@ -94,7 +94,14 @@ Current workflow facts at HEAD:
   targeting `staging` or `main`, and the same workflow is manually dispatchable. No
   required gate carries `continue-on-error`, and the `quality gate` job fails when any
   dependency failed, was cancelled, or was skipped.
-- The blocking jobs are: documentation and generated traceability contract; Ruff lint and format; mypy; pytest (Python 3.11 and 3.12, acceptance subset then the full unit/integration suite); migration and frozen-baseline contract; SPA typecheck, production build and committed-bundle comparison; wheel/sdist build with shipped-data assertions; the privacy scan; the runtime image build and container health smoke; and the Playwright journey suite.
+- The blocking jobs are: documentation and generated traceability contract; Ruff lint
+  and format; mypy; pytest (Python 3.11 and 3.12, acceptance subset then the full
+  unit/integration suite); migration and frozen-baseline contract; SPA typecheck,
+  production build and committed-bundle comparison; wheel/sdist build with shipped-data
+  assertions; native Windows/macOS/Linux clean-home package, service-definition, and
+  reversible wire probes on both supported Python versions; the privacy scan; the
+  runtime image build and container health smoke; and the Playwright journey suite. The
+  native probe does not mutate or certify the runner's service manager.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
 - Failing jobs upload their diagnostics: pytest and migration JUnit XML plus coverage, the rebuilt SPA bundle, container logs, and the Playwright report and hub log.

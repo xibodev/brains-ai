@@ -31,16 +31,16 @@ promise that the current candidate produced them successfully.
 | ID | User promise | Minimal path | Code contract | Expected evidence contract | Core backlog items | Acceptance anchors |
 |---|---|---|---|---|---|---|
 | F0 | A user can operate Brains from one coherent Workspace-first console. | Sign in -> inspect Command Center -> enter a Workspace -> choose a typed action or receive an explicit blocker. | `/app/command-center`, Workspaces, Coordination, Governance, Operations, Act; typed operator HTTP adapters over shared controls. | Attributable task/claim/handoff/message/knowledge/decision events and audit rows with Workspace scope. | BL-P3-01, BL-P2-01 | AC-F0-01..05; J1, J7, J11 |
-| F1 | Withdrawn target: connect a machine and expose tools as Runtimes. | No supported user path; verify enrollment, Runtime, daemon, and activation surfaces are absent from discovery and fail closed. | Frozen Runtime/daemon routes, models, and tests are source-compatibility inventory only. | Advertisement inventory plus direct-call refusal and persisted-data compatibility evidence. | Contained; no active core item. | AC-F1-01..06; J2 |
-| F2 | Withdrawn target: define reusable execution Personas. | No supported user path; verify Persona, binding, managed Skill, and Spawn surfaces are undiscoverable and non-activatable. | Frozen Persona/Skill/spawn source and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-F2-01..06; J3 |
+| F1 | Withdrawn target: connect a machine and expose tools as Runtimes. | No supported user path; verify enrollment, Runtime, daemon, and activation surfaces are absent from discovery and fail closed. | Frozen Runtime/daemon routes, models, and tests are source-compatibility inventory only. | Advertisement inventory plus direct-call refusal and persisted-data compatibility evidence. | BL-P0-09 | AC-F1-01..06; J2 |
+| F2 | Withdrawn target: define reusable execution Personas. | No supported user path; verify Persona, binding, managed Skill, and Spawn surfaces are undiscoverable and non-activatable. | Frozen Persona/Skill/spawn source and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | BL-P0-09 | AC-F2-01..06; J3 |
 | F3 | A user can preserve durable coordination state, resolve human decisions, and resume work. | Open Workspace/Coordination/Governance -> inspect scoped Session context -> answer or decide -> checkpoint, hand off, resume, or end. | Workspace, Coordination, Governance; Session/event/decision APIs; local realtime delivery; CLI/MCP Session, decision, checkpoint, and resume families. | Coordination lifecycle transitions; persisted events; decision correlation; local reconnect backfill; unsupported execution control refused explicitly. | BL-P1-12, BL-P1-14 | AC-F3-01..07; J7, J8, J11 |
-| F4 | Withdrawn target: express and dispatch Projects and Issues. | No supported user path; verify Project, Issue, assignment, dispatch, and execution evidence surfaces are undiscoverable and non-activatable. | Frozen Project/Issue APIs, controls, UI, and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | Contained; no active core item. | AC-F4-01..07; J5, J6, J7 |
-| F5 | Withdrawn target: assemble execution Pods. | No supported user path; verify Pod/Squad execution, roster, and dispatch surfaces are undiscoverable and non-activatable. | Frozen Pod/Squad source and rows are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | Contained; no active core item. | AC-F5-01..04; J4, J6 |
-| F6 | Withdrawn target: execution-model first-run onboarding. | No supported user path; a fresh install must start at Command Center and never redirect into execution onboarding. | Frozen onboarding route/state and composed F1/F2/F4 APIs are compatibility inventory only. | Clean-state route inventory and direct-call refusal without an execution flag. | Contained; no active core item. | AC-F6-01..05; J1 |
+| F4 | Withdrawn target: express and dispatch Projects and Issues. | No supported user path; verify Project, Issue, assignment, dispatch, and execution evidence surfaces are undiscoverable and non-activatable. | Frozen Project/Issue APIs, controls, UI, and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | BL-P0-09 | AC-F4-01..07; J5, J6, J7 |
+| F5 | Withdrawn target: assemble execution Pods. | No supported user path; verify Pod/Squad execution, roster, and dispatch surfaces are undiscoverable and non-activatable. | Frozen Pod/Squad source and rows are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | BL-P0-09 | AC-F5-01..04; J4, J6 |
+| F6 | Withdrawn target: execution-model first-run onboarding. | No supported user path; a fresh install must start at Command Center and never redirect into execution onboarding. | Frozen onboarding route/state and composed F1/F2/F4 APIs are compatibility inventory only. | Clean-state route inventory and direct-call refusal without an execution flag. | BL-P0-09 | AC-F6-01..05; J1 |
 | F7 | A user can inspect supported Brains configuration and change only settings with an approved write contract. | Operations -> Configuration -> inspect redacted local service and MCP posture -> use only a supported write/reload path. | Operations Config; supported local config summaries and probes; validated non-secret writes. Withdrawn gateway, provider, email, and bridge configuration is containment inventory. | Redacted effective state; attributable audit and explicit reload/restart result; zero withdrawn activation controls. | BL-P1-05, BL-P2-01 | AC-F7-01..04; J9 |
-| F8 | Frozen target: accept signed GitHub development events and relay approved public defects. | No supported user path; verify GitHub ingress and outbound relay surfaces are not advertised or activated. | Frozen GitHub webhook, delivery, and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-F8-01..04; J6, J9 |
-| F9 | Frozen target: manage multi-user Orgs, membership, roles, and usage. | No supported user path; verify multi-user access and Org-management surfaces are not advertised or activated. | Frozen Org/member/usage APIs and identity controls are compatibility inventory only; Workspace scoping remains supported for the local operator. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-F9-01..05; J10, J11 |
-| F10 | Withdrawn target: managed Skills, Autopilots, and scheduled execution. | No supported user path; verify Automation, recurring, generic webhook, and managed Skill surfaces are undiscoverable and non-activatable. | Frozen automation UI/APIs/CLI/MCP/tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | Contained; no active core item. | AC-F10-01..06; J10 |
+| F8 | Frozen target: accept signed GitHub development events and relay approved public defects. | No supported user path; verify GitHub ingress and outbound relay surfaces are not advertised or activated. | Frozen GitHub webhook, delivery, and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | BL-P0-09 | AC-F8-01..04; J6, J9 |
+| F9 | Frozen target: manage multi-user Orgs, membership, roles, and usage. | No supported user path; verify multi-user access and Org-management surfaces are not advertised or activated. | Frozen Org/member/usage APIs and identity controls are compatibility inventory only; Workspace scoping remains supported for the local operator. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | BL-P0-09 | AC-F9-01..05; J10, J11 |
+| F10 | Withdrawn target: managed Skills, Autopilots, and scheduled execution. | No supported user path; verify Automation, recurring, generic webhook, and managed Skill surfaces are undiscoverable and non-activatable. | Frozen automation UI/APIs/CLI/MCP/tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | BL-P0-09 | AC-F10-01..06; J10 |
 
 ## Supporting user and operator outcomes
 
@@ -64,7 +64,7 @@ promise that the current candidate produced them successfully.
 - **When:** the work is recorded, claimed, coordinated, and handed off through Brains.
 - **Then:** ownership remains attributable and idempotent, progress survives reconnect,
   and human questions or governed actions remain pending until resolved.
-- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12, BL-P1-14.
+- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12.
 
 ### O2 - Coordinate several AI specialists
 
@@ -72,7 +72,7 @@ promise that the current candidate produced them successfully.
 - **When:** they use claims, tasks, direct mail, topics, peer help, and handoffs.
 - **Then:** ownership and routing are explicit; each contribution remains attributable;
   stale or unavailable participants leave recoverable queue state.
-- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12, BL-P1-14.
+- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12.
 
 ### O3 - Repeat a successful method safely
 
@@ -100,7 +100,7 @@ promise that the current candidate produced them successfully.
   notification.
 - **Then:** Brains restores the authorized durable state, identifies stale or
   missing dependencies, and supports retry/resume without duplicating work.
-- **Evidence:** F3; B2, B3, B8; J7, J8, J11; BL-P1-12, BL-P1-14,
+- **Evidence:** F3; B2, B3, B8; J7, J8, J11; BL-P1-12,
   BL-P1-18.
 
 ### O6 - Operate Brains locally

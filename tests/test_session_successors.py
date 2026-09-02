@@ -92,7 +92,7 @@ def test_replacement_candidates_and_roster_require_recent_activity(tmp_path):
     assert stale["session_id"] not in roster
 
 
-def test_post_end_activity_heals_false_terminal_state(tmp_path):
+def test_post_end_activity_does_not_resurrect_terminal_state(tmp_path):
     session_result = start_session(str(tmp_path / "repo"), tool="opencode")
     with SessionLocal() as session:
         row = session.get(AgentSession, session_result["session_id"])
@@ -101,8 +101,13 @@ def test_post_end_activity_heals_false_terminal_state(tmp_path):
         row.last_activity_at = datetime.now(UTC)
         session.commit()
 
+    with (
+        SessionLocal() as session,
+        pytest.raises(ValueError, match="refusing test against a dead handle"),
+    ):
+        require_live_session(session, session_result["session_id"], action="test")
+
     with SessionLocal() as session:
-        healed = require_live_session(session, session_result["session_id"], action="test")
-        session.commit()
-        assert healed.state == "running"
-        assert healed.ended_at is None
+        persisted = session.get(AgentSession, session_result["session_id"])
+        assert persisted.state == "failed"
+        assert persisted.ended_at is not None
