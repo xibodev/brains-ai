@@ -14,6 +14,7 @@ bind the migration registry to per-test baseline/migration directories.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sqlite3
@@ -51,6 +52,7 @@ from brains.storage.migrations import (
     MigrationChecksumError,
     MigrationCorpusError,
     MigrationExecutionError,
+    MigrationLedgerStateError,
     MigrationSchemaDriftError,
     current_schema_versions,
     init_db,
@@ -462,8 +464,10 @@ def test_legacy_gap_is_reported_not_absorbed(isolated_db):
 
     report = run_migrations()
 
-    gaps = {f.migration_id for f in report.findings if f.code == "ledger_gap"}
+    gap_findings = [f for f in report.findings if f.code == "ledger_gap"]
+    gaps = {f.migration_id for f in gap_findings}
     assert "070_audit_log" in gaps
+    assert {finding.severity for finding in gap_findings} == {"warning"}
     assert "070_audit_log" in report.executed
     assert report.healthy is True
 
@@ -633,9 +637,136 @@ def test_unknown_migration_in_the_ledger_is_reported(isolated_db):
         conn.close()
 
     migrations_module.reset_migration_cache()
-    report = run_migrations()
-    unknown = [f for f in report.findings if f.code == "unknown_migration"]
-    assert [f.migration_id for f in unknown] == ["900_from_the_future"]
+    before = _ledger_rows(isolated_db)
+    with pytest.raises(MigrationLedgerStateError, match="unknown_migration"):
+        run_migrations()
+    assert _ledger_rows(isolated_db) == before
+
+    status = migration_status()
+    unknown = [f for f in status["findings"] if f["code"] == "unknown_migration"]
+    assert [f["migration_id"] for f in unknown] == ["900_from_the_future"]
+    assert {f["severity"] for f in unknown} == {"error"}
+    assert status["healthy"] is False
+    assert _ledger_rows(isolated_db) == before
+
+
+def test_modern_checksummed_ledger_gap_is_refused_without_change(isolated_db):
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute("DELETE FROM schema_versions WHERE version = '125_skills'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    before = _ledger_rows(isolated_db)
+    with pytest.raises(MigrationLedgerStateError, match=r"ledger_gap \(125_skills\)"):
+        run_migrations()
+    assert _ledger_rows(isolated_db) == before
+
+    status = migration_status()
+    gaps = [f for f in status["findings"] if f["code"] == "ledger_gap"]
+    assert any(
+        f["migration_id"] == "125_skills" and f["severity"] == "error" for f in gaps
+    )
+    assert status["healthy"] is False
+    assert _ledger_rows(isolated_db) == before
+
+
+def test_recorded_migration_order_mismatch_is_refused_without_change(isolated_db):
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "UPDATE schema_versions SET migration_order = 999 WHERE version = '125_skills'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    before = _ledger_rows(isolated_db)
+    with pytest.raises(MigrationLedgerStateError, match="migration_order_mismatch"):
+        run_migrations()
+    assert _ledger_rows(isolated_db) == before
+
+    status = migration_status()
+    mismatches = [
+        f for f in status["findings"] if f["code"] == "migration_order_mismatch"
+    ]
+    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [
+        ("125_skills", "error")
+    ]
+    assert "records order 999" in mismatches[0]["detail"]
+    assert status["healthy"] is False
+    assert _ledger_rows(isolated_db) == before
+
+
+def test_checksummed_row_without_migration_order_is_refused_without_change(isolated_db):
+    init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "UPDATE schema_versions SET migration_order = NULL "
+            "WHERE version = '125_skills'"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    before = _ledger_rows(isolated_db)
+    with pytest.raises(MigrationLedgerStateError, match="migration_order_mismatch"):
+        run_migrations()
+    assert _ledger_rows(isolated_db) == before
+
+    status = migration_status()
+    mismatches = [
+        f for f in status["findings"] if f["code"] == "migration_order_mismatch"
+    ]
+    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [
+        ("125_skills", "error")
+    ]
+    assert "records no migration order" in mismatches[0]["detail"]
+    assert status["healthy"] is False
+    assert _ledger_rows(isolated_db) == before
+
+
+def test_migration_status_does_not_create_a_missing_sqlite_database(isolated_db):
+    assert isolated_db.exists() is False
+
+    status = migration_status()
+
+    assert status["healthy"] is False
+    assert "0000_baseline" in status["pending"]
+    assert isolated_db.exists() is False
+
+
+def test_migration_status_does_not_upgrade_or_adopt_a_legacy_ledger(isolated_db):
+    recorded = HISTORICAL_LEDGER_IDS[:8]
+    _build_legacy_store(isolated_db, recorded=recorded)
+    conn = _connect(isolated_db)
+    try:
+        before_columns = conn.execute("PRAGMA table_info(schema_versions)").fetchall()
+        before_rows = conn.execute("SELECT * FROM schema_versions ORDER BY version").fetchall()
+    finally:
+        conn.close()
+    before_hash = hashlib.sha256(isolated_db.read_bytes()).hexdigest()
+
+    status = migration_status()
+
+    conn = _connect(isolated_db)
+    try:
+        after_columns = conn.execute("PRAGMA table_info(schema_versions)").fetchall()
+        after_rows = conn.execute("SELECT * FROM schema_versions ORDER BY version").fetchall()
+    finally:
+        conn.close()
+    assert status["healthy"] is False
+    assert any(f["code"] == "legacy_checksum_unverified" for f in status["findings"])
+    assert after_columns == before_columns
+    assert after_rows == before_rows
+    assert hashlib.sha256(isolated_db.read_bytes()).hexdigest() == before_hash
 
 
 def test_schema_drift_from_an_unmigrated_model_is_refused(isolated_db, monkeypatch):
@@ -911,6 +1042,50 @@ def test_a_previously_skipped_migration_runs_once_its_backend_ships(synthetic_co
     assert report.applied == ["0000_baseline", "010_covered"]
     rows = _ledger_rows(synthetic_corpus.db_path)
     assert rows["010_covered"]["status"] == STATUS_APPLIED
+
+
+def test_a_sqlite_skipped_row_is_reapplied_once_without_data_loss(synthetic_corpus):
+    (synthetic_corpus.migrations_dir / "010_covered.py").write_text(
+        "import sqlite3\n\n\ndef upgrade(conn: sqlite3.Connection) -> None:\n"
+        "    conn.execute('CREATE INDEX IF NOT EXISTS ix_widgets_name ON widgets (name)')\n",
+        encoding="utf-8",
+    )
+    first = run_migrations()
+    assert first.executed == ["0000_baseline", "010_covered"]
+
+    conn = _connect(synthetic_corpus.db_path)
+    try:
+        conn.execute("INSERT INTO widgets (id, name, tint) VALUES (1, 'kept', 'blue')")
+        conn.execute("DROP INDEX ix_widgets_name")
+        conn.execute(
+            "UPDATE schema_versions SET status = ?, outcome_detail = ? "
+            "WHERE version = '010_covered'",
+            (STATUS_SKIPPED, "synthetic skipped SQLite row"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    migrations_module.reset_migration_cache()
+    reapplied = run_migrations()
+    assert reapplied.executed == ["010_covered"]
+    assert reapplied.skipped == []
+    assert (
+        _ledger_rows(synthetic_corpus.db_path)["010_covered"]["status"] == STATUS_APPLIED
+    )
+
+    conn = _connect(synthetic_corpus.db_path)
+    try:
+        assert conn.execute("SELECT id, name, tint FROM widgets").fetchall() == [
+            (1, "kept", "blue")
+        ]
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(widgets)")}
+    finally:
+        conn.close()
+    assert "ix_widgets_name" in indexes
+
+    migrations_module.reset_migration_cache()
+    assert run_migrations().executed == []
 
 
 def test_a_failing_delta_rolls_back_and_records_the_error(synthetic_corpus):
@@ -1404,25 +1579,29 @@ def test_legacy_postgres_ledger_reports_unknown_rows_clearly(synthetic_corpus, m
     )
     monkeypatch.setattr(synthetic_corpus.engine.dialect, "name", "postgresql")
 
-    report = run_migrations()
+    before = _ledger_rows(synthetic_corpus.db_path)
+    with pytest.raises(MigrationLedgerStateError, match="unknown_migration"):
+        run_migrations()
+    assert _ledger_rows(synthetic_corpus.db_path) == before
 
-    unknown = [f for f in report.findings if f.code == "unknown_migration"]
-    assert [f.migration_id for f in unknown] == ["900_from_the_future"]
-    assert "different Brains build" in unknown[0].detail
+    status = migration_status()
+    unknown = [f for f in status["findings"] if f["code"] == "unknown_migration"]
+    assert [f["migration_id"] for f in unknown] == ["900_from_the_future"]
+    assert "different Brains build" in unknown[0]["detail"]
+    assert unknown[0]["severity"] == "error"
     assert "900_from_the_future" not in known_migration_ids()
 
     row = _ledger_rows(synthetic_corpus.db_path)["900_from_the_future"]
-    assert row["checksum"] is None, "an unknown row must never be given a checksum"
-    assert row["checksum_origin"] is None
-    assert row["backend"] is None
-    # It still counts as applied schema, so the backup gate refuses an archive
-    # from that build instead of restoring it silently.
-    assert "900_from_the_future" in current_schema_versions()
-
-    status = migration_status()
+    assert row.get("checksum") is None, "an unknown row must never be given a checksum"
+    assert row.get("checksum_origin") is None
+    assert row.get("backend") is None
+    # The unknown legacy row is reported in place, without being adopted or
+    # otherwise rewritten by either refusal or status inspection.
+    assert row.get("status") is None
     listed = {entry["migration_id"]: entry for entry in status["migrations"]}
     assert listed["900_from_the_future"]["checksum"] is None
     assert any(f["code"] == "unknown_migration" for f in status["findings"])
+    assert _ledger_rows(synthetic_corpus.db_path) == before
 
 
 # --------------------------------------------------------------------------- #
@@ -1551,3 +1730,66 @@ def test_backup_restore_accepts_a_matching_store(isolated_db, tmp_path, monkeypa
     restored = tmp_path / "restored.sqlite"
     backup_module.restore_backup(archive, target_url=f"sqlite:///{restored.as_posix()}")
     assert _schema_shape(restored) == _schema_shape(isolated_db)
+
+
+def test_older_backup_restores_and_migrates_to_fresh_shape_with_data(
+    isolated_db, tmp_path, monkeypatch
+):
+    from brains import backup as backup_module
+
+    recorded = HISTORICAL_LEDGER_IDS[
+        : HISTORICAL_LEDGER_IDS.index("100_session_machine_id")
+    ]
+    _build_legacy_store(
+        isolated_db,
+        recorded=recorded,
+        drop=(
+            "skills",
+            "issue_comments",
+            "enrolment_tokens",
+            "agent_sessions.machine_id",
+        ),
+    )
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "INSERT INTO traces (route, payload, created_at) VALUES (?, ?, ?)",
+            ("older-backup", '{"kept": true}', "2024-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        backup_module, "_current_db_url", lambda: f"sqlite:///{isolated_db.as_posix()}"
+    )
+    monkeypatch.setattr(backup_module, "_current_schema_versions", lambda: list(recorded))
+    archive = tmp_path / "older-supported.tar.gz"
+    backup_module.create_backup(archive)
+
+    restored = tmp_path / "restored-older.sqlite"
+    backup_module.restore_backup(archive, target_url=f"sqlite:///{restored.as_posix()}")
+    restored_engine = create_engine(f"sqlite:///{restored.as_posix()}")
+    try:
+        _run_against(restored_engine)
+    finally:
+        restored_engine.dispose()
+
+    fresh = tmp_path / "fresh-current.sqlite"
+    fresh_engine = create_engine(f"sqlite:///{fresh.as_posix()}")
+    try:
+        _run_against(fresh_engine)
+    finally:
+        fresh_engine.dispose()
+
+    assert _schema_shape(restored) == _schema_shape(fresh)
+    conn = _connect(restored)
+    try:
+        assert conn.execute(
+            "SELECT route, payload FROM traces WHERE route = 'older-backup'"
+        ).fetchall() == [("older-backup", '{"kept": true}')]
+    finally:
+        conn.close()
+    restored_rows = _ledger_rows(restored)
+    assert {row["status"] for row in restored_rows.values()} == {STATUS_APPLIED}
+    assert all(row["checksum"] for row in restored_rows.values())
