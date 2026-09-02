@@ -17,17 +17,17 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 - **Risk:** May assume a durable event means Brains executed or delivered an external
   effect.
 
-### P2 - Org owner
+### P2 - Reserved multi-operator owner
 
-- **Goal:** Define the Org, membership, role boundaries, integrations, and risk posture.
-- **Expects:** Owner-only changes, secret safety, scoped usage, and evidence for decisions.
-- **Risk:** Current role labels do not provide complete route-level authorization.
+- **Lifecycle:** frozen; retained for stable contract history only.
+- **Goal:** Future multi-operator administration.
+- **Risk:** Compatibility rows must not be mistaken for a supported tenancy boundary.
 
-### P3 - Org admin/member
+### P3 - Reserved multi-operator member
 
-- **Goal:** Collaborate across Workspaces and coordination queues within authorized scope.
-- **Expects:** No cross-Org visibility, attributable changes, and stable realtime updates.
-- **Risk:** Current native API and topic authorization are incomplete.
+- **Lifecycle:** frozen; retained for stable contract history only.
+- **Goal:** Future collaboration between human operators.
+- **Risk:** This actor is not part of the supported single-operator product.
 
 ### P4 - Service host operator
 
@@ -66,10 +66,10 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 | SA1 | Gateway process | Supported `/v1`, `/app`, and WS/SSE surfaces | Process-local config, counters, and live EventBus; shared durable state. |
 | SA2 | MCP process | Supported SSE/stdio coordination tools and maintenance | Shares SQLite/files; stdio relies on the local process boundary. |
 | SA3 | Agent harness | Uses Brains MCP/CLI from a Workspace | Harness execution and provider authority remain outside Brains unless a governed path explicitly proves otherwise. |
-| SA4 | GitHub | Delivers signed repository events and, after BL-P1-19, receives an exact human-approved defect payload | External operation remains unverified. |
+| SA4 | GitHub | Frozen external integration | Source compatibility only; not an active evidence gap. |
 | SA5 | SQLite store | Durable coordination, identity, governance, audit, and recovery state | Supported source of truth; one-writer contention and opt-in FK enforcement are explicit. |
 | SA6 | Service supervisor | Owns the supported gateway and MCP child processes | PID identity alone is not protocol readiness. |
-| SA7 | In-process EventBus + durable event log | Realtime fan-out for gateway publishers over shared `realtime_events` | Live fan-out is not cross-process; durability and cursor replay are. |
+| SA7 | In-process EventBus + durable event log | Realtime fan-out and replay for the supervised local gateway | Cross-process scale is frozen. |
 | SA8 | Withdrawn compatibility modules | Runtime execution, model gateway, automation, semantic/graph, bridges, alternate storage, and legacy HTML | Frozen source/data inventory only; no activation contract. |
 
 ## Journey conventions
@@ -83,7 +83,7 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 
 ## J1 - Sign in and complete first run
 
-**Primary personas:** P1, P2
+**Primary personas:** P1
 **Entry:** An operator opens `/app` or a protected browser route.
 **Preconditions:** The gateway is reachable; an accepted key exists; the browser has no valid session cookie.
 
@@ -96,20 +96,20 @@ onboarding steps formerly attached to this journey are withdrawn.
 2. The operator submits a key.
 3. Brains establishes a signed browser session.
 4. Brains opens Command Center with truthful empty, ready, or degraded state.
-5. The operator creates or selects an authorized Org and Workspace where supported.
+5. The operator creates or selects a Workspace; any implicit Org is compatibility state.
 6. Brains offers setup, wiring, coordination, or recovery actions through typed normal
    surfaces only.
 7. Any withdrawn execution-model URL returns retirement/not-found behavior and never
    becomes a first-run dependency.
 
-**UX states:** signed out, submitting, invalid key, signed in, no Org, no Workspace,
+**UX states:** signed out, submitting, invalid key, signed in, no Workspace,
 ready, degraded, blocked.
 
 **Errors and recovery**
 
 - Invalid key: remain signed out, show bounded error, allow retry.
 - API unavailable: retain entered non-secret state where safe and offer retry.
-- Missing Workspace: retain authorized Org context and offer a supported setup action.
+- Missing Workspace: retain safe local context and offer a supported setup action.
 - Withdrawn route: return retirement/not-found guidance without exposing an activation
   switch.
 
@@ -119,8 +119,8 @@ supported next action and no withdrawn route exposure.
 **Acceptance IDs:** AC-F0-01, AC-F0-02, AC-F6-01, AC-F6-02, AC-F6-03, AC-F6-04, AC-F6-05.
 
 **Evidence gaps:** `j01-first-run.spec.ts` now asserts clean-state Workspace-first entry
-and fail-closed onboarding-route containment. Multi-process and isolated-UAT E4 evidence
-for long-running first-run recovery remains open.
+and fail-closed onboarding-route containment. Isolated-UAT E4 evidence for long-running
+first-run recovery remains open; multi-process scale is frozen.
 
 ## J2 - Connect a machine
 
@@ -362,9 +362,7 @@ action.
 6. An explicitly installed harness adapter may claim only a fixed body-free nudge and
    settle its observed result; regardless of that result, the agent pulls durable mail
    with current attachment and binding proof.
-7. A human may verify a mailbox-specific external email destination, keep the default
-   content-free notification copy, or explicitly consent to full-body copies. SMTP sends
-   after local commit and never accepts replies into Brains.
+7. External email copies are frozen; local durable mail remains authoritative.
 8. Unsupported running-agent steering or process stop is refused explicitly.
 
 **UX states:** new, awaiting human, approved, rejected, deferred, consumed, timed out,
@@ -383,8 +381,7 @@ message unread/read, help open/claimed/answered, unsupported.
   proof-bound incarnation resumes from its cursor.
 - Missing or failed notification adapter: preserve local acceptance and expose pull
   fallback; never inject peer-controlled mail text into model input.
-- SMTP unavailable: preserve local acceptance, retry only known pre-send failures, and
-  mark ambiguous send-stage outcomes uncertain rather than duplicate them.
+- Frozen adapters remain irrelevant to local acceptance and readiness.
 
 **Success:** The human decision or coordination message is durable, scoped, attributable,
 and represented no more strongly than its observed result.
@@ -397,11 +394,9 @@ Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
 reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
 refusal, and accepted/read state. E3 also covers fixed body-free notification claims,
 mode restrictions, concurrent claim/settle, detach/read fallback, and binding proof.
-Synthetic SMTP E3 and container browser E4 cover encrypted verification, notification
-redaction, explicit full-body consent, retry/uncertain outcomes, and revocation. Concrete
-hook/plugin installation, external harness wakeup, real-provider SMTP, Copilot container
-credentials, abrupt process exit, and the residual in-process governance boundary remain
-open.
+SMTP, external harness wakeup, and optional adapter work are frozen rather than active
+evidence gaps. Abrupt process exit and the residual in-process governance boundary remain
+core concerns.
 
 Operations E3 additionally distinguishes malformed registrations/live attachments,
 aged unread delivery, notification fallback/failure, and SMTP backlog/failure without
@@ -409,20 +404,20 @@ making detached unread mail an outage. J11 shows count-only readiness without em
 behavioral analytics; the projection contains no content, address, path, native Session
 ID, or native mailbox object ID.
 
-## J9 - Configure Brains and GitHub linkage
+## J9 - Configure local Brains operation
 
-**Primary personas:** P1, P2, P6
+**Primary personas:** P1, P6
 **Entry:** Operations Configuration and supported CLI operations.
 **Preconditions:** Authorized operator; required credentials for the supported operation
 are available through their authoritative secret store.
 
-**Lifecycle:** advertised for supported service/MCP/email/GitHub posture and approved
-writes. Provider gateway, messaging bridge, alternate-storage, telemetry, and legacy
-admin activation are withdrawn.
+**Lifecycle:** advertised for supported local service/MCP posture and approved writes.
+Email/SMTP and GitHub are frozen; provider gateway, messaging bridge, alternate-storage,
+telemetry, and legacy admin activation are withdrawn.
 
 **Actions**
 
-1. Inspect redacted effective service, MCP, email, GitHub, and secret-handling state.
+1. Inspect redacted effective local service, MCP, and secret-handling state.
 2. Confirm withdrawn settings are absent from supported configuration controls.
 3. Configure through an approved typed surface if the operation is supported.
 4. Validate reload/restart semantics and rollback.
@@ -442,14 +437,17 @@ which processes need restart, and which source-level capabilities are withdrawn.
 
 **Acceptance IDs:** AC-F7-01 through AC-F7-04, AC-F8-03, AC-F8-04, AC-B1-04, AC-B7-03.
 
-**Evidence gaps:** Live GitHub operation and multi-process reload remain unverified;
-BL-P0-09 must remove withdrawn configuration discovery and activation.
+**Evidence gaps:** BL-P0-09 must remove frozen and withdrawn configuration discovery and
+activation. GitHub operation and multi-process reload are frozen, not active evidence gaps.
 
 ## J10 - Manage Org, members, usage, and reusable guidance
 
 **Primary personas:** P2, P3, P6
 **Entry:** Operations Access, Coordination, and knowledge/pattern surfaces.
 **Preconditions:** Active Org; authenticated operator; owner/admin privileges for protected changes.
+
+**Lifecycle:** frozen target history. Multi-user Org administration, automatic pattern
+intelligence, and related usage analysis are not supported local-product journeys.
 
 **Actions**
 
@@ -476,13 +474,12 @@ non-activatable.
 
 **Acceptance IDs:** AC-F9-01 through AC-F9-05, AC-F10-01 through AC-F10-06, AC-B4-01, AC-B5-04.
 
-**Evidence gaps:** Browser-session E4 for Org usage and coordination-pattern receipts is
-absent. Existing Skill/Autopilot source tests remain compatibility evidence only, while
-browser specs now assert withdrawn automation containment.
+**Evidence gaps:** None for current core scope. Future work is tracked in
+[FROZEN_BACKLOG.md](FROZEN_BACKLOG.md); existing source tests are compatibility evidence only.
 
 ## J11 - Cross-cutting trust, realtime, errors, accessibility, and hygiene
 
-**Primary personas:** P1-P7
+**Primary personas:** P1, P4-P7; P2-P3 remain frozen compatibility personas
 **Entry:** Every Brains journey.
 **Preconditions:** Any supported browser, API, CLI, MCP, agent-session, or operational
 path.
@@ -512,7 +509,11 @@ path.
 
 **Acceptance IDs:** AC-F0-01 through AC-F0-05, AC-F3-01, AC-F3-07, AC-F9-03, AC-B8-01 through AC-B8-04, AC-B9-01 through AC-B9-03.
 
-**Evidence gaps:** The J11 browser sweep is a blocking CI gate, but accessibility, route-contract, and multi-process realtime coverage are incomplete. Realtime authorization, cursor replay, gap signalling and revocation are asserted at the API and unit level (`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a browser disconnect/reconnect run.
+**Evidence gaps:** The J11 browser sweep is a blocking CI gate, but accessibility and
+route-contract coverage are incomplete. Realtime authorization, cursor replay, gap
+signalling and revocation are asserted at the API and unit level
+(`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a
+browser disconnect/reconnect run. Multi-process realtime is frozen.
 
 ## Supporting capability acceptance mapping
 
@@ -524,9 +525,9 @@ screens. They require the following explicit system or operational validation:
 | B1 Gateway/routing | AC-B1-01 through AC-B1-04 | J9, J11 | Withdrawn-surface advertisement inventory and fail-closed direct-call tests; target protocol tests remain historical source evidence only. |
 | B2 Coordination/MCP | AC-B2-01 through AC-B2-04 | J5-J8, J10, J11 | Session/task/claim/handoff/message/checkpoint lifecycle plus authorization tests. |
 | B3 Context/retrieval | AC-B3-01 through AC-B3-04 | J6, J7, J11 | Workspace knowledge and bounded non-semantic lookup tests plus containment tests for semantic, graph, embedding, and freshness surfaces. |
-| B4 Governance/audit | AC-B4-01 through AC-B4-04 | J8, J10, J11 | Gate-bypass, transaction, multiprocess-chain, and tamper tests. |
+| B4 Governance/audit | AC-B4-01 through AC-B4-04 | J8, J10, J11 | Supported-path gate-bypass, transaction, and local tamper tests; multi-operator/concurrent-chain validation is frozen. |
 | B5 Storage/recovery | AC-B5-01 through AC-B5-05 | J5, J7, J10, J11 | SQLite fresh/upgrade parity, FK, backup, restore, compatibility, and recovery drills; alternate backend containment. |
 | B6 CLI/wiring/service | AC-B6-01 through AC-B6-04 | J1, J2, J9, J11 | Clean-host CLI, config-preservation, listener-aware service lifecycle, and removed-command checks. |
-| B7 Authenticated external events | AC-B7-01 through AC-B7-04 | J8, J9, J11 | GitHub authentication/idempotency/redaction tests, governed exact-payload relay tests, and bridge/generic-trigger containment. |
-| B8 Observability/readiness | AC-B8-01 through AC-B8-04 | J7, J10, J11 | Liveness/readiness separation, redaction, process/listener failure, stale-presence, and privacy-safe experiment tests. |
+| B7 Authenticated external events | AC-B7-01 through AC-B7-04 | J8, J9, J11 | Frozen target history; core validation covers containment only. |
+| B8 Observability/readiness | AC-B8-01 through AC-B8-04 | J7, J10, J11 | Local liveness/readiness separation, redaction, process/listener failure, and stale-presence tests. |
 | B9 Legacy surfaces | AC-B9-01 through AC-B9-03 | J9-J11 | Modern-route inventory plus retired legacy route/static/launch containment tests. |

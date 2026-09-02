@@ -62,6 +62,9 @@ never install. The tag and `pyproject.toml` must agree; CI enforces this.
 
 - The product is **Brains**. Keep the repository, `brains-ai` package and CLI, `brains` namespace, `brains_` MCP prefix, `~/.brains` state, and browser product aligned to that identity.
 - Start with [PRODUCT_BRIEF.md](docs/product/PRODUCT_BRIEF.md), then map work through [FEATURE_CONTRACT.md](docs/product/FEATURE_CONTRACT.md), [PERSONAS_AND_JOURNEYS.md](docs/product/PERSONAS_AND_JOURNEYS.md), and [TRACEABILITY.md](docs/product/TRACEABILITY.md).
+- [BACKLOG.md](docs/product/BACKLOG.md) is the sole schedulable core backlog. [FROZEN_BACKLOG.md](docs/product/FROZEN_BACKLOG.md) contains deferred TODOs that cannot be scheduled until the core backlog is empty and a human explicitly approves thawing them. Keep both files action-only; remove completed items and historical/evidence narrative and rely on Git history.
+- Do implementation work on local feature or fix branches and merge accepted work into local `staging`. Do not commit directly to `main`, push any branch, merge into `main`, tag, publish, or release without the operator's explicit approval.
+- Any test that could affect the installed Brains service, database, state directory, ports, or client configuration must run in Docker with isolated synthetic state and configuration. Docker tests may use outbound internet when needed, but must never mount the operator's `~/.brains` or client configuration, bind host ports 9876 or 9877, or send requests or mutations to the host installation.
 - Plan, implement, review, test, and UAT against the final product outcome and stable `F*`, `B*`, `J*`, and `AC-*` IDs.
 - Keep implementation minimal but functional.
 - SQLite is the default source of truth; Markdown projections under `.brains/views` are optional.

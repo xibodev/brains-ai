@@ -807,8 +807,8 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
     ever returns a secret or a raw exception message - only its type name.
 
     Withdrawn Runtime and live provider state are deliberately NOT part of this contract: a
-    simulated/unconfigured model provider is a routing fact (see BL-P1-11),
-    not an operational outage, and folding it in here would make every
+    simulated/unconfigured model provider is withdrawn routing state, not an
+    operational outage, and folding it in here would make every
     lean-core install without a configured provider permanently "degraded"
     for a reason that has nothing to do with whether Brains itself is
     operating correctly.

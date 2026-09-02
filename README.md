@@ -1,14 +1,14 @@
 <!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
+last_verified: 2026-09-01T22:00:00.000-06:00
+verified_by: Codex
+verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree actionable-backlog navigation rewrite; documentation, traceability, and targeted Docker gates verified; deployment not verified
 -->
 
 # Brains
 
 Brains is a local-first operator control plane for coordinating AI coding agents through shared Workspaces, durable work, and human approvals.
 
-Current maturity: Brains is an alpha release. The normal product is the Workspace-first coordination, governance, operations, access/configuration, GitHub-linkage, and local-lookup surface. Withdrawn implementations are not product claims even where containment removal from current source remains open. Live deployment and external provider behavior are not certified by repository evidence.
+Current maturity: Brains is an alpha release for one local human operator coordinating multiple Workspaces and agent Sessions through one supervised local service. The normal product is the Workspace-first coordination, governance, operations, supported local configuration, and local-lookup surface. Frozen and withdrawn implementations are not product claims even where containment removal from current source remains open. Live deployment and external provider behavior are not certified by repository evidence.
 
 Brains is the canonical product and repository identity. It is distributed as `brains-ai`, uses the `brains` Python namespace, `brains_` MCP prefix, `~/.brains` state directory, `brains-spa` frontend package, and Brains browser identity.
 
@@ -48,9 +48,8 @@ development. Upgrade an existing isolated installation with `pipx upgrade brains
 - [Architecture](docs/ARCHITECTURE.md)
 - [Operations](docs/OPERATIONS.md)
 - [Quality gates](docs/QUALITY_GATES.md)
-- [Backlog registry](docs/product/BACKLOG.md)
-- [Active feature backlog](docs/product/ACTIVE_BACKLOG.md)
-- [Experimental feature backlog](docs/product/EXPERIMENTAL_BACKLOG.md)
+- [Actionable backlog](docs/product/BACKLOG.md)
+- [Frozen backlog](docs/product/FROZEN_BACKLOG.md)
 
 ## Repository guidance
 

@@ -55,12 +55,12 @@ EXPERIMENTAL_MCP_TOOLS: frozenset[str] = frozenset(
 #: are surfaced verbatim in refusals so an operator never has to guess.
 EXPERIMENTAL_TOOL_REASONS: dict[str, str] = {
     "search_semantic": "embeddings need a configured local model; matches are empty without one",
-    "graph_build": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_query": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_neighbors": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_path": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_subsystems": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_export": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
+    "graph_build": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_query": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_neighbors": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_path": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_subsystems": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_export": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
     "session_message": (
         "no shipped agent CLI is launched with an input channel; delivery to "
         "copilot/claude/codex is a durable refusal (AC-F3-05)"
