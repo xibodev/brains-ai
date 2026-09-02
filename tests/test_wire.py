@@ -13,7 +13,6 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from brains import wire
 
 
@@ -125,7 +124,7 @@ def test_codex_streamable_http_schema_references_token_env_only(home: Path) -> N
     assert "bearer_token =" not in text
 
 
-@pytest.mark.parametrize("client_value", [None, "", "WRONGKEY"])
+@pytest.mark.parametrize("client_value", [None, "", "WRONGKEY", "wrong-☃"])
 def test_codex_remote_wiring_fails_closed_before_writing_when_token_invalid(
     home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -145,9 +144,27 @@ def test_codex_remote_wiring_fails_closed_before_writing_when_token_invalid(
     assert "BRAINS_MCP_BEARER_TOKEN" in detail
     assert "TESTKEY" not in detail
     assert "WRONGKEY" not in detail
+    assert "wrong-☃" not in detail
     assert not (home / ".codex" / "config.toml").exists()
     assert not (home / ".codex" / "AGENTS.md").exists()
     assert not (home / ".copilot" / "mcp-config.json").exists()
+
+
+def test_remote_wiring_fails_before_writes_when_effective_key_is_missing(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "synthetic-client-key")
+    ctx = _http_ctx()
+    ctx.api_key = ""
+
+    report = wire.wire(home, ctx, rules=True)
+
+    assert report["ok"] is False
+    assert report["tools"][0]["mcp"]["action"] == "error"
+    assert "effective Brains API credential" in report["tools"][0]["mcp"]["detail"]
+    assert "synthetic-client-key" not in report["tools"][0]["mcp"]["detail"]
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".codex" / "AGENTS.md").exists()
 
 
 def test_opencode_sse_schema(home: Path) -> None:

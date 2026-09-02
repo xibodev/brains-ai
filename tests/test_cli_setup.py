@@ -8,12 +8,14 @@ not the individual subcommands (those have their own tests).
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from brains.cli.app import app
+from typer.testing import CliRunner
 
 
 @pytest.fixture
@@ -145,6 +147,44 @@ def test_wire_cli_fails_when_codex_token_env_is_missing(
     assert "BRAINS_MCP_BEARER_TOKEN" in payload["tools"][0]["mcp"]["detail"]
     assert "synthetic-effective-key" not in result.output
     assert not (isolated_home / ".codex" / "config.toml").exists()
+    assert list((isolated_home.parent / "brains-state").iterdir()) == []
+
+
+def test_standalone_wire_refusal_creates_no_key_state_or_config(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "clean-home"
+    state_dir = tmp_path / "clean-brains-state"
+    (home / ".codex").mkdir(parents=True)
+    state_dir.mkdir()
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "BRAINS_STATE_DIR": str(state_dir),
+        }
+    )
+    env.pop("BRAINS_API_KEY", None)
+    env.pop("BRAINS_MCP_BEARER_TOKEN", None)
+    env.pop("BRAINS_CONFIG", None)
+    env.pop("BRAINS_RUNTIME_OVERLAY", None)
+
+    result = subprocess.run(  # noqa: S603 - fixed interpreter/module argv
+        [sys.executable, "-m", "brains", "wire", "--tool", "codex"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["tools"][0]["mcp"]["action"] == "error"
+    assert list(state_dir.iterdir()) == []
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".codex" / "AGENTS.md").exists()
 
 
 def test_wire_cli_accepts_matching_synthetic_codex_token_env(
@@ -212,7 +252,7 @@ def test_setup_default_output_is_human_readable(
     assert "[3/4] optional features" in output
     assert "[4/4] next steps" in output
     assert "brains-ai serve-all" in output
-    assert "Dashboard:" in output
+    assert "Console:" in output
 
 
 def test_setup_json_flag_emits_machine_readable(

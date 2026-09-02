@@ -383,7 +383,7 @@ def _canonical_db_url() -> str:
     Returns ``settings.db_url``. The ``Settings.db_url`` validator already
     rewrites the bare ``sqlite:///brains.db`` default to the absolute
     per-machine path under ``BRAINS_STATE_DIR`` (or ``~/.brains``), so
-    every entry point — the bare CLI, the SSE server, stdio MCP children
+    every entry point — the bare CLI, the HTTP MCP server, stdio MCP children
     spawned by agents — agrees on one shared brain.
 
     The literal-string fallback below is kept as defence in depth in case
@@ -459,11 +459,9 @@ def wire_cli(
     if show_status:
         _print_json(wire_mod.status(home))
         return
-    if transport == "http":
-        transport = MCP_MODE_STREAMABLE_HTTP
     if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
         raise typer.BadParameter(
-            "transport must be 'streamable-http', 'http', legacy 'sse', or 'stdio'"
+            "transport must be 'streamable-http', 'stdio', or legacy 'sse'"
         )
 
     default_url = (
@@ -477,7 +475,7 @@ def wire_cli(
         db_url=_canonical_db_url(),
     )
     if transport != MCP_MODE_STDIO:
-        ctx.api_key = _effective_wire_api_key(create=not dry_run)
+        ctx.api_key = _effective_wire_api_key(create=False)
 
     report = wire_mod.wire(
         home,
@@ -879,11 +877,9 @@ def setup_cli(
 
     # --- Step 2: wire (optional) -----------------------------------------
     if wire_tools:
-        if transport == "http":
-            transport = MCP_MODE_STREAMABLE_HTTP
         if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
             raise typer.BadParameter(
-                "transport must be 'streamable-http', 'http', legacy 'sse', or 'stdio'"
+                "transport must be 'streamable-http', 'stdio', or legacy 'sse'"
             )
         wire_url = (
             f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
@@ -895,7 +891,7 @@ def setup_cli(
             db_url=_canonical_db_url(),
         )
         if transport != MCP_MODE_STDIO:
-            ctx.api_key = _effective_wire_api_key(create=not dry_run)
+            ctx.api_key = _effective_wire_api_key(create=False)
         report = wire_mod.wire(Path.home(), ctx, dry_run=dry_run)
         summary["steps"].append({"step": "wire", "report": report})
     else:
@@ -1086,9 +1082,9 @@ def _render_setup_text(summary: dict[str, Any], *, port: int) -> None:
     line()
     line(f"   Start everything:   {typer.style(start, bold=True)}")
     line()
-    line("   Dashboard:          http://127.0.0.1:9876")
+    line("   Console:            http://127.0.0.1:8787/app")
     line("   Gateway:            http://127.0.0.1:8787")
-    line(f"   MCP (wired above):  http://127.0.0.1:{port}/sse")
+    line(f"   MCP (wired above):  http://127.0.0.1:{port}/mcp")
     line()
     line(
         "   Launch an LLM CLI through the gateway: "
@@ -1210,7 +1206,7 @@ def operator_add_cli(
     Prints the key value ONCE to stdout — copy it into the operator's
     client (Authorization: Bearer <key>) immediately. The key file is
     also written to ``~/.brains/operator-keys/<slug>.key`` for the
-    gateway / dashboard / MCP SSE auth to load on startup.
+    gateway and Streamable HTTP MCP authentication to load on startup.
     """
     from brains.control.operators import (
         OperatorExistsError,

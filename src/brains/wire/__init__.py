@@ -547,7 +547,11 @@ def _bearer_env_state(ctx: WireContext) -> str:
         return "missing"
     if not ctx.api_key:
         return "effective-key-unavailable"
-    return "available" if hmac.compare_digest(client_token, ctx.api_key) else "mismatch"
+    return (
+        "available"
+        if hmac.compare_digest(client_token.encode("utf-8"), ctx.api_key.encode("utf-8"))
+        else "mismatch"
+    )
 
 
 def wire(
@@ -607,6 +611,28 @@ def wire(
                     "detail": remediation,
                 },
                 "mailbox_notification_mode": codex.mailbox_notification_mode,
+            }
+        )
+        return report
+    if adapters and ctx.transport != MCP_MODE_STDIO and not ctx.api_key:
+        adapter = adapters[0]
+        report["ok"] = False
+        report["tools"].append(
+            {
+                "tool": adapter.name,
+                "display": adapter.display,
+                "detected": adapter.detect(home),
+                "mcp": {
+                    "path": str(adapter.mcp_path(home)),
+                    "transport": ctx.transport,
+                    "url": ctx.url,
+                    "action": "error",
+                    "detail": (
+                        "the effective Brains API credential is unavailable; run "
+                        "`brains-ai init` or `brains-ai setup` before remote wiring"
+                    ),
+                },
+                "mailbox_notification_mode": adapter.mailbox_notification_mode,
             }
         )
         return report

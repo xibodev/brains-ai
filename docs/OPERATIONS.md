@@ -85,7 +85,7 @@ them as withdrawal defects, not operating alternatives.
 | Process | Default bind/port | Supported surface |
 |---|---|---|
 | Gateway | `127.0.0.1:8787` | `/app`, protected native `/v1`, `/health`, WS/SSE, signed GitHub ingress |
-| MCP SSE | port `9877`; bind controlled by supported MCP settings | Authenticated `/sse` transport |
+| MCP Streamable HTTP | port `9877`; bind controlled by supported MCP settings | Authenticated `/mcp` transport; `/sse` is explicit legacy compatibility only |
 
 `serve-all` supervises the gateway and MCP children. The retired dashboard port and
 WhatsApp Web sidecar are not part of the supported stack.
