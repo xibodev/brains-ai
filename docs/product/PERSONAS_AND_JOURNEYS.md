@@ -64,7 +64,7 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 | ID | Actor | Responsibility | Current boundary |
 |---|---|---|---|
 | SA1 | Gateway process | Supported `/v1`, `/app`, and WS/SSE surfaces | Process-local config, counters, and live EventBus; shared durable state. |
-| SA2 | MCP process | Supported SSE/stdio coordination tools and maintenance | Shares SQLite/files; stdio relies on the local process boundary. |
+| SA2 | MCP process | Supported Streamable HTTP `/mcp` and stdio coordination tools; SSE is explicit legacy compatibility only | Shares SQLite/files; stdio relies on the local process boundary. |
 | SA3 | Agent harness | Uses Brains MCP/CLI from a Workspace | Harness execution and provider authority remain outside Brains unless a governed path explicitly proves otherwise. |
 | SA4 | GitHub | Frozen external integration | Source compatibility only; not an active evidence gap. |
 | SA5 | SQLite store | Durable coordination, identity, governance, audit, and recovery state | Supported source of truth; one-writer contention and opt-in FK enforcement are explicit. |

@@ -401,7 +401,7 @@ def _canonical_db_url() -> str:
 
 
 def _effective_wire_api_key(*, create: bool) -> str:
-    """Resolve the effective MCP credential, creating it only for a real wire."""
+    """Resolve the effective MCP credential; create only when explicitly requested."""
 
     from brains.api.admin_key import ensure_admin_key, read_persisted_key
     from brains.config import settings
@@ -812,8 +812,16 @@ def setup_cli(
         "Default is a human-readable progress summary.",
     ),
 ):
-    """One-shot first-run bootstrap: init DB, register workspace, wire MCP,
-    show optional-features status, and print the next command.
+    """First-run bootstrap: init DB, register workspace, wire MCP, show
+    optional-features status, and print the next command.
+
+    Codex remote wiring intentionally fails closed unless
+    ``BRAINS_MCP_BEARER_TOKEN`` already matches the effective Brains API
+    credential in the environment that will launch Codex. Pre-provisioning
+    matching ``BRAINS_API_KEY`` and ``BRAINS_MCP_BEARER_TOKEN`` permits one
+    invocation. Otherwise initialize first, make the named bearer variable
+    available securely, and rerun ``brains-ai wire``. Brains neither prints
+    the generated key here nor changes its parent environment.
 
     Idempotent — safe to re-run; each step is its own subcommand
     (``init`` / ``wire`` / ``features --status`` / ``serve``) so you can
@@ -856,7 +864,7 @@ def setup_cli(
     else:
         init_db()
         workspace = register_workspace(path)
-        _key, was_generated = ensure_admin_key(print_banner=True)
+        _key, was_generated = ensure_admin_key(print_banner=False)
         summary["steps"].append(
             {
                 "step": "init",
@@ -922,33 +930,52 @@ def setup_cli(
     else:
         summary["steps"].append({"step": "service", "skipped": True})
 
-    # --- Step 4: next-command hint ---------------------------------------
-    # Recommend `serve-all`: it runs gateway (8787) + MCP HTTP (9877) in one
-    # supervised tree. The wired MCP entries above
-    # point at port 9877, which only `serve-all` (or `brains-ai mcp`)
-    # brings up — `serve` alone leaves the MCP integrations dark.
-    if install_service:
-        summary["next"] = {
-            "start_gateway": "brains-ai service status",
-            "tip": (
-                "Installed as an autostart service — it's already running and "
-                "will come back on every login. Check it with `brains-ai "
-                "service status` / `brains-ai service logs`, or remove it with "
-                "`brains-ai service uninstall`."
-            ),
-        }
+    # --- Step 4: transport-specific next-command hint --------------------
+    start_gateway = "brains-ai service status" if install_service else "brains-ai serve"
+    summary["next"] = {
+        "start_gateway": start_gateway,
+        "mcp_transport": transport,
+    }
+    if not wire_tools:
+        summary["next"].update(
+            {
+                "mcp_transport": None,
+                "mcp_url": None,
+                "tip": "MCP wiring was skipped; no MCP endpoint is claimed.",
+            }
+        )
+    elif transport == MCP_MODE_STREAMABLE_HTTP:
+        summary["next"].update(
+            {
+                "start_gateway": (
+                    "brains-ai service status" if install_service else "brains-ai serve-all"
+                ),
+                "mcp_url": mcp_http_url(port=port),
+                "mcp_auth_env": wire_mod.MCP_CLIENT_BEARER_ENV,
+                "tip": (
+                    "The hosted default uses authenticated Streamable HTTP. For Codex, "
+                    f"{wire_mod.MCP_CLIENT_BEARER_ENV} must already match the effective "
+                    "Brains API credential in the environment that launches Codex; "
+                    "Brains cannot change its parent environment."
+                ),
+            }
+        )
+    elif transport == MCP_MODE_SSE:
+        summary["next"].update(
+            {
+                "start_mcp": f"brains-ai mcp --mode sse --port {port}",
+                "mcp_url": f"http://127.0.0.1:{port}/sse",
+                "legacy": True,
+                "tip": "SSE is an explicit legacy compatibility mode.",
+            }
+        )
     else:
-        summary["next"] = {
-            "start_gateway": "brains-ai serve-all",
-            "tip": (
-                "Run `brains-ai serve-all` in a separate terminal — it supervises "
-                "the gateway (127.0.0.1:8787) and the Streamable HTTP MCP server "
-                f"(127.0.0.1:{port}/mcp) the wire above points "
-                "at. `brains-ai serve` alone starts only the gateway, leaving "
-                "MCP integrations dark. To run it automatically at login, see "
-                "`brains-ai service install`."
-            ),
-        }
+        summary["next"].update(
+            {
+                "mcp_url": None,
+                "tip": "stdio is client-spawned and has no HTTP endpoint or listener.",
+            }
+        )
 
     if json_out:
         _print_json(summary)
@@ -1076,13 +1103,23 @@ def _render_setup_text(summary: dict[str, Any], *, port: int) -> None:
     # ---------- Step 4 / 4: next ----------
     header(4, 4, "next steps")
     nxt = summary.get("next", {})
-    start = nxt.get("start_gateway", "brains-ai serve-all")
+    start = nxt.get("start_gateway", "brains-ai serve")
+    mcp_transport = nxt.get("mcp_transport")
     line()
-    line(f"   Start everything:   {typer.style(start, bold=True)}")
+    line(f"   Start Brains:       {typer.style(start, bold=True)}")
     line()
     line("   Console:            http://127.0.0.1:8787/app")
     line("   Gateway:            http://127.0.0.1:8787")
-    line(f"   MCP (wired above):  http://127.0.0.1:{port}/mcp")
+    if mcp_transport == "streamable-http":
+        line(f"   MCP (Streamable HTTP): {nxt.get('mcp_url')}")
+        line(f"   Codex auth env:     {nxt.get('mcp_auth_env')}")
+    elif mcp_transport == "sse":
+        line(f"   MCP (legacy SSE):   {nxt.get('mcp_url')}")
+        line(f"   Start legacy MCP:   {typer.style(nxt.get('start_mcp', ''), bold=True)}")
+    elif mcp_transport == "stdio":
+        line("   MCP:                 stdio (client-spawned; no HTTP endpoint or listener)")
+    else:
+        line("   MCP wiring:          skipped")
     line()
     line(
         "   Launch an LLM CLI through the gateway: "

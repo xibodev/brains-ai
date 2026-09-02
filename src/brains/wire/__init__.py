@@ -582,18 +582,22 @@ def wire(
         if bearer_state == "mismatch":
             remediation = (
                 f"{env_name} does not match the effective Brains API credential; "
-                "set that variable securely in the environment that launches Codex, "
-                "then rerun `brains-ai wire`"
+                "it must already match in the environment that launches Codex. "
+                "Brains cannot change that parent environment; then rerun "
+                "`brains-ai wire`"
             )
         elif bearer_state == "effective-key-unavailable":
             remediation = (
                 "the effective Brains API credential is unavailable for validation; "
-                f"make it available together with {env_name}, then rerun `brains-ai wire`"
+                f"initialize it first, then make {env_name} match it securely in the "
+                "environment that launches Codex. Brains cannot change that parent "
+                "environment; then rerun `brains-ai wire`"
             )
         else:
             remediation = (
-                f"{env_name} is unavailable to this process; set that variable securely "
-                "in the environment that launches Codex, then rerun `brains-ai wire`"
+                f"{env_name} is unavailable to this process; it must already match the "
+                "effective Brains API credential in the environment that launches Codex. "
+                "Brains cannot change that parent environment; then rerun `brains-ai wire`"
             )
         report["ok"] = False
         report["tools"].append(

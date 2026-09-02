@@ -136,7 +136,7 @@ and available Org/Workspace scope.
 | Native `/v1` | `require_api_key` plus route-specific Org/Workspace capability. |
 | `/app` | Signed browser cookie bound to the credential that minted it, or accepted header/key flow. |
 | WS/SSE | Principal plus server-derived topic authorization, revalidated during the connection. |
-| MCP SSE | Credential-store lookup and loopback Host policy by default. |
+| MCP Streamable HTTP `/mcp` | Credential-store lookup and loopback Host policy by default; SSE is explicit legacy compatibility only. |
 | MCP stdio | Local OS process boundary; inherits local state authority. |
 | GitHub ingress | Signature, delivery/event headers, exact repository binding, replay refusal. |
 

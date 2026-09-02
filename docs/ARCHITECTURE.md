@@ -58,7 +58,8 @@ Gateway process                         MCP process
 ```
 
 `brains-ai serve-all` supervises the supported gateway and MCP children. The default
-gateway is loopback on port `8787`; the MCP SSE source default is port `9877`. The
+gateway is loopback on port `8787`; MCP defaults to authenticated Streamable HTTP at
+`http://127.0.0.1:9877/mcp`. Legacy SSE at `/sse` is explicit compatibility only. The
 children share durable state but not Python memory.
 
 The normal browser surface is `/app`:

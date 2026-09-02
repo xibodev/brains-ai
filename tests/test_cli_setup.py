@@ -211,19 +211,91 @@ def test_setup_next_hint_present(
     isolated_home: Path,
     tmp_path: Path,
 ) -> None:
-    """The bootstrap MUST end with the next-command hint so the operator
-    knows how to start the full stack (gateway + dashboard + MCP).
-    """
+    """A no-wire bootstrap must not claim an MCP endpoint was configured."""
     runner = CliRunner()
     workspace = tmp_path / "ws"
     workspace.mkdir()
     result = runner.invoke(app, ["setup", "--path", str(workspace), "--no-wire", "--json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    # Must point at `serve-all` (not `serve`) — only `serve-all` brings up
-    # the MCP HTTP port that `wire` registered upstream.
-    assert payload["next"]["start_gateway"] == "brains-ai serve-all"
+    assert payload["next"]["start_gateway"] == "brains-ai serve"
+    assert payload["next"]["mcp_transport"] is None
+    assert payload["next"]["mcp_url"] is None
     assert "tip" in payload["next"]
+
+
+@pytest.mark.parametrize(
+    ("transport_args", "expected_transport", "expected_suffix"),
+    [
+        ([], "streamable-http", "/mcp"),
+        (["--transport", "streamable-http"], "streamable-http", "/mcp"),
+        (["--transport", "sse"], "sse", "/sse"),
+        (["--transport", "stdio"], "stdio", None),
+    ],
+)
+def test_setup_report_is_transport_specific(
+    isolated_home: Path,
+    tmp_path: Path,
+    transport_args: list[str],
+    expected_transport: str,
+    expected_suffix: str | None,
+) -> None:
+    (isolated_home / ".copilot").mkdir()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    result = CliRunner().invoke(
+        app,
+        ["setup", "--path", str(workspace), "--dry-run", "--json", *transport_args],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    wire = next(step for step in payload["steps"] if step["step"] == "wire")["report"]
+    assert wire["transport"] == expected_transport
+    assert payload["next"]["mcp_transport"] == expected_transport
+    if expected_suffix is None:
+        assert wire["url"] is None
+        assert payload["next"]["mcp_url"] is None
+    else:
+        assert wire["url"].endswith(expected_suffix)
+        assert payload["next"]["mcp_url"].endswith(expected_suffix)
+
+
+@pytest.mark.parametrize(
+    ("transport_args", "required", "forbidden"),
+    [
+        ([], ("Streamable HTTP", "/mcp", "BRAINS_MCP_BEARER_TOKEN"), ("/sse",)),
+        (
+            ["--transport", "streamable-http"],
+            ("Streamable HTTP", "/mcp", "BRAINS_MCP_BEARER_TOKEN"),
+            ("/sse",),
+        ),
+        (["--transport", "sse"], ("legacy SSE", "/sse"), ("/mcp",)),
+        (
+            ["--transport", "stdio"],
+            ("stdio", "no HTTP endpoint or listener"),
+            ("/mcp", "/sse", "127.0.0.1:9877"),
+        ),
+    ],
+)
+def test_setup_human_output_is_transport_specific(
+    isolated_home: Path,
+    tmp_path: Path,
+    transport_args: list[str],
+    required: tuple[str, ...],
+    forbidden: tuple[str, ...],
+) -> None:
+    (isolated_home / ".copilot").mkdir()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    result = CliRunner().invoke(
+        app,
+        ["setup", "--path", str(workspace), "--dry-run", *transport_args],
+    )
+    assert result.exit_code == 0, result.output
+    for text in required:
+        assert text in result.output
+    for text in forbidden:
+        assert text not in result.output
 
 
 def test_setup_default_output_is_human_readable(
@@ -252,7 +324,9 @@ def test_setup_default_output_is_human_readable(
     assert "[2/4] wire MCP" in output
     assert "[3/4] optional features" in output
     assert "[4/4] next steps" in output
-    assert "brains-ai serve-all" in output
+    assert "brains-ai serve" in output
+    assert "MCP wiring:" in output
+    assert "/mcp" not in output
     assert "Console:" in output
 
 
