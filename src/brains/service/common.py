@@ -14,12 +14,11 @@ Two hard rules, learned the hard way, are encoded here:
    OAuth cache from the user's ``HOME``. A system-account service would point
    ``HOME`` elsewhere — breaking auth and silently re-fragmenting the DB into
    a second per-profile ``brains.db``.
-2. **Exec via ``<python> -m brains serve-all``.** This is the most portable
-   launch form: it works from the same interpreter that has brains installed
-   (the pipx/uv venv python running the ``install`` command) without relying
-    on the ``brains-ai`` console script being on ``PATH``. Use the exact
-    ``sys.executable`` that passed the install command; sibling ``pythonw.exe``
-    launchers from some uv-created environments do not resolve the venv.
+2. **Exec via the installed environment, not ``PATH``.** POSIX services use
+   the exact interpreter running ``install``. Windows selects that
+   environment's sibling ``pythonw.exe`` and verifies it imports Brains before
+   registration, avoiding a persistent console without guessing another
+   environment.
 """
 
 from __future__ import annotations
@@ -85,10 +84,20 @@ def state_dir() -> Path:
 def _service_python(executable: str | None = None) -> str:
     """The interpreter the service should launch.
 
-    Defaults to the exact interpreter running this process — i.e. the venv
-    that has brains installed. Never guess a sibling launcher.
+    Defaults to the exact interpreter running this process. Windows services
+    use the same environment's ``pythonw.exe`` so Task Scheduler does not
+    create a persistent console window; installation separately verifies that
+    this launcher imports Brains before registering the task.
     """
-    return str(Path(executable or sys.executable))
+    selected = Path(executable or sys.executable)
+    if current_platform() != "windows" or selected.name.casefold() == "pythonw.exe":
+        return str(selected)
+    windowless = selected.with_name("pythonw.exe")
+    if not windowless.is_file():
+        raise ValueError(
+            f"windowless Python launcher is unavailable beside the service interpreter: {windowless}"
+        )
+    return str(windowless)
 
 
 def verify_service_interpreter(program: str) -> dict[str, Any]:

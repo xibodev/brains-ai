@@ -30,10 +30,11 @@ supported harness reaches one healthy shared coordination service.
 
 **Owned items:** BL-P0-06, BL-P1-09, BL-P1-10, BL-P1-18.
 
-**Implemented foundation:** The Windows user service is hidden and preserves user
-HOME/OAuth access. Every owned child has a protocol-aware listener watchdog; a process
-that never serves or survives listener loss has its process tree terminated so the
-bounded restart loop can recover it.
+**Implemented foundation:** The Windows user service uses the installed environment's
+verified windowless Python launcher and preserves user HOME/OAuth access; a headed or
+missing launcher is refused before task registration. Every owned child has a
+protocol-aware listener watchdog; a process that never serves or survives listener loss
+has its process tree terminated so the bounded restart loop can recover it.
 
 **Open requirements:** Wiring must select a transport the harness actually supports and
 readiness can prove; package build, migration corpus, database schema, endpoint

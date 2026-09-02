@@ -89,10 +89,11 @@ def _setup_logging() -> None:
         _log_path(), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
     )
     file_handler.setFormatter(fmt)
-    stream_handler = logging.StreamHandler(sys.stderr)
-    stream_handler.setFormatter(fmt)
     logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+    if sys.stderr is not None:
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(fmt)
+        logger.addHandler(stream_handler)
 
 
 class Child:
