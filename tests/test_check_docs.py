@@ -60,16 +60,14 @@ def _valid_tree(root: Path) -> None:
         encoding="utf-8",
     )
     (root / "docs/product/BACKLOG.md").write_text(
-        HEADER
-        + "### BL-P0-01 - Implement fixture behavior\n\n"
+        "### BL-P0-01 - Implement fixture behavior\n\n"
         + "- **Action:** Implement the fixture behavior.\n"
         + "- **Done when:** The fixture behavior is verified.\n"
         + "- **Maps to:** F0-F10, B1-B9.\n",
         encoding="utf-8",
     )
     (root / "docs/product/FROZEN_BACKLOG.md").write_text(
-        HEADER
-        + "# Frozen backlog\n\n"
+        "# Frozen backlog\n\n"
         + "Items may move only after `BACKLOG.md` is empty and a human explicitly "
         + "approves thawing it.\n",
         encoding="utf-8",
@@ -266,6 +264,15 @@ def test_checker_rejects_non_actionable_backlog_items(tmp_path: Path) -> None:
         assert expected in _run(case).stdout
 
 
+def test_checker_rejects_backlog_verification_history_metadata(tmp_path: Path) -> None:
+    for name in ("BACKLOG.md", "FROZEN_BACKLOG.md"):
+        case = tmp_path / name.lower()
+        _valid_tree(case)
+        backlog = case / "docs/product" / name
+        backlog.write_text(HEADER + backlog.read_text(encoding="utf-8"), encoding="utf-8")
+        assert "verification/history metadata is not allowed" in _run(case).stdout
+
+
 def test_checker_enforces_frozen_backlog_boundary(tmp_path: Path) -> None:
     case = tmp_path / "missing-thaw-rule"
     _valid_tree(case)
@@ -314,7 +321,7 @@ def test_checker_accepts_explicit_empty_core_backlog(tmp_path: Path) -> None:
     case = tmp_path / "empty-core"
     _valid_tree(case)
     backlog = case / "docs/product/BACKLOG.md"
-    backlog.write_text(HEADER + "# Core backlog\n\nCore backlog is empty.\n", encoding="utf-8")
+    backlog.write_text("# Core backlog\n\nCore backlog is empty.\n", encoding="utf-8")
     outcome = case / "docs/product/USER_OUTCOME_SPEC.md"
     outcome.write_text(
         outcome.read_text(encoding="utf-8").replace("BL-P0-01", "—"),

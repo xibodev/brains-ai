@@ -46,7 +46,13 @@ SUPPORTING_DOCS = (
     "examples/brains.skill.md",
 )
 
-FRESHNESS_DOCS = CANONICAL_DOCS + SUPPORTING_DOCS
+BACKLOG_DOCS = {
+    "docs/product/BACKLOG.md",
+    "docs/product/FROZEN_BACKLOG.md",
+}
+FRESHNESS_DOCS = tuple(
+    path for path in CANONICAL_DOCS + SUPPORTING_DOCS if path not in BACKLOG_DOCS
+)
 
 EXACT_PROHIBITED = {
     "CHANGELOG.md",
@@ -255,6 +261,8 @@ def _backlog_contract_errors(path: Path) -> list[str]:
     text = path.read_text(encoding="utf-8")
     items = list(BACKLOG_ITEM_RE.finditer(text))
     label = path.name
+    if any(pattern.search(text) for pattern in FIELD_PATTERNS.values()):
+        errors.append(f"{label}: verification/history metadata is not allowed")
     if label == "FROZEN_BACKLOG.md" and FROZEN_BACKLOG_THAW_MARKER not in text:
         errors.append("FROZEN_BACKLOG.md: missing empty-core and explicit-human thaw rule")
     if not items:

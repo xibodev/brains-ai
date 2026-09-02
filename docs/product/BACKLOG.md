@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-09-02T08:50:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree core/frozen scope rewrite and source inspection; documentation and generated traceability contracts passed; focused pytest blocked by host temp-directory permissions; deployment not verified
--->
-
 # Brains Core Backlog
 
 This is the sole schedulable product backlog. It contains unfinished work required for

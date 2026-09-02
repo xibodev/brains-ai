@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-09-02T08:50:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree core/frozen scope decision; documentation and generated traceability contracts passed; focused pytest blocked by host temp-directory permissions; deployment not verified
--->
-
 # Brains Frozen Backlog
 
 This file contains deferred future TODOs only. These items are not advertised,
