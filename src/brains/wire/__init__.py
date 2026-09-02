@@ -219,6 +219,7 @@ class ToolAdapter:
     supports_sse: bool = True
     sse_experimental: bool = False
     mailbox_notification_mode: str = "pull"
+    native_id_context_keys: tuple[str, ...] = ()
 
     def mcp_path(self, home: Path) -> Path:
         return self._mcp_path(home)
@@ -239,6 +240,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".copilot" / "copilot-instructions.md",
         _detect=lambda h: (h / ".copilot").is_dir(),
         _json_entry=_copilot_entry,
+        native_id_context_keys=("copilot_session_id",),
     ),
     "claude-code": ToolAdapter(
         name="claude-code",
@@ -248,6 +250,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".claude" / "CLAUDE.md",
         _detect=lambda h: (h / ".claude").is_dir() or (h / ".claude.json").exists(),
         _json_entry=_claude_entry,
+        native_id_context_keys=("claude_session_id",),
     ),
     "codex": ToolAdapter(
         name="codex",
@@ -258,6 +261,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _detect=lambda h: (h / ".codex").is_dir(),
         _toml_block=_codex_block,
         supports_sse=False,
+        native_id_context_keys=("codex_thread_id", "codex_session_id"),
     ),
     "opencode": ToolAdapter(
         name="opencode",
@@ -268,6 +272,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _detect=lambda h: (h / ".config" / "opencode").is_dir(),
         _json_entry=_opencode_entry,
         json_servers_key="mcp",
+        native_id_context_keys=("opencode_session_id",),
     ),
 }
 
@@ -615,6 +620,7 @@ def wire(
                     "detail": remediation,
                 },
                 "mailbox_notification_mode": codex.mailbox_notification_mode,
+                "native_id_context_keys": list(codex.native_id_context_keys),
             }
         )
         return report
@@ -637,6 +643,7 @@ def wire(
                     ),
                 },
                 "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "native_id_context_keys": list(adapter.native_id_context_keys),
             }
         )
         return report
@@ -655,6 +662,7 @@ def wire(
             "detected": detected,
             "mcp": mcp,
             "mailbox_notification_mode": adapter.mailbox_notification_mode,
+            "native_id_context_keys": list(adapter.native_id_context_keys),
         }
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
@@ -749,6 +757,7 @@ def status(home: Path) -> dict[str, Any]:
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
                 "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "native_id_context_keys": list(adapter.native_id_context_keys),
             }
         )
     return {"tools": out}

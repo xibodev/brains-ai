@@ -29,11 +29,17 @@ from brains.control.decisions import (
     resolve_decision,
 )
 from brains.control.durable_mailbox import (
+    create_managed_agent_mailbox,
     ensure_operator_mailboxes,
+    extract_native_tool_session_id,
     list_phonebook,
     lookup_mailbox,
     read_mailbox_binding_file,
+    reconcile_managed_mailbox_bindings,
+    recover_managed_agent_mailbox_binding,
     register_agent_mailbox,
+    revoke_managed_agent_mailbox_binding,
+    rotate_managed_agent_mailbox_binding,
 )
 from brains.control.events import append_event, list_events
 from brains.control.handoffs import (
@@ -2555,6 +2561,86 @@ def mailbox_register_cli(
             notification_mode=notification_mode or "pull",
         )
     )
+
+
+@mailbox_app.command("native-id")
+def mailbox_native_id_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    copilot_session_id: str | None = typer.Option(None, "--copilot-session-id"),
+    claude_session_id: str | None = typer.Option(None, "--claude-session-id"),
+    codex_thread_id: str | None = typer.Option(None, "--codex-thread-id"),
+    codex_session_id: str | None = typer.Option(None, "--codex-session-id"),
+    opencode_session_id: str | None = typer.Option(None, "--opencode-session-id"),
+):
+    _print_json(
+        extract_native_tool_session_id(
+            adapter,
+            {
+                "copilot_session_id": copilot_session_id,
+                "claude_session_id": claude_session_id,
+                "codex_thread_id": codex_thread_id,
+                "codex_session_id": codex_session_id,
+                "opencode_session_id": opencode_session_id,
+            },
+        )
+    )
+
+
+def _managed_mailbox_action(
+    action: str, workspace: str, adapter: str, native_id: str, session: str
+) -> None:
+    controls = {
+        "create": create_managed_agent_mailbox,
+        "rotate": rotate_managed_agent_mailbox_binding,
+        "recover": recover_managed_agent_mailbox_binding,
+        "revoke": revoke_managed_agent_mailbox_binding,
+    }
+    _print_json(controls[action](workspace, adapter, native_id, session))
+
+
+@mailbox_app.command("managed-create")
+def mailbox_managed_create_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("create", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-rotate")
+def mailbox_managed_rotate_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("rotate", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-recover")
+def mailbox_managed_recover_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("recover", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-revoke")
+def mailbox_managed_revoke_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("revoke", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("reconcile-bindings")
+def mailbox_reconcile_bindings_cli():
+    _print_json(reconcile_managed_mailbox_bindings())
 
 
 @mailbox_app.command("phonebook")

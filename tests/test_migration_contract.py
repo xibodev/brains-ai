@@ -129,6 +129,7 @@ POST_CHECKSUM_DELTAS = (
     "150_durable_mailboxes",
     "151_mail_notification_state",
     "152_mail_smtp_state",
+    "153_mailbox_identity_lifecycle",
 )
 
 _LEGACY_LEDGER_DDL = """

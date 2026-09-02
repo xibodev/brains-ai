@@ -285,12 +285,15 @@ Coordination browser mailbox desk now exposes authorized mailbox selection, Inbo
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
 
-Migration 150 and the current control/adapters implement hash-bound mailbox identity,
+Migrations 150 and 153 and the current control/adapters implement hash-bound mailbox identity,
 one-current-incarnation attachment and cursor, operator inbox provisioning, authorized
 phonebook/lookup, and non-enumerating conflict refusal. Managed binding operations create,
-rotate, recover, and revoke owner-only files with conditional database mutation,
-fail-closed compensation, versioned hashes, and immediate old-key rejection; raw secrets
-never enter their result or event shapes. Lease, terminal detach, successor, alias, and
+rotate, recover, and revoke through supported CLI and MCP surfaces. A hash-only durable
+transition intent reconciles interruption between an owner-only file replacement and its
+conditional database mutation; POSIX mode enforcement and Windows DPAPI plus an explicit
+current-user DACL protect the file. Raw adapter provenance is stored on mailbox and
+attachment rows, while versioned hashes provide immediate old-key rejection and raw
+secrets never enter result, event, or intent shapes. Lease, terminal detach, successor, alias, and
 resume journeys preserve identity separately from activity, ownership, and reachability
 across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
 threaded message and per-recipient delivery/read rows are active for durable local mail.

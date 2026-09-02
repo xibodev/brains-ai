@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -55,6 +57,7 @@ from brains.storage.models import (
     Event,
     Mailbox,
     MailboxAttachment,
+    MailboxBindingTransition,
     Operator,
     SessionLease,
     SessionSuccessor,
@@ -192,6 +195,15 @@ def test_managed_binding_create_rotate_recover_revoke_and_restart_journey(
         )
         assert f'"adapter": "{adapter}"' in (registration_event.metadata_json or "")
         assert original_secret not in (registration_event.metadata_json or "")
+        mailbox_row = session.get(Mailbox, created["mailbox_id"])
+        assert mailbox_row.tool == canonical_mailbox_tool(adapter)
+        assert mailbox_row.adapter_provenance == adapter
+        attachment_row = (
+            session.query(MailboxAttachment)
+            .filter(MailboxAttachment.session_id == started["session_id"])
+            .one()
+        )
+        assert attachment_row.adapter_provenance == adapter
 
     conflict = start_session(workspace, tool=adapter)
     with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
@@ -256,6 +268,15 @@ def test_managed_binding_create_rotate_recover_revoke_and_restart_journey(
     )
     assert packet["mailbox"]["mailbox_id"] == created["mailbox_id"]
     assert packet["mailbox"]["attachment"]["session_id"] == successor["session_id"]
+    assert packet["mailbox"]["adapter"] == adapter
+    assert packet["mailbox"]["attachment"]["adapter"] == adapter
+    with SessionLocal() as session:
+        successor_attachment = (
+            session.query(MailboxAttachment)
+            .filter(MailboxAttachment.session_id == successor["session_id"])
+            .one()
+        )
+        assert successor_attachment.adapter_provenance == adapter
 
     revoked = revoke_managed_agent_mailbox_binding(
         workspace, adapter, native_id, successor["session_id"]
@@ -270,6 +291,191 @@ def test_managed_binding_create_rotate_recover_revoke_and_restart_journey(
             native_tool_session_id=native_id,
             mailbox_binding_secret=recovered_secret,
         )
+
+
+def test_supported_wire_adapters_reach_identity_lifecycle_through_cli_and_mcp(tmp_path) -> None:
+    from brains.mcp import server as mcp_server
+    from brains.wire import ADAPTERS, WireContext, wire
+
+    runner = CliRunner()
+    for tool, adapter in ADAPTERS.items():
+        home = tmp_path / f"home-{tool}"
+        report = wire(
+            home,
+            WireContext(transport="stdio"),
+            tools=[tool],
+            force=True,
+        )
+        entry = report["tools"][0]
+        assert entry["native_id_context_keys"] == list(adapter.native_id_context_keys)
+        source = adapter.native_id_context_keys[0]
+        native_id = _native(tool)
+        identity = mcp_server.call_tool(
+            "brains_mailbox_native_id", adapter=tool, context={source: native_id}
+        )
+        assert identity["status"] == "resolved"
+
+        workspace = str(tmp_path / f"product-{tool}")
+        started = start_session(workspace, tool=tool)
+        created = runner.invoke(
+            cli_app,
+            [
+                "mailbox",
+                "managed-create",
+                "--workspace",
+                workspace,
+                "--adapter",
+                tool,
+                "--native-tool-session-id",
+                native_id,
+                "--session",
+                started["session_id"],
+            ],
+        )
+        assert created.exit_code == 0, created.output
+        created_payload = json.loads(created.output)
+        assert "secret" not in created.output.lower()
+
+        rotated = mcp_server.call_tool(
+            "brains_mailbox_managed_rotate",
+            workspace_path=workspace,
+            adapter=tool,
+            native_tool_session_id=native_id,
+            session_id=started["session_id"],
+        )
+        assert rotated["binding_version"] == 2
+        binding_path = Path(created_payload["binding_file"])
+        binding_path.unlink()
+        recovered = runner.invoke(
+            cli_app,
+            [
+                "mailbox",
+                "managed-recover",
+                "--workspace",
+                workspace,
+                "--adapter",
+                tool,
+                "--native-tool-session-id",
+                native_id,
+                "--session",
+                started["session_id"],
+            ],
+        )
+        assert recovered.exit_code == 0, recovered.output
+        assert "secret" not in recovered.output.lower()
+        revoked = mcp_server.call_tool(
+            "brains_mailbox_managed_revoke",
+            workspace_path=workspace,
+            adapter=tool,
+            native_tool_session_id=native_id,
+            session_id=started["session_id"],
+        )
+        assert revoked["status"] == "retired"
+
+
+def test_binding_transition_journal_recovers_death_after_file_mutation(
+    tmp_path, monkeypatch
+) -> None:
+    from brains.control import durable_mailbox as mailbox_ctl
+    from brains.mcp import server as mcp_server
+
+    workspace = str(tmp_path / "crash-recovery")
+    native_id = _native("codex")
+    started = start_session(workspace, tool="codex")
+    real_reconcile = mailbox_ctl._reconcile_binding_transition
+
+    def die_before_database_finalize(*_args, **_kwargs):
+        raise SystemExit(91)
+
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", die_before_database_finalize)
+    with pytest.raises(SystemExit):
+        create_managed_agent_mailbox(workspace, "codex", native_id, started["session_id"])
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", real_reconcile)
+    with SessionLocal() as session:
+        intent = session.query(MailboxBindingTransition).one()
+        intent.owner_process_instance = "terminated-process"
+        mailbox_id = intent.mailbox_id
+        session.commit()
+    created = mcp_server.call_tool("brains_mailbox_binding_reconcile")
+    assert created["results"][0]["action"] == "created"
+
+    path = Path(created["results"][0]["binding_file"])
+    old_secret = read_mailbox_binding_file(path, managed_only=True)
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", die_before_database_finalize)
+    with pytest.raises(SystemExit):
+        rotate_managed_agent_mailbox_binding(workspace, "codex", native_id, started["session_id"])
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", real_reconcile)
+    new_secret = read_mailbox_binding_file(path, managed_only=True)
+    assert new_secret != old_secret
+    with SessionLocal() as session:
+        mailbox = session.get(Mailbox, mailbox_id)
+        intent = session.get(MailboxBindingTransition, mailbox_id)
+        assert mailbox.binding_key_hash != intent.to_binding_hash
+        journal = repr(
+            (
+                intent.operation,
+                intent.from_binding_hash,
+                intent.to_binding_hash,
+                intent.binding_file,
+            )
+        )
+        assert old_secret not in journal and new_secret not in journal
+        intent.owner_process_instance = "terminated-process"
+        session.commit()
+    rotated = mcp_server.call_tool("brains_mailbox_binding_reconcile")
+    assert rotated["results"][0]["action"] == "rotated"
+    with pytest.raises(MailboxUnavailableError):
+        heartbeat_session(
+            started["session_id"],
+            tool="codex",
+            native_tool_session_id=native_id,
+            mailbox_binding_secret=old_secret,
+        )
+
+    path.unlink()
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", die_before_database_finalize)
+    with pytest.raises(SystemExit):
+        recover_managed_agent_mailbox_binding(workspace, "codex", native_id, started["session_id"])
+    monkeypatch.setattr(mailbox_ctl, "_reconcile_binding_transition", real_reconcile)
+    with SessionLocal() as session:
+        intent = session.get(MailboxBindingTransition, mailbox_id)
+        intent.owner_process_instance = "terminated-process"
+        session.commit()
+    recovered = mcp_server.call_tool("brains_mailbox_binding_reconcile")
+    assert recovered["results"][0]["action"] == "recovered"
+    with SessionLocal() as session:
+        assert session.get(MailboxBindingTransition, mailbox_id) is None
+        assert session.get(Mailbox, mailbox_id).binding_key_version == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows DACL/DPAPI contract")
+def test_windows_managed_binding_is_dpapi_protected_and_acl_verified(tmp_path) -> None:
+    from brains.control import durable_mailbox as mailbox_ctl
+
+    workspace = str(tmp_path / "windows-binding")
+    started = start_session(workspace, tool="codex")
+    created = create_managed_agent_mailbox(
+        workspace, "codex", _native("codex"), started["session_id"]
+    )
+    path = Path(created["binding_file"])
+    assert path.read_text(encoding="utf-8").startswith("dpapi-v1:")
+    verified = subprocess.run(
+        ["icacls", str(path), "/verify"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert verified.returncode == 0
+    listed = subprocess.run(
+        ["icacls", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert mailbox_ctl._windows_current_user_sid() in listed.stdout
+    assert "(I)" not in listed.stdout
 
 
 def test_invalid_mailbox_start_does_not_register_workspace(tmp_path) -> None:
