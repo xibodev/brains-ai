@@ -46,43 +46,11 @@ dev=[
   "mypy>=1.10",
   "types-PyYAML",
 ]
-# --- Optional runtime subsystems ---
-# Each extra is gated at startup by config: if a subsystem is enabled in
-# brains.runtime.yaml without its extra installed, Brains fails loud at
-# load time with the matching `pip install` hint. Never silent-installs.
-litellm=["litellm>=1.40"]
-postgres=["asyncpg>=0.29", "psycopg[binary]>=3.1"]
-telegram=["python-telegram-bot>=21.0"]
-slack=["slack_sdk>=3.27"]
-whatsapp=["httpx>=0.27"]
-whatsapp_web=["httpx>=0.27"]
-otel=[
-  "opentelemetry-api>=1.25",
-  "opentelemetry-sdk>=1.25",
-  "opentelemetry-exporter-otlp-proto-http>=1.25",
-  "opentelemetry-instrumentation-fastapi>=0.46b0",
-]
-# Meta-extra: install everything optional in one go.
-all=[
-  "litellm>=1.40",
-  "asyncpg>=0.29",
-  "psycopg[binary]>=3.1",
-  "python-telegram-bot>=21.0",
-  "slack_sdk>=3.27",
-  "opentelemetry-api>=1.25",
-  "opentelemetry-sdk>=1.25",
-  "opentelemetry-exporter-otlp-proto-http>=1.25",
-  "opentelemetry-instrumentation-fastapi>=0.46b0",
-]
 
 [project.scripts]
 # Canonical (and only) binary. Matches the PyPI distribution name.
-# Every feature is a subcommand of `brains-ai`:
-#   serve / serve-all   — proxy gateway (+ dashboard + MCP SSE)
-#   setup / wire / unwire — first-run + MCP wiring
-#   features            — optional-subsystem wizard
-#   run <tool>          — spawn an LLM CLI against the brains gateway
-#                          (e.g. `brains-ai run claude -p "hi"`)
+# Supported service, setup, wiring, coordination and recovery commands use the
+# single canonical executable.
 brains-ai="brains.cli.app:app"
 
 [project.urls]

@@ -85,20 +85,14 @@ def operations_snapshot() -> dict[str, Any]:
     as capabilities rather than executed here.
     """
     from brains import service
-    from brains.control.operators import list_operators
     from brains.control.queue_health import diagnose, summarize
     from brains.control.recovery_policy import recovery_readiness
-    from brains.control.tool_registry import list_registered_tools
-    from brains.experimental import ui_labs_enabled
 
     return {
         "readiness": readiness_report(),
         "queue": {"summary": summarize(), "diagnosis": diagnose()},
         "recovery": recovery_readiness(),
         "service": service.status(),
-        "tools": list_registered_tools(verify_now=False),
-        "operators": list_operators(),
-        "labs_enabled": ui_labs_enabled(),
     }
 
 

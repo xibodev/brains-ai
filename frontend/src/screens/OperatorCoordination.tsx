@@ -30,10 +30,9 @@ export function OperatorCoordination() {
       <OperatorPageHead
         eyebrow="Shared work plane"
         title="Coordination"
-        lede="Global queues for tasks, ownership, handoffs, messages, topics, and shared learning, always traceable back to a workspace."
+        lede="Global queues for tasks, ownership, handoffs, durable mail, and shared knowledge, always traceable back to a workspace."
         actions={
           <>
-            <button className="operator-button" onClick={() => openAct("topic.post")}>Post topic</button>
             <button className="operator-button primary" onClick={() => openAct("task.create")}>Create task</button>
           </>
         }
@@ -86,18 +85,15 @@ export function OperatorCoordination() {
                 </div>
               </OperatorCard>
 
-              <OperatorCard kicker="Comms" title="Boards and presence">
+              <OperatorCard kicker="Coordination" title="Current ownership">
                 <OperatorMiniList rows={[
-                  { label: "Active topics", value: data.topics.length },
-                  { label: "Recent topic posts", value: data.topic_posts.length },
-                  { label: "Live agents", value: data.live_agents.length },
                   { label: "Workspace claims", value: data.claims.length },
+                  { label: "Active handoffs", value: data.handoffs.filter((row) => row.status === "active").length },
                 ]} />
               </OperatorCard>
 
               <OperatorCard kicker="Learning" title="Review queue">
                 <OperatorMiniList rows={[
-                  { label: "Pattern proposals", value: data.patterns.filter((row) => row.status === "proposed").length },
                   { label: "Knowledge blockers", value: data.knowledge.filter((row) => row.type === "blocker" && row.status === "active").length },
                   { label: "Workarounds", value: data.knowledge.filter((row) => row.type === "workaround").length },
                   { label: "Advisory signals", value: data.signals.reduce((total, row) => total + row.count, 0) },

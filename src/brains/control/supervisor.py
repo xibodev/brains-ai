@@ -304,23 +304,6 @@ def _build_children(args: argparse.Namespace) -> list[Child]:
                 listener_status=200,
             )
         )
-    if _include_legacy_dashboard(args):
-        children.append(
-            Child(
-                "dashboard",
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "brains.dashboard.app:app",
-                    "--host",
-                    args.dashboard_host,
-                    "--port",
-                    str(args.dashboard_port),
-                ],
-                listener=(_listener_probe_host(args.dashboard_host), args.dashboard_port),
-            )
-        )
     if not args.no_mcp:
         children.append(
             Child(
@@ -459,38 +442,12 @@ def _clear_pidfile() -> None:
         _pid_path().unlink()
 
 
-def _include_legacy_dashboard(args: argparse.Namespace) -> bool:
-    """The legacy dashboard is retired from the normal install.
-
-    It runs only when explicitly requested: ``--dashboard``, or the
-    ``BRAINS_LEGACY_SURFACES`` opt-in. ``--no-dashboard`` (kept for
-    back-compatibility) is a veto that wins over both.
-    """
-    if args.no_dashboard:
-        return False
-    from brains.experimental import legacy_surfaces_enabled
-
-    return bool(getattr(args, "dashboard", False)) or legacy_surfaces_enabled()
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="brains-supervisor")
     parser.add_argument("--no-gateway", action="store_true")
-    parser.add_argument(
-        "--no-dashboard",
-        action="store_true",
-        help="Back-compat veto: never start the legacy dashboard child.",
-    )
-    parser.add_argument(
-        "--dashboard",
-        action="store_true",
-        help="Opt in to the retired legacy dashboard child (normally off).",
-    )
     parser.add_argument("--no-mcp", action="store_true")
     parser.add_argument("--gateway-host", default="127.0.0.1")
     parser.add_argument("--gateway-port", type=int, default=8787)
-    parser.add_argument("--dashboard-host", default="127.0.0.1")
-    parser.add_argument("--dashboard-port", type=int, default=9876)
     parser.add_argument("--mcp-port", type=int, default=9877)
     parser.add_argument("--mcp-scheduler-interval", type=int, default=60)
     return parser
@@ -510,8 +467,6 @@ def run(argv: list[str] | None = None) -> int:
     listeners: list[tuple[str, str, int]] = []
     if not args.no_gateway:
         listeners.append(("gateway", args.gateway_host, args.gateway_port))
-    if _include_legacy_dashboard(args):
-        listeners.append(("dashboard", args.dashboard_host, args.dashboard_port))
     if not args.no_mcp:
         from brains.mcp.sse_auth import resolve_bind_host
 

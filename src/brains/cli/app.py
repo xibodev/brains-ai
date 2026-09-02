@@ -252,24 +252,13 @@ def prune_traces_cli(
 def serve_all_cli(
     gateway_host: str = "127.0.0.1",
     gateway_port: int = 8787,
-    dashboard_host: str = "127.0.0.1",
-    dashboard_port: int = 9876,
     mcp_port: int = 9877,
     mcp_scheduler_interval: int = 60,
     no_gateway: bool = False,
-    no_dashboard: bool = False,
     no_mcp: bool = False,
-    dashboard: bool = typer.Option(
-        False,
-        "--dashboard",
-        help="Opt in to the retired legacy dashboard child (normally off; "
-        "also enabled by BRAINS_LEGACY_SURFACES=1).",
-    ),
 ):
     """Supervise gateway + MCP server in one process (restart-on-crash).
 
-    The legacy dashboard is retired from the normal install and runs only
-    with --dashboard / BRAINS_LEGACY_SURFACES=1 (--no-dashboard vetoes both).
     The MCP server is what agent CLIs/IDEs connect to, so it is included by
     default. Pass --no-mcp to leave it out. Its bind host follows
     BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (defaults to loopback).
@@ -279,19 +268,9 @@ def serve_all_cli(
     argv: list[str] = []
     if no_gateway:
         argv.append("--no-gateway")
-    if no_dashboard:
-        argv.append("--no-dashboard")
-    if dashboard:
-        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += [
-        "--dashboard-host",
-        dashboard_host,
-        "--dashboard-port",
-        str(dashboard_port),
-    ]
     argv += ["--mcp-port", str(mcp_port)]
     argv += ["--mcp-scheduler-interval", str(mcp_scheduler_interval)]
     raise SystemExit(supervisor_run(argv))
@@ -329,23 +308,13 @@ def mcp_cli(
 def up_cli(
     gateway_host: str = "127.0.0.1",
     gateway_port: int = 8787,
-    dashboard_host: str = "127.0.0.1",
-    dashboard_port: int = 9876,
     mcp_port: int = 9877,
     no_gateway: bool = False,
-    no_dashboard: bool = False,
     no_mcp: bool = False,
-    dashboard: bool = typer.Option(
-        False,
-        "--dashboard",
-        help="Opt in to the retired legacy dashboard child (normally off; "
-        "also enabled by BRAINS_LEGACY_SURFACES=1).",
-    ),
 ):
     """Zero-to-running: init the DB + workspace, then supervise the stack.
 
-    Equivalent to `brains-ai init` followed by `brains-ai serve-all` (gateway
-    + MCP; legacy dashboard only with --dashboard / BRAINS_LEGACY_SURFACES=1).
+    Equivalent to `brains-ai init` followed by `brains-ai serve-all`.
     Idempotent — safe to re-run.
     """
     from brains.api.admin_key import ensure_admin_key
@@ -360,19 +329,9 @@ def up_cli(
     argv: list[str] = []
     if no_gateway:
         argv.append("--no-gateway")
-    if no_dashboard:
-        argv.append("--no-dashboard")
-    if dashboard:
-        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += [
-        "--dashboard-host",
-        dashboard_host,
-        "--dashboard-port",
-        str(dashboard_port),
-    ]
     argv += ["--mcp-port", str(mcp_port)]
     raise SystemExit(supervisor_run(argv))
 
@@ -4674,3 +4633,20 @@ def recovery_policy_cli() -> None:
     from brains.control.recovery_policy import recovery_readiness
 
     _print_json(recovery_readiness())
+
+
+# Apply the shipped capability boundary only after every decorator has run.
+# Keeping implementation functions importable preserves readers/migrations for
+# historical stores without leaving a command-name activation path.
+from brains.capabilities import WITHDRAWN_CLI_COMMANDS, WITHDRAWN_CLI_GROUPS  # noqa: E402
+
+app.registered_commands[:] = [
+    command
+    for command in app.registered_commands
+    if command.name not in WITHDRAWN_CLI_COMMANDS
+]
+app.registered_groups[:] = [
+    group
+    for group in app.registered_groups
+    if group.name not in WITHDRAWN_CLI_GROUPS
+]

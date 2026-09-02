@@ -50,8 +50,8 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 stable supported surfaces, receive actionable errors, and launch only typed, truthfully
 available actions.
 
-**Lifecycle:** advertised/partial. Execution-model screens and redirects still present
-in source are BL-P0-09 containment debt.
+**Lifecycle:** advertised/partial. Execution-model screens and redirects are absent from
+the shipped SPA route inventory.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
@@ -59,7 +59,7 @@ in source are BL-P0-09 containment debt.
 | AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
 | AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised/partial; some screens still collapse failures into empty state. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
-| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes await removal. |
+| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes are absent. |
 
 **Failure behavior:** Authentication failure leads to sign-in or a structured error.
 Unknown/unauthorized entities never silently select another entity.
@@ -420,5 +420,6 @@ workflow can contradict or bypass it.
 - AC-B9-02: authentication/authorization remain consistent until retired mounts are removed.
 - AC-B9-03: duplicate or unsupported workflows are unreachable and their assets/launch paths are removed.
 
-Remaining routes, templates, static assets, flags, and commands are BL-P0-09/BL-P2-01
-containment debt. Shared authentication code is not an activation contract.
+Legacy templates, route definitions, flags, and commands remain deletion debt under
+BL-P2-01, but are not mounted or registered. Shared sign-in authentication code is not
+an activation contract.

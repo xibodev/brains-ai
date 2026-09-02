@@ -72,19 +72,17 @@ Current HEAD implements parts of this promise. [FEATURE_CONTRACT.md](FEATURE_CON
 The normal installation currently claims only:
 
 - Command Center and Workspace portfolio views;
-- durable coordination Sessions, tasks, claims, handoffs, checkpoints, mail, topics,
-  peer help, knowledge, and coordination patterns;
+- durable coordination Sessions, tasks, claims, handoffs, checkpoints, mailbox,
+  peer help, and knowledge;
 - human asks, decisions, governed-effect records, and audit verification;
-- Operations readiness, queue diagnosis, service/tool posture, recovery policy,
-  supported configuration, and local usage;
+- Operations readiness, queue diagnosis, service posture, and recovery policy;
 - bounded Workspace knowledge and non-semantic repository lookup;
-- experimental behavior explicitly labelled in [FEATURE_CONTRACT.md](FEATURE_CONTRACT.md).
 
 Execution-model, model-gateway, semantic/graph, automation, alternate-storage,
 telemetry-export, messaging-bridge, and legacy-browser implementations have been
-withdrawn as product claims. Some routes, commands, tools, flags, extras, tables, and
-source modules still exist until BL-P0-09 removes their exposure; existence is not an
-invitation to enable them.
+withdrawn as product claims. Their routes, commands, tools, flags, runtime extras, and
+browser activation paths are absent. Historical modules and tables may remain only for
+persisted-data compatibility.
 
 ## Primary users
 

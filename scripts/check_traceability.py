@@ -84,11 +84,7 @@ SPA_BASENAME = "/app"
 #: the screen yet (traceability mismatch UM-04). Each entry must also be stated
 #: as a gap in the route's ``TRACEABILITY.md`` row. Removing the gap in code
 #: without removing the entry here fails the gate.
-UNCONSUMED_ROUTE_PARAMS: dict[str, tuple[str, ...]] = {
-    "/app/labs/sessions/:id": ("id",),
-    "/app/labs/personas/:slug": ("slug",),
-    "/app/labs/runtimes/:slug": ("slug",),
-}
+UNCONSUMED_ROUTE_PARAMS: dict[str, tuple[str, ...]] = {}
 
 #: Client calls whose literal path is intentionally not mounted by this server
 #: (an externally served or legacy surface). Entries are ``(METHOD, path)``.
@@ -100,9 +96,6 @@ CLIENT_CALL_ALLOWLIST: dict[tuple[str, str], str] = {}
 NON_ROUTE_FAMILIES = {
     # A cross-cutting dependency layer, not a mount point.
     "Identity/authorization",
-    # Implemented by the bare-path rewrite middleware in ``brains.main``; the
-    # ``copilot-aliases`` check proves each alias target is mounted.
-    "Copilot aliases",
 }
 
 #: Mounted-route prefix rules, in order. The first match wins. A mounted route
@@ -666,18 +659,18 @@ def collect_server_routes(app: object) -> tuple[ServerRoute, ...]:
     """Mounted routes, one record per HTTP method (``WS`` for websockets)."""
 
     routes: list[ServerRoute] = []
+    openapi = getattr(app, "openapi", None)
+    if callable(openapi):
+        for path, operations in openapi().get("paths", {}).items():
+            for method in operations:
+                method = method.upper()
+                if method not in {"HEAD", "OPTIONS", "PARAMETERS"}:
+                    routes.append(ServerRoute(method=method, path=path))
     for route in getattr(app, "routes", []):
         path = getattr(route, "path", None)
-        if not path:
+        if not path or getattr(route, "methods", None):
             continue
-        methods = getattr(route, "methods", None)
-        if methods:
-            for method in sorted(methods):
-                if method in {"HEAD", "OPTIONS"}:
-                    continue
-                routes.append(ServerRoute(method=method, path=path))
-        else:
-            routes.append(ServerRoute(method="WS", path=path))
+        routes.append(ServerRoute(method="WS", path=path))
     return tuple(sorted(set(routes), key=lambda item: (item.path, item.method)))
 
 
@@ -1054,7 +1047,8 @@ def _check_docs_required_routes(root: Path) -> tuple[str, ...]:
 def check_repository(root: Path = ROOT) -> list[str]:
     """Run every generated traceability check against ``root``."""
 
-    from brains.main import _COPILOT_PATH_ALIASES, app
+    from brains.capabilities import WITHDRAWN_HTTP_EXACT_PATHS, WITHDRAWN_HTTP_PATH_PREFIXES
+    from brains.main import app
     from brains.storage import migration_registry as registry
     from brains.storage.models import Base
 
@@ -1074,9 +1068,20 @@ def check_repository(root: Path = ROOT) -> list[str]:
     )
 
     server_routes = collect_server_routes(app)
-    errors.extend(check_client_server(collect_client_calls(root), server_routes))
+    withdrawn_exact = {normalize_path(path) for path in WITHDRAWN_HTTP_EXACT_PATHS}
+    withdrawn_prefixes = tuple(normalize_path(path) for path in WITHDRAWN_HTTP_PATH_PREFIXES)
+    collected_calls = collect_client_calls(root)
+    client_calls = ClientCallInventory(calls=tuple(
+        call
+        for call in collected_calls.calls
+        if normalize_path(call.path) not in withdrawn_exact
+        and not normalize_path(call.path).startswith(withdrawn_prefixes)
+    ), unmatchable=collected_calls.unmatchable)
+    errors.extend(check_client_server(client_calls, server_routes))
     errors.extend(check_server_families(server_routes, doc_families(trace)))
-    errors.extend(check_copilot_aliases(dict(_COPILOT_PATH_ALIASES), server_routes))
+    # Compatibility gateway aliases are withdrawn from the core composition.
+    # An empty inventory is still checked so reintroduction is explicit.
+    errors.extend(check_copilot_aliases({}, server_routes))
 
     errors.extend(
         check_entities(
