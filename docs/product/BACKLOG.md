@@ -49,6 +49,12 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Supported-harness journeys prove wakeup or pull fallback, bounded retry and uncertainty, and zero message-body or credential disclosure.
 - **Maps to:** F3, B2, B8; J7, J8, J11.
 
+### BL-P1-14 - Complete harness identity and presence lifecycle
+
+- **Action:** Preserve raw adapter provenance and close native-ID extraction, renewal, detach, conflict, binding recovery, restart, and resume gaps across supported harnesses.
+- **Done when:** Idle, abrupt-exit, restart, Workspace movement, conflict, and resume journeys keep identity, activity, ownership, and reachability distinct and recoverable.
+- **Maps to:** F3, B2, B8; J7, J8, J11.
+
 ### BL-P1-18 - Complete truthful default lookup guidance
 
 - **Action:** Remove semantic and graph recommendations from default wire guidance and use the existing non-embedding knowledge and substring/symbol lookup path.

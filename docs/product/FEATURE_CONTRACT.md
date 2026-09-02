@@ -285,7 +285,7 @@ Coordination browser mailbox desk now exposes authorized mailbox selection, Inbo
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
 
-Migrations 150 and 153 and the current control/adapters implement hash-bound mailbox identity,
+Migrations 150 and 153 and the current control surfaces implement hash-bound mailbox identity,
 one-current-incarnation attachment and cursor, operator inbox provisioning, authorized
 phonebook/lookup, and non-enumerating conflict refusal. Managed binding operations create,
 rotate, recover, and revoke through supported CLI and MCP surfaces. A hash-only durable
@@ -297,6 +297,9 @@ secrets never enter result, event, or intent shapes. Lease, terminal detach, suc
 resume journeys preserve identity separately from activity, ownership, and reachability
 across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
 threaded message and per-recipient delivery/read rows are active for durable local mail.
+No supported wire adapter yet extracts a native harness identifier and invokes this
+lifecycle end to end; BL-P1-14 remains open until real generated hook/plugin journeys
+prove that integration, including truthful unavailable and ambiguous outcomes.
 Notification attempt state is active through migration 151 and the CLI/MCP adapter
 protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
 reports pull until it installs a stronger adapter. Migration 152 preserves constrained

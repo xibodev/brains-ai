@@ -302,6 +302,29 @@ def _windows_current_user_sid() -> str:
     return row[1]
 
 
+def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
+    environment = dict(os.environ)
+    environment["BRAINS_BINDING_ACL_PATH"] = str(path)
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$acl = Get-Acl -LiteralPath $env:BRAINS_BINDING_ACL_PATH; "
+            "$acl.Access | ForEach-Object { "
+            "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
+            "}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=environment,
+    )
+    return tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
+
+
 def _secure_binding_file(path: Path) -> None:
     if os.name != "nt":
         path.chmod(0o600)
@@ -321,6 +344,11 @@ def _secure_binding_file(path: Path) -> None:
         text=True,
         timeout=10,
     )
+    acl_sids = _windows_binding_acl_sids(path)
+    # The owner and privileged backup operators are OS semantics, not DACL allow
+    # entries. The managed file needs no explicit access principal except its user.
+    if acl_sids != (sid,):
+        raise OSError("mailbox binding file ACL contains an unexpected principal")
 
 
 def _replace_managed_binding(path: Path, binding_secret: str) -> None:

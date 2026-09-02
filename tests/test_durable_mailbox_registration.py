@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import uuid
@@ -293,86 +292,6 @@ def test_managed_binding_create_rotate_recover_revoke_and_restart_journey(
         )
 
 
-def test_supported_wire_adapters_reach_identity_lifecycle_through_cli_and_mcp(tmp_path) -> None:
-    from brains.mcp import server as mcp_server
-    from brains.wire import ADAPTERS, WireContext, wire
-
-    runner = CliRunner()
-    for tool, adapter in ADAPTERS.items():
-        home = tmp_path / f"home-{tool}"
-        report = wire(
-            home,
-            WireContext(transport="stdio"),
-            tools=[tool],
-            force=True,
-        )
-        entry = report["tools"][0]
-        assert entry["native_id_context_keys"] == list(adapter.native_id_context_keys)
-        source = adapter.native_id_context_keys[0]
-        native_id = _native(tool)
-        identity = mcp_server.call_tool(
-            "brains_mailbox_native_id", adapter=tool, context={source: native_id}
-        )
-        assert identity["status"] == "resolved"
-
-        workspace = str(tmp_path / f"product-{tool}")
-        started = start_session(workspace, tool=tool)
-        created = runner.invoke(
-            cli_app,
-            [
-                "mailbox",
-                "managed-create",
-                "--workspace",
-                workspace,
-                "--adapter",
-                tool,
-                "--native-tool-session-id",
-                native_id,
-                "--session",
-                started["session_id"],
-            ],
-        )
-        assert created.exit_code == 0, created.output
-        created_payload = json.loads(created.output)
-        assert "secret" not in created.output.lower()
-
-        rotated = mcp_server.call_tool(
-            "brains_mailbox_managed_rotate",
-            workspace_path=workspace,
-            adapter=tool,
-            native_tool_session_id=native_id,
-            session_id=started["session_id"],
-        )
-        assert rotated["binding_version"] == 2
-        binding_path = Path(created_payload["binding_file"])
-        binding_path.unlink()
-        recovered = runner.invoke(
-            cli_app,
-            [
-                "mailbox",
-                "managed-recover",
-                "--workspace",
-                workspace,
-                "--adapter",
-                tool,
-                "--native-tool-session-id",
-                native_id,
-                "--session",
-                started["session_id"],
-            ],
-        )
-        assert recovered.exit_code == 0, recovered.output
-        assert "secret" not in recovered.output.lower()
-        revoked = mcp_server.call_tool(
-            "brains_mailbox_managed_revoke",
-            workspace_path=workspace,
-            adapter=tool,
-            native_tool_session_id=native_id,
-            session_id=started["session_id"],
-        )
-        assert revoked["status"] == "retired"
-
-
 def test_binding_transition_journal_recovers_death_after_file_mutation(
     tmp_path, monkeypatch
 ) -> None:
@@ -467,15 +386,24 @@ def test_windows_managed_binding_is_dpapi_protected_and_acl_verified(tmp_path) -
         timeout=10,
     )
     assert verified.returncode == 0
-    listed = subprocess.run(
-        ["icacls", str(path)],
+    assert mailbox_ctl._windows_binding_acl_sids(path) == (mailbox_ctl._windows_current_user_sid(),)
+    subprocess.run(
+        ["icacls", str(path), "/grant", "*S-1-1-0:(R)"],
         check=True,
         capture_output=True,
         text=True,
         timeout=10,
     )
-    assert mailbox_ctl._windows_current_user_sid() in listed.stdout
-    assert "(I)" not in listed.stdout
+    with pytest.raises(OSError, match="unexpected principal"):
+        mailbox_ctl._secure_binding_file(path)
+
+
+def test_windows_binding_acl_proof_is_required_by_native_ci() -> None:
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "if: runner.os == 'Windows'" in workflow
+    assert "-k windows_managed_binding_is_dpapi_protected_and_acl_verified" in workflow
 
 
 def test_invalid_mailbox_start_does_not_register_workspace(tmp_path) -> None:
