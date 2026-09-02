@@ -568,7 +568,10 @@ def run_mcp_server(
         # gateway's lifespan (brains.main:lifespan). Without this, every
         # authenticated MCP request 500s with "API key not configured".
         sched_thread = threading.Thread(
-            target=_scheduler_loop, args=(scheduler_interval,), daemon=True, name="brains-scheduler"
+            target=_scheduler_loop,
+            args=(scheduler_interval,),
+            daemon=True,
+            name="brains-scheduler",
         )
         sched_thread.start()
         import uvicorn
@@ -578,8 +581,7 @@ def run_mcp_server(
         path = MCP_STREAMABLE_HTTP_PATH if mode == MCP_MODE_STREAMABLE_HTTP else MCP_LEGACY_SSE_PATH
         compatibility = " (legacy compatibility)" if mode == MCP_MODE_SSE else ""
         print(
-            f"Brains MCP server running via {mode}{compatibility} on "
-            f"http://{host}:{port}{path}",
+            f"Brains MCP server running via {mode}{compatibility} on http://{host}:{port}{path}",
             file=sys.stderr,
         )
         print(f"Scheduler active (every {scheduler_interval}s)", file=sys.stderr)

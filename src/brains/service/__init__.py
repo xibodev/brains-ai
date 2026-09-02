@@ -163,9 +163,7 @@ def status() -> dict:
     else:
         runtime_classification = "stopped"
     report["runtime_classification"] = runtime_classification
-    report["healthy"] = bool(
-        installed and pid_confidence == "verified" and report["serving"]
-    )
+    report["healthy"] = bool(installed and pid_confidence == "verified" and report["serving"])
     return report
 
 

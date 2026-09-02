@@ -286,7 +286,12 @@ def serve_all_cli(
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += ["--dashboard-host", dashboard_host, "--dashboard-port", str(dashboard_port)]
+    argv += [
+        "--dashboard-host",
+        dashboard_host,
+        "--dashboard-port",
+        str(dashboard_port),
+    ]
     argv += ["--mcp-port", str(mcp_port)]
     argv += ["--mcp-scheduler-interval", str(mcp_scheduler_interval)]
     raise SystemExit(supervisor_run(argv))
@@ -360,7 +365,12 @@ def up_cli(
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += ["--dashboard-host", dashboard_host, "--dashboard-port", str(dashboard_port)]
+    argv += [
+        "--dashboard-host",
+        dashboard_host,
+        "--dashboard-port",
+        str(dashboard_port),
+    ]
     argv += ["--mcp-port", str(mcp_port)]
     raise SystemExit(supervisor_run(argv))
 
@@ -443,9 +453,7 @@ def wire_cli(
         )
 
     default_url = (
-        f"http://127.0.0.1:{port}/sse"
-        if transport == MCP_MODE_SSE
-        else mcp_http_url(port=port)
+        f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
     )
 
     ctx = wire_mod.WireContext(
@@ -474,7 +482,9 @@ def wire_cli(
 def unwire_cli(
     tool: list[str] = typer.Option([], "--tool", help="Limit to specific tool(s). Repeatable."),
     no_rules: bool = typer.Option(
-        False, "--no-rules", help="Only remove the MCP entry; leave the instruction rule."
+        False,
+        "--no-rules",
+        help="Only remove the MCP entry; leave the instruction rule.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change; write nothing."),
 ):
@@ -862,9 +872,7 @@ def setup_cli(
                 "transport must be 'streamable-http', 'http', legacy 'sse', or 'stdio'"
             )
         wire_url = (
-            f"http://127.0.0.1:{port}/sse"
-            if transport == MCP_MODE_SSE
-            else mcp_http_url(port=port)
+            f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
         )
         ctx = wire_mod.WireContext(
             transport=transport,
@@ -1814,7 +1822,10 @@ def graph_query_cli(
 
 @app.command("graph-neighbors")
 def graph_neighbors_cli(
-    node_query: str, workspace_path: str = ".", relation: str | None = None, limit: int = 50
+    node_query: str,
+    workspace_path: str = ".",
+    relation: str | None = None,
+    limit: int = 50,
 ):
     """Neighbours (callers/callees/imports/contains) of a graph node. Auto-builds."""
     _require_experimental_cli("code graph neighbors")
@@ -2870,7 +2881,8 @@ def session_message_cli(
     session: str = typer.Option(..., help="Session id to message."),
     text: str = typer.Option(..., help="The message to deliver to the running agent."),
     operation_id: str | None = typer.Option(
-        None, help="Idempotency handle; re-sending the same one never queues a second message."
+        None,
+        help="Idempotency handle; re-sending the same one never queues a second message.",
     ),
 ):
     """Queue a durable message for a running Session (BL-P0-05).
@@ -2882,7 +2894,11 @@ def session_message_cli(
     from brains.control import session_commands as commands_ctl
 
     command, created = commands_ctl.enqueue(
-        session, commands_ctl.KIND_MESSAGE, text=text, operation_id=operation_id, requested_by="cli"
+        session,
+        commands_ctl.KIND_MESSAGE,
+        text=text,
+        operation_id=operation_id,
+        requested_by="cli",
     )
     _print_json({**command, "duplicate": not created})
 
@@ -2892,7 +2908,8 @@ def session_stop_cli(
     session: str = typer.Option(..., help="Session id to stop."),
     reason: str = typer.Option("", help="Why the Session is being stopped."),
     operation_id: str | None = typer.Option(
-        None, help="Idempotency handle; omitted, a repeated stop is the same logical command."
+        None,
+        help="Idempotency handle; omitted, a repeated stop is the same logical command.",
     ),
 ):
     """Request that a Session's agent process be stopped (idempotent)."""
@@ -3316,7 +3333,10 @@ def _workspace_cascade(session):
     """
     import sqlite3
 
-    from brains.storage.integrity import UnsupportedDatabaseError, workspace_cascade_tables
+    from brains.storage.integrity import (
+        UnsupportedDatabaseError,
+        workspace_cascade_tables,
+    )
 
     raw = session.connection().connection
     conn = getattr(raw, "driver_connection", None) or getattr(raw, "connection", raw)
@@ -3576,7 +3596,10 @@ def workspaces_doctor_cli(
                     "schema-derived tables). Pass --apply to commit.",
                     err=True,
                 )
-                report["pruned_missing"] = {"dry_run": True, "would_delete": len(missing)}
+                report["pruned_missing"] = {
+                    "dry_run": True,
+                    "would_delete": len(missing),
+                }
                 _print_json(report)
                 return
 
@@ -4090,7 +4113,11 @@ def db_migrate_cli() -> None:
     Exits 2 when the runner refuses, 1 when the store is still not healthy
     afterwards.
     """
-    from brains.storage.migrations import MigrationCorpusError, MigrationError, run_migrations
+    from brains.storage.migrations import (
+        MigrationCorpusError,
+        MigrationError,
+        run_migrations,
+    )
 
     try:
         report = run_migrations(apply=True)
@@ -4235,7 +4262,11 @@ def db_repair_cli(
     that could not see all of it, cannot pass silently in a pipeline.
     """
     from brains.audit import AuditWriteError, required_effect
-    from brains.storage.integrity import IntegrityError, repair_database, resolve_sqlite_path
+    from brains.storage.integrity import (
+        IntegrityError,
+        repair_database,
+        resolve_sqlite_path,
+    )
 
     if not apply:
         try:

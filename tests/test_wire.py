@@ -148,9 +148,7 @@ def test_streamable_http_schemas_for_current_remote_clients(home: Path) -> None:
     wire.wire(home, _http_ctx(), rules=False)
     copilot = json.loads((home / ".copilot" / "mcp-config.json").read_text())
     claude = json.loads((home / ".claude.json").read_text())
-    opencode = json.loads(
-        (home / ".config" / "opencode" / "opencode.json").read_text()
-    )
+    opencode = json.loads((home / ".config" / "opencode" / "opencode.json").read_text())
     assert copilot["mcpServers"]["brains"]["type"] == "http"
     assert copilot["mcpServers"]["brains"]["url"].endswith("/mcp")
     assert claude["mcpServers"]["brains"]["type"] == "http"
@@ -260,7 +258,7 @@ def test_only_one_brains_server_after_repeated_wire(home: Path) -> None:
 def test_codex_migrates_only_managed_legacy_sse_block(home: Path) -> None:
     cfg = home / ".codex" / "config.toml"
     cfg.write_text(
-        "model = \"gpt-example\"\n\n"
+        'model = "gpt-example"\n\n'
         f"{wire.TOML_START}\n"
         "[mcp_servers.brains]\n"
         'url = "http://127.0.0.1:9877/sse"\n'

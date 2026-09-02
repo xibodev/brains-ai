@@ -256,22 +256,16 @@ def _backlog_contract_errors(path: Path) -> list[str]:
     items = list(BACKLOG_ITEM_RE.finditer(text))
     label = path.name
     if label == "FROZEN_BACKLOG.md" and FROZEN_BACKLOG_THAW_MARKER not in text:
-        errors.append(
-            "FROZEN_BACKLOG.md: missing empty-core and explicit-human thaw rule"
-        )
+        errors.append("FROZEN_BACKLOG.md: missing empty-core and explicit-human thaw rule")
     if not items:
         if label == "BACKLOG.md" and EMPTY_CORE_BACKLOG_MARKER not in text:
-            errors.append(
-                "BACKLOG.md: no actionable items and no explicit empty-core marker"
-            )
+            errors.append("BACKLOG.md: no actionable items and no explicit empty-core marker")
         return errors
 
     for section in BACKLOG_SECTION_RE.finditer(text):
         title = section.group("title")
         if not BACKLOG_ALLOWED_SECTION_RE.match(title):
-            errors.append(
-                f"{label}: unexpected non-actionable section **{title}**"
-            )
+            errors.append(f"{label}: unexpected non-actionable section **{title}**")
 
     ids = [item.group("id") for item in items]
     for duplicate in sorted({item_id for item_id in ids if ids.count(item_id) > 1}):
@@ -282,18 +276,14 @@ def _backlog_contract_errors(path: Path) -> list[str]:
         block = item.group(0)
         heading = block.splitlines()[0]
         if not BACKLOG_ACTION_HEADING_RE.match(heading):
-            errors.append(
-                f"{label}: {item_id} heading must start with an actionable verb"
-            )
+            errors.append(f"{label}: {item_id} heading must start with an actionable verb")
         for label, pattern in (
             ("Action", BACKLOG_ACTION_RE),
             ("Done when", BACKLOG_DONE_RE),
             ("Maps to", BACKLOG_MAPS_RE),
         ):
             if len(pattern.findall(block)) != 1:
-                errors.append(
-                    f"{path.name}: {item_id} must contain exactly one **{label}:** line"
-                )
+                errors.append(f"{path.name}: {item_id} must contain exactly one **{label}:** line")
     return errors
 
 

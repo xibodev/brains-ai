@@ -197,9 +197,7 @@ def _codex_block(ctx: WireContext) -> str:
         f"url = {json.dumps(ctx.url)}",
     ]
     if ctx.bearer_token_env_var:
-        lines.append(
-            f"bearer_token_env_var = {json.dumps(ctx.bearer_token_env_var)}"
-        )
+        lines.append(f"bearer_token_env_var = {json.dumps(ctx.bearer_token_env_var)}")
     return "\n".join(lines)
 
 
@@ -625,9 +623,7 @@ def status(home: Path) -> dict[str, Any]:
                 server = servers[SERVER_KEY]
                 if server.get("command") or server.get("type") == "local":
                     transport = MCP_MODE_STDIO
-                elif server.get("type") == "sse" or str(server.get("url", "")).endswith(
-                    "/sse"
-                ):
+                elif server.get("type") == "sse" or str(server.get("url", "")).endswith("/sse"):
                     transport = MCP_MODE_SSE
                 else:
                     transport = MCP_MODE_STREAMABLE_HTTP

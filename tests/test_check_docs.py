@@ -172,8 +172,7 @@ def test_checker_rejects_required_contract_failures(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert (
-        "backlog ID BL-P0-01 is not referenced by any Core backlog items cell"
-        in _run(case).stdout
+        "backlog ID BL-P0-01 is not referenced by any Core backlog items cell" in _run(case).stdout
     )
 
     case = tmp_path / "bad-outcome-anchor"
@@ -213,10 +212,7 @@ def test_checker_rejects_retired_backlog_documents(tmp_path: Path) -> None:
         _valid_tree(case)
         retired = case / "docs/product" / name
         retired.write_text(HEADER, encoding="utf-8")
-        assert (
-            f"prohibited documentation/evidence path: docs/product/{name}"
-            in _run(case).stdout
-        )
+        assert f"prohibited documentation/evidence path: docs/product/{name}" in _run(case).stdout
 
 
 def test_checker_rejects_non_actionable_backlog_items(tmp_path: Path) -> None:
@@ -243,8 +239,7 @@ def test_checker_rejects_non_actionable_backlog_items(tmp_path: Path) -> None:
         (
             "duplicate-action",
             "- **Action:** Implement the fixture behavior.\n",
-            "- **Action:** Implement the fixture behavior.\n"
-            "- **Action:** Implement it again.\n",
+            "- **Action:** Implement the fixture behavior.\n- **Action:** Implement it again.\n",
             "must contain exactly one **Action:** line",
         ),
         (
@@ -295,8 +290,7 @@ def test_checker_enforces_frozen_backlog_boundary(tmp_path: Path) -> None:
     _valid_tree(case)
     frozen = case / "docs/product/FROZEN_BACKLOG.md"
     frozen.write_text(
-        frozen.read_text(encoding="utf-8")
-        + frozen_item.replace("BL-P1-99", "BL-P0-01"),
+        frozen.read_text(encoding="utf-8") + frozen_item.replace("BL-P1-99", "BL-P0-01"),
         encoding="utf-8",
     )
     assert "appears in both BACKLOG.md and FROZEN_BACKLOG.md" in _run(case).stdout
@@ -329,7 +323,9 @@ def test_checker_accepts_explicit_empty_core_backlog(tmp_path: Path) -> None:
     assert _run(case).returncode == 0
 
 
-def test_checker_accepts_normalized_and_reference_style_readme_links(tmp_path: Path) -> None:
+def test_checker_accepts_normalized_and_reference_style_readme_links(
+    tmp_path: Path,
+) -> None:
     case = tmp_path / "links"
     _valid_tree(case)
     definitions = []
@@ -355,7 +351,9 @@ def test_checker_rejects_missing_document_references_in_source(tmp_path: Path) -
     assert "reference to missing documentation: docs/removed-guide.md" in output
 
 
-def test_checker_supports_brains_example_and_rejects_legacy_identity(tmp_path: Path) -> None:
+def test_checker_supports_brains_example_and_rejects_legacy_identity(
+    tmp_path: Path,
+) -> None:
     case = tmp_path / "identity"
     _valid_tree(case)
     example = case / "examples/brains.skill.md"
