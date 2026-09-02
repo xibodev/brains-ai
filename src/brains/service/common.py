@@ -23,6 +23,7 @@ Two hard rules, learned the hard way, are encoded here:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import csv
 import getpass
@@ -36,6 +37,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+
+from brains.mcp.transport import mcp_http_url
 
 # Logical identifiers, mapped to per-OS names by each backend.
 SERVICE_LABEL = "brains-serve-all"
@@ -52,7 +55,7 @@ GATEWAY_FALLBACK_PORTS = range(8877, 8978)
 def _service_description(gateway_host: str, gateway_port: int, mcp_port: int) -> str:
     return (
         f"Brains control plane — supervises the gateway ({gateway_host}:{gateway_port}), "
-        f"the MCP SSE server ({gateway_host}:{mcp_port}), and opt-in experimental children. "
+        f"and the Streamable HTTP MCP server ({gateway_host}:{mcp_port}/mcp). "
         "Starts at login and restarts on failure."
     )
 
@@ -160,7 +163,7 @@ def listener_status(
     gateway_port: int | None = None,
     mcp_port: int | None = None,
 ) -> dict[str, Any]:
-    """Bounded probes for the configured supervised listeners."""
+    """Bounded listener and protocol probes for the supervised service."""
     configured = read_service_config()
     resolved_host = host or str(configured["gateway_host"])
     resolved_gateway_port = gateway_port or int(configured["gateway_port"])
@@ -172,15 +175,128 @@ def listener_status(
                 listeners[name] = True
         except OSError:
             listeners[name] = False
+    mcp_protocol = (
+        mcp_protocol_status(resolved_host, resolved_mcp_port)
+        if listeners["mcp"]
+        else {
+            "ready": False,
+            "stage": "connect",
+            "reason": "listener-unavailable",
+        }
+    )
     return {
         "listeners": listeners,
-        "serving": all(listeners.values()),
+        "mcp_protocol": mcp_protocol,
+        "serving": bool(listeners["gateway"] and mcp_protocol["ready"]),
         "endpoints": {
             "gateway": f"http://{resolved_host}:{resolved_gateway_port}",
             "console": f"http://{resolved_host}:{resolved_gateway_port}/app",
-            "mcp": f"http://{resolved_host}:{resolved_mcp_port}/sse",
+            "mcp": mcp_http_url(resolved_host, resolved_mcp_port),
         },
     }
+
+
+def _exception_status_code(exc: BaseException) -> int | None:
+    """Find an HTTP status on an exception tree without exposing its body."""
+
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+        direct = getattr(current, "status_code", None)
+        if isinstance(direct, int):
+            return direct
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple | list):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+    return None
+
+
+async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float) -> dict[str, Any]:
+    """Initialize MCP and list tools, returning only bounded non-secret facts."""
+
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    stage = "connect"
+    try:
+        async with (
+            httpx.AsyncClient(headers=headers, timeout=timeout, trust_env=False) as client,
+            streamable_http_client(url, http_client=client) as streams,
+        ):
+            read_stream, write_stream, _ = streams
+            async with ClientSession(read_stream, write_stream) as session:
+                stage = "initialize"
+                await session.initialize()
+                stage = "tools-list"
+                tools = await session.list_tools()
+                names = {tool.name for tool in tools.tools}
+                if "brains_start_session" not in names:
+                    return {
+                        "ready": False,
+                        "stage": stage,
+                        "reason": "core-tool-missing",
+                    }
+                return {
+                    "ready": True,
+                    "stage": "ready",
+                    "reason": "initialize-and-tools-list-succeeded",
+                    "tool_count": len(names),
+                }
+    except Exception as exc:  # noqa: BLE001 - converted to bounded readiness state
+        status_code = _exception_status_code(exc)
+        if status_code in {401, 403}:
+            failed_stage = "authentication"
+            reason = "credential-rejected"
+        elif status_code is not None:
+            failed_stage = "protocol"
+            reason = "http-protocol-rejected"
+        elif stage == "connect":
+            failed_stage = "connect"
+            reason = "connection-failed"
+        else:
+            failed_stage = stage
+            reason = f"{stage}-failed"
+        report: dict[str, Any] = {
+            "ready": False,
+            "stage": failed_stage,
+            "reason": reason,
+            "error_type": type(exc).__name__,
+        }
+        if status_code is not None:
+            report["status_code"] = status_code
+        return report
+
+
+def mcp_protocol_status(
+    host: str = DEFAULT_GATEWAY_HOST,
+    port: int = DEFAULT_MCP_PORT,
+    *,
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    """Perform an authenticated Streamable HTTP initialize + tools/list probe.
+
+    The report never includes the credential, exception text, or response body.
+    Missing credentials fail before any request unless the operator explicitly
+    configured unauthenticated API access.
+    """
+
+    from brains.api.admin_key import read_persisted_key
+    from brains.config import settings
+
+    api_key = settings.api_key or read_persisted_key()
+    if not api_key and not settings.allow_unauthenticated_api:
+        return {
+            "ready": False,
+            "stage": "authentication",
+            "reason": "credential-unavailable",
+        }
+    return asyncio.run(_mcp_protocol_handshake(mcp_http_url(host, port), api_key, timeout))
 
 
 def _valid_port(value: object, name: str) -> int:

@@ -85,7 +85,7 @@ them as withdrawal defects, not operating alternatives.
 | Process | Default bind/port | Supported surface |
 |---|---|---|
 | Gateway | `127.0.0.1:8787` | `/app`, protected native `/v1`, `/health`, WS/SSE, signed GitHub ingress |
-| MCP SSE | port `9877`; bind controlled by supported MCP settings | Authenticated `/sse` transport |
+| MCP Streamable HTTP | port `9877`; bind controlled by supported MCP settings | Authenticated `/mcp` transport; `/sse` is explicit legacy compatibility only |
 
 `serve-all` supervises the gateway and MCP children. The retired dashboard port and
 WhatsApp Web sidecar are not part of the supported stack.
@@ -136,7 +136,7 @@ and available Org/Workspace scope.
 | Native `/v1` | `require_api_key` plus route-specific Org/Workspace capability. |
 | `/app` | Signed browser cookie bound to the credential that minted it, or accepted header/key flow. |
 | WS/SSE | Principal plus server-derived topic authorization, revalidated during the connection. |
-| MCP SSE | Credential-store lookup and loopback Host policy by default. |
+| MCP Streamable HTTP `/mcp` | Credential-store lookup and loopback Host policy by default; SSE is explicit legacy compatibility only. |
 | MCP stdio | Local OS process boundary; inherits local state authority. |
 | GitHub ingress | Signature, delivery/event headers, exact repository binding, replay refusal. |
 

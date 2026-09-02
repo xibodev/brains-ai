@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from brains.mcp.transport import mcp_http_url
 from brains.service import linux, macos, windows
 from brains.service.common import (
     ServiceSpec,
@@ -98,7 +99,7 @@ def install(
     report["interpreter"] = check
     report["endpoints"] = {
         "console": f"http://{resolved.gateway_host}:{resolved.gateway_port}/app",
-        "mcp": f"http://{resolved.gateway_host}:{resolved.mcp_port}/sse",
+        "mcp": mcp_http_url(resolved.gateway_host, resolved.mcp_port),
     }
     if not dry_run and report.get("ok"):
         report["config"] = str(write_service_config(resolved))
@@ -144,9 +145,26 @@ def status() -> dict:
     report["supported"] = True
     report["service_pid"] = verify_pid(read_pidfile_record())
     report.update(listener_status())
-    report["healthy"] = bool(
-        report.get("installed") and report["service_pid"].get("running") and report["serving"]
-    )
+    pid_confidence = report["service_pid"].get("confidence")
+    installed = bool(report.get("installed"))
+    protocol_ready = bool(report["mcp_protocol"].get("ready"))
+    mcp_listener = bool(report["listeners"].get("mcp"))
+    if installed and pid_confidence == "verified":
+        runtime_classification = (
+            "installed-owned-ready" if protocol_ready else "installed-owned-unready"
+        )
+    elif pid_confidence == "stale":
+        runtime_classification = "stale-pid"
+    elif mcp_listener and (installed or pid_confidence not in {"absent", None}):
+        runtime_classification = "unknown-port-owner"
+    elif protocol_ready:
+        runtime_classification = "manual-running"
+    elif mcp_listener:
+        runtime_classification = "unknown-port-owner"
+    else:
+        runtime_classification = "stopped"
+    report["runtime_classification"] = runtime_classification
+    report["healthy"] = bool(installed and pid_confidence == "verified" and report["serving"])
     return report
 
 
