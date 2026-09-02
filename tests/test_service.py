@@ -125,7 +125,11 @@ def test_service_status_requires_live_listeners(monkeypatch) -> None:
     monkeypatch.setattr(
         service,
         "listener_status",
-        lambda: {"listeners": {"gateway": True, "mcp": False}, "serving": False},
+        lambda: {
+            "listeners": {"gateway": True, "mcp": False},
+            "mcp_protocol": {"ready": False, "stage": "connect"},
+            "serving": False,
+        },
     )
     report = service.status()
     assert report["healthy"] is False
@@ -208,9 +212,16 @@ def test_listener_status_uses_persisted_service_ports(monkeypatch, tmp_path) -> 
         return Connection()
 
     monkeypatch.setattr(service_common.socket, "create_connection", connect)
+    monkeypatch.setattr(
+        service_common,
+        "mcp_protocol_status",
+        lambda _host, _port: {"ready": True, "stage": "ready"},
+    )
     report = service_common.listener_status()
     assert attempted == [("127.0.0.1", 8877), ("127.0.0.1", 9988)]
     assert report["endpoints"]["console"] == "http://127.0.0.1:8877/app"
+    assert report["endpoints"]["mcp"] == "http://127.0.0.1:9988/mcp"
+    assert report["serving"] is True
 
 
 def test_pid_identity_accepts_exact_brains_command_when_start_time_drifts(monkeypatch) -> None:

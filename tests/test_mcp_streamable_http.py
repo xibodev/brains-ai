@@ -18,6 +18,7 @@ from brains.api.auth import reset_rate_limit_state
 from brains.config import settings
 from brains.mcp.server import _build_http_app
 from brains.mcp.transport import MCP_MODE_STREAMABLE_HTTP
+from brains.service.common import _mcp_protocol_handshake, mcp_protocol_status
 
 
 @pytest.fixture
@@ -94,6 +95,15 @@ def test_streamable_http_protocol_auth_and_host_contract(
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid Host header: 'attacker.example'"
 
+    rejected = "synthetic-rejected-credential"
+    rejected_report = asyncio.run(
+        _mcp_protocol_handshake(streamable_http_url, rejected, 3.0)
+    )
+    assert rejected_report["ready"] is False
+    assert rejected_report["stage"] == "authentication"
+    assert rejected_report["status_code"] == 401
+    assert rejected not in repr(rejected_report)
+
     async def exercise() -> None:
         headers = {"Authorization": f"Bearer {settings.api_key}"}
         async with (
@@ -108,3 +118,9 @@ def test_streamable_http_protocol_auth_and_host_contract(
                 assert "brains_start_session" in {tool.name for tool in result.tools}
 
     asyncio.run(exercise())
+    host_port = streamable_http_url.removeprefix("http://").split("/", 1)[0]
+    host, raw_port = host_port.rsplit(":", 1)
+    report = mcp_protocol_status(host, int(raw_port))
+    assert report["ready"] is True
+    assert report["stage"] == "ready"
+    assert report["tool_count"] > 0

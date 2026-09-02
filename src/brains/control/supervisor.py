@@ -5,7 +5,7 @@ consolidation plan). Supervises by default:
 
 * ``brains.main:app``        \u2014 the gateway FastAPI app on :8787
 
-The MCP SSE server (``brains.mcp.server`` on :9877) is what agent tools
+The MCP Streamable HTTP server (``brains.mcp.server`` on :9877) is what agent tools
 connect to, so it is supervised by default alongside the gateway. Pass
 ``--no-mcp`` to leave it out. Its bind host is driven by ``BRAINS_MCP_BIND``
 / ``BRAINS_MCP_ALLOW_PUBLIC`` per the MCP auth design.
@@ -47,6 +47,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from brains.mcp.transport import MCP_MODE_STREAMABLE_HTTP, MCP_STREAMABLE_HTTP_PATH
 
 
 def _state_dir() -> Path:
@@ -328,13 +330,14 @@ def _build_children(args: argparse.Namespace) -> list[Child]:
                     "-m",
                     "brains.mcp.server",
                     "--mode",
-                    "sse",
+                    MCP_MODE_STREAMABLE_HTTP,
                     "--port",
                     str(args.mcp_port),
                     "--scheduler-interval",
                     str(args.mcp_scheduler_interval),
                 ],
                 listener=(_listener_probe_host(_mcp_bind_host()), args.mcp_port),
+                listener_path=MCP_STREAMABLE_HTTP_PATH,
             )
         )
     return children
@@ -429,6 +432,10 @@ def _listener_responding(
     path: str,
     expected_status: int | None,
 ) -> bool:
+    if path == MCP_STREAMABLE_HTTP_PATH:
+        from brains.service.common import mcp_protocol_status
+
+        return bool(mcp_protocol_status(host, port)["ready"])
     connection = http.client.HTTPConnection(host, port, timeout=2.0)
     try:
         connection.request("GET", path, headers={"Connection": "close"})

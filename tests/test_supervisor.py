@@ -34,6 +34,8 @@ def test_build_children_includes_gateway_and_mcp_by_default(monkeypatch) -> None
     assert by_name["gateway"].listener_path == "/health"
     assert by_name["gateway"].listener_status == 200
     assert by_name["mcp"].listener == ("127.0.0.1", 9877)
+    assert by_name["mcp"].listener_path == "/mcp"
+    assert "streamable-http" in by_name["mcp"].argv
 
 
 def test_build_children_dashboard_is_explicit_opt_in(monkeypatch) -> None:
