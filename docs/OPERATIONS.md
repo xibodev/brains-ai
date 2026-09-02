@@ -226,9 +226,11 @@ Clean-host Windows restart/rollback remains an E4 requirement.
 
 `brains-ai setup --path . --service` or `brains-ai service install` is the supported
 way to avoid keeping a `serve-all` terminal open. Windows uses a hidden per-user Task
-Scheduler task; macOS uses launchd and Linux uses a systemd user service. Inspect it with
-`brains-ai service status`. Do not run a second foreground `serve-all` against the same
-ports or state directory.
+Scheduler task whose action is the installed environment's verified `pythonw.exe`; the
+installer refuses a headed or missing launcher rather than leaving a persistent console.
+Supervisor and child output continues to rotate in the service log. macOS uses launchd
+and Linux uses a systemd user service. Inspect it with `brains-ai service status`. Do not
+run a second foreground `serve-all` against the same ports or state directory.
 
 ## Coordination operation
 

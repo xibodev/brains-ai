@@ -58,10 +58,43 @@ def test_default_spec_execs_brains_module() -> None:
     ]
     assert s.program  # the running interpreter
     assert "-m brains serve-all" in s.command_line
-    assert Path(s.program).resolve() == Path(sys.executable).resolve()
+    expected = Path(sys.executable)
+    if current_platform() == "windows":
+        expected = expected.with_name("pythonw.exe")
+    assert Path(s.program).resolve() == expected.resolve()
+
+
+def test_windows_default_spec_requires_same_environment_pythonw(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "state"))
+    python = tmp_path / "python.exe"
+    pythonw = tmp_path / "pythonw.exe"
+    pythonw.touch()
+    monkeypatch.setattr(service_common, "current_platform", lambda: "windows")
+
+    assert Path(default_spec(executable=str(python)).program) == pythonw
+
+    pythonw.unlink()
+    with pytest.raises(ValueError, match="windowless Python launcher"):
+        default_spec(executable=str(python))
+
+
+def test_windows_install_refuses_caller_supplied_console_interpreter(monkeypatch) -> None:
+    monkeypatch.setattr(service, "current_platform", lambda: "windows")
+    monkeypatch.setattr(
+        service,
+        "verify_service_interpreter",
+        lambda _program: pytest.fail("headed interpreter must be refused before verification"),
+    )
+
+    report = service.install(ServiceSpec(program=r"C:\venv\Scripts\python.exe"), dry_run=True)
+
+    assert report["ok"] is False
+    assert report["action"] == "refused"
+    assert "pythonw.exe" in report["detail"]
 
 
 def test_install_refuses_interpreter_that_cannot_import_brains(monkeypatch) -> None:
+    monkeypatch.setattr(service, "current_platform", lambda: "linux")
     monkeypatch.setattr(
         service,
         "verify_service_interpreter",
@@ -252,6 +285,7 @@ def test_windows_task_xml_encodes_policy(spec: ServiceSpec) -> None:
     assert "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>" in xml  # no time cap
     assert "<Hidden>true</Hidden>" in xml
     assert "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" in xml
+    assert spec.program.endswith("pythonw.exe")
     assert spec.program in xml
     assert "-m brains serve-all" in xml
     assert "USER-PC\\user" in xml

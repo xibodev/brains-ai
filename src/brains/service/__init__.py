@@ -21,6 +21,7 @@ for why both of those matter.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from brains.service import linux, macos, windows
@@ -79,6 +80,12 @@ def install(
         )
     except ValueError as exc:
         return {"ok": False, "action": "refused", "detail": str(exc)}
+    if current_platform() == "windows" and Path(resolved.program).name.casefold() != "pythonw.exe":
+        return {
+            "ok": False,
+            "action": "refused",
+            "detail": "Windows services require the same environment's windowless pythonw.exe",
+        }
     check = verify_service_interpreter(resolved.program)
     if not check["ok"]:
         return {

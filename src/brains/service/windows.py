@@ -40,8 +40,8 @@ def render_task_xml(spec: ServiceSpec) -> str:
 
     Encodes: LogonTrigger for ``spec.user``; an interactive-token principal at
     least-privilege; restart-on-failure (every 1 minute, up to 9999 times); no
-    execution time limit; hidden; single-instance; and the ``python -m brains
-    serve-all`` action with a neutral working directory.
+    execution time limit; hidden; single-instance; and the verified windowless
+    ``pythonw -m brains serve-all`` action with a neutral working directory.
     """
     arguments = " ".join(spec.args)
     user = escape(spec.user)
