@@ -55,7 +55,7 @@ GATEWAY_FALLBACK_PORTS = range(8877, 8978)
 def _service_description(gateway_host: str, gateway_port: int, mcp_port: int) -> str:
     return (
         f"Brains control plane — supervises the gateway ({gateway_host}:{gateway_port}), "
-        f"the MCP SSE server ({gateway_host}:{mcp_port}), and opt-in experimental children. "
+        f"and the Streamable HTTP MCP server ({gateway_host}:{mcp_port}/mcp). "
         "Starts at login and restarts on failure."
     )
 

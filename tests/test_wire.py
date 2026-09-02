@@ -13,17 +13,17 @@ import stat
 from pathlib import Path
 
 import pytest
-
 from brains import wire
 
 
 @pytest.fixture
-def home(tmp_path: Path) -> Path:
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # Clean-slate: tool config dirs exist but hold no brains entry yet.
     (tmp_path / ".copilot").mkdir()
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".config" / "opencode").mkdir(parents=True)
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "TESTKEY")
     return tmp_path
 
 
@@ -122,6 +122,31 @@ def test_codex_streamable_http_schema_references_token_env_only(home: Path) -> N
     assert "experimental_use_rmcp_client" not in text
     assert "TESTKEY" not in text
     assert "bearer_token =" not in text
+
+
+@pytest.mark.parametrize("client_value", [None, "", "WRONGKEY"])
+def test_codex_remote_wiring_fails_closed_before_writing_when_token_invalid(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client_value: str | None,
+) -> None:
+    if client_value is None:
+        monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", client_value)
+
+    report = wire.wire(home, _http_ctx(), rules=True)
+
+    assert report["ok"] is False
+    assert report["tools"][0]["tool"] == "codex"
+    assert report["tools"][0]["mcp"]["action"] == "error"
+    detail = report["tools"][0]["mcp"]["detail"]
+    assert "BRAINS_MCP_BEARER_TOKEN" in detail
+    assert "TESTKEY" not in detail
+    assert "WRONGKEY" not in detail
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".codex" / "AGENTS.md").exists()
+    assert not (home / ".copilot" / "mcp-config.json").exists()
 
 
 def test_opencode_sse_schema(home: Path) -> None:
@@ -283,8 +308,8 @@ def test_codex_migrates_only_managed_legacy_sse_block(home: Path) -> None:
 def test_status_reports_actual_url_transport_and_token_env_availability(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
     wire.wire(home, _http_ctx(), tools=["codex"], rules=False)
+    monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
 
     codex = next(row for row in wire.status(home)["tools"] if row["tool"] == "codex")
     assert codex["mcp_transport"] == "streamable-http"

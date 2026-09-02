@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from brains.mcp.transport import mcp_http_url
 from brains.service import linux, macos, windows
 from brains.service.common import (
     ServiceSpec,
@@ -98,7 +99,7 @@ def install(
     report["interpreter"] = check
     report["endpoints"] = {
         "console": f"http://{resolved.gateway_host}:{resolved.gateway_port}/app",
-        "mcp": f"http://{resolved.gateway_host}:{resolved.mcp_port}/sse",
+        "mcp": mcp_http_url(resolved.gateway_host, resolved.mcp_port),
     }
     if not dry_run and report.get("ok"):
         report["config"] = str(write_service_config(resolved))

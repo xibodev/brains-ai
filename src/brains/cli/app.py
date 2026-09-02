@@ -300,24 +300,26 @@ def serve_all_cli(
 @app.command("mcp")
 def mcp_cli(
     mode: str = typer.Option(
-        "sse", "--mode", help="Transport: 'sse' (hosted, default) or 'stdio'."
+        "streamable-http",
+        "--mode",
+        help="Transport: 'streamable-http' (hosted, default), 'stdio', or legacy 'sse'.",
     ),
-    port: int = typer.Option(9877, "--port", help="Port for SSE mode."),
+    port: int = typer.Option(9877, "--port", help="Port for HTTP transport modes."),
     scheduler_interval: int = typer.Option(
         60,
         "--scheduler-interval",
-        help="Seconds between recurring-task scheduler ticks (SSE mode).",
+        help="Seconds between recurring-task scheduler ticks (hosted HTTP modes).",
     ),
 ):
     """Run the Brains MCP server so agent CLIs/IDEs can connect.
 
-    SSE (default) is the always-on hosted transport — point Claude Desktop /
-    Cursor / Copilot CLI at http://127.0.0.1:<port>/sse. Use 'stdio' for
-    tools that spawn the server as a subprocess. The SSE bind host is driven
-    by BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (defaults to loopback).
+    Streamable HTTP is the hosted default at http://127.0.0.1:<port>/mcp.
+    Use ``stdio`` for tools that explicitly spawn the server as a subprocess;
+    ``sse`` remains an explicit legacy compatibility mode. The HTTP bind host
+    is driven by BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (loopback by default).
     """
-    if mode not in {"sse", "stdio"}:
-        raise typer.BadParameter("mode must be 'sse' or 'stdio'")
+    if mode not in {"streamable-http", "stdio", "sse"}:
+        raise typer.BadParameter("mode must be 'streamable-http', 'stdio', or legacy 'sse'")
     from brains.mcp.server import run_mcp_server
 
     run_mcp_server(mode=mode, port=port, scheduler_interval=scheduler_interval)
@@ -398,6 +400,18 @@ def _canonical_db_url() -> str:
     return url
 
 
+def _effective_wire_api_key(*, create: bool) -> str:
+    """Resolve the effective MCP credential, creating it only for a real wire."""
+
+    from brains.api.admin_key import ensure_admin_key, read_persisted_key
+    from brains.config import settings
+
+    if create:
+        key, _ = ensure_admin_key(print_banner=False)
+        return key
+    return settings.api_key or read_persisted_key() or ""
+
+
 @app.command("wire")
 def wire_cli(
     transport: str = typer.Option(
@@ -462,10 +476,8 @@ def wire_cli(
         python=sys.executable,
         db_url=_canonical_db_url(),
     )
-    if transport != MCP_MODE_STDIO and not dry_run:
-        from brains.api.admin_key import ensure_admin_key
-
-        ctx.api_key, _ = ensure_admin_key(print_banner=False)
+    if transport != MCP_MODE_STDIO:
+        ctx.api_key = _effective_wire_api_key(create=not dry_run)
 
     report = wire_mod.wire(
         home,
@@ -476,6 +488,8 @@ def wire_cli(
         dry_run=dry_run,
     )
     _print_json(report)
+    if report.get("ok") is False:
+        raise typer.Exit(code=1)
 
 
 @app.command("unwire")
@@ -541,7 +555,7 @@ def service_install_cli(
         "--mcp-port",
         min=1,
         max=65535,
-        help="MCP SSE port. Omit to reuse the persisted port or default to 9877.",
+        help="MCP HTTP port. Omit to reuse the persisted port or default to 9877.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show the unit definition + commands; write nothing."
@@ -880,8 +894,8 @@ def setup_cli(
             python=sys.executable,
             db_url=_canonical_db_url(),
         )
-        if transport != MCP_MODE_STDIO and not dry_run:
-            ctx.api_key, _ = ensure_admin_key(print_banner=False)
+        if transport != MCP_MODE_STDIO:
+            ctx.api_key = _effective_wire_api_key(create=not dry_run)
         report = wire_mod.wire(Path.home(), ctx, dry_run=dry_run)
         summary["steps"].append({"step": "wire", "report": report})
     else:
@@ -915,8 +929,8 @@ def setup_cli(
         summary["steps"].append({"step": "service", "skipped": True})
 
     # --- Step 4: next-command hint ---------------------------------------
-    # Recommend `serve-all`: it runs gateway (8787) + dashboard (9876) +
-    # MCP HTTP (9877) in one supervised tree. The wired MCP entries above
+    # Recommend `serve-all`: it runs gateway (8787) + MCP HTTP (9877) in one
+    # supervised tree. The wired MCP entries above
     # point at port 9877, which only `serve-all` (or `brains-ai mcp`)
     # brings up — `serve` alone leaves the MCP integrations dark.
     if install_service:
@@ -934,8 +948,8 @@ def setup_cli(
             "start_gateway": "brains-ai serve-all",
             "tip": (
                 "Run `brains-ai serve-all` in a separate terminal — it supervises "
-                "the gateway (127.0.0.1:8787), the dashboard (127.0.0.1:9876), "
-                f"and the MCP server (127.0.0.1:{port}/mcp) the wire above points "
+                "the gateway (127.0.0.1:8787) and the Streamable HTTP MCP server "
+                f"(127.0.0.1:{port}/mcp) the wire above points "
                 "at. `brains-ai serve` alone starts only the gateway, leaving "
                 "MCP integrations dark. To run it automatically at login, see "
                 "`brains-ai service install`."
@@ -946,6 +960,9 @@ def setup_cli(
         _print_json(summary)
     else:
         _render_setup_text(summary, port=port)
+    wire_step = next((step for step in summary["steps"] if step["step"] == "wire"), None)
+    if wire_step and wire_step.get("report", {}).get("ok") is False:
+        raise typer.Exit(code=1)
 
 
 def _render_setup_text(summary: dict[str, Any], *, port: int) -> None:

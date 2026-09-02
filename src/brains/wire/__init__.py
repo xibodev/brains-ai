@@ -25,6 +25,7 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import hmac
 import json
 import os
 import re
@@ -448,9 +449,7 @@ def _wire_toml(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
     if ctx.transport != MCP_MODE_STDIO:
         result["url"] = ctx.url
         result["bearer_token_env_var"] = ctx.bearer_token_env_var or None
-        result["bearer_token_env_available"] = bool(
-            ctx.bearer_token_env_var and ctx.bearer_token_env_var in os.environ
-        )
+        result["bearer_token_env_available"] = _bearer_env_state(ctx) == "available"
 
     if _toml_has_unmanaged_entry(text):
         result["action"] = "conflict"
@@ -538,6 +537,19 @@ def _select_adapters(tools: list[str] | None, home: Path, force: bool) -> list[T
     return [a for a in ADAPTERS.values() if a.detect(home)]
 
 
+def _bearer_env_state(ctx: WireContext) -> str:
+    """Validate the named client credential without exposing either value."""
+
+    if not ctx.bearer_token_env_var:
+        return "missing"
+    client_token = os.environ.get(ctx.bearer_token_env_var)
+    if not client_token:
+        return "missing"
+    if not ctx.api_key:
+        return "effective-key-unavailable"
+    return "available" if hmac.compare_digest(client_token, ctx.api_key) else "mismatch"
+
+
 def wire(
     home: Path,
     ctx: WireContext,
@@ -559,6 +571,45 @@ def wire(
         "dry_run": dry_run,
         "tools": [],
     }
+    codex = next((adapter for adapter in adapters if adapter.name == "codex"), None)
+    bearer_state = _bearer_env_state(ctx)
+    if codex is not None and ctx.transport != MCP_MODE_STDIO and bearer_state != "available":
+        env_name = ctx.bearer_token_env_var or MCP_CLIENT_BEARER_ENV
+        if bearer_state == "mismatch":
+            remediation = (
+                f"{env_name} does not match the effective Brains API credential; "
+                "set that variable securely in the environment that launches Codex, "
+                "then rerun `brains-ai wire`"
+            )
+        elif bearer_state == "effective-key-unavailable":
+            remediation = (
+                "the effective Brains API credential is unavailable for validation; "
+                f"make it available together with {env_name}, then rerun `brains-ai wire`"
+            )
+        else:
+            remediation = (
+                f"{env_name} is unavailable to this process; set that variable securely "
+                "in the environment that launches Codex, then rerun `brains-ai wire`"
+            )
+        report["ok"] = False
+        report["tools"].append(
+            {
+                "tool": codex.name,
+                "display": codex.display,
+                "detected": codex.detect(home),
+                "mcp": {
+                    "path": str(codex.mcp_path(home)),
+                    "transport": ctx.transport,
+                    "url": ctx.url,
+                    "action": "error",
+                    "bearer_token_env_var": env_name,
+                    "bearer_token_env_available": False,
+                    "detail": remediation,
+                },
+                "mailbox_notification_mode": codex.mailbox_notification_mode,
+            }
+        )
+        return report
     for adapter in adapters:
         detected = adapter.detect(home)
         warnings: list[str] = []
@@ -580,6 +631,10 @@ def wire(
         if warnings:
             entry["warnings"] = warnings
         report["tools"].append(entry)
+    report["ok"] = all(
+        entry["mcp"].get("action") not in {"error", "conflict"}
+        for entry in report["tools"]
+    )
     return report
 
 
@@ -660,7 +715,9 @@ def status(home: Path) -> dict[str, Any]:
                 "mcp_url": url,
                 "bearer_token_env_var": bearer_token_env_var,
                 "bearer_token_env_available": (
-                    bearer_token_env_var in os.environ if bearer_token_env_var else None
+                    bool(os.environ.get(bearer_token_env_var))
+                    if bearer_token_env_var
+                    else None
                 ),
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),

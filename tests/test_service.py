@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from brains import service
 from brains.control import supervisor
 from brains.service import common as service_common
@@ -182,6 +181,7 @@ def test_install_dry_run_does_not_probe_an_implicit_default(monkeypatch, tmp_pat
 
     assert report["action"] == "would-install"
     assert report["endpoints"]["console"] == "http://127.0.0.1:8787/app"
+    assert report["endpoints"]["mcp"] == "http://127.0.0.1:9877/mcp"
 
 
 def test_install_refuses_identical_gateway_and_mcp_ports(monkeypatch, tmp_path) -> None:

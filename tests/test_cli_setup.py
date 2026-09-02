@@ -11,9 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-from typer.testing import CliRunner
-
 from brains.cli.app import app
+from typer.testing import CliRunner
 
 
 @pytest.fixture
@@ -114,6 +113,56 @@ def test_setup_rejects_bad_transport(
     )
     assert result.exit_code != 0
     assert "transport must be 'streamable-http'" in result.output
+
+
+def test_mcp_command_defaults_to_streamable_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_mcp_server(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("brains.mcp.server.run_mcp_server", fake_run_mcp_server)
+    result = CliRunner().invoke(app, ["mcp"])
+    assert result.exit_code == 0, result.output
+    assert captured["mode"] == "streamable-http"
+
+
+def test_wire_cli_fails_when_codex_token_env_is_missing(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (isolated_home / ".codex").mkdir()
+    monkeypatch.setenv("BRAINS_API_KEY", "synthetic-effective-key")
+    monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
+    from brains import config as config_module
+
+    config_module.reload_settings()
+    result = CliRunner().invoke(app, ["wire", "--tool", "codex", "--no-rules"])
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["ok"] is False
+    assert payload["tools"][0]["mcp"]["action"] == "error"
+    assert "BRAINS_MCP_BEARER_TOKEN" in payload["tools"][0]["mcp"]["detail"]
+    assert "synthetic-effective-key" not in result.output
+    assert not (isolated_home / ".codex" / "config.toml").exists()
+
+
+def test_wire_cli_accepts_matching_synthetic_codex_token_env(
+    isolated_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (isolated_home / ".codex").mkdir()
+    monkeypatch.setenv("BRAINS_API_KEY", "synthetic-matching-key")
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "synthetic-matching-key")
+    from brains import config as config_module
+
+    config_module.reload_settings()
+    result = CliRunner().invoke(app, ["wire", "--tool", "codex", "--no-rules"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    rendered = (isolated_home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    assert 'url = "http://127.0.0.1:9877/mcp"' in rendered
+    assert 'bearer_token_env_var = "BRAINS_MCP_BEARER_TOKEN"' in rendered
+    assert "synthetic-matching-key" not in rendered
 
 
 def test_setup_next_hint_present(
