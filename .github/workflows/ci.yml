@@ -310,6 +310,13 @@ jobs:
         run: python -m pip install "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
       - name: Probe clean-home setup, native rendering, and every wire adapter
         run: python scripts/probe_native_installation.py
+      - name: Prove Windows managed-binding DPAPI and owner-only DACL
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_durable_mailbox_registration.py \
+            -k windows_managed_binding_is_dpapi_protected_and_acl_verified
 
   privacy:
     name: privacy gate

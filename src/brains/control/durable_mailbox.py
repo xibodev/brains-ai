@@ -7,11 +7,16 @@ Migration 150 owns the storage boundary. Address-based delivery lives in
 
 from __future__ import annotations
 
+import base64
+import csv
+import ctypes
 import hashlib
 import hmac
 import os
 import re
+import secrets
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +34,7 @@ from brains.storage.models import (
     AgentSession,
     Mailbox,
     MailboxAttachment,
+    MailboxBindingTransition,
     MailNotificationAttempt,
     Operator,
     OrgMember,
@@ -70,12 +76,19 @@ _MODEL_NAME_RE = re.compile(
 _BRAINS_SESSION_ID_RE = re.compile(r"^ses_[0-9a-f]{12}$", re.IGNORECASE)
 _MANAGED_BINDING_FILE_RE = re.compile(r"^[0-9a-f]{64}\.binding$")
 _BINDING_DOMAIN = b"brains-mailbox-binding-v1\0"
+_WINDOWS_BINDING_PREFIX = "dpapi-v1:"
 MAILBOX_NOTIFICATION_MODES = frozenset({"pull", "turn_boundary", "immediate"})
 _TOOL_NOTIFICATION_MODES = {
     "copilot-cli": frozenset({"pull"}),
     "claude-code": frozenset({"pull", "immediate"}),
     "codex": frozenset({"pull", "turn_boundary"}),
     "opencode": frozenset({"pull", "immediate"}),
+}
+_NATIVE_ID_CONTEXT_KEYS = {
+    "copilot-cli": ("copilot_session_id",),
+    "claude-code": ("claude_session_id",),
+    "codex": ("codex_thread_id", "codex_session_id"),
+    "opencode": ("opencode_session_id",),
 }
 
 
@@ -102,6 +115,14 @@ def canonical_mailbox_tool(tool: str) -> str:
     return canonical
 
 
+def _adapter_provenance(adapter: str) -> str:
+    value = (adapter or "").strip()
+    canonical_mailbox_tool(value)
+    if not value or len(value) > 64:
+        raise MailboxValidationError("mailbox adapter provenance is unavailable")
+    return value
+
+
 def validate_native_tool_session_id(native_tool_session_id: str) -> str:
     """Reject placeholders and labels that cannot be adapter Session IDs."""
     value = (native_tool_session_id or "").strip()
@@ -120,6 +141,49 @@ def validate_native_tool_session_id(native_tool_session_id: str) -> str:
     return value
 
 
+def extract_native_tool_session_id(
+    adapter: str,
+    context: dict[str, str | None],
+) -> dict[str, Any]:
+    """Resolve one adapter-native ID without guessing or losing provenance.
+
+    Harness adapters pass only values they obtained from their native protocol.
+    Absence and disagreement are explicit results, never fabricated identities.
+    """
+    raw_adapter = _adapter_provenance(adapter)
+    canonical_tool = canonical_mailbox_tool(raw_adapter)
+    candidates: list[tuple[str, str]] = []
+    for key in _NATIVE_ID_CONTEXT_KEYS[canonical_tool]:
+        value = context.get(key)
+        if value:
+            candidates.append((key, validate_native_tool_session_id(value)))
+    distinct = {value for _source, value in candidates}
+    if not candidates:
+        return {
+            "status": "unavailable",
+            "adapter": raw_adapter,
+            "tool": canonical_tool,
+            "native_tool_session_id": None,
+            "source": None,
+        }
+    if len(distinct) != 1:
+        return {
+            "status": "ambiguous",
+            "adapter": raw_adapter,
+            "tool": canonical_tool,
+            "native_tool_session_id": None,
+            "source": None,
+        }
+    native_id = distinct.pop()
+    return {
+        "status": "resolved",
+        "adapter": raw_adapter,
+        "tool": canonical_tool,
+        "native_tool_session_id": native_id,
+        "source": next(source for source, value in candidates if value == native_id),
+    }
+
+
 def _binding_hash(binding_secret: str) -> str:
     value = binding_secret or ""
     if (
@@ -131,6 +195,203 @@ def _binding_hash(binding_secret: str) -> str:
             "mailbox binding secret must contain 32-512 non-space characters"
         )
     return hashlib.sha256(_BINDING_DOMAIN + value.encode("utf-8")).hexdigest()
+
+
+def _managed_binding_path(workspace: Workspace, tool: str, native_id: str) -> Path:
+    from brains.api.admin_key import state_dir
+
+    identity = f"{workspace.id}\0{tool}\0{native_id}".encode()
+    return state_dir() / "mailbox-bindings" / f"{hashlib.sha256(identity).hexdigest()}.binding"
+
+
+def _process_instance_id(pid: int) -> str | None:
+    """Return a PID-reuse-safe process birth marker when the OS exposes one."""
+    proc_stat = Path(f"/proc/{pid}/stat")
+    if proc_stat.exists():
+        try:
+            fields = proc_stat.read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+            return f"proc:{fields[19]}"
+        except (IndexError, OSError, UnicodeError):
+            return None
+    if os.name == "nt":
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "(Get-Process -Id $args[0]).StartTime.ToUniversalTime().Ticks",
+                    str(pid),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            return f"windows:{completed.stdout.strip()}"
+        except (OSError, subprocess.SubprocessError):
+            return None
+    try:
+        completed = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return f"ps:{completed.stdout.strip()}"
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _windows_dpapi(data: bytes, *, protect: bool) -> bytes:
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("size", ctypes.c_ulong), ("data", ctypes.POINTER(ctypes.c_ubyte))]
+
+    buffer = ctypes.create_string_buffer(data)
+    source = DataBlob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    target = DataBlob()
+    windll = ctypes.windll  # type: ignore[attr-defined]
+    crypt32 = windll.crypt32
+    function = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
+    args = (
+        (ctypes.byref(source), None, None, None, None, 1, ctypes.byref(target))
+        if protect
+        else (ctypes.byref(source), None, None, None, None, 1, ctypes.byref(target))
+    )
+    if not function(*args):
+        error_code = ctypes.get_last_error()  # type: ignore[attr-defined]
+        raise OSError(error_code, "Windows DPAPI binding protection failed")
+    try:
+        return ctypes.string_at(target.data, target.size)
+    finally:
+        windll.kernel32.LocalFree(target.data)
+
+
+def _encode_binding_payload(binding_secret: str) -> str:
+    if os.name != "nt":
+        return binding_secret
+    protected = _windows_dpapi(binding_secret.encode(), protect=True)
+    return _WINDOWS_BINDING_PREFIX + base64.b64encode(protected).decode("ascii")
+
+
+def _decode_binding_payload(payload: str) -> str:
+    if not payload.startswith(_WINDOWS_BINDING_PREFIX):
+        return payload
+    if os.name != "nt":
+        raise MailboxValidationError("mailbox binding file is unavailable")
+    try:
+        protected = base64.b64decode(payload.removeprefix(_WINDOWS_BINDING_PREFIX), validate=True)
+        return _windows_dpapi(protected, protect=False).decode()
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise MailboxValidationError("mailbox binding file is unavailable") from exc
+
+
+def _windows_current_user_sid() -> str:
+    completed = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    row = next(csv.reader([completed.stdout.strip()]))
+    if len(row) < 2 or not row[1].startswith("S-1-"):
+        raise OSError("current Windows user SID is unavailable")
+    return row[1]
+
+
+def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
+    environment = dict(os.environ)
+    environment["BRAINS_BINDING_ACL_PATH"] = str(path)
+    completed = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$acl = Get-Acl -LiteralPath $env:BRAINS_BINDING_ACL_PATH; "
+            "$acl.Access | ForEach-Object { "
+            "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
+            "}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=environment,
+    )
+    return tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
+
+
+def _secure_binding_file(path: Path) -> None:
+    if os.name != "nt":
+        path.chmod(0o600)
+        return
+    sid = _windows_current_user_sid()
+    subprocess.run(
+        ["icacls", str(path), "/inheritance:r", "/grant:r", f"*{sid}:(F)"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    subprocess.run(
+        ["icacls", str(path), "/verify"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    acl_sids = _windows_binding_acl_sids(path)
+    # The owner and privileged backup operators are OS semantics, not DACL allow
+    # entries. The managed file needs no explicit access principal except its user.
+    if acl_sids != (sid,):
+        raise OSError("mailbox binding file ACL contains an unexpected principal")
+
+
+def _replace_managed_binding(path: Path, binding_secret: str) -> None:
+    """Owner-only atomic replacement; the secret is never returned or logged."""
+    _binding_hash(binding_secret)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    payload = _encode_binding_payload(binding_secret)
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _secure_binding_file(temporary)
+        os.replace(temporary, path)
+        _secure_binding_file(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _create_managed_binding(path: Path, binding_secret: str) -> None:
+    """Create a managed binding without overwriting a concurrent winner."""
+    _binding_hash(binding_secret)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise MailboxUnavailableError("mailbox unavailable") from exc
+    payload = _encode_binding_payload(binding_secret)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(payload + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _secure_binding_file(path)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def validate_mailbox_registration_inputs(
@@ -191,6 +452,7 @@ def read_mailbox_binding_file(
         raise MailboxValidationError("mailbox binding file is unavailable") from exc
     if len(value.encode("utf-8")) > 1024:
         raise MailboxValidationError("mailbox binding file is unavailable")
+    value = _decode_binding_payload(value)
     _binding_hash(value)
     return value
 
@@ -504,6 +766,7 @@ def _attachment_result(row: MailboxAttachment) -> dict[str, Any]:
     return {
         "session_id": row.session_id,
         "notification_mode": row.notification_mode,
+        "adapter": row.adapter_provenance,
         "cursor": row.last_seen_delivery_id,
         "attached_at": row.attached_at.isoformat(),
     }
@@ -560,6 +823,7 @@ def _attach_current_session(
                         include_claimed=False,
                     )
                 current.notification_mode = notification_mode
+                current.adapter_provenance = mailbox.adapter_provenance
                 return current
             if current is not None:
                 current_agent = _lock_agent_session(session, current.session_id)
@@ -579,6 +843,7 @@ def _attach_current_session(
                     raise MailboxUnavailableError("mailbox unavailable")
                 existing.active_slot = 1
                 existing.notification_mode = notification_mode
+                existing.adapter_provenance = mailbox.adapter_provenance
                 existing.detached_at = None
                 existing.detach_reason = None
                 session.flush()
@@ -597,6 +862,7 @@ def _attach_current_session(
                 session_id=agent.id,
                 active_slot=1,
                 notification_mode=notification_mode,
+                adapter_provenance=mailbox.adapter_provenance,
                 last_seen_delivery_id=last_cursor,
             )
             session.add(attachment)
@@ -604,6 +870,24 @@ def _attach_current_session(
     except IntegrityError as exc:
         raise MailboxUnavailableError("mailbox unavailable") from exc
     return attachment
+
+
+def _require_attachment_transition_available(
+    session, mailbox: Mailbox, agent: AgentSession
+) -> None:
+    current = (
+        session.query(MailboxAttachment)
+        .filter(
+            MailboxAttachment.mailbox_id == mailbox.id,
+            MailboxAttachment.active_slot == 1,
+        )
+        .one_or_none()
+    )
+    if current is None or current.session_id == agent.id:
+        return
+    current_agent = _lock_agent_session(session, current.session_id)
+    if _attachment_session_is_current(session, current_agent):
+        raise MailboxUnavailableError("mailbox unavailable")
 
 
 def register_agent_mailbox_in_transaction(
@@ -618,6 +902,7 @@ def register_agent_mailbox_in_transaction(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Create/find and attach a mailbox without committing the caller's transaction."""
+    raw_adapter = _adapter_provenance(tool)
     canonical_tool = canonical_mailbox_tool(tool)
     native_id = validate_native_tool_session_id(native_tool_session_id)
     mode = validate_notification_mode(canonical_tool, notification_mode)
@@ -654,6 +939,7 @@ def register_agent_mailbox_in_transaction(
             kind="agent",
             workspace_id=workspace.id,
             tool=canonical_tool,
+            adapter_provenance=raw_adapter,
             native_tool_session_id=native_id,
             owner_operator_id=operator.id,
             binding_key_hash=binding_hash,
@@ -701,6 +987,7 @@ def register_agent_mailbox_in_transaction(
         "status": mailbox.status,
         "workspace": workspace.slug,
         "tool": mailbox.tool,
+        "adapter": mailbox.adapter_provenance,
         "attachment": _attachment_result(attachment),
         "unread_count": unread_count,
         "created": created,
@@ -716,7 +1003,11 @@ def record_agent_mailbox_registration(
         f"durable mailbox {'registered' if created else 'attached'}",
         workspace_id=workspace_id,
         session_id=session_id,
-        metadata={"tool": result["tool"], "result": "success"},
+        metadata={
+            "tool": result["tool"],
+            "adapter": result.get("adapter", result["tool"]),
+            "result": "success",
+        },
     )
 
 
@@ -770,6 +1061,7 @@ def resume_agent_mailbox(
     principal: Principal | None = None,
 ) -> dict[str, Any]:
     """Verify binding, renew the Session, and reattach as one transaction."""
+    _adapter_provenance(tool)
     canonical_tool = canonical_mailbox_tool(tool)
     native_id = validate_native_tool_session_id(native_tool_session_id)
     mode = validate_notification_mode(canonical_tool, notification_mode)
@@ -836,6 +1128,7 @@ def resume_agent_mailbox(
             "status": mailbox.status,
             "workspace": workspace.slug,
             "tool": mailbox.tool,
+            "adapter": mailbox.adapter_provenance,
             "attachment": _attachment_result(attachment),
             "unread_count": unread_count,
             "created": False,
@@ -843,6 +1136,398 @@ def resume_agent_mailbox(
         workspace_id = workspace.id
     record_agent_mailbox_registration(result, session_id, workspace_id)
     return result
+
+
+def _managed_result(
+    mailbox: Mailbox, workspace: Workspace, path: Path, action: str
+) -> dict[str, Any]:
+    return {
+        "mailbox_id": mailbox.id,
+        "address": mailbox.address,
+        "workspace": workspace.slug,
+        "tool": mailbox.tool,
+        "adapter": mailbox.adapter_provenance,
+        "binding_file": str(path),
+        "binding_version": mailbox.binding_key_version,
+        "status": mailbox.status,
+        "action": action,
+    }
+
+
+def _observed_binding_hash(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return _binding_hash(read_mailbox_binding_file(path, managed_only=True))
+
+
+def _prepare_binding_transition(
+    session,
+    mailbox: Mailbox,
+    *,
+    operation: str,
+    path: Path,
+    agent: AgentSession,
+    notification_mode: str,
+    to_hash: str | None,
+    to_version: int | None,
+) -> None:
+    if session.get(MailboxBindingTransition, mailbox.id) is not None:
+        raise MailboxUnavailableError("mailbox transition requires reconciliation")
+    session.add(
+        MailboxBindingTransition(
+            mailbox_id=mailbox.id,
+            operation=operation,
+            from_binding_hash=mailbox.binding_key_hash,
+            to_binding_hash=to_hash,
+            to_binding_version=to_version,
+            binding_file=str(path),
+            session_id=agent.id,
+            owner_pid=os.getpid(),
+            owner_process_instance=_process_instance_id(os.getpid()) or "unavailable",
+            notification_mode=notification_mode,
+        )
+    )
+
+
+def _reconcile_binding_transition(mailbox_id: int, *, force: bool = False) -> dict[str, Any]:
+    with _db_module.SessionLocal() as session:
+        transition_query = session.query(MailboxBindingTransition).filter(
+            MailboxBindingTransition.mailbox_id == mailbox_id
+        )
+        if session.get_bind().dialect.name == "postgresql":
+            transition = transition_query.with_for_update().one_or_none()
+        else:
+            session.execute(
+                update(MailboxBindingTransition)
+                .where(MailboxBindingTransition.mailbox_id == mailbox_id)
+                .values(operation=MailboxBindingTransition.operation)
+            )
+            transition = transition_query.one_or_none()
+        mailbox = session.get(Mailbox, mailbox_id)
+        if transition is None:
+            return {"mailbox_id": mailbox_id, "action": "absent"}
+        if not force:
+            from brains.control.sessions import _pid_alive
+
+            if _pid_alive(transition.owner_pid):
+                live_instance = _process_instance_id(transition.owner_pid)
+                if live_instance is None or live_instance == transition.owner_process_instance:
+                    return {"mailbox_id": mailbox_id, "action": "in_progress"}
+        if mailbox is None or mailbox.workspace_id is None:
+            raise MailboxUnavailableError("mailbox transition is unavailable")
+        workspace = session.get(Workspace, mailbox.workspace_id)
+        agent = session.get(AgentSession, transition.session_id)
+        if (
+            workspace is None
+            or agent is None
+            or not mailbox.tool
+            or not mailbox.native_tool_session_id
+        ):
+            raise MailboxUnavailableError("mailbox transition is unavailable")
+        expected_path = _managed_binding_path(
+            workspace, mailbox.tool, mailbox.native_tool_session_id
+        ).resolve()
+        path = Path(transition.binding_file).resolve()
+        if path != expected_path:
+            raise MailboxUnavailableError("mailbox transition is unavailable")
+        observed = _observed_binding_hash(path)
+        operation = transition.operation
+        if operation == "create":
+            if observed == transition.to_binding_hash:
+                _secure_binding_file(path)
+                session.delete(transition)
+                session.commit()
+                session.refresh(mailbox)
+                return _managed_result(mailbox, workspace, path, "created")
+            if observed is None:
+                session.query(MailboxAttachment).filter(
+                    MailboxAttachment.mailbox_id == mailbox.id
+                ).delete(synchronize_session=False)
+                session.delete(transition)
+                session.flush()
+                session.delete(mailbox)
+                session.commit()
+                return {"mailbox_id": mailbox_id, "action": "aborted"}
+        elif operation in {"rotate", "recover"}:
+            if observed == transition.to_binding_hash:
+                _secure_binding_file(path)
+                if not hmac.compare_digest(
+                    mailbox.binding_key_hash or "", transition.from_binding_hash or ""
+                ):
+                    raise MailboxUnavailableError("mailbox transition is unavailable")
+                mailbox.binding_key_hash = transition.to_binding_hash
+                mailbox.binding_key_version = transition.to_binding_version
+                mailbox.binding_rotated_at = utc_now()
+                mailbox.updated_at = utc_now()
+                attachment = _attach_current_session(
+                    session,
+                    mailbox,
+                    agent,
+                    notification_mode=transition.notification_mode,
+                )
+                session.delete(transition)
+                session.commit()
+                session.refresh(mailbox)
+                action = "recovered" if operation == "recover" else "rotated"
+                result = _managed_result(mailbox, workspace, path, action)
+                result["attachment"] = _attachment_result(attachment)
+                return result
+            if observed == transition.from_binding_hash or (
+                operation == "recover" and observed is None
+            ):
+                session.delete(transition)
+                session.commit()
+                return {"mailbox_id": mailbox_id, "action": "aborted"}
+        elif operation == "revoke":
+            if observed is None:
+                if mailbox.binding_key_hash != transition.from_binding_hash:
+                    raise MailboxUnavailableError("mailbox transition is unavailable")
+                detach_session_mailbox_in_transaction(session, agent.id, reason="binding_revoked")
+                mailbox.status = "retired"
+                mailbox.retired_at = utc_now()
+                mailbox.updated_at = utc_now()
+                session.delete(transition)
+                session.commit()
+                session.refresh(mailbox)
+                return _managed_result(mailbox, workspace, path, "revoked")
+            if observed == transition.from_binding_hash:
+                session.delete(transition)
+                session.commit()
+                return {"mailbox_id": mailbox_id, "action": "aborted"}
+        raise MailboxUnavailableError("mailbox transition requires reconciliation")
+
+
+def reconcile_managed_mailbox_bindings() -> dict[str, Any]:
+    """Converge hash-only intents after an interrupted file/database transition."""
+    init_db()
+    with _db_module.SessionLocal() as session:
+        mailbox_ids = [row[0] for row in session.query(MailboxBindingTransition.mailbox_id).all()]
+    results = [_reconcile_binding_transition(mailbox_id) for mailbox_id in mailbox_ids]
+    return {"count": len(results), "results": results}
+
+
+def create_managed_agent_mailbox(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    session_id: str,
+    *,
+    notification_mode: str = "pull",
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """Atomically provision an owner-only binding file and mailbox registration."""
+    resolved = _principal_or_local(principal)
+    canonical_tool = canonical_mailbox_tool(adapter)
+    native_id = validate_native_tool_session_id(native_tool_session_id)
+    init_db()
+    reconcile_managed_mailbox_bindings()
+    binding_secret = secrets.token_urlsafe(32)
+    mailbox_id: int | None = None
+    try:
+        with _db_module.SessionLocal() as session:
+            workspace = _authorized_workspace(
+                session, resolved, workspace_path=workspace_path, capability=CAP_ORG_WRITE
+            )
+            agent = _lock_agent_session(session, session_id)
+            if agent is None:
+                raise MailboxUnavailableError("mailbox unavailable")
+            path = _managed_binding_path(workspace, canonical_tool, native_id)
+            if path.exists():
+                raise MailboxUnavailableError("mailbox unavailable")
+            result = register_agent_mailbox_in_transaction(
+                session,
+                workspace,
+                agent,
+                adapter,
+                native_id,
+                binding_secret,
+                notification_mode=notification_mode,
+                principal=resolved,
+            )
+            mailbox = session.get(Mailbox, result["mailbox_id"])
+            assert mailbox is not None
+            _prepare_binding_transition(
+                session,
+                mailbox,
+                operation="create",
+                path=path,
+                agent=agent,
+                notification_mode=notification_mode,
+                to_hash=mailbox.binding_key_hash,
+                to_version=mailbox.binding_key_version,
+            )
+            session.commit()
+            workspace_id = workspace.id
+            mailbox_id = mailbox.id
+        _create_managed_binding(path, binding_secret)
+        output = _reconcile_binding_transition(mailbox_id, force=True)
+        record_agent_mailbox_registration(result, session_id, workspace_id)
+        return output
+    except BaseException:
+        if mailbox_id is not None:
+            _reconcile_binding_transition(mailbox_id, force=True)
+        raise
+
+
+def _rotate_or_recover_managed_binding(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    session_id: str,
+    *,
+    recover: bool,
+    notification_mode: str,
+    principal: Principal | None,
+) -> dict[str, Any]:
+    resolved = _principal_or_local(principal)
+    canonical_tool = canonical_mailbox_tool(adapter)
+    native_id = validate_native_tool_session_id(native_tool_session_id)
+    new_secret = secrets.token_urlsafe(32)
+    new_hash = _binding_hash(new_secret)
+    init_db()
+    reconcile_managed_mailbox_bindings()
+    with _db_module.SessionLocal() as session:
+        workspace = _authorized_workspace(
+            session, resolved, workspace_path=workspace_path, capability=CAP_ORG_WRITE
+        )
+        agent = _lock_agent_session(session, session_id)
+        mailbox = _find_agent_mailbox(session, workspace.id, canonical_tool, native_id)
+        if agent is None or mailbox is None:
+            raise MailboxUnavailableError("mailbox unavailable")
+        _assert_agent_identity(agent, workspace, resolved, canonical_tool)
+        operator_id = resolved.operator_id
+        assert operator_id is not None
+        if mailbox.owner_operator_id != operator_id or mailbox.status != "active":
+            raise MailboxUnavailableError("mailbox unavailable")
+        path = _managed_binding_path(workspace, canonical_tool, native_id)
+        old_secret: str | None = None
+        if recover:
+            if path.exists():
+                raise MailboxUnavailableError("mailbox unavailable")
+        else:
+            old_secret = read_mailbox_binding_file(path, managed_only=True)
+            _verify_existing_mailbox(
+                mailbox,
+                owner_operator_id=operator_id,
+                binding_hash=_binding_hash(old_secret),
+                address=_mailbox_address(canonical_tool, native_id, workspace.slug),
+            )
+        previous_version = mailbox.binding_key_version or 0
+        _require_attachable_agent(session, agent)
+        _require_attachment_transition_available(session, mailbox, agent)
+        mode = validate_notification_mode(canonical_tool, notification_mode)
+        _prepare_binding_transition(
+            session,
+            mailbox,
+            operation="recover" if recover else "rotate",
+            path=path,
+            agent=agent,
+            notification_mode=mode,
+            to_hash=new_hash,
+            to_version=previous_version + 1,
+        )
+        session.commit()
+        mailbox_id = mailbox.id
+    try:
+        if recover:
+            _create_managed_binding(path, new_secret)
+        else:
+            _replace_managed_binding(path, new_secret)
+    except BaseException:
+        outcome = _reconcile_binding_transition(mailbox_id, force=True)
+        if outcome["action"] != "aborted":
+            return outcome
+        raise
+    return _reconcile_binding_transition(mailbox_id, force=True)
+
+
+def rotate_managed_agent_mailbox_binding(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    session_id: str,
+    *,
+    notification_mode: str = "pull",
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    return _rotate_or_recover_managed_binding(
+        workspace_path,
+        adapter,
+        native_tool_session_id,
+        session_id,
+        recover=False,
+        notification_mode=notification_mode,
+        principal=principal,
+    )
+
+
+def recover_managed_agent_mailbox_binding(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    session_id: str,
+    *,
+    notification_mode: str = "pull",
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    return _rotate_or_recover_managed_binding(
+        workspace_path,
+        adapter,
+        native_tool_session_id,
+        session_id,
+        recover=True,
+        notification_mode=notification_mode,
+        principal=principal,
+    )
+
+
+def revoke_managed_agent_mailbox_binding(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    session_id: str,
+    *,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """Proof-bound revocation of a managed mailbox identity."""
+    resolved = _principal_or_local(principal)
+    canonical_tool = canonical_mailbox_tool(adapter)
+    native_id = validate_native_tool_session_id(native_tool_session_id)
+    init_db()
+    reconcile_managed_mailbox_bindings()
+    with _db_module.SessionLocal() as session:
+        workspace = _authorized_workspace(
+            session, resolved, workspace_path=workspace_path, capability=CAP_ORG_WRITE
+        )
+        agent = _lock_agent_session(session, session_id)
+        mailbox = _find_agent_mailbox(session, workspace.id, canonical_tool, native_id)
+        if agent is None or mailbox is None:
+            raise MailboxUnavailableError("mailbox unavailable")
+        path = _managed_binding_path(workspace, canonical_tool, native_id)
+        binding_secret = read_mailbox_binding_file(path, managed_only=True)
+        prove_session_mailbox_binding_in_transaction(
+            session,
+            workspace,
+            agent,
+            tool=canonical_tool,
+            native_tool_session_id=native_id,
+            binding_secret=binding_secret,
+            principal=resolved,
+        )
+        _prepare_binding_transition(
+            session,
+            mailbox,
+            operation="revoke",
+            path=path,
+            agent=agent,
+            notification_mode="pull",
+            to_hash=None,
+            to_version=None,
+        )
+        session.commit()
+        mailbox_id = mailbox.id
+    path.unlink()
+    return _reconcile_binding_transition(mailbox_id, force=True)
 
 
 def detach_session_mailbox_in_transaction(
@@ -1058,9 +1743,11 @@ __all__ = [
     "MailboxUnavailableError",
     "MailboxValidationError",
     "canonical_mailbox_tool",
+    "create_managed_agent_mailbox",
     "detach_session_mailbox",
     "detach_session_mailbox_in_transaction",
     "ensure_operator_mailboxes",
+    "extract_native_tool_session_id",
     "list_phonebook",
     "lookup_mailbox",
     "notification_modes_for_tool",
@@ -1068,10 +1755,14 @@ __all__ = [
     "prove_session_mailbox_binding_in_transaction",
     "record_agent_mailbox_registration",
     "read_mailbox_binding_file",
+    "reconcile_managed_mailbox_bindings",
+    "recover_managed_agent_mailbox_binding",
     "require_current_agent_mailbox_in_transaction",
     "register_agent_mailbox",
     "register_agent_mailbox_in_transaction",
     "resume_agent_mailbox",
+    "revoke_managed_agent_mailbox_binding",
+    "rotate_managed_agent_mailbox_binding",
     "validate_native_tool_session_id",
     "validate_mailbox_registration_inputs",
     "validate_notification_mode",

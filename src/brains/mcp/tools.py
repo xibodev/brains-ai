@@ -39,10 +39,16 @@ from brains.control.durable_mail import (
     take_mailbox_notification,
 )
 from brains.control.durable_mailbox import (
+    create_managed_agent_mailbox,
+    extract_native_tool_session_id,
     list_phonebook,
     lookup_mailbox,
     read_mailbox_binding_file,
+    reconcile_managed_mailbox_bindings,
+    recover_managed_agent_mailbox_binding,
     register_agent_mailbox,
+    revoke_managed_agent_mailbox_binding,
+    rotate_managed_agent_mailbox_binding,
 )
 from brains.control.events import append_event, event_scope_report, get_event_context
 from brains.control.feedback import enrich_feedback, file_feedback, get_feedback, list_feedback
@@ -543,6 +549,45 @@ def mailbox_register_tool(
         binding_secret,
         notification_mode=notification_mode or "pull",
     )
+
+
+def mailbox_native_id_tool(adapter: str, context: dict[str, str | None]):
+    """Resolve adapter-provided native identity without guessing."""
+    return extract_native_tool_session_id(adapter, context)
+
+
+def mailbox_managed_create_tool(
+    workspace_path: str, adapter: str, native_tool_session_id: str, session_id: str
+):
+    return create_managed_agent_mailbox(workspace_path, adapter, native_tool_session_id, session_id)
+
+
+def mailbox_managed_rotate_tool(
+    workspace_path: str, adapter: str, native_tool_session_id: str, session_id: str
+):
+    return rotate_managed_agent_mailbox_binding(
+        workspace_path, adapter, native_tool_session_id, session_id
+    )
+
+
+def mailbox_managed_recover_tool(
+    workspace_path: str, adapter: str, native_tool_session_id: str, session_id: str
+):
+    return recover_managed_agent_mailbox_binding(
+        workspace_path, adapter, native_tool_session_id, session_id
+    )
+
+
+def mailbox_managed_revoke_tool(
+    workspace_path: str, adapter: str, native_tool_session_id: str, session_id: str
+):
+    return revoke_managed_agent_mailbox_binding(
+        workspace_path, adapter, native_tool_session_id, session_id
+    )
+
+
+def mailbox_binding_reconcile_tool():
+    return reconcile_managed_mailbox_bindings()
 
 
 def mailbox_send_tool(

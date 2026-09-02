@@ -493,6 +493,7 @@ class Mailbox(Base):
         ForeignKey("workspaces.id"), nullable=True, index=True
     )
     tool: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    adapter_provenance: Mapped[str | None] = mapped_column(String(64), nullable=True)
     native_tool_session_id: Mapped[str | None] = mapped_column(
         String(256), nullable=True, index=True
     )
@@ -544,6 +545,7 @@ class MailboxAttachment(Base):
     session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"), index=True)
     active_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notification_mode: Mapped[str] = mapped_column(String(24), default="pull", index=True)
+    adapter_provenance: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_seen_delivery_id: Mapped[int] = mapped_column(Integer, default=0)
     attached_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
@@ -552,6 +554,25 @@ class MailboxAttachment(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
     detach_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MailboxBindingTransition(Base):
+    """Hash-only crash-recovery intent for a managed binding file transition."""
+
+    __tablename__ = "mailbox_binding_transitions"
+    mailbox_id: Mapped[int] = mapped_column(ForeignKey("mailboxes.id"), primary_key=True)
+    operation: Mapped[str] = mapped_column(String(16))
+    from_binding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    to_binding_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    to_binding_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    binding_file: Mapped[str] = mapped_column(String(1024))
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    owner_pid: Mapped[int] = mapped_column(Integer)
+    owner_process_instance: Mapped[str] = mapped_column(String(128))
+    notification_mode: Mapped[str] = mapped_column(String(24), default="pull")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True
+    )
 
 
 class MailThread(Base):
