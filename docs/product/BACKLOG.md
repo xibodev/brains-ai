@@ -23,18 +23,6 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Clean-host install, wire, start, stop, restart, persistence, uninstall, and configuration-preservation journeys pass for every declared combination.
 - **Maps to:** F0, F7, B6, B8, B9; J1, J9, J11.
 
-### BL-P0-07 - Implement backup-backed SQLite integrity repair
-
-- **Action:** Detect and repair supported-store foreign-key and invariant violations behind a mandatory verified backup and dry-run boundary.
-- **Done when:** Corrupt and legacy-store fixtures prove diagnosis, backup ownership, repair refusal or success, post-repair integrity, and recoverable rollback.
-- **Maps to:** F3, B2, B5; J7, J11.
-
-### BL-P0-08 - Validate reproducible SQLite schema evolution
-
-- **Action:** Validate that clean install, upgrade, backup, restore, and archive compatibility use one ordered checksummed SQLite migration contract; close demonstrated gaps.
-- **Done when:** Fresh and supported legacy fixtures converge and skipped, reordered, changed, or incompatible migrations fail clearly without data loss.
-- **Maps to:** B5, B6; J9, J11.
-
 ### BL-P0-09 - Complete frozen and withdrawn capability containment
 
 - **Action:** Remove frozen or withdrawn discovery and activation from normal documentation, default CLI/MCP and wire surfaces, browser navigation and configuration, setup, examples, extras, and operator guidance while retaining only safe persisted-data compatibility.

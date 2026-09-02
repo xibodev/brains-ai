@@ -22,7 +22,13 @@ import brains.audit as audit_module
 import brains.storage.db as db_module
 import brains.storage.migrations as migrations_module
 from brains.audit import _reset_key_cache
-from brains.backup import BackupError, create_backup, inspect_archive, verify_backup
+from brains.backup import (
+    BackupError,
+    create_backup,
+    inspect_archive,
+    restore_backup,
+    verify_backup,
+)
 from brains.config import settings
 from brains.storage import integrity
 from brains.storage.integrity import (
@@ -1290,6 +1296,69 @@ def test_apply_repairs_deterministically_and_clears_foreign_key_violations(isola
     assert remaining == {"session.ended_state_ambiguous"}
 
 
+def test_successful_repair_archive_restores_the_exact_pre_repair_state(isolated_db):
+    """The safety archive is usable and contains the state repair changed.
+
+    Restore goes to a separate path through the public backup API. This proves
+    both halves of the recovery promise: the archive recreates the original
+    data and anomalies, and doing so cannot roll back the repaired live store.
+    """
+    _seed_anomalies(isolated_db)
+    archive = isolated_db.parent / "restorable-pre-repair.tar.gz"
+
+    repaired = repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+    assert repaired["applied"] is True
+    assert repaired["backup"]["ok"] is True
+
+    live_after_repair = _snapshot(isolated_db)
+    live_report = diagnose_database(isolated_db, now=FIXED_NOW)
+    assert live_report.foreign_key_violations == 0
+    assert {finding.code for finding in live_report.findings} == {
+        "session.ended_state_ambiguous"
+    }
+
+    restored_path = isolated_db.parent / "restored-pre-repair.sqlite"
+    restored = restore_backup(archive, target_url=f"sqlite:///{restored_path}")
+    assert Path(restored.restored_to).resolve() == restored_path.resolve()
+
+    conn = _connect(restored_path)
+    try:
+        states = dict(conn.execute("SELECT id, state FROM agent_sessions").fetchall())
+        assert states["ses-reaped"] == "running"
+        assert states["ses-ended"] == "running"
+        assert states["ses-completed-open"] == "completed"
+        assert conn.execute(
+            "SELECT ended_at FROM agent_sessions WHERE id='ses-completed-open'"
+        ).fetchone()[0] is None
+        assert conn.execute(
+            "SELECT org_id FROM workspaces WHERE slug='ws-orgless'"
+        ).fetchone()[0] is None
+        assert conn.execute("SELECT COUNT(*) FROM workspace_claims").fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT session_id FROM events WHERE kind='agent_stdout'"
+        ).fetchone()[0] == "ses-gone"
+        assert conn.execute("SELECT set_by_session_id FROM handoffs").fetchone()[0] == "ses-gone"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        conn.close()
+
+    restored_codes = {
+        finding.code for finding in diagnose_database(restored_path, now=FIXED_NOW).findings
+    }
+    assert {
+        "session.ended_without_terminal_state",
+        "session.ended_state_ambiguous",
+        "session.terminal_without_ended_at",
+        "workspace.missing_org",
+        "claim.expired",
+        "claim.session_ended",
+        "foreign_key.orphaned_reference",
+    } <= restored_codes
+
+    # Restoring the safety archive elsewhere must not alter the repaired live DB.
+    assert _snapshot(isolated_db) == live_after_repair
+
+
 def test_apply_is_idempotent(isolated_db):
     _seed_anomalies(isolated_db)
     repair_database(
@@ -1330,23 +1399,47 @@ def test_repair_rolls_back_every_action_when_one_fails(isolated_db):
     assert all(action.applied_rows is None for action in actions)
 
 
-def test_repair_refuses_a_structurally_corrupt_database(isolated_db, monkeypatch):
+def test_repair_refuses_a_genuinely_corrupt_database_before_backup_or_mutation(isolated_db):
+    """Exercise SQLite's real integrity checker rather than mocking its verdict.
+
+    The deliberately corrupted table is independent of the product schema, so
+    migration readiness, foreign-key inspection, and product diagnosis can
+    still run. Its first b-tree cell pointer is then moved beyond the page,
+    which makes ``PRAGMA integrity_check`` report structural corruption while
+    leaving the rest of the database readable enough to reach repair's
+    preflight refusal.
+    """
     _seed_anomalies(isolated_db)
-    monkeypatch.setattr(
-        integrity,
-        "integrity_check",
-        lambda conn: ("*** in database main ***", "page 3 is never used"),
-    )
-    before = _snapshot(isolated_db)
+    conn = _connect(isolated_db)
+    try:
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("CREATE TABLE corrupt_me (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
+        conn.execute("INSERT INTO corrupt_me (payload) VALUES ('must survive unchanged')")
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        root_page = int(
+            conn.execute(
+                "SELECT rootpage FROM sqlite_master WHERE type='table' AND name='corrupt_me'"
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+
+    # A table-leaf page header is 8 bytes; the first two-byte cell pointer
+    # follows it. 0xffff cannot point inside any supported SQLite page.
+    page_offset = (root_page - 1) * page_size
+    with isolated_db.open("r+b") as handle:
+        handle.seek(page_offset + 8)
+        handle.write(b"\xff\xff")
+        handle.flush()
+
+    before = isolated_db.read_bytes()
+    archive = isolated_db.parent / "corrupt.tar.gz"
 
     with pytest.raises(integrity.DatabaseCorruptError):
-        repair_database(
-            isolated_db,
-            apply=True,
-            backup_to=isolated_db.parent / "corrupt.tar.gz",
-            now=FIXED_NOW,
-        )
-    assert _snapshot(isolated_db) == before
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert isolated_db.read_bytes() == before
+    assert not archive.exists()
 
 
 def test_required_orphans_need_an_operator_unless_delete_orphans_is_requested(isolated_db):
