@@ -4,8 +4,9 @@ This is the soft-wiring layer of the brains adoption story. For every
 detected agentic CLI/IDE on the machine it idempotently injects:
 
 1. **An MCP server entry** so the tool can *reach* every ``brains.*`` tool
-   (the capability surface). Default transport is SSE — point the tool at
-   the running ``brains up`` server — with stdio as an opt-in alternative.
+   (the capability surface). Default transport is Streamable HTTP — point the
+   tool at the supervised ``/mcp`` endpoint — with stdio as an opt-in
+   alternative.
 2. **A short "use brains first" rule** into the tool's instruction file,
    wrapped in sentinels so it can be updated or removed cleanly (the
    strongest *soft* nudge toward treating brains as mandatory).
@@ -34,6 +35,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from brains.config import _canonical_default_db_url
+from brains.mcp.transport import (
+    MCP_CLIENT_BEARER_ENV,
+    MCP_MODE_SSE,
+    MCP_MODE_STDIO,
+    MCP_MODE_STREAMABLE_HTTP,
+    mcp_http_url,
+)
 
 # --- defaults -------------------------------------------------------------
 
@@ -91,15 +99,18 @@ the `brains-ai` CLI — same store.
 class WireContext:
     """Everything the adapters need to render a brains entry.
 
-    ``transport`` is ``"sse"`` (default) or ``"stdio"``. For SSE we point
-    tools at ``url`` and authenticate with ``api_key``. For stdio each tool
-    spawns ``python -m brains.mcp.server --mode stdio`` with ``db_url`` in
-    its env so every spawned server shares the one global brains DB.
+    ``transport`` is ``"streamable-http"`` (default), explicit legacy
+    ``"sse"``, or ``"stdio"``. HTTP clients point at ``url``. Codex reads its
+    bearer token from ``bearer_token_env_var``; the token value is never
+    rendered into its TOML. For stdio each tool spawns
+    ``python -m brains.mcp.server --mode stdio`` with ``db_url`` in its env so
+    every spawned server shares the one global brains DB.
     """
 
-    transport: str = "sse"
-    url: str = f"http://{DEFAULT_MCP_HOST}:{DEFAULT_MCP_PORT}/sse"
+    transport: str = MCP_MODE_STREAMABLE_HTTP
+    url: str = field(default_factory=mcp_http_url)
     api_key: str = ""
+    bearer_token_env_var: str = MCP_CLIENT_BEARER_ENV
     python: str = "python"
     # Default to the absolute per-machine brain so a bare ``WireContext()``
     # can never embed a CWD-relative ``sqlite:///brains.db`` into a tool's
@@ -133,7 +144,8 @@ def _copilot_entry(ctx: WireContext) -> dict[str, Any]:
             "args": ctx.stdio_args(),
             "env": ctx.stdio_env(),
         }
-    return {"type": "sse", "url": ctx.url, "headers": ctx.auth_headers()}
+    remote_type = "sse" if ctx.transport == MCP_MODE_SSE else "http"
+    return {"type": remote_type, "url": ctx.url, "headers": ctx.auth_headers()}
 
 
 def _claude_entry(ctx: WireContext) -> dict[str, Any]:
@@ -145,7 +157,8 @@ def _claude_entry(ctx: WireContext) -> dict[str, Any]:
             "args": ctx.stdio_args(),
             "env": ctx.stdio_env(),
         }
-    return {"type": "sse", "url": ctx.url, "headers": ctx.auth_headers()}
+    remote_type = "sse" if ctx.transport == MCP_MODE_SSE else "http"
+    return {"type": remote_type, "url": ctx.url, "headers": ctx.auth_headers()}
 
 
 def _opencode_entry(ctx: WireContext) -> dict[str, Any]:
@@ -167,7 +180,7 @@ def _opencode_entry(ctx: WireContext) -> dict[str, Any]:
 
 def _codex_block(ctx: WireContext) -> str:
     # Codex is TOML. stdio uses command/args + a nested env table; remote
-    # uses url + bearer_token and the experimental rmcp client.
+    # uses the current Streamable HTTP URL + an environment-variable name.
     if ctx.transport == "stdio":
         args = ", ".join(json.dumps(a) for a in ctx.stdio_args())
         lines = [
@@ -182,10 +195,11 @@ def _codex_block(ctx: WireContext) -> str:
     lines = [
         "[mcp_servers.brains]",
         f"url = {json.dumps(ctx.url)}",
-        "experimental_use_rmcp_client = true",
     ]
-    if ctx.api_key:
-        lines.append(f"bearer_token = {json.dumps(ctx.api_key)}")
+    if ctx.bearer_token_env_var:
+        lines.append(
+            f"bearer_token_env_var = {json.dumps(ctx.bearer_token_env_var)}"
+        )
     return "\n".join(lines)
 
 
@@ -244,7 +258,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".codex" / "AGENTS.md",
         _detect=lambda h: (h / ".codex").is_dir(),
         _toml_block=_codex_block,
-        sse_experimental=True,
+        supports_sse=False,
     ),
     "opencode": ToolAdapter(
         name="opencode",
@@ -384,7 +398,7 @@ def _wire_json(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
     if dry_run:
         result["preview"] = entry
         return result
-    secure = ctx.transport == "sse" and bool(ctx.api_key)
+    secure = ctx.transport != MCP_MODE_STDIO and bool(ctx.api_key)
     result["backup"] = _backup(path, secure=secure)
     _write(path, json.dumps(data, indent=2) + "\n", secure=secure)
     return result
@@ -433,6 +447,12 @@ def _wire_toml(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
     assert adapter._toml_block is not None
     block = adapter._toml_block(ctx)
     result: dict[str, Any] = {"path": str(path), "transport": ctx.transport}
+    if ctx.transport != MCP_MODE_STDIO:
+        result["url"] = ctx.url
+        result["bearer_token_env_var"] = ctx.bearer_token_env_var or None
+        result["bearer_token_env_available"] = bool(
+            ctx.bearer_token_env_var and ctx.bearer_token_env_var in os.environ
+        )
 
     if _toml_has_unmanaged_entry(text):
         result["action"] = "conflict"
@@ -441,13 +461,20 @@ def _wire_toml(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
             "remove it or run `brains-ai unwire` first"
         )
         return result
+    if ctx.transport == MCP_MODE_SSE and not adapter.supports_sse:
+        result["action"] = "error"
+        result["detail"] = (
+            f"{adapter.display} does not support the legacy Brains SSE endpoint; "
+            "use streamable-http or stdio"
+        )
+        return result
 
     has_block = TOML_START in text
     result["action"] = "update" if has_block else "create"
     if dry_run:
         result["preview"] = block
         return result
-    secure = ctx.transport == "sse" and bool(ctx.api_key)
+    secure = ctx.transport != MCP_MODE_STDIO and bool(ctx.api_key)
     result["backup"] = _backup(path, secure=secure)
     _write(
         path,
@@ -530,14 +557,14 @@ def wire(
     adapters = _select_adapters(tools, home, force)
     report: dict[str, Any] = {
         "transport": ctx.transport,
-        "url": ctx.url if ctx.transport == "sse" else None,
+        "url": ctx.url if ctx.transport != MCP_MODE_STDIO else None,
         "dry_run": dry_run,
         "tools": [],
     }
     for adapter in adapters:
         detected = adapter.detect(home)
         warnings: list[str] = []
-        if ctx.transport == "sse" and adapter.sse_experimental:
+        if ctx.transport == MCP_MODE_SSE and adapter.sse_experimental:
             warnings.append("SSE/remote MCP is experimental for this tool")
         if adapter.mcp_format == "json":
             mcp = _wire_json(adapter, home, ctx, dry_run)
@@ -588,18 +615,43 @@ def status(home: Path) -> dict[str, Any]:
         instr_path = adapter.instr_path(home)
         wired_mcp = False
         transport = None
+        url = None
+        bearer_token_env_var = None
         if adapter.mcp_format == "json":
             data = _load_json(mcp_path)
             servers = data.get(adapter.json_servers_key)
             if isinstance(servers, dict) and isinstance(servers.get(SERVER_KEY), dict):
                 wired_mcp = True
-                transport = "stdio" if servers[SERVER_KEY].get("command") else "sse"
+                server = servers[SERVER_KEY]
+                if server.get("command") or server.get("type") == "local":
+                    transport = MCP_MODE_STDIO
+                elif server.get("type") == "sse" or str(server.get("url", "")).endswith(
+                    "/sse"
+                ):
+                    transport = MCP_MODE_SSE
+                else:
+                    transport = MCP_MODE_STREAMABLE_HTTP
+                url = server.get("url")
         elif mcp_path.exists() and TOML_START in mcp_path.read_text(encoding="utf-8"):
             wired_mcp = True
             managed = (
                 mcp_path.read_text(encoding="utf-8").split(TOML_START, 1)[-1].split(TOML_END, 1)[0]
             )
-            transport = "stdio" if "command =" in managed else "sse"
+            if "command =" in managed:
+                transport = MCP_MODE_STDIO
+            else:
+                url_match = re.search(r'(?m)^\s*url\s*=\s*["\']([^"\']+)["\']', managed)
+                url = url_match.group(1) if url_match else None
+                transport = (
+                    MCP_MODE_SSE
+                    if isinstance(url, str) and url.endswith("/sse")
+                    else MCP_MODE_STREAMABLE_HTTP
+                )
+                env_match = re.search(
+                    r'(?m)^\s*bearer_token_env_var\s*=\s*["\']([^"\']+)["\']',
+                    managed,
+                )
+                bearer_token_env_var = env_match.group(1) if env_match else None
         wired_rule = instr_path.exists() and MD_START in instr_path.read_text(encoding="utf-8")
         out.append(
             {
@@ -609,6 +661,11 @@ def status(home: Path) -> dict[str, Any]:
                 "mcp_path": str(mcp_path),
                 "mcp_wired": wired_mcp,
                 "mcp_transport": transport,
+                "mcp_url": url,
+                "bearer_token_env_var": bearer_token_env_var,
+                "bearer_token_env_available": (
+                    bearer_token_env_var in os.environ if bearer_token_env_var else None
+                ),
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
                 "mailbox_notification_mode": adapter.mailbox_notification_mode,

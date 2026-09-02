@@ -391,7 +391,9 @@ def _canonical_db_url() -> str:
 @app.command("wire")
 def wire_cli(
     transport: str = typer.Option(
-        "sse", "--transport", help="MCP transport: 'sse' (default) or 'stdio'."
+        "streamable-http",
+        "--transport",
+        help="MCP transport: 'streamable-http' (default), legacy 'sse', or 'stdio'.",
     ),
     tool: list[str] = typer.Option(
         [],
@@ -399,9 +401,9 @@ def wire_cli(
         help="Limit to specific tool(s): copilot-cli, claude-code, codex, opencode. Repeatable.",
     ),
     url: str | None = typer.Option(
-        None, "--url", help="SSE server URL (default http://127.0.0.1:<port>/sse)."
+        None, "--url", help="HTTP MCP URL (default http://127.0.0.1:<port>/mcp)."
     ),
-    port: int = typer.Option(9877, "--port", help="SSE port used when --url is not given."),
+    port: int = typer.Option(9877, "--port", help="MCP port used when --url is not given."),
     no_rules: bool = typer.Option(
         False, "--no-rules", help="Only wire the MCP entry; skip the instruction rule."
     ),
@@ -422,21 +424,37 @@ def wire_cli(
     import sys
 
     from brains import wire as wire_mod
+    from brains.mcp.transport import (
+        MCP_MODE_SSE,
+        MCP_MODE_STDIO,
+        MCP_MODE_STREAMABLE_HTTP,
+        mcp_http_url,
+    )
 
     home = Path.home()
     if show_status:
         _print_json(wire_mod.status(home))
         return
-    if transport not in {"sse", "stdio"}:
-        raise typer.BadParameter("transport must be 'sse' or 'stdio'")
+    if transport == "http":
+        transport = MCP_MODE_STREAMABLE_HTTP
+    if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+        raise typer.BadParameter(
+            "transport must be 'streamable-http', 'http', legacy 'sse', or 'stdio'"
+        )
+
+    default_url = (
+        f"http://127.0.0.1:{port}/sse"
+        if transport == MCP_MODE_SSE
+        else mcp_http_url(port=port)
+    )
 
     ctx = wire_mod.WireContext(
         transport=transport,
-        url=url or f"http://127.0.0.1:{port}/sse",
+        url=url or default_url,
         python=sys.executable,
         db_url=_canonical_db_url(),
     )
-    if transport == "sse":
+    if transport != MCP_MODE_STDIO and not dry_run:
         from brains.api.admin_key import ensure_admin_key
 
         ctx.api_key, _ = ensure_admin_key(print_banner=False)
@@ -746,14 +764,14 @@ def setup_cli(
         "Claude Code, Codex). Default: yes.",
     ),
     transport: str = typer.Option(
-        "sse",
+        "streamable-http",
         "--transport",
-        help="MCP transport for `wire`: 'sse' (default) or 'stdio'.",
+        help="MCP transport for `wire`: 'streamable-http' (default), legacy 'sse', or 'stdio'.",
     ),
     port: int = typer.Option(
         9877,
         "--port",
-        help="SSE port to wire (default 9877).",
+        help="MCP port to wire (default 9877).",
     ),
     install_service: bool = typer.Option(
         False,
@@ -786,13 +804,19 @@ def setup_cli(
       brains-ai setup                       # init + wire + status, friendly text
       brains-ai setup --json                # same flow, machine-readable JSON
       brains-ai setup --no-wire             # init only (skip agentic-tool wiring)
-      brains-ai setup --transport stdio     # wire MCP over stdio instead of SSE
+      brains-ai setup --transport stdio     # use an explicit per-client subprocess
       brains-ai setup --dry-run             # preview every step, write nothing
     """
     from brains import wire as wire_mod
     from brains.api.admin_key import admin_key_path, ensure_admin_key
     from brains.control.sessions import register_workspace
     from brains.install import status_report
+    from brains.mcp.transport import (
+        MCP_MODE_SSE,
+        MCP_MODE_STDIO,
+        MCP_MODE_STREAMABLE_HTTP,
+        mcp_http_url,
+    )
     from brains.storage.migrations import current_schema_versions, init_db
 
     summary: dict[str, Any] = {"dry_run": dry_run, "steps": []}
@@ -831,15 +855,24 @@ def setup_cli(
 
     # --- Step 2: wire (optional) -----------------------------------------
     if wire_tools:
-        if transport not in {"sse", "stdio"}:
-            raise typer.BadParameter("transport must be 'sse' or 'stdio'")
+        if transport == "http":
+            transport = MCP_MODE_STREAMABLE_HTTP
+        if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+            raise typer.BadParameter(
+                "transport must be 'streamable-http', 'http', legacy 'sse', or 'stdio'"
+            )
+        wire_url = (
+            f"http://127.0.0.1:{port}/sse"
+            if transport == MCP_MODE_SSE
+            else mcp_http_url(port=port)
+        )
         ctx = wire_mod.WireContext(
             transport=transport,
-            url=f"http://127.0.0.1:{port}/sse",
+            url=wire_url,
             python=sys.executable,
             db_url=_canonical_db_url(),
         )
-        if transport == "sse" and not dry_run:
+        if transport != MCP_MODE_STDIO and not dry_run:
             ctx.api_key, _ = ensure_admin_key(print_banner=False)
         report = wire_mod.wire(Path.home(), ctx, dry_run=dry_run)
         summary["steps"].append({"step": "wire", "report": report})
@@ -875,7 +908,7 @@ def setup_cli(
 
     # --- Step 4: next-command hint ---------------------------------------
     # Recommend `serve-all`: it runs gateway (8787) + dashboard (9876) +
-    # MCP SSE (9877) in one supervised tree. The wired MCP entries above
+    # MCP HTTP (9877) in one supervised tree. The wired MCP entries above
     # point at port 9877, which only `serve-all` (or `brains-ai mcp`)
     # brings up — `serve` alone leaves the MCP integrations dark.
     if install_service:
@@ -894,7 +927,7 @@ def setup_cli(
             "tip": (
                 "Run `brains-ai serve-all` in a separate terminal — it supervises "
                 "the gateway (127.0.0.1:8787), the dashboard (127.0.0.1:9876), "
-                f"and the MCP SSE server (127.0.0.1:{port}) the wire above points "
+                f"and the MCP server (127.0.0.1:{port}/mcp) the wire above points "
                 "at. `brains-ai serve` alone starts only the gateway, leaving "
                 "MCP integrations dark. To run it automatically at login, see "
                 "`brains-ai service install`."

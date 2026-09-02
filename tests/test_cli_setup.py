@@ -113,7 +113,7 @@ def test_setup_rejects_bad_transport(
         ["setup", "--path", str(workspace), "--transport", "bogus", "--json"],
     )
     assert result.exit_code != 0
-    assert "transport must be 'sse' or 'stdio'" in result.output
+    assert "transport must be 'streamable-http'" in result.output
 
 
 def test_setup_next_hint_present(
@@ -130,7 +130,7 @@ def test_setup_next_hint_present(
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     # Must point at `serve-all` (not `serve`) — only `serve-all` brings up
-    # the MCP SSE port that `wire` registered upstream.
+    # the MCP HTTP port that `wire` registered upstream.
     assert payload["next"]["start_gateway"] == "brains-ai serve-all"
     assert "tip" in payload["next"]
 
