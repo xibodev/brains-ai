@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,11 +21,16 @@ from brains.control.durable_mailbox import (
     MailboxUnavailableError,
     MailboxValidationError,
     canonical_mailbox_tool,
+    create_managed_agent_mailbox,
     ensure_operator_mailboxes,
+    extract_native_tool_session_id,
     list_phonebook,
     lookup_mailbox,
     read_mailbox_binding_file,
+    recover_managed_agent_mailbox_binding,
     register_agent_mailbox,
+    revoke_managed_agent_mailbox_binding,
+    rotate_managed_agent_mailbox_binding,
     validate_native_tool_session_id,
 )
 from brains.control.events import append_event
@@ -104,6 +110,45 @@ def test_canonical_tool_and_native_id_validation_reject_placeholders() -> None:
             validate_native_tool_session_id(invalid)
 
 
+@pytest.mark.parametrize(
+    ("adapter", "source"),
+    [
+        ("github-copilot", "copilot_session_id"),
+        ("claude", "claude_session_id"),
+        ("codex", "codex_thread_id"),
+        ("OpenCode", "opencode_session_id"),
+    ],
+)
+def test_native_id_extraction_is_explicit_and_preserves_adapter_provenance(
+    adapter: str, source: str
+) -> None:
+    native_id = _native("harness")
+    resolved = extract_native_tool_session_id(adapter, {source: native_id})
+    assert resolved == {
+        "status": "resolved",
+        "adapter": adapter,
+        "tool": canonical_mailbox_tool(adapter),
+        "native_tool_session_id": native_id,
+        "source": source,
+    }
+    unavailable = extract_native_tool_session_id(adapter, {})
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["native_tool_session_id"] is None
+
+
+def test_codex_native_id_extraction_refuses_ambiguous_adapter_evidence() -> None:
+    result = extract_native_tool_session_id(
+        "codex",
+        {
+            "codex_thread_id": _native("thread"),
+            "codex_session_id": _native("session"),
+        },
+    )
+    assert result["status"] == "ambiguous"
+    assert result["native_tool_session_id"] is None
+    assert result["source"] is None
+
+
 def test_binding_file_is_bounded_and_owner_only(tmp_path) -> None:
     secure = tmp_path / "secure-binding"
     value = _binding()
@@ -121,6 +166,110 @@ def test_binding_file_is_bounded_and_owner_only(tmp_path) -> None:
         insecure.chmod(0o644)
         with pytest.raises(MailboxValidationError, match="only by its owner"):
             read_mailbox_binding_file(insecure)
+
+
+@pytest.mark.parametrize("adapter", ["github-copilot", "claude", "codex", "OpenCode"])
+def test_managed_binding_create_rotate_recover_revoke_and_restart_journey(
+    tmp_path, monkeypatch, adapter: str
+) -> None:
+    from brains.api.admin_key import state_dir
+    from brains.control import sessions as sessions_ctl
+
+    workspace = str(tmp_path / f"managed-{canonical_mailbox_tool(adapter)}")
+    native_id = _native("native")
+    started = start_session(workspace, tool=adapter)
+    created = create_managed_agent_mailbox(workspace, adapter, native_id, started["session_id"])
+    binding_path = state_dir() / "mailbox-bindings" / Path(created["binding_file"]).name
+    assert binding_path == Path(created["binding_file"])
+    original_secret = read_mailbox_binding_file(binding_path, managed_only=True)
+    assert original_secret not in repr(created)
+    assert created["binding_version"] == 1
+    with SessionLocal() as session:
+        registration_event = (
+            session.query(Event)
+            .filter(Event.kind == "mailbox_registered", Event.session_id == started["session_id"])
+            .one()
+        )
+        assert f'"adapter": "{adapter}"' in (registration_event.metadata_json or "")
+        assert original_secret not in (registration_event.metadata_json or "")
+
+    conflict = start_session(workspace, tool=adapter)
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        rotate_managed_agent_mailbox_binding(workspace, adapter, native_id, conflict["session_id"])
+    assert read_mailbox_binding_file(binding_path, managed_only=True) == original_secret
+
+    moved = tmp_path / f"moved-{canonical_mailbox_tool(adapter)}"
+    moved.mkdir()
+    canonical = Path(workspace).resolve()
+    identity = f"git:{tmp_path / 'shared.git'}"
+    monkeypatch.setattr(sessions_ctl, "workspace_identity", lambda _path: identity)
+    monkeypatch.setattr(
+        sessions_ctl,
+        "_git_worktree_paths",
+        lambda _path: (str(canonical), str(moved.resolve())),
+    )
+    assert register_workspace(str(moved)).slug == started["workspace"]
+
+    rotated = rotate_managed_agent_mailbox_binding(
+        str(moved), adapter, native_id, started["session_id"]
+    )
+    rotated_secret = read_mailbox_binding_file(binding_path, managed_only=True)
+    assert rotated_secret != original_secret
+    assert rotated_secret not in repr(rotated)
+    assert rotated["binding_version"] == 2
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        heartbeat_session(
+            started["session_id"],
+            tool=adapter,
+            native_tool_session_id=native_id,
+            mailbox_binding_secret=original_secret,
+        )
+
+    end_session(started["session_id"], "abrupt adapter exit")
+    successor = start_session(workspace, tool=adapter)
+    resumed = rotate_managed_agent_mailbox_binding(
+        workspace, adapter, native_id, successor["session_id"]
+    )
+    assert resumed["mailbox_id"] == created["mailbox_id"]
+    assert resumed["attachment"]["session_id"] == successor["session_id"]
+
+    binding_path.unlink()
+    recovered = recover_managed_agent_mailbox_binding(
+        workspace, adapter, native_id, successor["session_id"]
+    )
+    recovered_secret = read_mailbox_binding_file(binding_path, managed_only=True)
+    assert recovered_secret not in repr(recovered)
+    assert recovered["binding_version"] == 4
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        heartbeat_session(
+            successor["session_id"],
+            tool=adapter,
+            native_tool_session_id=native_id,
+            mailbox_binding_secret=rotated_secret,
+        )
+
+    packet = resume_brain_session(
+        successor["session_id"],
+        tool=adapter,
+        native_tool_session_id=native_id,
+        mailbox_binding_secret=recovered_secret,
+    )
+    assert packet["mailbox"]["mailbox_id"] == created["mailbox_id"]
+    assert packet["mailbox"]["attachment"]["session_id"] == successor["session_id"]
+
+    revoked = revoke_managed_agent_mailbox_binding(
+        workspace, adapter, native_id, successor["session_id"]
+    )
+    assert revoked["status"] == "retired"
+    assert revoked["action"] == "revoked"
+    assert not binding_path.exists()
+    with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):
+        heartbeat_session(
+            successor["session_id"],
+            tool=adapter,
+            native_tool_session_id=native_id,
+            mailbox_binding_secret=recovered_secret,
+        )
 
 
 def test_invalid_mailbox_start_does_not_register_workspace(tmp_path) -> None:

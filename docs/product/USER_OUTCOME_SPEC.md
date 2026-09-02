@@ -33,7 +33,7 @@ promise that the current candidate produced them successfully.
 | F0 | A user can operate Brains from one coherent Workspace-first console. | Sign in -> inspect Command Center -> enter a Workspace -> choose a typed action or receive an explicit blocker. | `/app/command-center`, Workspaces, Coordination, Governance, Operations, Act; typed operator HTTP adapters over shared controls. | Attributable task/claim/handoff/message/knowledge/decision events and audit rows with Workspace scope. | BL-P3-01, BL-P2-01 | AC-F0-01..05; J1, J7, J11 |
 | F1 | Withdrawn target: connect a machine and expose tools as Runtimes. | No supported user path; verify enrollment, Runtime, daemon, and activation surfaces are absent from discovery and fail closed. | Frozen Runtime/daemon routes, models, and tests are source-compatibility inventory only. | Advertisement inventory plus direct-call refusal and persisted-data compatibility evidence. | BL-P0-09 | AC-F1-01..06; J2 |
 | F2 | Withdrawn target: define reusable execution Personas. | No supported user path; verify Persona, binding, managed Skill, and Spawn surfaces are undiscoverable and non-activatable. | Frozen Persona/Skill/spawn source and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | BL-P0-09 | AC-F2-01..06; J3 |
-| F3 | A user can preserve durable coordination state, resolve human decisions, and resume work. | Open Workspace/Coordination/Governance -> inspect scoped Session context -> answer or decide -> checkpoint, hand off, resume, or end. | Workspace, Coordination, Governance; Session/event/decision APIs; local realtime delivery; CLI/MCP Session, decision, checkpoint, and resume families. | Coordination lifecycle transitions; persisted events; decision correlation; local reconnect backfill; unsupported execution control refused explicitly. | BL-P1-12, BL-P1-14 | AC-F3-01..07; J7, J8, J11 |
+| F3 | A user can preserve durable coordination state, resolve human decisions, and resume work. | Open Workspace/Coordination/Governance -> inspect scoped Session context -> answer or decide -> checkpoint, hand off, resume, or end. | Workspace, Coordination, Governance; Session/event/decision APIs; local realtime delivery; CLI/MCP Session, decision, checkpoint, and resume families. | Coordination lifecycle transitions; persisted events; decision correlation; local reconnect backfill; unsupported execution control refused explicitly. | BL-P1-12 | AC-F3-01..07; J7, J8, J11 |
 | F4 | Withdrawn target: express and dispatch Projects and Issues. | No supported user path; verify Project, Issue, assignment, dispatch, and execution evidence surfaces are undiscoverable and non-activatable. | Frozen Project/Issue APIs, controls, UI, and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | BL-P0-09 | AC-F4-01..07; J5, J6, J7 |
 | F5 | Withdrawn target: assemble execution Pods. | No supported user path; verify Pod/Squad execution, roster, and dispatch surfaces are undiscoverable and non-activatable. | Frozen Pod/Squad source and rows are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | BL-P0-09 | AC-F5-01..04; J4, J6 |
 | F6 | Withdrawn target: execution-model first-run onboarding. | No supported user path; a fresh install must start at Command Center and never redirect into execution onboarding. | Frozen onboarding route/state and composed F1/F2/F4 APIs are compatibility inventory only. | Clean-state route inventory and direct-call refusal without an execution flag. | BL-P0-09 | AC-F6-01..05; J1 |
@@ -47,7 +47,7 @@ promise that the current candidate produced them successfully.
 | ID | User promise | Minimal path | Code contract | Expected evidence contract | Core backlog items | Acceptance anchors |
 |---|---|---|---|---|---|---|
 | B1 | Withdrawn target: model gateway and policy routing. | No supported user path; verify model proxy, provider, routing, and launcher surfaces are undiscoverable and non-activatable. | Frozen OpenAI/Anthropic facades, router, providers, and usage tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and no normal-readiness dependency. | BL-P0-09 | AC-B1-01..04; J9, J11 |
-| B2 | A local human operator and agents can coordinate durable Workspace work across Sessions. | Start/register mailbox -> task/claim/address mail/handoff/help -> Inbox/Sent/thread/read -> checkpoint -> proof-bound resume/end. | Supported CLI/MCP coordination, mailbox identity/delivery/local-notification controls, and the Coordination mailbox desk. | Session, task, claim, handoff, mailbox identity/attachment, direct/offline delivery, explicit broadcast, body-free local notification with pull fallback, thread/reply/forward, per-recipient read, browser selection/compose/deep-link, help, checkpoint, and resume transitions with valid ownership and references. | BL-P1-12, BL-P1-14 | AC-B2-01..04; J5-J8, J10 |
+| B2 | A local human operator and agents can coordinate durable Workspace work across Sessions. | Start/register mailbox -> task/claim/address mail/handoff/help -> Inbox/Sent/thread/read -> checkpoint -> proof-bound resume/end. | Supported CLI/MCP coordination, mailbox identity/delivery/local-notification controls, and the Coordination mailbox desk. | Session, task, claim, handoff, mailbox identity/attachment, direct/offline delivery, explicit broadcast, body-free local notification with pull fallback, thread/reply/forward, per-recipient read, browser selection/compose/deep-link, help, checkpoint, and resume transitions with valid ownership and references. | BL-P1-12 | AC-B2-01..04; J5-J8, J10 |
 | B3 | A user or agent can retrieve bounded Workspace knowledge and non-semantic repository matches. | Search knowledge or bounded repository text/symbols -> inspect source and unavailable/empty state. | Knowledge controls and stable local lookup. Semantic indexing, embeddings, graph, and external freshness are withdrawn. | Workspace scope, source reference, bounded result, and explicit empty/unavailable outcome. | BL-P0-09, BL-P1-18 | AC-B3-01..04; J6, J7, J11 |
 | B4 | A human can retain authority over supported consequential actions and verify the decision trail. | Action requested -> review exact bounded context -> approve/reject -> execute/deny -> verify audit. | Supported governed actions, decisions, and local audit trail. | Request/resolution/execution correlation; actor/action; denial and failure evidence. | — | AC-B4-01..04; J8, J10, J11 |
 | B5 | An operator can evolve, back up, and restore supported SQLite data without losing integrity. | Initialize/upgrade -> inspect schema -> back up -> verify manifest -> restore/rollback. | SQLite storage, migrations, integrity, and backup/restore CLI/MCP. | Applied migration checksum/outcome; FK check; backup manifest/hash/schema; restore compatibility and result. | BL-P1-09 | AC-B5-01..05; J10, J11 |
@@ -64,7 +64,7 @@ promise that the current candidate produced them successfully.
 - **When:** the work is recorded, claimed, coordinated, and handed off through Brains.
 - **Then:** ownership remains attributable and idempotent, progress survives reconnect,
   and human questions or governed actions remain pending until resolved.
-- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12, BL-P1-14.
+- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12.
 
 ### O2 - Coordinate several AI specialists
 
@@ -72,7 +72,7 @@ promise that the current candidate produced them successfully.
 - **When:** they use claims, tasks, direct mail, topics, peer help, and handoffs.
 - **Then:** ownership and routing are explicit; each contribution remains attributable;
   stale or unavailable participants leave recoverable queue state.
-- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12, BL-P1-14.
+- **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12.
 
 ### O3 - Repeat a successful method safely
 
@@ -100,7 +100,7 @@ promise that the current candidate produced them successfully.
   notification.
 - **Then:** Brains restores the authorized durable state, identifies stale or
   missing dependencies, and supports retry/resume without duplicating work.
-- **Evidence:** F3; B2, B3, B8; J7, J8, J11; BL-P1-12, BL-P1-14,
+- **Evidence:** F3; B2, B3, B8; J7, J8, J11; BL-P1-12,
   BL-P1-18.
 
 ### O6 - Operate Brains locally

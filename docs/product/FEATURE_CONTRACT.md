@@ -275,25 +275,31 @@ operations require current attachment plus binding; operator-inbox reads require
 browser/local human channel. A proof-bound, body-free local notification take/settle
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
 preserving pull fallback. SMTP rows and adapters are frozen compatibility inventory.
-Isolated UAT covers explicit real native-ID
-extraction, offline delivery, successor recovery, and threaded replies for
-OpenCode/Codex and OpenCode/Claude. Automatic extraction, concrete hook/plugin
-installation, abrupt-exit recovery, Copilot container credentials, real-provider review,
-and broad per-tool authorization remain open. The
+Isolated UAT covers explicit real native-ID extraction, offline delivery, successor
+recovery, and threaded replies for OpenCode/Codex and OpenCode/Claude. The adapter
+identity contract covers Copilot CLI, Claude Code, Codex, and OpenCode without guessing:
+it preserves the raw adapter label and reports native identity as resolved, unavailable,
+or ambiguous. Concrete hook/plugin installation, Copilot container credentials,
+real-provider review, and broad per-tool authorization remain open. The
 Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
 
-Migration 150 and the current control/adapters implement the BL-P1-12/BL-P1-14 identity
-foundation: hash-bound mailbox identity, one-current-incarnation attachment and cursor,
-operator inbox provisioning, authorized phonebook/lookup, and non-enumerating conflict
-refusal. The threaded message and per-recipient delivery/read rows are now active for
-durable local mail. Notification attempt state is active through migration 151 and the
-CLI/MCP adapter protocol; the fixed nudge carries no mail metadata or content, and `wire`
-truthfully reports pull until it installs a stronger adapter. Migration 152 preserves
-constrained SMTP consent/outbox rows for compatibility without advertising external
-delivery. Concrete local harness wakeup, binding rotation/recovery, and abrupt-exit/
-host-restart acceptance remain core work; real-provider SMTP is frozen.
+Migration 150 and the current control/adapters implement hash-bound mailbox identity,
+one-current-incarnation attachment and cursor, operator inbox provisioning, authorized
+phonebook/lookup, and non-enumerating conflict refusal. Managed binding operations create,
+rotate, recover, and revoke owner-only files with conditional database mutation,
+fail-closed compensation, versioned hashes, and immediate old-key rejection; raw secrets
+never enter their result or event shapes. Lease, terminal detach, successor, alias, and
+resume journeys preserve identity separately from activity, ownership, and reachability
+across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
+threaded message and per-recipient delivery/read rows are active for durable local mail.
+Notification attempt state is active through migration 151 and the CLI/MCP adapter
+protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
+reports pull until it installs a stronger adapter. Migration 152 preserves constrained
+SMTP consent/outbox rows for compatibility without advertising external delivery.
+Concrete local harness wakeup and host-restart acceptance remain core work;
+real-provider SMTP is frozen.
 
 ### B3 - Workspace knowledge and repository lookup
 
