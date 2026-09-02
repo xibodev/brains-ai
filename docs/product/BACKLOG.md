@@ -11,12 +11,6 @@ empty and a human explicitly approves thawing it.
 
 ## P0 — Core integrity
 
-### BL-P0-05 - Validate durable coordination lifecycle
-
-- **Action:** Validate coordination Sessions, tasks, claims, handoffs, checkpoints, terminal state, and explicit refusal of unsupported steering under concurrency and reload.
-- **Done when:** Isolated supported-harness journeys prove idempotent concurrent ownership, durable lifecycle recovery, and no false execution-control claim.
-- **Maps to:** F0, F3, B2; J7, J8, J11.
-
 ### BL-P0-06 - Validate supported local installation, wiring, and transport
 
 - **Action:** Validate package, executable, endpoint, and wire identity, safe harness transport selection, and service lifecycle on the declared supported host/harness matrix.

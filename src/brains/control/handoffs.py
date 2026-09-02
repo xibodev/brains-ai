@@ -5,7 +5,12 @@ from datetime import timedelta
 
 from brains.control.common import utc_now
 from brains.control.events import append_event
-from brains.control.sessions import register_workspace
+from brains.control.sessions import (
+    _lock_session_lifecycle,
+    _lock_workspace_lifecycle,
+    register_workspace,
+    require_live_session,
+)
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import Handoff, Workspace
@@ -69,6 +74,14 @@ def set_handoff(
     workspace = register_workspace(workspace_path)
     init_db()
     with SessionLocal() as session:
+        _lock_workspace_lifecycle(session, workspace.id)
+        if session_id:
+            agent = _lock_session_lifecycle(session, session_id)
+            if agent is None:
+                raise ValueError(f"unknown session: {session_id} (set handoff)")
+            agent = require_live_session(session, session_id, action="set handoff")
+            if agent.workspace_id != workspace.id:
+                raise ValueError("handoff and setting Session must belong to the same workspace")
         active = (
             session.query(Handoff)
             .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
@@ -159,6 +172,13 @@ def pick_handoff(workspace_path: str, session_id: str | None = None) -> dict:
         )
     init_db()
     with SessionLocal() as session:
+        if session_id:
+            agent = _lock_session_lifecycle(session, session_id)
+            if agent is None:
+                raise ValueError(f"unknown session: {session_id} (pick handoff)")
+            agent = require_live_session(session, session_id, action="pick handoff")
+            if agent.workspace_id != workspace.id:
+                raise ValueError("handoff and picking Session must belong to the same workspace")
         row = (
             session.query(Handoff)
             .filter(Handoff.workspace_id == workspace.id, Handoff.status == "active")
@@ -167,9 +187,23 @@ def pick_handoff(workspace_path: str, session_id: str | None = None) -> dict:
         )
         if row is None:
             raise ValueError(f"no active handoff for {workspace.slug}")
-        row.status = "picked_up"
-        row.picked_up_by_session_id = session_id
-        row.picked_up_at = utc_now()
+        picked_at = utc_now()
+        picked = (
+            session.query(Handoff)
+            .filter(Handoff.id == row.id, Handoff.status == "active")
+            .update(
+                {
+                    "status": "picked_up",
+                    "picked_up_by_session_id": session_id,
+                    "picked_up_at": picked_at,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not picked:
+            session.rollback()
+            raise ValueError(f"no active handoff for {workspace.slug}")
+        session.expire(row)
         result = {
             "handoff_id": row.id,
             "title": row.title,

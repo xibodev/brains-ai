@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlalchemy import or_
+
 from brains.audit import record as audit_record
 from brains.control.common import (
     insert_with_code_retry,
@@ -7,7 +9,11 @@ from brains.control.common import (
     utc_now,
 )
 from brains.control.events import append_event
-from brains.control.sessions import register_workspace
+from brains.control.sessions import (
+    _lock_session_lifecycle,
+    register_workspace,
+    require_live_session,
+)
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import AgentTask, Workspace
@@ -173,9 +179,17 @@ def claim_task(task_code: str, session_id: str, actor: str | None = None) -> dic
     now = utc_now()
     init_db()
     with SessionLocal() as session:
+        agent = _lock_session_lifecycle(session, session_id)
+        if agent is None:
+            raise ValueError(f"unknown session: {session_id} (claim task)")
+        agent = require_live_session(session, session_id, action="claim task")
         row = session.query(AgentTask).filter(AgentTask.code == task_code).one_or_none()
         if row is None:
             raise ValueError(f"unknown task: {task_code}")
+        if agent.workspace_id != row.workspace_id:
+            raise ValueError(
+                f"session {session_id} and task {task_code} must belong to the same workspace"
+            )
         if row.status != "available":
             raise ValueError(
                 f"task {task_code} is {row.status}, claimed by {row.claimed_by_session_id}"
@@ -191,9 +205,25 @@ def claim_task(task_code: str, session_id: str, actor: str | None = None) -> dic
                     raise ValueError(
                         f"dependency {dependency_code} is {dependency.status}, not done"
                     )
-        row.status = "in_progress"
-        row.claimed_by_session_id = session_id
-        row.claimed_at = now
+        claimed = (
+            session.query(AgentTask)
+            .filter(AgentTask.id == row.id, AgentTask.status == "available")
+            .update(
+                {
+                    "status": "in_progress",
+                    "claimed_by_session_id": session_id,
+                    "claimed_at": now,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not claimed:
+            session.rollback()
+            winner = session.query(AgentTask).filter(AgentTask.code == task_code).one()
+            raise ValueError(
+                f"task {task_code} is {winner.status}, claimed by {winner.claimed_by_session_id}"
+            )
+        session.expire(row)
         workspace = session.query(Workspace).filter(Workspace.id == row.workspace_id).one()
         session.commit()
         result = _task_to_dict(row, workspace.slug)
@@ -224,16 +254,47 @@ def complete_task(
     now = utc_now()
     init_db()
     with SessionLocal() as session:
+        agent = _lock_session_lifecycle(session, session_id)
+        if agent is None:
+            raise ValueError(f"unknown session: {session_id} (complete task)")
+        agent = require_live_session(session, session_id, action="complete task")
         row = session.query(AgentTask).filter(AgentTask.code == task_code).one_or_none()
         if row is None:
             raise ValueError(f"unknown task: {task_code}")
+        if agent.workspace_id != row.workspace_id:
+            raise ValueError(
+                f"session {session_id} and task {task_code} must belong to the same workspace"
+            )
         if row.status == "done":
             raise ValueError(f"task {task_code} is already done")
         if row.claimed_by_session_id and row.claimed_by_session_id != session_id:
             raise ValueError(f"task {task_code} is claimed by {row.claimed_by_session_id}")
-        row.status = "done"
-        row.completed_at = now
-        row.completion_summary = summary
+        completed = (
+            session.query(AgentTask)
+            .filter(
+                AgentTask.id == row.id,
+                AgentTask.status != "done",
+                or_(
+                    AgentTask.claimed_by_session_id.is_(None),
+                    AgentTask.claimed_by_session_id == session_id,
+                ),
+            )
+            .update(
+                {
+                    "status": "done",
+                    "completed_at": now,
+                    "completion_summary": summary,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not completed:
+            session.rollback()
+            winner = session.query(AgentTask).filter(AgentTask.code == task_code).one()
+            if winner.status == "done":
+                raise ValueError(f"task {task_code} is already done")
+            raise ValueError(f"task {task_code} is claimed by {winner.claimed_by_session_id}")
+        session.expire(row)
         workspace = session.query(Workspace).filter(Workspace.id == row.workspace_id).one()
         session.commit()
         result = _task_to_dict(row, workspace.slug)
