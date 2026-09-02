@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from brains import service
 from brains.control import supervisor
 from brains.service import common as service_common

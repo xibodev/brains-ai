@@ -632,8 +632,7 @@ def wire(
             entry["warnings"] = warnings
         report["tools"].append(entry)
     report["ok"] = all(
-        entry["mcp"].get("action") not in {"error", "conflict"}
-        for entry in report["tools"]
+        entry["mcp"].get("action") not in {"error", "conflict"} for entry in report["tools"]
     )
     return report
 
@@ -715,9 +714,7 @@ def status(home: Path) -> dict[str, Any]:
                 "mcp_url": url,
                 "bearer_token_env_var": bearer_token_env_var,
                 "bearer_token_env_available": (
-                    bool(os.environ.get(bearer_token_env_var))
-                    if bearer_token_env_var
-                    else None
+                    bool(os.environ.get(bearer_token_env_var)) if bearer_token_env_var else None
                 ),
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),

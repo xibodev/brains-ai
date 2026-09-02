@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 
 import pytest
-from brains.cli.app import app
 from typer.testing import CliRunner
+
+from brains.cli.app import app
 
 
 @pytest.fixture
