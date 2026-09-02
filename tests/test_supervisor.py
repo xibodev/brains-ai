@@ -89,6 +89,20 @@ def test_state_dir_respects_env_override(tmp_path, monkeypatch) -> None:
     assert supervisor._log_path().parent == (tmp_path / "custom").resolve() / "sessions"
 
 
+def test_setup_logging_keeps_file_logging_when_pythonw_has_no_stderr(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(supervisor.sys, "stderr", None)
+    monkeypatch.setattr(supervisor.logger, "handlers", [])
+
+    supervisor._setup_logging()
+    supervisor.logger.info("windowless-service-probe")
+
+    assert len(supervisor.logger.handlers) == 1
+    assert "windowless-service-probe" in supervisor._log_path().read_text(encoding="utf-8")
+    for handler in supervisor.logger.handlers:
+        handler.close()
+
+
 def test_child_runs_short_command_and_stops_cleanly(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
     supervisor._setup_logging()
