@@ -1,7 +1,7 @@
 <!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
+last_verified: 2026-09-01T22:00:00.000-06:00
+verified_by: Codex
+verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree experimental-lifecycle reference rewrite; documentation, traceability, and targeted Docker gates verified; deployment not verified
 -->
 
 # Brains Feature Contract
@@ -14,7 +14,7 @@ does not by itself advertise a feature.
 | Lifecycle | Meaning |
 |---|---|
 | Advertised | Supported in the normal installation. Evidence level is stated separately. |
-| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, listed in [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md); full UAT still applies. |
+| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, explicitly labelled in this contract; full UAT still applies. |
 | Target-only | Future product contract with no current product surface. |
 | Withdrawn | Known-faulty or retired implementation, unadvertised and non-activatable by contract. |
 | Source compatibility | Code or data remains temporarily for existing stores or until BL-P0-09 removes exposure. Presence is not availability. |
@@ -27,8 +27,8 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 
 1. Brains is the canonical product, repository, package, namespace, CLI, MCP, state,
    and browser identity.
-2. Every protected operation resolves one principal and applies explicit Org/Workspace
-   authorization.
+2. Every protected operation resolves the local operator principal and applies explicit
+   Workspace scope; retained Org policy is compatibility defense, not a multi-user claim.
 3. Durable state commits before it is presented as recovered, delivered, or complete.
 4. Human-gated actions do not execute before an attributable matching decision.
 5. A durable event is not proof that Brains executed or delivered an external effect.
@@ -56,7 +56,7 @@ in source are BL-P0-09 containment debt.
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
 | AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | Advertised at E1/E2; `/app` starts at Command Center. |
-| AC-F0-02 | Active Org/Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
+| AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
 | AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised/partial; some screens still collapse failures into empty state. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
 | AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes await removal. |
@@ -103,20 +103,19 @@ inventory, not an authentication identity or user path.
 **Promise:** Workspace-scoped coordination Sessions preserve lifecycle, events, asks,
 decisions, ownership, and resume context. Unsupported execution steering is refused.
 
-**Lifecycle:** advertised/partial. BL-P1-15 provides ordinary feedback. BL-P1-16's
-analytics interpretation is removed. BL-P1-20 is an implemented candidate blocked from admission
-until activation and worker transport are independently bounded. Running-agent
-delivery, Runtime stop, and execution supervision are withdrawn.
+**Lifecycle:** advertised/partial for durable local coordination. Feedback intelligence,
+automatic pattern routing, ephemeral peer review, running-agent delivery, Runtime stop,
+and execution supervision are frozen or withdrawn; see [FROZEN_BACKLOG.md](FROZEN_BACKLOG.md).
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Advertised at E1/E2/E3 for persisted event/replay paths; cross-process live fan-out remains open. |
+| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Advertised at E1/E2/E3 for the supported single-gateway process and persisted replay paths. |
 | AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised/partial; renewable PID-less leases and dormant transition exist, cross-harness end/detach E4 is open. |
 | AC-F3-03 | Session actions update linked Issue state/comments with attribution. | Withdrawn with Project/Issue execution; Workspace task/handoff attribution remains under B2. |
 | AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Advertised/partial; human routing is separate from authorization and complete publish E4 remains open. |
 | AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox/topics remain B2 capabilities. |
 | AC-F3-06 | Stop is authorized, durable, delivered to the Runtime, and reconciled. | Withdrawn with Runtime execution; coordination Session end is separate. |
-| AC-F3-07 | Realtime subscriptions are principal-, Org-, Workspace-, and entity-authorized. | Advertised at E1/E2; closed topics, replay, and revalidation exist, browser reconnect E4 is open. |
+| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and entity-authorized. | Advertised at E1/E2; closed topics, replay, and revalidation exist, browser reconnect E4 is open. |
 
 **Failure behavior:** Reconnect uses scoped durable state. Unsupported process delivery
 or stop is refused rather than queued or reported as successful.
@@ -174,47 +173,46 @@ authorized Workspace; it does not expose execution-model onboarding.
 **Promise:** Operations presents redacted effective state and permits only approved
 non-secret/encrypted writes with explicit reload or restart behavior.
 
-**Lifecycle:** advertised/partial for service, MCP, email, secrets, and GitHub posture.
+**Lifecycle:** advertised/partial for the local service, MCP, and secret posture.
 Gateway/provider, Runtime, automation, bridge, Postgres, telemetry, and legacy-admin
-activation are withdrawn.
+activation are withdrawn. Email/SMTP and GitHub integration are frozen.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial; external GitHub E4 is absent and provider probes are withdrawn. |
+| AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial for local service/MCP probes; external integration probes are frozen or withdrawn. |
 | AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial; withdrawn fields still require BL-P0-09 containment. |
 | AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised at E1/E2 for current typed writes; browser E4 remains open. |
-| AC-F7-04 | Multi-process reload/restart semantics are documented and verified before writes are promised. | Advertised/partial; handling-process reload exists for some settings, full convergence requires restart/probe. |
+| AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised/partial; handling-process reload exists for some settings, full convergence requires restart/probe. |
 
 ### F8 - GitHub linkage
 
-**Promise:** Authenticated GitHub events are accepted only when signature, delivery
-identity, and repository scope satisfy the configured contract. Outbound public defect
-creation additionally requires approval of the exact payload.
+**Promise:** Frozen target for authenticated GitHub events and human-approved public
+defect publication.
 
-**Lifecycle:** advertised/partial for signed ingress. BL-P1-19 is active implementation
-work, not yet an experiment or available outbound feature.
+**Lifecycle:** frozen/source compatibility. Signed ingress and persisted delivery
+identity do not create a supported integration or active evidence gap.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F8-01 | A pull-request reference can link to attributable Brains work. | Present at E1/E2/E3 for historical Issue linkage; Workspace-first destination needs BL-P1-19/containment design. |
-| AC-F8-02 | A verified merged event updates linked state idempotently. | Present at E1/E2/E3 in source; external operation unverified. |
-| AC-F8-03 | Webhook authentication validates GitHub signature and exact repository scope. | Present at E1/E2/E3 in source. |
-| AC-F8-04 | Configuration/failure state is visible without credentials or repository disclosure. | Present at E1/E2/E3 in redacted posture; browser/external E4 absent. |
+| AC-F8-01 | A pull-request reference can link to attributable Brains work. | Frozen target; historical Issue linkage remains compatibility inventory. |
+| AC-F8-02 | A verified merged event updates linked state idempotently. | Frozen/source compatibility. |
+| AC-F8-03 | Webhook authentication validates GitHub signature and exact repository scope. | Frozen source retains defensive validation. |
+| AC-F8-04 | Configuration/failure state is visible without credentials or repository disclosure. | Frozen/source compatibility. |
 
 ### F9 - Orgs, members, roles, and usage
 
-**Promise:** Org owners administer membership and roles; operators see only authorized
-Org/Workspace state and explicitly scoped usage.
+**Promise:** Frozen target for multi-user Org membership, roles, and scoped usage.
 
-**Lifecycle:** advertised/partial.
+**Lifecycle:** frozen/source compatibility. Signed ingress code and persisted delivery
+identity do not create a supported integration or active evidence gap.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F9-01 | Org create/read/update and active-Org switching are durable. | Advertised at E1/E2. |
-| AC-F9-02 | Owners/admins manage members without role escalation or last-owner loss. | Advertised at E1/E2/E3 for API paths. |
-| AC-F9-03 | HTTP reads/writes enforce principal plus Org/Workspace scope. | Advertised at E1/E2/E3 for covered routes; withdrawn routes remain containment debt. |
-| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Advertised/partial; Org-scoped SQL attribution exists. |
-| AC-F9-05 | Two-user/two-Org denial covers native APIs and browser sessions. | Partial; API/cookie tests exist, browser E4 is absent. |
+| AC-F9-01 | Org create/read/update and active-Org switching are durable. | Frozen/source compatibility. |
+| AC-F9-02 | Owners/admins manage members without role escalation or last-owner loss. | Frozen source retains defensive checks. |
+| AC-F9-03 | HTTP reads/writes enforce principal plus Org/Workspace scope. | Supported paths retain defensive scope checks; multi-user tenancy is frozen. |
+| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Frozen/source compatibility. |
+| AC-F9-05 | Two-user/two-Org denial covers native APIs and browser sessions. | Frozen target; not an active evidence gap. |
 
 ### F10 - Autopilots and managed Skills
 
@@ -250,11 +248,11 @@ LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility on
 ### B2 - Coordination plane and MCP
 
 **Promise:** Agents share coordination Sessions, tasks, claims, handoffs, messages,
-topics, peer help, decisions, knowledge, patterns, tool records, and checkpoints through
-stable scoped MCP/CLI/browser surfaces.
+topics, decisions, knowledge, tool records, and checkpoints through stable scoped
+MCP/CLI/browser surfaces.
 
-**Lifecycle:** advertised/partial, with BL-P1-15 as the ordinary feedback path and
-BL-P1-20 blocked from experimental admission.
+**Lifecycle:** advertised/partial for the local coordination plane. Feedback intelligence,
+automatic patterns, and peer-review spawning are frozen.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
@@ -262,8 +260,7 @@ BL-P1-20 blocked from experimental admission.
 - AC-B2-04: mutation tools authenticate, scope, and human-gate where required.
 
 Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
-successor transfer, interest-scoped topics, asynchronous peer help, sequential retry
-dedupe, Workspace browser adapters, feedback reporting, fenced ephemeral review, and
+successor transfer, interest-scoped topics, sequential retry dedupe, Workspace browser adapters, and
 durable mailbox identity/attachment plus address-based local delivery. Mailbox
 registration validates supported canonical
 tools and native IDs, stores only a unique versioned binding hash, provisions operator
@@ -274,11 +271,10 @@ address. Direct/offline delivery, explicit Workspace broadcast, Inbox/Sent,
 per-recipient read state, filtered thread timelines, reply/forward provenance,
 idempotent operation IDs, and cursor continuity now use migration 150 rows. Agent
 operations require current attachment plus binding; operator-inbox reads require a
-browser/local human channel. A proof-bound, body-free notification take/settle protocol
-now records idempotent `queued -> claimed -> delivered|failed` attempts while preserving
-pull fallback. Per-operator one-way SMTP copy now uses encrypted verified destinations,
-notification-only default content, explicit full-body consent, a leased retry outbox,
-and conservative uncertain outcomes. Isolated UAT covers explicit real native-ID
+browser/local human channel. A proof-bound, body-free local notification take/settle
+protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
+preserving pull fallback. SMTP rows and adapters are frozen compatibility inventory.
+Isolated UAT covers explicit real native-ID
 extraction, offline delivery, successor recovery, and threaded replies for
 OpenCode/Codex and OpenCode/Claude. Automatic extraction, concrete hook/plugin
 installation, abrupt-exit recovery, Copilot container credentials, real-provider review,
@@ -293,12 +289,10 @@ operator inbox provisioning, authorized phonebook/lookup, and non-enumerating co
 refusal. The threaded message and per-recipient delivery/read rows are now active for
 durable local mail. Notification attempt state is active through migration 151 and the
 CLI/MCP adapter protocol; the fixed nudge carries no mail metadata or content, and `wire`
-truthfully reports pull until it installs a stronger adapter. Migration 152 activates
-and constrains per-operator SMTP consent/outbox rows; destination ciphertext is
-mailbox-bound and excluded from generic configuration projection, local delivery is
-authoritative, and only pre-send failures retry. Concrete external harness wakeup,
-real-provider SMTP, binding rotation/recovery, and abrupt-exit/host-restart acceptance
-remain missing until later slices land.
+truthfully reports pull until it installs a stronger adapter. Migration 152 preserves
+constrained SMTP consent/outbox rows for compatibility without advertising external
+delivery. Concrete local harness wakeup, binding rotation/recovery, and abrupt-exit/
+host-restart acceptance remain core work; real-provider SMTP is frozen.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -321,7 +315,9 @@ BL-P1-18 owns normal-install local lookup and truthful unavailable-versus-empty 
 **Promise:** Human decisions precede governed consequential actions, and the resulting
 record is attributable and tamper-evident without overstating external harness effects.
 
-**Lifecycle:** advertised/partial.
+**Lifecycle:** advertised for supported local governed actions. The supported product has
+one local human operator; retained Org/member rows and defensive checks do not advertise
+multi-user tenancy, and broader external-action enforcement is frozen.
 
 - AC-B4-01: approval-required actions fail closed until a matching decision exists.
 - AC-B4-02: every advertised governed execution path shares the declared boundary.
@@ -384,9 +380,9 @@ E4 remain active backlog work.
 **Promise:** Advertised external events use explicit credentials, bounded scope,
 deduplication, privacy controls, and visible failure states.
 
-**Lifecycle:** advertised/partial for signed GitHub ingress. BL-P1-19 is active work for
-an exact human-approved outbound public defect payload. Generic triggers, relay,
-Telegram, Slack, WhatsApp, and WhatsApp Web are withdrawn.
+**Lifecycle:** frozen/source compatibility. Signed GitHub ingress, public defect relay,
+generic triggers, Telegram, Slack, WhatsApp, and WhatsApp Web are not supported local
+product surfaces and create no active evidence gap.
 
 - AC-B7-01: ingress and any future relay reject absent/invalid credentials.
 - AC-B7-02: delivery is idempotent where an external event ID exists.
@@ -407,13 +403,11 @@ is removed.
 - AC-B8-04: multi-process failures and stale coordination presence are observable.
 
 Protected readiness currently reports bounded storage/migration, queue, durable-mail,
-and recovery policy. Durable mail distinguishes invalid registration/attachment, aged
-unread, notification failure, and SMTP backlog/failure without treating ordinary offline
-mail as degraded. Readiness reports operational state only and does not infer adoption,
-behavior, or value. Child listener/protocol health, scheduler
-progress, registry/package/schema convergence, supported wire transport, and
-cross-process failure remain open. Withdrawn Runtime/provider/Postgres state does not
-degrade normal readiness.
+and recovery policy. Readiness reports operational state only and does not infer adoption,
+behavior, or value. Child listener/protocol health, scheduler progress,
+registry/package/schema convergence, and supported wire transport remain open for the
+single supervised local service. Frozen SMTP, multi-process, Runtime/provider/Postgres,
+and external-integration state does not degrade normal readiness.
 
 ### B9 - Retired legacy browser surfaces
 
