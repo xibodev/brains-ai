@@ -51,11 +51,12 @@ VOLUME ["/data"]
 EXPOSE 8787 9877
 
 # The supervisor can remain alive while a child crash-loops, so verify the
-# gateway response plus the MCP listener.
+# gateway response plus a real authenticated MCP initialize + tools/list.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import socket,urllib.request; \
+  CMD python -c "import urllib.request; \
 assert urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=3).status == 200; \
-[socket.create_connection(('127.0.0.1', 9877), timeout=3).close()]" \
+from brains.service.common import mcp_protocol_status; \
+assert mcp_protocol_status(timeout=3)['ready']" \
   || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "--", "brains-ai"]
