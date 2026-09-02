@@ -11,29 +11,17 @@ empty and a human explicitly approves thawing it.
 
 ## P0 — Core integrity
 
-### BL-P0-05 - Validate durable coordination lifecycle
-
-- **Action:** Validate coordination Sessions, tasks, claims, handoffs, checkpoints, terminal state, and explicit refusal of unsupported steering under concurrency and reload.
-- **Done when:** Isolated supported-harness journeys prove idempotent concurrent ownership, durable lifecycle recovery, and no false execution-control claim.
-- **Maps to:** F0, F3, B2; J7, J8, J11.
-
 ### BL-P0-06 - Validate supported local installation, wiring, and transport
 
 - **Action:** Validate package, executable, endpoint, and wire identity, safe harness transport selection, and service lifecycle on the declared supported host/harness matrix.
 - **Done when:** Clean-host install, wire, start, stop, restart, persistence, uninstall, and configuration-preservation journeys pass for every declared combination.
 - **Maps to:** F0, F7, B6, B8, B9; J1, J9, J11.
 
-### BL-P0-07 - Implement backup-backed SQLite integrity repair
+### BL-P0-09 - Complete frozen and withdrawn capability containment
 
-- **Action:** Detect and repair supported-store foreign-key and invariant violations behind a mandatory verified backup and dry-run boundary.
-- **Done when:** Corrupt and legacy-store fixtures prove diagnosis, backup ownership, repair refusal or success, post-repair integrity, and recoverable rollback.
-- **Maps to:** F3, B2, B5; J7, J11.
-
-### BL-P0-08 - Validate reproducible SQLite schema evolution
-
-- **Action:** Validate that clean install, upgrade, backup, restore, and archive compatibility use one ordered checksummed SQLite migration contract; close demonstrated gaps.
-- **Done when:** Fresh and supported legacy fixtures converge and skipped, reordered, changed, or incompatible migrations fail clearly without data loss.
-- **Maps to:** B5, B6; J9, J11.
+- **Action:** Remove frozen or withdrawn discovery and activation from normal documentation, default CLI/MCP and wire surfaces, browser navigation and configuration, setup, examples, extras, and operator guidance while retaining only safe persisted-data compatibility.
+- **Done when:** Generated advertisement inventories find no supported path for Runtime execution, Personas, Projects/Issues, Pods, execution onboarding or supervision, automation/managed Skills, semantic/graph retrieval, running-agent delivery, model gateway, Postgres, telemetry, messaging bridges, GitHub linkage, Org multi-user administration, cross-process scale, automatic feedback/pattern intelligence, public defect relay, ephemeral peer launch, optional SMTP copy, or external evidence services; direct calls fail closed.
+- **Maps to:** F1, F2, F4-F6, F8-F10, B1, B3, B7-B9; J1-J11.
 
 ## P1 — Core completion
 

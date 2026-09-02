@@ -67,6 +67,7 @@ from .migration_ledger import (
     begin_attempt,
     ensure_ledger,
     finish_attempt,
+    inspect_ledger,
     read_ledger,
     record_skipped,
 )
@@ -94,6 +95,7 @@ __all__ = [
     "MigrationError",
     "MigrationExecutionError",
     "MigrationFinding",
+    "MigrationLedgerStateError",
     "MigrationReport",
     "MigrationSchemaDriftError",
     "current_schema_versions",
@@ -128,6 +130,20 @@ _PRE_RELEASE_CHECKSUM_COMPAT: dict[tuple[str, str], frozenset[str]] = {
 }
 
 
+def _is_exact_pre_release_repair_gap(
+    spec: MigrationSpec, ledger: dict[str, LedgerRow], backend: str
+) -> bool:
+    """Whether this is the one known draft-139 gap repaired by migration 140."""
+    if backend != "sqlite" or spec.migration_id != "140_agent_comms_repair":
+        return False
+    leaked = ledger.get("139_agent_comms")
+    return bool(
+        leaked
+        and leaked.checksum
+        in _PRE_RELEASE_CHECKSUM_COMPAT.get(("139_agent_comms", backend), frozenset())
+    )
+
+
 class MigrationError(RuntimeError):
     """Base class for every refusal raised by the migration runner."""
 
@@ -146,6 +162,10 @@ class MigrationExecutionError(MigrationError):
 
 class MigrationSchemaDriftError(MigrationError):
     """The migrated schema does not contain everything the models declare."""
+
+
+class MigrationLedgerStateError(MigrationError):
+    """The recorded migration history is unsafe to advance."""
 
 
 @dataclass(frozen=True)
@@ -508,7 +528,7 @@ def _analyze_ledger(
         findings.append(
             MigrationFinding(
                 code="unknown_migration",
-                severity=SEVERITY_WARNING,
+                severity=SEVERITY_ERROR,
                 migration_id=migration_id,
                 detail=(
                     "the ledger records a migration this build does not ship; the store "
@@ -523,6 +543,30 @@ def _analyze_ledger(
         if row is None:
             continue
         status = row.effective_status
+        if row.migration_order is None and row.checksum is not None:
+            findings.append(
+                MigrationFinding(
+                    code="migration_order_mismatch",
+                    severity=SEVERITY_ERROR,
+                    migration_id=spec.migration_id,
+                    detail=(
+                        "the checksummed ledger row records no migration order, but this "
+                        f"build's immutable corpus records order {spec.order}"
+                    ),
+                )
+            )
+        elif row.migration_order is not None and row.migration_order != spec.order:
+            findings.append(
+                MigrationFinding(
+                    code="migration_order_mismatch",
+                    severity=SEVERITY_ERROR,
+                    migration_id=spec.migration_id,
+                    detail=(
+                        f"the ledger records order {row.migration_order}, but this build's "
+                        f"immutable corpus records order {spec.order}"
+                    ),
+                )
+            )
         if status in (STATUS_APPLIED, STATUS_SKIPPED):
             highest_settled = max(highest_settled, spec.order)
         if row.backend and row.backend != backend:
@@ -564,14 +608,40 @@ def _analyze_ledger(
         if spec.migration_id in ledger:
             continue
         if spec.order < highest_settled:
+            later_settled = [
+                ledger[later.migration_id]
+                for later in specs
+                if later.order > spec.order
+                and later.migration_id in ledger
+                and ledger[later.migration_id].effective_status
+                in (STATUS_APPLIED, STATUS_SKIPPED)
+            ]
+            exact_pre_release_repair_gap = _is_exact_pre_release_repair_gap(
+                spec, ledger, backend
+            )
+            modern_gap = any(row.checksum is not None for row in later_settled) and not (
+                exact_pre_release_repair_gap
+            )
             findings.append(
                 MigrationFinding(
                     code="ledger_gap",
-                    severity=SEVERITY_WARNING,
+                    severity=SEVERITY_ERROR if modern_gap else SEVERITY_WARNING,
                     migration_id=spec.migration_id,
                     detail=(
                         "a later migration is already settled while this one is missing "
-                        "from the ledger; it is applied out of its original order"
+                        "from the ledger; "
+                        + (
+                            "the later checksummed history makes this unsafe to apply out "
+                            "of its original order"
+                            if modern_gap
+                            else (
+                                "this exact pre-release repair gap is applied during "
+                                "supported convergence"
+                                if exact_pre_release_repair_gap
+                                else "this pre-checksum legacy gap is applied out of its "
+                                "original order during supported legacy convergence"
+                            )
+                        )
                     ),
                 )
             )
@@ -742,6 +812,55 @@ def _settle_recorded(
     return row.effective_status, False
 
 
+def _inspect_recorded(
+    spec: MigrationSpec,
+    row: LedgerRow,
+    backend: str,
+    findings: list[MigrationFinding],
+) -> str:
+    """Validate one settled row without adopting or otherwise rewriting it."""
+    if row.checksum is None:
+        findings.append(
+            MigrationFinding(
+                code="legacy_checksum_unverified",
+                severity=SEVERITY_WARNING,
+                migration_id=spec.migration_id,
+                detail=(
+                    "the pre-checksum ledger has no immutable hash for this migration; "
+                    "an applying run can adopt the current corpus identity, but status "
+                    "inspection leaves the row unchanged"
+                ),
+            )
+        )
+        return row.effective_status
+
+    expected = spec.checksum_for(row.backend or backend)
+    if row.checksum != expected:
+        accepted = _PRE_RELEASE_CHECKSUM_COMPAT.get(
+            (spec.migration_id, row.backend or backend), frozenset()
+        )
+        if row.checksum in accepted:
+            findings.append(
+                MigrationFinding(
+                    code="pre_release_checksum_accepted",
+                    severity=SEVERITY_WARNING,
+                    migration_id=spec.migration_id,
+                    detail=(
+                        "accepted one exact pre-release SQLite checksum; the additive "
+                        "repair migration is still required for convergence"
+                    ),
+                )
+            )
+            return row.effective_status
+        raise MigrationChecksumError(
+            f"migration {spec.migration_id} was applied with checksum {row.checksum} but the "
+            f"shipped implementation hashes to {expected}. A migration a database has already "
+            "applied must never be edited; restore the file and add a new numbered migration "
+            "instead."
+        )
+    return row.effective_status
+
+
 # --------------------------------------------------------------------------- #
 # Schema verification
 # --------------------------------------------------------------------------- #
@@ -787,24 +906,58 @@ def _ensure_ledger_once(active: Engine) -> None:
 def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> MigrationReport:
     """Bring the active database to the current schema, or report what is left.
 
-    With ``apply=False`` no delta runs; the ledger is still self-upgraded (that
-    is what makes it readable) and a pre-checksum row still has its checksum
-    adopted, so a read-only caller sees the same truth the applying caller
-    would.
+    With ``apply=False`` no delta runs and no filesystem, schema, or ledger
+    state is created or rewritten. Legacy rows are projected into the current
+    diagnostic shape in memory and reported without adopting their checksums.
 
     ``include_ledger=False`` skips materialising the per-migration listing.
     ``init_db`` runs on every entry point and does not need it.
     """
     active = _active_engine()
-    _ensure_sqlite_parent_directory(active)
+    if apply:
+        _ensure_sqlite_parent_directory(active)
     backend = active.dialect.name
     report = MigrationReport(backend=backend, database=database_identity(active))
     specs = corpus()
 
     with _RUN_LOCK:
-        _ensure_ledger_once(active)
-        ledger = read_ledger(active)
-        report.findings.extend(_analyze_ledger(specs, ledger, backend))
+        if apply:
+            # Refuse an unsafe existing history before ``ensure_ledger`` gets
+            # any opportunity to create, upgrade, or adopt ledger state. A
+            # fresh store and a warning-only pre-checksum legacy store proceed
+            # to the normal bootstrap path below.
+            preflight_ledger = inspect_ledger(active)
+            preflight_findings = _analyze_ledger(specs, preflight_ledger, backend)
+            validation_findings: list[MigrationFinding] = []
+            for spec in specs:
+                row = preflight_ledger.get(spec.migration_id)
+                if row is None:
+                    continue
+                status = row.effective_status
+                settled = status in (STATUS_APPLIED, STATUS_SKIPPED)
+                reapplicable = status == STATUS_SKIPPED and spec.supports(backend)
+                if settled and not reapplicable:
+                    _inspect_recorded(spec, row, backend, validation_findings)
+            fatal = [
+                finding
+                for finding in preflight_findings
+                if finding.severity == SEVERITY_ERROR
+            ]
+            if fatal:
+                detail = "; ".join(
+                    finding.code
+                    + (f" ({finding.migration_id})" if finding.migration_id else "")
+                    for finding in fatal
+                )
+                raise MigrationLedgerStateError(
+                    "refusing to advance an inconsistent migration ledger: " + detail
+                )
+            report.findings.extend(preflight_findings)
+            _ensure_ledger_once(active)
+            ledger = read_ledger(active)
+        else:
+            ledger = inspect_ledger(active)
+            report.findings.extend(_analyze_ledger(specs, ledger, backend))
         adopted = False
 
         for spec in specs:
@@ -816,8 +969,13 @@ def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> Migrat
             reapplicable = status == STATUS_SKIPPED and spec.supports(backend)
 
             if row is not None and settled and not reapplicable:
-                resolved, rewritten = _settle_recorded(active, spec, row, backend, report.findings)
-                adopted = adopted or rewritten
+                if apply:
+                    resolved, rewritten = _settle_recorded(
+                        active, spec, row, backend, report.findings
+                    )
+                    adopted = adopted or rewritten
+                else:
+                    resolved = _inspect_recorded(spec, row, backend, report.findings)
                 target = report.applied if resolved == STATUS_APPLIED else report.skipped
                 target.append(spec.migration_id)
                 continue
@@ -910,7 +1068,22 @@ def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> Migrat
             report.ledger = [row.to_dict() for row in _ordered_rows(final, specs)]
 
     if not apply:
-        report.schema_verified = not _verify_schema(active)
+        database = active.url.database
+        sqlite_database_exists = True
+        if backend == "sqlite" and database and database != ":memory:":
+            candidate = database
+            if candidate.startswith("file:"):
+                mode = str(active.url.query.get("mode", ""))
+                if mode == "memory" or candidate == "file::memory:":
+                    candidate = ":memory:"
+                else:
+                    candidate = candidate.removeprefix("file:").split("?", 1)[0]
+            if candidate != ":memory:":
+                sqlite_database_exists = Path(candidate).expanduser().exists()
+        can_inspect_schema = not (
+            backend == "sqlite" and database and not sqlite_database_exists
+        )
+        report.schema_verified = can_inspect_schema and not _verify_schema(active)
         return report
 
     if report.executed or not _SCHEMA_VERIFIED.get(active, False):

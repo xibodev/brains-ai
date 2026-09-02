@@ -110,7 +110,7 @@ and execution supervision are frozen or withdrawn; see [FROZEN_BACKLOG.md](FROZE
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
 | AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Advertised at E1/E2/E3 for the supported single-gateway process and persisted replay paths. |
-| AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised/partial; renewable PID-less leases and dormant transition exist, cross-harness end/detach E4 is open. |
+| AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised; terminal transitions cannot resurrect and atomically release task, claim, mailbox, and command ownership. |
 | AC-F3-03 | Session actions update linked Issue state/comments with attribution. | Withdrawn with Project/Issue execution; Workspace task/handoff attribution remains under B2. |
 | AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Advertised/partial; human routing is separate from authorization and complete publish E4 remains open. |
 | AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox/topics remain B2 capabilities. |
@@ -260,7 +260,8 @@ automatic patterns, and peer-review spawning are frozen.
 - AC-B2-04: mutation tools authenticate, scope, and human-gate where required.
 
 Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
-successor transfer, interest-scoped topics, sequential retry dedupe, Workspace browser adapters, and
+successor transfer, interest-scoped topics, concurrent retry dedupe, live-Session- and
+Workspace-bound atomic task/claim/handoff ownership, Workspace browser adapters, and
 durable mailbox identity/attachment plus address-based local delivery. Mailbox
 registration validates supported canonical
 tools and native IDs, stores only a unique versioned binding hash, provisions operator

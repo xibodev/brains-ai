@@ -343,6 +343,7 @@ _BLOCKING_MIGRATION_FINDINGS = frozenset(
         "interrupted_migration",
         "failed_migration",
         "ledger_gap",
+        "migration_order_mismatch",
         "unknown_migration",
         "backend_mismatch",
     }
