@@ -31,6 +31,13 @@ from brains.mcp.sse_auth import (
     host_allowlist_for,
     resolve_bind_host,
 )
+from brains.mcp.transport import (
+    MCP_LEGACY_SSE_PATH,
+    MCP_MODE_SSE,
+    MCP_MODE_STDIO,
+    MCP_MODE_STREAMABLE_HTTP,
+    MCP_STREAMABLE_HTTP_PATH,
+)
 
 
 def _build_mcp_transport_security() -> TransportSecuritySettings | None:
@@ -189,7 +196,12 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "learn_propose": tools.learn_propose_tool,
 }
 
-mcp = FastMCP("Brains v2", transport_security=_build_mcp_transport_security())
+mcp = FastMCP(
+    "Brains v2",
+    streamable_http_path=MCP_STREAMABLE_HTTP_PATH,
+    sse_path=MCP_LEGACY_SSE_PATH,
+    transport_security=_build_mcp_transport_security(),
+)
 
 # Namespace prefix for every MCP tool. MUST stay within Anthropic's tool-name
 # rule ^[a-zA-Z0-9_-]+$ — an underscore, NOT a dot. A dotted name (the old
@@ -522,11 +534,26 @@ def _scheduler_loop(interval_seconds: int = 60):
         time.sleep(interval_seconds)
 
 
-def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int = 60):
+def _build_http_app(mode: str, host: str):
+    """Build the authenticated ASGI application for an HTTP MCP transport."""
+    if mode == MCP_MODE_STREAMABLE_HTTP:
+        inner_app = mcp.streamable_http_app()
+    elif mode == MCP_MODE_SSE:
+        inner_app = mcp.sse_app()
+    else:
+        raise ValueError(f"unsupported HTTP MCP mode: {mode}")
+    return MCPAuthMiddleware(inner_app, allowed_hosts=host_allowlist_for(host))
+
+
+def run_mcp_server(
+    mode: str = MCP_MODE_STREAMABLE_HTTP,
+    port: int = 9877,
+    scheduler_interval: int = 60,
+):
     from brains.api.admin_key import ensure_admin_key
 
     # Both transports need the persisted key to decrypt local secure settings.
-    ensure_admin_key(print_banner=mode == "sse")
+    ensure_admin_key(print_banner=mode != MCP_MODE_STDIO)
     # Make sure the admin operator row exists before any tool can be
     # invoked over either transport. Idempotent and cheap.
     from brains.control.durable_mailbox import ensure_operator_mailboxes
@@ -535,11 +562,11 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
     ensure_admin_operator()
     ensure_operator_mailboxes()
 
-    if mode == "sse":
-        # Load the persisted admin key into settings so the SSE auth
+    if mode in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE}:
+        # Load the persisted admin key into settings so HTTP auth
         # middleware's _valid_keys() can resolve it — parity with the
         # gateway's lifespan (brains.main:lifespan). Without this, every
-        # authenticated SSE request 500s with "API key not configured".
+        # authenticated MCP request 500s with "API key not configured".
         sched_thread = threading.Thread(
             target=_scheduler_loop, args=(scheduler_interval,), daemon=True, name="brains-scheduler"
         )
@@ -547,9 +574,14 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
         import uvicorn
 
         host = resolve_bind_host()
-        sse_app = mcp.sse_app()
-        guarded_app = MCPAuthMiddleware(sse_app, allowed_hosts=host_allowlist_for(host))
-        print(f"Brains MCP server running on http://{host}:{port}/sse", file=sys.stderr)
+        guarded_app = _build_http_app(mode, host)
+        path = MCP_STREAMABLE_HTTP_PATH if mode == MCP_MODE_STREAMABLE_HTTP else MCP_LEGACY_SSE_PATH
+        compatibility = " (legacy compatibility)" if mode == MCP_MODE_SSE else ""
+        print(
+            f"Brains MCP server running via {mode}{compatibility} on "
+            f"http://{host}:{port}{path}",
+            file=sys.stderr,
+        )
         print(f"Scheduler active (every {scheduler_interval}s)", file=sys.stderr)
         if experimental_enabled():
             print("Autopilot auto-fire: enabled (experimental)", file=sys.stderr)
@@ -560,24 +592,31 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
             )
         if settings.allow_unauthenticated_api:
             print(
-                "MCP SSE auth: DISABLED (settings.allow_unauthenticated_api=True)",
+                "MCP HTTP auth: DISABLED (settings.allow_unauthenticated_api=True)",
                 file=sys.stderr,
             )
         else:
             print(
-                "MCP SSE auth: required (Authorization: Bearer <api-key>)",
+                "MCP HTTP auth: required (Authorization: Bearer <api-key>)",
                 file=sys.stderr,
             )
         os.environ["UVICORN_PORT"] = str(port)
         os.environ["UVICORN_HOST"] = host
         uvicorn.run(guarded_app, host=host, port=port, log_level="info")
-    else:
+    elif mode == MCP_MODE_STDIO:
         mcp.run(transport="stdio")
+    else:
+        raise ValueError(f"unsupported MCP mode: {mode}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="brains-mcp-server")
-    parser.add_argument("--mode", choices=["sse", "stdio"], default="sse")
+    parser.add_argument(
+        "--mode",
+        choices=[MCP_MODE_STREAMABLE_HTTP, MCP_MODE_STDIO, MCP_MODE_SSE],
+        default=MCP_MODE_STREAMABLE_HTTP,
+        help="MCP transport; sse is retained only for explicit legacy compatibility",
+    )
     parser.add_argument("--port", type=int, default=9877)
     parser.add_argument("--scheduler-interval", type=int, default=60)
     args = parser.parse_args()
