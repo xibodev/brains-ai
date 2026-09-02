@@ -324,14 +324,39 @@ def release_task(
 ) -> dict:
     init_db()
     with SessionLocal() as session:
+        agent = _lock_session_lifecycle(session, session_id)
+        if agent is None:
+            raise ValueError(f"unknown session: {session_id} (release task)")
+        agent = require_live_session(session, session_id, action="release task")
         row = session.query(AgentTask).filter(AgentTask.code == task_code).one_or_none()
         if row is None:
             raise ValueError(f"unknown task: {task_code}")
-        if row.claimed_by_session_id and row.claimed_by_session_id != session_id:
+        if agent.workspace_id != row.workspace_id:
+            raise ValueError(
+                f"session {session_id} and task {task_code} must belong to the same workspace"
+            )
+        if row.claimed_by_session_id != session_id or row.status != "in_progress":
             raise ValueError(f"task {task_code} is claimed by {row.claimed_by_session_id}")
-        row.status = "available"
-        row.claimed_by_session_id = None
-        row.claimed_at = None
+        released = (
+            session.query(AgentTask)
+            .filter(
+                AgentTask.id == row.id,
+                AgentTask.status == "in_progress",
+                AgentTask.claimed_by_session_id == session_id,
+            )
+            .update(
+                {
+                    "status": "available",
+                    "claimed_by_session_id": None,
+                    "claimed_at": None,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not released:
+            session.rollback()
+            winner = session.query(AgentTask).filter(AgentTask.code == task_code).one()
+            raise ValueError(f"task {task_code} is claimed by {winner.claimed_by_session_id}")
         workspace_id = row.workspace_id
         title = row.title
         session.commit()
@@ -387,20 +412,51 @@ def handoff_task(
     holder: dict = {}
 
     def build(session):
+        agent = _lock_session_lifecycle(session, session_id)
+        if agent is None:
+            raise ValueError(f"unknown session: {session_id} (handoff task)")
+        agent = require_live_session(session, session_id, action="handoff task")
         predecessor = (
             session.query(AgentTask).filter(AgentTask.code == from_task_code).one_or_none()
         )
         if predecessor is None:
             raise ValueError(f"unknown task: {from_task_code}")
+        if agent.workspace_id != predecessor.workspace_id:
+            raise ValueError(
+                f"session {session_id} and task {from_task_code} must belong to the same workspace"
+            )
         if predecessor.status == "done":
             raise ValueError(f"task {from_task_code} is already done")
         if predecessor.claimed_by_session_id and predecessor.claimed_by_session_id != session_id:
             raise ValueError(
                 f"task {from_task_code} is claimed by {predecessor.claimed_by_session_id}"
             )
-        predecessor.status = "done"
-        predecessor.completed_at = now
-        predecessor.completion_summary = completion_summary
+        completed = (
+            session.query(AgentTask)
+            .filter(
+                AgentTask.id == predecessor.id,
+                AgentTask.status != "done",
+                or_(
+                    AgentTask.claimed_by_session_id.is_(None),
+                    AgentTask.claimed_by_session_id == session_id,
+                ),
+            )
+            .update(
+                {
+                    "status": "done",
+                    "completed_at": now,
+                    "completion_summary": completion_summary,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not completed:
+            session.rollback()
+            winner = session.query(AgentTask).filter(AgentTask.code == from_task_code).one()
+            if winner.status == "done":
+                raise ValueError(f"task {from_task_code} is already done")
+            raise ValueError(f"task {from_task_code} is claimed by {winner.claimed_by_session_id}")
+        session.expire(predecessor)
 
         deps = [from_task_code]
         for extra in (extra_depends_on or "").split(","):

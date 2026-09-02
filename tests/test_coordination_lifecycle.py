@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -14,12 +15,27 @@ from brains.control.handoffs import list_handoffs, pick_handoff, set_handoff
 from brains.control.resume import checkpoint, list_checkpoints
 from brains.control.session_commands import KIND_MESSAGE, RESULT_UNSUPPORTED, enqueue
 from brains.control.sessions import end_session, get_agent_session, set_session_state, start_session
-from brains.control.tasks import claim_task, complete_task, create_task, get_task
+from brains.control.tasks import (
+    claim_task,
+    complete_task,
+    create_task,
+    get_task,
+    handoff_task,
+    release_task,
+)
+from brains.storage.migrations import init_db
 
 
 def _concurrent(count, call):
     with ThreadPoolExecutor(max_workers=count) as pool:
         return list(pool.map(call, range(count)))
+
+
+def _python_env():
+    return {
+        **os.environ,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+    }
 
 
 @pytest.mark.parametrize("terminal_path", ["state", "end"])
@@ -87,6 +103,44 @@ def test_task_claim_is_atomic_live_and_workspace_bound(tmp_path):
 
     completions = [status for status in _concurrent(len(agents), complete) if status]
     assert completions == ["done"]
+
+
+def test_release_and_task_handoff_enforce_live_atomic_ownership(tmp_path):
+    workspace = str(tmp_path / "one")
+    other_workspace = str(tmp_path / "two")
+    owner = start_session(workspace, tool="pytest")
+    contender = start_session(workspace, tool="pytest")
+    outsider = start_session(other_workspace, tool="pytest")
+    task = create_task(workspace, "owned release")
+    claim_task(task["code"], owner["session_id"])
+
+    with pytest.raises(ValueError, match="same workspace"):
+        release_task(task["code"], outsider["session_id"])
+    with pytest.raises(ValueError, match="claimed by"):
+        release_task(task["code"], contender["session_id"])
+    assert release_task(task["code"], owner["session_id"])["status"] == "available"
+
+    predecessor = create_task(workspace, "one handoff winner")
+
+    def handoff(index):
+        session_id = (owner, contender)[index]["session_id"]
+        try:
+            return handoff_task(predecessor["code"], title=f"next {index}", session_id=session_id)
+        except ValueError:
+            return None
+
+    outcomes = [result for result in _concurrent(2, handoff) if result]
+    assert len(outcomes) == 1
+    assert get_task(predecessor["code"])["status"] == "done"
+
+    ended_task = create_task(workspace, "ended handoff")
+    ended_release = create_task(workspace, "ended release")
+    claim_task(ended_release["code"], owner["session_id"])
+    set_session_state(owner["session_id"], "completed")
+    with pytest.raises(ValueError, match="ended"):
+        release_task(ended_release["code"], owner["session_id"])
+    with pytest.raises(ValueError, match="ended"):
+        handoff_task(ended_task["code"], title="not created", session_id=owner["session_id"])
 
 
 def test_workspace_claim_is_live_and_workspace_bound(tmp_path):
@@ -160,11 +214,37 @@ def test_checkpoint_retry_is_atomic_and_rejects_ended_session(tmp_path):
 
 def test_reuse_survives_concurrency_and_process_restart(tmp_path):
     workspace = str(tmp_path)
-
-    def register(_index):
-        return start_session(workspace, tool="pytest", reuse_existing=True)["session_id"]
-
-    session_ids = _concurrent(6, register)
+    init_db()
+    gate = tmp_path / "go"
+    scripts = []
+    for index in range(4):
+        ready = tmp_path / f"ready-{index}"
+        script = (
+            "import json,time; from pathlib import Path; "
+            "from brains.control.sessions import start_session; "
+            f"ready=Path({str(ready)!r}); gate=Path({str(gate)!r}); ready.write_text('ready'); "
+            "\nwhile not gate.exists(): time.sleep(0.01)\n"
+            f"print(json.dumps(start_session({workspace!r}, tool='pytest', reuse_existing=True)))"
+        )
+        scripts.append(
+            subprocess.Popen(
+                [sys.executable, "-c", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=_python_env(),
+                text=True,
+            )
+        )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and len(list(tmp_path.glob("ready-*"))) != len(scripts):
+        time.sleep(0.01)
+    assert len(list(tmp_path.glob("ready-*"))) == len(scripts)
+    gate.write_text("go", encoding="utf-8")
+    outputs = [process.communicate(timeout=60) for process in scripts]
+    assert all(process.returncode == 0 for process in scripts), outputs
+    session_ids = [
+        json.loads(stdout.strip().splitlines()[-1])["session_id"] for stdout, _ in outputs
+    ]
     assert len(set(session_ids)) == 1
     session_id = session_ids[0]
 
@@ -190,10 +270,7 @@ def test_reuse_survives_concurrency_and_process_restart(tmp_path):
         [sys.executable, "-c", script],
         check=True,
         capture_output=True,
-        env={
-            **os.environ,
-            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-        },
+        env=_python_env(),
         text=True,
     )
     resumed = json.loads(completed.stdout.strip().splitlines()[-1])
