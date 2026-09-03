@@ -121,6 +121,83 @@ def test_positive_manifest_rejects_deep_surface_changes() -> None:
         assert any(section in error for error in errors)
 
 
+def test_positive_manifest_rejects_cli_contract_mutations() -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    normal = actual["modes"]["normal"]
+    normal["cli_groups"].append("rogue")
+    normal["cli_callbacks"]["rogue.callback"] = ["rogue"]
+    normal["cli_root"]["parameters"].append({"name": "rogue"})
+    normal["cli_nodes"]["serve"]["parameters"].append({"name": "activator"})
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    for section in ("cli_groups", "cli_callbacks", "cli_root.parameters", "cli_nodes.serve"):
+        assert any(section in error for error in errors)
+
+
+def test_manifest_records_supported_secondary_option_spellings() -> None:
+    manifest = _manifest()
+    normal = manifest["modes"]["normal"]
+    root_spellings = {
+        spelling
+        for parameter in normal["cli_root"]["parameters"]
+        for spelling in parameter["spellings"]
+    }
+    log_spellings = {
+        spelling
+        for parameter in normal["cli_nodes"]["service logs"]["parameters"]
+        for spelling in parameter["spellings"]
+    }
+    assert {"--version", "-V"} <= root_spellings
+    assert {"--lines", "-n"} <= log_spellings
+
+
+def test_positive_manifest_rejects_advertisement_and_activation_mutations() -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    normal = actual["modes"]["normal"]
+    normal["mcp_tool_prefix"] = "rogue_"
+    normal["mcp_advertised_tools"].append("rogue_tool")
+    normal["config_sections"].append("rogue")
+    normal["extras"].append("rogue")
+    normal["install_features"].append("rogue")
+    all_opt = actual["modes"]["all_opt_in"]
+    all_opt["all_opt_in_environment_names"].append("BRAINS_ROGUE_ACTIVATOR")
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    for section in (
+        "mcp_tool_prefix",
+        "mcp_advertised_tools",
+        "config_sections",
+        "extras",
+        "install_features",
+        "all_opt_in_environment_names",
+    ):
+        assert any(section in error for error in errors)
+
+
+def test_positive_manifest_rejects_navigation_and_wire_file_mutations() -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    normal = actual["modes"]["normal"]
+    normal["browser_redirects"].append("/rogue")
+    normal["spa_navigation_sites"].append(
+        {"file": "frontend/src/Rogue.tsx", "kind": "link", "line": 1, "target": "/rogue"}
+    )
+    adapter = next(iter(normal["wire"]["adapters"].values()))
+    transport = next(iter(adapter["transports"].values()))
+    transport["config_content"] = transport["config_content"].replace(
+        "brains", "rogue", 1
+    )
+    transport["instruction_content"] = "missing sentinels"
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any("browser_redirects" in error for error in errors)
+    assert any("spa_navigation_sites" in error for error in errors)
+    assert any("config_content" in error for error in errors)
+    assert any("instruction_content" in error for error in errors)
+
+
 def test_checker_fails_closed_without_disclosing_inventory_error(monkeypatch, capsys) -> None:
     def fail() -> dict[str, object]:
         raise RuntimeError("sensitive inventory detail")

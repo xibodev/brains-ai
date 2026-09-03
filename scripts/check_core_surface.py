@@ -14,7 +14,7 @@ import sys
 import tempfile
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
@@ -138,70 +138,111 @@ def _documented_ids() -> dict[str, object]:
 
 def _wire_inventory() -> dict[str, object]:
     from brains.mcp.transport import MCP_MODE_SSE, MCP_MODE_STDIO, MCP_MODE_STREAMABLE_HTTP
-    from brains.wire import (
-        ADAPTERS,
-        MD_END,
-        MD_START,
-        RULE_BODY,
-        SERVER_KEY,
-        TOML_END,
-        TOML_START,
-        WireContext,
-        _replace_sentinel_block,
-    )
+    from brains.wire import ADAPTERS, RULE_BODY, build_wire_context, wire
 
-    home = Path("/surface-home")
     rendered: dict[str, object] = {}
-    for name, adapter in sorted(ADAPTERS.items()):
-        transports = [MCP_MODE_STREAMABLE_HTTP, MCP_MODE_STDIO]
-        if adapter.supports_sse:
-            transports.append(MCP_MODE_SSE)
-        entries: dict[str, object] = {}
-        for transport in transports:
-            context = WireContext(
-                transport=transport,
-                url="http://127.0.0.1:9877/mcp",
-                api_key="<redacted>",
-                bearer_token_env_var="BRAINS_MCP_BEARER_TOKEN",
-                python="python",
-                db_url="sqlite:////surface/brains.db",
-            )
-            if adapter._json_entry is not None:
-                managed_entry = {**adapter._json_entry(context), "_brains_managed": True}
-                config_content = (
-                    json.dumps(
-                        {adapter.json_servers_key: {SERVER_KEY: managed_entry}},
-                        indent=2,
+    token_name = "BRAINS_MCP_BEARER_TOKEN"
+    previous_token = os.environ.get(token_name)
+    os.environ[token_name] = "<redacted>"
+    try:
+        for name, adapter in sorted(ADAPTERS.items()):
+            transports = [MCP_MODE_STREAMABLE_HTTP, MCP_MODE_STDIO]
+            if adapter.supports_sse:
+                transports.append(MCP_MODE_SSE)
+            entries: dict[str, object] = {}
+            for transport in transports:
+                with tempfile.TemporaryDirectory(prefix=f"brains-wire-{name}-") as temporary:
+                    home = Path(temporary)
+                    context = build_wire_context(
+                        transport=transport,
+                        port=9877,
+                        api_key=("" if transport == MCP_MODE_STDIO else "<redacted>"),
+                        python="python",
+                        db_url="sqlite:////surface/brains.db",
                     )
-                    + "\n"
-                )
-            elif adapter._toml_block is not None:
-                managed_entry = adapter._toml_block(context)
-                config_content = _replace_sentinel_block(
-                    "", TOML_START, TOML_END, managed_entry
-                )
-            else:
-                raise RuntimeError(f"wire adapter {name} has no renderer")
-            entries[transport] = {
-                "managed_entry": managed_entry,
-                "file_content": config_content,
+                    report = wire(
+                        home,
+                        context,
+                        tools=[name],
+                        rules=True,
+                        force=True,
+                        dry_run=False,
+                    )
+                    tool_reports = report.get("tools", [])
+                    if not report.get("ok") or len(tool_reports) != 1:
+                        raise RuntimeError(f"wire adapter {name} failed isolated generation")
+                    tool_report = tool_reports[0]
+                    config_path = adapter.mcp_path(home)
+                    instruction_path = adapter.instr_path(home)
+                    entries[transport] = {
+                        "url": context.url if transport != MCP_MODE_STDIO else None,
+                        "config_content": config_path.read_text(encoding="utf-8"),
+                        "instruction_content": instruction_path.read_text(encoding="utf-8"),
+                        "mcp_action": tool_report["mcp"].get("action"),
+                        "rule_action": tool_report["rule"].get("action"),
+                    }
+            canonical_home = Path("/surface-home")
+            rendered[name] = {
+                "format": adapter.mcp_format,
+                "mcp_path": adapter.mcp_path(canonical_home).relative_to(canonical_home).as_posix(),
+                "instruction_path": adapter.instr_path(canonical_home)
+                .relative_to(canonical_home)
+                .as_posix(),
+                "json_servers_key": adapter.json_servers_key,
+                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "transports": entries,
             }
-        instruction_content = _replace_sentinel_block(
-            "", MD_START, MD_END, RULE_BODY.rstrip("\n")
-        )
-        rendered[name] = {
-            "format": adapter.mcp_format,
-            "mcp_path": adapter.mcp_path(home).relative_to(home).as_posix(),
-            "instruction_path": adapter.instr_path(home).relative_to(home).as_posix(),
-            "json_servers_key": adapter.json_servers_key,
-            "mailbox_notification_mode": adapter.mailbox_notification_mode,
-            "transports": entries,
-            "instruction_content": instruction_content,
-        }
+    finally:
+        if previous_token is None:
+            os.environ.pop(token_name, None)
+        else:
+            os.environ[token_name] = previous_token
     return {
         "adapters": rendered,
         "rule_sha256": hashlib.sha256(RULE_BODY.encode("utf-8")).hexdigest(),
     }
+
+
+def _spa_navigation_inventory() -> tuple[list[dict[str, object]], dict[str, str]]:
+    source_root = ROOT / "frontend/src"
+    patterns = (
+        ("route", re.compile(r'<Route\b[^>]*\bpath\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
+        ("redirect", re.compile(r'<Navigate\b[^>]*\bto\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
+        ("link", re.compile(r'<(?:Link|NavLink)\b[^>]*\bto\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
+        ("anchor", re.compile(r'<a\b[^>]*\bhref\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
+        ("navigate", re.compile(r'\bnavigate\(\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
+        ("location", re.compile(r'\blocation\.(?:assign|replace)\(\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
+        ("location-href", re.compile(r'\blocation\.href\s*=\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
+        ("command-target", re.compile(r'\bto:\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
+    )
+    sites: list[dict[str, object]] = []
+    hashes: dict[str, str] = {}
+    for path in sorted(
+        candidate
+        for candidate in source_root.rglob("*")
+        if candidate.is_file() and candidate.suffix in {".ts", ".tsx"}
+    ):
+        source = path.read_text(encoding="utf-8")
+        relative = path.relative_to(ROOT).as_posix()
+        hashes[relative] = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        for kind, pattern in patterns:
+            for match in pattern.finditer(source):
+                sites.append(
+                    {
+                        "file": relative,
+                        "kind": kind,
+                        "line": source.count("\n", 0, match.start()) + 1,
+                        "target": match.group("target"),
+                    }
+                )
+    return sorted(
+        sites,
+        key=lambda item: (
+            str(item["file"]),
+            cast(int, item["line"]),
+            str(item["kind"]),
+        ),
+    ), hashes
 
 
 def inventory() -> dict[str, object]:
@@ -223,6 +264,42 @@ def inventory() -> dict[str, object]:
     cli_nodes: dict[str, object] = {}
     callback_paths: dict[str, list[str]] = {}
 
+    def parameter_contract(parameter: Any) -> dict[str, object]:
+        spellings = [
+            *list(getattr(parameter, "opts", [])),
+            *list(getattr(parameter, "secondary_opts", [])),
+        ]
+        default = getattr(parameter, "default", None)
+        if callable(default):
+            default_contract: object = {"callable": getattr(default, "__qualname__", "callable")}
+        elif isinstance(default, bool | int | float | str) or default is None:
+            default_contract = default
+        elif isinstance(default, list | tuple) and all(
+            isinstance(value, bool | int | float | str) or value is None for value in default
+        ):
+            default_contract = list(default)
+        else:
+            default_contract = {"type": type(default).__name__}
+        return {
+            "name": parameter.name,
+            "spellings": spellings,
+            "type": getattr(parameter.type, "name", type(parameter.type).__name__),
+            "required": bool(parameter.required),
+            "default": default_contract,
+            "show_default": getattr(parameter, "show_default", None),
+            "multiple": bool(getattr(parameter, "multiple", False)),
+            "nargs": int(getattr(parameter, "nargs", 1)),
+            "is_flag": bool(getattr(parameter, "is_flag", False)),
+        }
+
+    def command_contract(command: Any, identity: str, kind: str) -> dict[str, object]:
+        return {
+            "callback": identity,
+            "hidden": bool(command.hidden),
+            "kind": kind,
+            "parameters": [parameter_contract(parameter) for parameter in command.params],
+        }
+
     def collect_commands(group: Any, prefix: str = "") -> None:
         for name, command in group.commands.items():
             path = f"{prefix}{name}"
@@ -236,11 +313,9 @@ def inventory() -> dict[str, object]:
             )
             if callback is not None:
                 callback_paths.setdefault(identity, []).append(path)
-            cli_nodes[path] = {
-                "callback": identity,
-                "hidden": bool(command.hidden),
-                "kind": "group" if is_group else "command",
-            }
+            cli_nodes[path] = command_contract(
+                command, identity, "group" if is_group else "command"
+            )
             if is_group:
                 collect_commands(command, f"{path} ")
 
@@ -272,6 +347,7 @@ def inventory() -> dict[str, object]:
     sidebar_imperative_routes = sorted(
         set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source))
     )
+    spa_navigation_sites, frontend_source_hashes = _spa_navigation_inventory()
     config_source = (ROOT / "frontend/src/screens/Config.tsx").read_text(encoding="utf-8")
     config_sections = sorted(re.findall(r'key:\s*"([^"]+)"', config_source))
     frontend_api_source = (ROOT / "frontend/src/api/client.ts").read_text(encoding="utf-8")
@@ -303,6 +379,15 @@ def inventory() -> dict[str, object]:
             if resolved_cli.callback is not None
             else "<none>"
         ),
+        "cli_root": command_contract(
+            resolved_cli,
+            (
+                f"{resolved_cli.callback.__module__}.{resolved_cli.callback.__qualname__}"
+                if resolved_cli.callback is not None
+                else "<none>"
+            ),
+            "group",
+        ),
         "cli_callbacks": {key: sorted(value) for key, value in sorted(callback_paths.items())},
         "cli_aliases": sorted(
             sorted(paths) for paths in callback_paths.values() if len(paths) > 1
@@ -330,6 +415,8 @@ def inventory() -> dict[str, object]:
             "sidebar": hashlib.sha256(sidebar_source.encode("utf-8")).hexdigest(),
             "palette": hashlib.sha256(palette_source.encode("utf-8")).hexdigest(),
         },
+        "spa_navigation_sites": spa_navigation_sites,
+        "frontend_source_sha256": frontend_source_hashes,
         "config_sections": config_sections,
         "config_read_keys": read_keys,
         "config_summary_write_keys": summary_write_keys,
@@ -388,7 +475,7 @@ def inventory() -> dict[str, object]:
     }
 
 
-def violations(snapshot: dict[str, object]) -> list[str]:
+def violations(snapshot: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     commands = set(snapshot["cli_commands"])
     groups = set(snapshot["cli_groups"])
@@ -466,8 +553,8 @@ def violations(snapshot: dict[str, object]) -> list[str]:
         )
     ]:
         errors.append(f"withdrawn browser routes advertised: {blocked}")
-    if blocked := config_sections & {"providers", "models", "integrations", "secrets", "email"}:
-        errors.append(f"withdrawn configuration sections advertised: {sorted(blocked)}")
+    if blocked_sections := config_sections & {"providers", "models", "integrations", "secrets", "email"}:
+        errors.append(f"withdrawn configuration sections advertised: {sorted(blocked_sections)}")
     if summary_write_keys != accepted_write_keys:
         errors.append("configuration summary and accepted write keys differ")
     if withdrawn_frontend_api_tokens:
@@ -546,7 +633,7 @@ def manifest_violations(
     return errors
 
 
-def _isolated_inventory(*, all_opt_in: bool) -> dict[str, object]:
+def _isolated_inventory(*, all_opt_in: bool) -> dict[str, Any]:
     env = {
         key: value
         for key, value in os.environ.items()
@@ -581,7 +668,7 @@ def _isolated_inventory(*, all_opt_in: bool) -> dict[str, object]:
     return payload
 
 
-def full_inventory() -> dict[str, object]:
+def full_inventory() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "modes": {

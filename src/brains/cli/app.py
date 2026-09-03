@@ -417,7 +417,6 @@ def wire_cli(
         MCP_MODE_SSE,
         MCP_MODE_STDIO,
         MCP_MODE_STREAMABLE_HTTP,
-        mcp_http_url,
     )
 
     home = Path.home()
@@ -427,18 +426,14 @@ def wire_cli(
     if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
         raise typer.BadParameter("transport must be 'streamable-http', 'stdio', or legacy 'sse'")
 
-    default_url = (
-        f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
-    )
-
-    ctx = wire_mod.WireContext(
+    ctx = wire_mod.build_wire_context(
         transport=transport,
-        url=url or default_url,
+        url=url,
+        port=port,
         python=sys.executable,
         db_url=_canonical_db_url(),
+        api_key=("" if transport == MCP_MODE_STDIO else _effective_wire_api_key(create=False)),
     )
-    if transport != MCP_MODE_STDIO:
-        ctx.api_key = _effective_wire_api_key(create=False)
 
     report = wire_mod.wire(
         home,

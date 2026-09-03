@@ -130,6 +130,35 @@ class WireContext:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
 
+def build_wire_context(
+    *,
+    transport: str = MCP_MODE_STREAMABLE_HTTP,
+    url: str | None = None,
+    port: int = 9877,
+    python: str = "python",
+    db_url: str | None = None,
+    api_key: str = "",
+) -> WireContext:
+    """Build the exact context used by the public wire command."""
+
+    if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+        raise ValueError("unsupported MCP transport")
+    default_url = (
+        f"http://127.0.0.1:{port}/sse"
+        if transport == MCP_MODE_SSE
+        else mcp_http_url(port=port)
+    )
+    values: dict[str, Any] = {
+        "transport": transport,
+        "url": url or default_url,
+        "python": python,
+        "api_key": api_key,
+    }
+    if db_url is not None:
+        values["db_url"] = db_url
+    return WireContext(**values)
+
+
 # --- per-tool MCP entry builders -----------------------------------------
 #
 # Each returns the JSON-serialisable dict (JSON tools) or a TOML block

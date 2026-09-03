@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import stat
 import sys
 import tarfile
 import zipfile
@@ -76,11 +77,17 @@ def _one(paths: list[Path], kind: str) -> tuple[Path | None, list[str]]:
 
 def wheel_inventory(path: Path) -> list[str]:
     with zipfile.ZipFile(path) as archive:
-        return sorted(
-            re.sub(r"^brains_ai-[^/]+\.dist-info/", "brains_ai.dist-info/", member)
-            for member in archive.namelist()
-            if not member.endswith("/")
-        )
+        members: list[str] = []
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            file_type = (info.external_attr >> 16) & 0o170000
+            if file_type not in {0, stat.S_IFREG}:
+                raise ValueError("wheel contains a non-regular member")
+            members.append(
+                re.sub(r"^brains_ai-[^/]+\.dist-info/", "brains_ai.dist-info/", info.filename)
+            )
+        return sorted(members)
 
 
 def sdist_inventory(path: Path) -> list[str]:
@@ -139,7 +146,12 @@ def check_wheel(path: Path) -> list[str]:
         migrations = {name for name in names if name.startswith("brains/storage/sql_migrations/")}
         if not any(name.endswith(".sql") for name in migrations):
             errors.append(f"{path.name}: brains/storage/sql_migrations ships no .sql delta")
-    errors.extend(_exact_errors(path, "wheel", wheel_inventory(path)))
+    try:
+        members = wheel_inventory(path)
+    except (OSError, ValueError, zipfile.BadZipFile):
+        errors.append(f"{path.name}: wheel inventory is malformed")
+    else:
+        errors.extend(_exact_errors(path, "wheel", members))
     return errors
 
 

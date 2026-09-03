@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import stat
 import tarfile
 import zipfile
 
@@ -134,3 +135,15 @@ def test_sdist_contract_rejects_non_regular_member(tmp_path, monkeypatch) -> Non
     monkeypatch.setattr(check_distribution, "_manifest_inventory", lambda kind: [])
 
     assert any("sdist inventory is malformed" in error for error in check_sdist(sdist))
+
+
+def test_wheel_contract_rejects_non_regular_member(tmp_path, monkeypatch) -> None:
+    wheel = tmp_path / "brains_ai-0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        link = zipfile.ZipInfo("brains/rogue-link")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(link, "target")
+    monkeypatch.setattr(check_distribution, "_manifest_inventory", lambda kind: [])
+
+    assert any("wheel inventory is malformed" in error for error in check_wheel(wheel))
