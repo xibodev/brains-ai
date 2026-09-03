@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { coreRoute } from "../coreRoutes";
 import { useOperator } from "../store/OperatorContext";
 
 interface Cmd {
@@ -54,7 +55,7 @@ export function CommandPalette() {
   if (!open) return null;
 
   const go = (to: string) => {
-    navigate(to);
+    navigate(coreRoute(to));
     setOpen(false);
   };
 

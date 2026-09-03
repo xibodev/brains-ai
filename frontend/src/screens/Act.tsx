@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { coreRoute } from "../coreRoutes";
 import { api, formatApiError } from "../api/client";
 import type { OperatorCapability, OperatorTransport, OperatorWorkspace } from "../api/types";
 import {
@@ -165,7 +166,7 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
         {!capability.enabled && <div className="operator-route-gap">Activation requirement: {capability.reason || "authorized typed HTTP support"}. No shell execution is involved.</div>}
         {capability.enabled && !runnable && <div className="operator-route-gap">Open the contextual screen to supply the identity and evidence this action requires.</div>}
       </div>
-      <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigate(contextualRoute)}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
+      <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigate(coreRoute(contextualRoute))}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
     </aside>
   );
 }

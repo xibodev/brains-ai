@@ -1,4 +1,5 @@
 import { NavLink, useNavigate } from "react-router-dom";
+import { coreRoute } from "../coreRoutes";
 
 interface Item {
   to: string;
@@ -20,7 +21,7 @@ export function Sidebar() {
   const renderItem = (it: Item) => (
     <NavLink
       key={it.to}
-      to={it.to}
+      to={coreRoute(it.to)}
       className={({ isActive }) => `control-nav-item ${isActive ? "active" : ""}`}
       title={it.label}
     >

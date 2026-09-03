@@ -12,6 +12,23 @@ def _manifest() -> dict[str, object]:
     return json.loads(check_core_surface.MANIFEST.read_text(encoding="utf-8"))
 
 
+def _mutate_path(mapping: dict[str, object], dotted: str) -> None:
+    parts = dotted.split(".")
+    target = mapping
+    for part in parts[:-1]:
+        value = target[part]
+        assert isinstance(value, dict)
+        target = value
+    leaf = parts[-1]
+    current = target[leaf]
+    if isinstance(current, bool):
+        target[leaf] = not current
+    elif isinstance(current, list):
+        target[leaf] = [*current, "changed"]
+    else:
+        target[leaf] = "changed"
+
+
 @pytest.mark.parametrize(
     ("section", "rogue"),
     [
@@ -136,36 +153,46 @@ def test_positive_manifest_rejects_cli_contract_mutations() -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "replacement"),
+    "field",
     [
-        ("name", "rogue"),
-        ("spellings", ["--rogue", "-R"]),
-        ("type", "rogue-type"),
-        ("required", "changed"),
-        ("default", {"rogue": True}),
-        ("show_default", "changed"),
-        ("multiple", "changed"),
-        ("nargs", 99),
-        ("is_flag", "changed"),
+        "kind", "name", "spellings", "type.class", "type.name", "type.choices",
+        "type.case_sensitive", "type.min", "type.max", "type.min_open", "type.max_open",
+        "type.clamp", "type.path_type", "type.exists", "type.file_okay", "type.dir_okay",
+        "type.writable", "type.readable", "type.resolve_path", "type.allow_dash",
+        "type.formats", "type.types", "required",
+        "default", "help", "metavar", "envvar", "prompt", "prompt_required",
+        "hide_input", "confirmation_prompt", "expose_value", "is_eager", "flag_value",
+        "count", "allow_from_autoenv", "show_default", "show_choices", "show_envvar",
+        "hidden", "multiple", "nargs", "is_flag", "is_bool_flag", "callback",
+        "shell_complete", "autocompletion", "deprecated", "deprecation",
+        "deprecation_help", "rich_help_panel",
     ],
 )
-def test_positive_manifest_rejects_every_cli_parameter_field(
-    field: str, replacement: object
-) -> None:
+def test_positive_manifest_rejects_every_cli_parameter_field(field: str) -> None:
     expected = _manifest()
     actual = copy.deepcopy(expected)
     parameter = actual["modes"]["normal"]["cli_nodes"]["service logs"]["parameters"][0]
-    parameter[field] = replacement
+    _mutate_path(parameter, field)
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any("cli_nodes.service logs.parameters" in error for error in errors)
 
 
-@pytest.mark.parametrize("field", ["callback", "hidden", "kind"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "callback", "name", "hidden", "kind", "help", "short_help", "epilog",
+        "deprecated", "deprecation", "deprecation_help", "options_metavar",
+        "subcommand_metavar", "context_settings", "result_callback", "rich_help_panel",
+        "allow_extra_args", "allow_interspersed_args", "ignore_unknown_options",
+        "context_class", "shell_complete", "command_class", "group_class",
+        "add_help_option", "no_args_is_help", "invoke_without_command", "chain",
+    ],
+)
 def test_positive_manifest_rejects_cli_root_contract_fields(field: str) -> None:
     expected = _manifest()
     actual = copy.deepcopy(expected)
-    actual["modes"]["normal"]["cli_root"][field] = "changed"
+    _mutate_path(actual["modes"]["normal"]["cli_root"], field)
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any(f"cli_root.{field}" in error for error in errors)
@@ -217,7 +244,7 @@ def test_positive_manifest_rejects_navigation_and_wire_file_mutations() -> None:
     actual = copy.deepcopy(expected)
     normal = actual["modes"]["normal"]
     normal["browser_redirects"].append("/rogue")
-    normal["spa_navigation_sites"].append(
+    normal["reachable_spa_navigation_sites"].append(
         {"file": "frontend/src/Rogue.tsx", "kind": "link", "line": 1, "target": "/rogue"}
     )
     adapter = next(iter(normal["wire"]["adapters"].values()))
@@ -229,7 +256,7 @@ def test_positive_manifest_rejects_navigation_and_wire_file_mutations() -> None:
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any("browser_redirects" in error for error in errors)
-    assert any("spa_navigation_sites" in error for error in errors)
+    assert any("reachable_spa_navigation_sites" in error for error in errors)
     assert any("config_content" in error for error in errors)
     assert any("instruction_content" in error for error in errors)
 
@@ -240,14 +267,21 @@ def test_positive_manifest_rejects_frontend_source_hash_mutation() -> None:
     hashes = actual["modes"]["normal"]["frontend_source_sha256"]
     first_source = next(iter(hashes))
     hashes[first_source] = "0" * 64
+    normal = actual["modes"]["normal"]
+    normal["spa_ast_helper_sha256"] = "0" * 64
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any("frontend_source_sha256" in error for error in errors)
+    assert any("spa_ast_helper_sha256" in error for error in errors)
 
 
 def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None:
     source = tmp_path / "frontend/src"
     (source / "screens").mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
     (source / "main.tsx").write_text('import { App } from "./App";\n<App />;\n', encoding="utf-8")
     (source / "App.tsx").write_text(
         'import { LabsHome } from "./screens/Labs";\n'
@@ -272,6 +306,36 @@ def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None
     assert any("frozen SPA target reachable: /labs" in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'export function App() { return <Route path={"/labs"} />; }\n',
+        'export function App() { return <Route path={"/" + "labs"} />; }\n',
+        'import { LabsHome as Core } from "./screens/Labs"; export function App() { return <Core />; }\n',
+        'const Core = import("./screens/Labs"); export function App() { return <div>{Core}</div>; }\n',
+    ],
+)
+def test_ast_reachability_rejects_expression_alias_and_dynamic_import_bypasses(
+    tmp_path, app_source: str
+) -> None:
+    source = tmp_path / "frontend/src"
+    (source / "screens").mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(app_source, encoding="utf-8")
+    (source / "screens/Labs.tsx").write_text("export const LabsHome = () => <div />;\n", encoding="utf-8")
+
+    modules, graph, sites = check_core_surface._frontend_reachability(source)
+    normal = copy.deepcopy(_manifest()["modes"]["normal"])
+    normal["frontend_reachable_modules"] = modules
+    normal["frontend_import_graph"] = graph
+    normal["reachable_spa_navigation_sites"] = sites
+    assert check_core_surface.violations(normal)
+
+
 def test_reachability_rejects_unknown_target_without_manifest_comparison() -> None:
     normal = copy.deepcopy(_manifest()["modes"]["normal"])
     normal["reachable_spa_navigation_sites"].append(
@@ -279,6 +343,64 @@ def test_reachability_rejects_unknown_target_without_manifest_comparison() -> No
     )
 
     assert any("unknown SPA target reachable: /rogue" in error for error in check_core_surface.violations(normal))
+
+
+def test_ast_reachability_fails_closed_on_unresolved_route_target(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(
+        "export function App() { return <Route path={window.location.pathname} />; }\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
+
+
+def test_ast_reachability_follows_configured_alias_and_reexport(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    (source / "screens").mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","baseUrl":".",'
+        '"paths":{"@/*":["src/*"]},"jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(
+        'import { LabsHome as Core } from "@/barrel"; export const App = () => <Core />;\n',
+        encoding="utf-8",
+    )
+    (source / "barrel.ts").write_text(
+        'export { LabsHome } from "./screens/Labs";\n', encoding="utf-8"
+    )
+    (source / "screens/Labs.tsx").write_text("export const LabsHome = () => <div />;\n", encoding="utf-8")
+
+    modules, _graph, _sites = check_core_surface._frontend_reachability(source)
+    assert "barrel.ts" in modules
+    assert "screens/Labs.tsx" in modules
+
+
+def test_ast_reachability_fails_closed_on_nonliteral_dynamic_import(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(
+        'const target = "./screens/Labs"; const loaded = import(target); '
+        "export const App = () => <div>{String(loaded)}</div>;\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
 
 
 @pytest.mark.parametrize(
@@ -321,6 +443,30 @@ def test_positive_manifest_rejects_every_wire_transport_field(field: str) -> Non
                 f"wire.adapters.{adapter_name}.transports.{transport_name}.{field}" in error
                 for error in errors
             )
+
+
+def test_wire_semantics_reject_drift_without_manifest_comparison() -> None:
+    baseline = _manifest()["modes"]["normal"]
+    adapters = baseline["wire"]["adapters"]
+    for adapter_name, adapter in adapters.items():
+        for field in ("mcp_path", "instruction_path"):
+            snapshot = copy.deepcopy(baseline)
+            snapshot["wire"]["adapters"][adapter_name][field] = "rogue"
+            assert check_core_surface.violations(snapshot)
+        for transport_name in adapter["transports"]:
+            mutations = {
+                "url": "http://127.0.0.1:9877/rogue",
+                "mcp_action": "skip",
+                "rule_action": "skip",
+                "config_content": "brains",
+                "instruction_content": "brains:wire:start\nbrains:wire:end",
+            }
+            for field, replacement in mutations.items():
+                snapshot = copy.deepcopy(baseline)
+                snapshot["wire"]["adapters"][adapter_name]["transports"][transport_name][
+                    field
+                ] = replacement
+                assert check_core_surface.violations(snapshot)
 
 
 def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> None:

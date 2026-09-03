@@ -13,8 +13,9 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
@@ -22,7 +23,6 @@ sys.path.insert(0, str(ROOT / "src"))
 
 HTTP_METHODS = {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"}
 
-FRONTEND_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".css")
 WITHDRAWN_SPA_PREFIXES = (
     "/automation",
     "/issues",
@@ -45,6 +45,8 @@ CORE_SPA_TARGET_PREFIXES = (
     "/operations",
     "/workspaces",
 )
+CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
+SPA_AST_HELPER_SHA256 = "548bf97df8979a910a034920c188c74bd725861d8de6bef694b4dacd14028cdf"
 CORE_FRONTEND_MODULES = frozenset(
     {
         "App.tsx",
@@ -64,6 +66,7 @@ CORE_FRONTEND_MODULES = frozenset(
         "components/TopBar.tsx",
         "components/format.ts",
         "components/sessionScope.ts",
+        "coreRoutes.ts",
         "main.tsx",
         "realtime/client.ts",
         "realtime/protocol.ts",
@@ -82,6 +85,20 @@ CORE_FRONTEND_MODULES = frozenset(
         "styles/tokens.css",
     }
 )
+CORE_WIRE_ADAPTERS = {
+    "claude-code": (".claude.json", ".claude/CLAUDE.md", {"sse", "stdio", "streamable-http"}),
+    "codex": (".codex/config.toml", ".codex/AGENTS.md", {"stdio", "streamable-http"}),
+    "copilot-cli": (
+        ".copilot/mcp-config.json",
+        ".copilot/copilot-instructions.md",
+        {"sse", "stdio", "streamable-http"},
+    ),
+    "opencode": (
+        ".config/opencode/opencode.json",
+        ".config/opencode/AGENTS.md",
+        {"sse", "stdio", "streamable-http"},
+    ),
+}
 
 WITHDRAWN_FRONTEND_API_TOKENS = (
     "/admin/configuration/",
@@ -264,22 +281,10 @@ def _wire_inventory() -> dict[str, object]:
     }
 
 
-def _spa_navigation_inventory(
-    source_root: Path | None = None,
-) -> tuple[list[dict[str, object]], dict[str, str]]:
-    source_root = source_root or (ROOT / "frontend/src")
-    inventory_root = ROOT if source_root == ROOT / "frontend/src" else source_root.parents[1]
-    patterns = (
-        ("route", re.compile(r'<Route\b[^>]*\bpath\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
-        ("redirect", re.compile(r'<Navigate\b[^>]*\bto\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
-        ("link", re.compile(r'<(?:Link|NavLink)\b[^>]*\bto\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
-        ("anchor", re.compile(r'<a\b[^>]*\bhref\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
-        ("navigate", re.compile(r'\bnavigate\(\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
-        ("location", re.compile(r'\blocation\.(?:assign|replace)\(\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
-        ("location-href", re.compile(r'\blocation\.href\s*=\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
-        ("command-target", re.compile(r'\bto:\s*(?P<q>["\'`])(?P<target>.*?)(?P=q)')),
-    )
-    sites: list[dict[str, object]] = []
+def _frontend_source_hashes() -> dict[str, str]:
+    """Hash all retained TS/TSX source separately from AST-proven reachability."""
+
+    source_root = ROOT / "frontend/src"
     hashes: dict[str, str] = {}
     for path in sorted(
         candidate
@@ -287,87 +292,37 @@ def _spa_navigation_inventory(
         if candidate.is_file() and candidate.suffix in {".ts", ".tsx"}
     ):
         source = path.read_text(encoding="utf-8")
-        relative = path.relative_to(inventory_root).as_posix()
+        relative = path.relative_to(ROOT).as_posix()
         hashes[relative] = hashlib.sha256(source.encode("utf-8")).hexdigest()
-        for kind, pattern in patterns:
-            for match in pattern.finditer(source):
-                sites.append(
-                    {
-                        "file": relative,
-                        "kind": kind,
-                        "line": source.count("\n", 0, match.start()) + 1,
-                        "target": match.group("target"),
-                    }
-                )
-    return sorted(
-        sites,
-        key=lambda item: (
-            str(item["file"]),
-            cast(int, item["line"]),
-            str(item["kind"]),
-        ),
-    ), hashes
-
-
-def _resolve_frontend_import(source_root: Path, importer: Path, specifier: str) -> Path | None:
-    """Resolve a static relative frontend import without invoking a bundler."""
-
-    if not specifier.startswith("."):
-        return None
-    unresolved = importer.parent / specifier.split("?", 1)[0].split("#", 1)[0]
-    candidates = [unresolved]
-    if unresolved.suffix not in FRONTEND_EXTENSIONS:
-        candidates.extend(unresolved.with_suffix(suffix) for suffix in FRONTEND_EXTENSIONS)
-        candidates.extend(unresolved / f"index{suffix}" for suffix in FRONTEND_EXTENSIONS)
-    root = source_root.resolve()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        if resolved.is_relative_to(root) and resolved.is_file():
-            return resolved
-    raise RuntimeError(f"relative frontend import could not be resolved: {specifier}")
+    return hashes
 
 
 def _frontend_reachability(
     source_root: Path | None = None,
 ) -> tuple[list[str], dict[str, list[str]], list[dict[str, object]]]:
-    """Inventory the import graph and navigation reachable from the actual SPA entry."""
+    """Invoke the checked TypeScript AST inventory rooted at the actual SPA entry."""
 
-    root = source_root or (ROOT / "frontend/src")
-    entry = root / "main.tsx"
-    if not entry.is_file():
-        raise RuntimeError("frontend entry main.tsx is unavailable")
-    import_pattern = re.compile(
-        r"(?:\b(?:import|export)\s+(?:type\s+)?(?:[^;\n]*?\s+from\s+)?|\bimport\s*\(\s*)"
-        r"(?P<q>[\"'])(?P<target>\.[^\"']+)(?P=q)"
+    root = (source_root or (ROOT / "frontend/src")).resolve()
+    helper = ROOT / "scripts/inventory_spa_surface.mjs"
+    completed = subprocess.run(
+        ["node", str(helper), str(root)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
     )
-    pending = [entry.resolve()]
-    reachable: set[Path] = set()
-    graph: dict[str, list[str]] = {}
-    while pending:
-        path = pending.pop()
-        if path in reachable:
-            continue
-        reachable.add(path)
-        source = path.read_text(encoding="utf-8")
-        dependencies: list[Path] = []
-        for match in import_pattern.finditer(source):
-            dependency = _resolve_frontend_import(root, path, match.group("target"))
-            if dependency is not None:
-                dependencies.append(dependency)
-                if dependency not in reachable:
-                    pending.append(dependency)
-        relative = path.relative_to(root).as_posix()
-        graph[relative] = sorted(
-            dependency.relative_to(root).as_posix() for dependency in set(dependencies)
-        )
-    modules = sorted(path.relative_to(root).as_posix() for path in reachable)
-    if "App.tsx" not in modules:
-        raise RuntimeError("frontend entry does not reach App.tsx")
-    all_sites, _hashes = _spa_navigation_inventory(root)
-    prefix = "frontend/src/"
-    reachable_files = {f"{prefix}{module}" for module in modules}
-    sites = [site for site in all_sites if site["file"] in reachable_files]
-    return modules, dict(sorted(graph.items())), sites
+    if completed.returncode != 0:
+        raise RuntimeError("TypeScript AST surface inventory failed closed")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError("TypeScript AST surface inventory was malformed")
+    modules = payload.get("modules")
+    graph = payload.get("graph")
+    navigation = payload.get("navigation")
+    if not isinstance(modules, list) or not isinstance(graph, dict) or not isinstance(navigation, list):
+        raise RuntimeError("TypeScript AST surface inventory was incomplete")
+    return modules, graph, navigation
 
 
 def inventory() -> dict[str, object]:
@@ -389,39 +344,128 @@ def inventory() -> dict[str, object]:
     cli_nodes: dict[str, object] = {}
     callback_paths: dict[str, list[str]] = {}
 
+    def callable_identity(value: Any) -> str | None:
+        if value is None:
+            return None
+        target = getattr(value, "__func__", value)
+        module = getattr(target, "__module__", type(target).__module__)
+        name = getattr(target, "__qualname__", type(target).__qualname__)
+        return f"{module}.{name}"
+
+    def normalized_value(value: Any) -> object:
+        if isinstance(value, Enum):
+            return normalized_value(value.value)
+        if isinstance(value, Path):
+            return value.as_posix()
+        if callable(value):
+            return {"callable": callable_identity(value)}
+        if isinstance(value, bool | int | float | str) or value is None:
+            return value
+        if isinstance(value, list | tuple):
+            return [normalized_value(item) for item in value]
+        if isinstance(value, dict):
+            return {str(key): normalized_value(item) for key, item in sorted(value.items())}
+        return {"type": type(value).__name__}
+
+    def type_contract(parameter_type: Any) -> dict[str, object]:
+        return {
+            "class": type(parameter_type).__name__,
+            "name": getattr(parameter_type, "name", type(parameter_type).__name__),
+            "choices": normalized_value(getattr(parameter_type, "choices", None)),
+            "case_sensitive": normalized_value(getattr(parameter_type, "case_sensitive", None)),
+            "min": normalized_value(getattr(parameter_type, "min", None)),
+            "max": normalized_value(getattr(parameter_type, "max", None)),
+            "min_open": normalized_value(getattr(parameter_type, "min_open", None)),
+            "max_open": normalized_value(getattr(parameter_type, "max_open", None)),
+            "clamp": normalized_value(getattr(parameter_type, "clamp", None)),
+            "path_type": normalized_value(getattr(parameter_type, "path_type", None)),
+            "exists": normalized_value(getattr(parameter_type, "exists", None)),
+            "file_okay": normalized_value(getattr(parameter_type, "file_okay", None)),
+            "dir_okay": normalized_value(getattr(parameter_type, "dir_okay", None)),
+            "writable": normalized_value(getattr(parameter_type, "writable", None)),
+            "readable": normalized_value(getattr(parameter_type, "readable", None)),
+            "resolve_path": normalized_value(getattr(parameter_type, "resolve_path", None)),
+            "allow_dash": normalized_value(getattr(parameter_type, "allow_dash", None)),
+            "formats": normalized_value(getattr(parameter_type, "formats", None)),
+            "types": [
+                type_contract(nested) for nested in list(getattr(parameter_type, "types", []))
+            ],
+        }
+
     def parameter_contract(parameter: Any) -> dict[str, object]:
         spellings = [
             *list(getattr(parameter, "opts", [])),
             *list(getattr(parameter, "secondary_opts", [])),
         ]
-        default = getattr(parameter, "default", None)
-        if callable(default):
-            default_contract: object = {"callable": getattr(default, "__qualname__", "callable")}
-        elif isinstance(default, bool | int | float | str) or default is None:
-            default_contract = default
-        elif isinstance(default, list | tuple) and all(
-            isinstance(value, bool | int | float | str) or value is None for value in default
-        ):
-            default_contract = list(default)
-        else:
-            default_contract = {"type": type(default).__name__}
+        parameter_type = parameter.type
         return {
+            "kind": type(parameter).__name__,
             "name": parameter.name,
             "spellings": spellings,
-            "type": getattr(parameter.type, "name", type(parameter.type).__name__),
+            "type": type_contract(parameter_type),
             "required": bool(parameter.required),
-            "default": default_contract,
-            "show_default": getattr(parameter, "show_default", None),
+            "default": normalized_value(getattr(parameter, "default", None)),
+            "help": normalized_value(getattr(parameter, "help", None)),
+            "metavar": normalized_value(getattr(parameter, "metavar", None)),
+            "envvar": normalized_value(getattr(parameter, "envvar", None)),
+            "prompt": normalized_value(getattr(parameter, "prompt", None)),
+            "prompt_required": normalized_value(getattr(parameter, "prompt_required", None)),
+            "hide_input": normalized_value(getattr(parameter, "hide_input", None)),
+            "confirmation_prompt": normalized_value(
+                getattr(parameter, "confirmation_prompt", None)
+            ),
+            "expose_value": bool(getattr(parameter, "expose_value", True)),
+            "is_eager": bool(getattr(parameter, "is_eager", False)),
+            "flag_value": normalized_value(getattr(parameter, "flag_value", None)),
+            "count": bool(getattr(parameter, "count", False)),
+            "allow_from_autoenv": bool(getattr(parameter, "allow_from_autoenv", True)),
+            "show_default": normalized_value(getattr(parameter, "show_default", None)),
+            "show_choices": normalized_value(getattr(parameter, "show_choices", None)),
+            "show_envvar": normalized_value(getattr(parameter, "show_envvar", None)),
+            "hidden": bool(getattr(parameter, "hidden", False)),
             "multiple": bool(getattr(parameter, "multiple", False)),
             "nargs": int(getattr(parameter, "nargs", 1)),
             "is_flag": bool(getattr(parameter, "is_flag", False)),
+            "is_bool_flag": bool(getattr(parameter, "is_bool_flag", False)),
+            "callback": callable_identity(getattr(parameter, "callback", None)),
+            "shell_complete": callable_identity(getattr(parameter, "shell_complete", None)),
+            "autocompletion": callable_identity(getattr(parameter, "autocompletion", None)),
+            "deprecated": normalized_value(getattr(parameter, "deprecated", None)),
+            "deprecation": normalized_value(getattr(parameter, "deprecation", None)),
+            "deprecation_help": normalized_value(getattr(parameter, "deprecation_help", None)),
+            "rich_help_panel": normalized_value(getattr(parameter, "rich_help_panel", None)),
         }
 
     def command_contract(command: Any, identity: str, kind: str) -> dict[str, object]:
         return {
             "callback": identity,
+            "name": normalized_value(getattr(command, "name", None)),
             "hidden": bool(command.hidden),
             "kind": kind,
+            "help": normalized_value(getattr(command, "help", None)),
+            "short_help": normalized_value(getattr(command, "short_help", None)),
+            "epilog": normalized_value(getattr(command, "epilog", None)),
+            "deprecated": normalized_value(getattr(command, "deprecated", None)),
+            "deprecation": normalized_value(getattr(command, "deprecation", None)),
+            "deprecation_help": normalized_value(getattr(command, "deprecation_help", None)),
+            "options_metavar": normalized_value(getattr(command, "options_metavar", None)),
+            "subcommand_metavar": normalized_value(getattr(command, "subcommand_metavar", None)),
+            "context_settings": normalized_value(getattr(command, "context_settings", None)),
+            "result_callback": callable_identity(getattr(command, "_result_callback", None)),
+            "rich_help_panel": normalized_value(getattr(command, "rich_help_panel", None)),
+            "allow_extra_args": bool(getattr(command, "allow_extra_args", False)),
+            "allow_interspersed_args": bool(
+                getattr(command, "allow_interspersed_args", True)
+            ),
+            "ignore_unknown_options": bool(getattr(command, "ignore_unknown_options", False)),
+            "context_class": callable_identity(getattr(command, "context_class", None)),
+            "shell_complete": callable_identity(getattr(command, "shell_complete", None)),
+            "command_class": callable_identity(getattr(command, "command_class", None)),
+            "group_class": callable_identity(getattr(command, "group_class", None)),
+            "add_help_option": bool(getattr(command, "add_help_option", True)),
+            "no_args_is_help": bool(getattr(command, "no_args_is_help", False)),
+            "invoke_without_command": bool(getattr(command, "invoke_without_command", False)),
+            "chain": bool(getattr(command, "chain", False)),
             "parameters": [parameter_contract(parameter) for parameter in command.params],
         }
 
@@ -472,7 +516,7 @@ def inventory() -> dict[str, object]:
     sidebar_imperative_routes = sorted(
         set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source))
     )
-    spa_navigation_sites, frontend_source_hashes = _spa_navigation_inventory()
+    frontend_source_hashes = _frontend_source_hashes()
     (
         frontend_reachable_modules,
         frontend_import_graph,
@@ -550,11 +594,13 @@ def inventory() -> dict[str, object]:
             "sidebar": hashlib.sha256(sidebar_source.encode("utf-8")).hexdigest(),
             "palette": hashlib.sha256(palette_source.encode("utf-8")).hexdigest(),
         },
-        "spa_navigation_sites": spa_navigation_sites,
         "reachable_spa_navigation_sites": reachable_spa_navigation_sites,
         "frontend_reachable_modules": frontend_reachable_modules,
         "frontend_dormant_modules": frontend_dormant_modules,
         "frontend_import_graph": frontend_import_graph,
+        "spa_ast_helper_sha256": hashlib.sha256(
+            (ROOT / "scripts/inventory_spa_surface.mjs").read_bytes()
+        ).hexdigest(),
         "frontend_source_sha256": frontend_source_hashes,
         "config_sections": config_sections,
         "config_read_keys": read_keys,
@@ -630,12 +676,17 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     extras = set(snapshot["extras"])
     runtime_extra_registry = set(snapshot["runtime_extra_registry"])
     install_features = set(snapshot["install_features"])
-    wire_rule = str(snapshot["wire_rule"]).lower()
+    wire_rule_body = str(snapshot["wire_rule"])
+    wire_rule = wire_rule_body.lower()
     realtime_org_channels = set(snapshot["realtime_org_channels"])
     withdrawn_realtime_topics = list(snapshot["withdrawn_realtime_topics_accepted"])
     legacy_browser_source = list(snapshot["legacy_browser_source"])
     reachable_modules = set(snapshot["frontend_reachable_modules"])
     reachable_navigation = list(snapshot["reachable_spa_navigation_sites"])
+    frontend_hashes = snapshot["frontend_source_sha256"]
+    ast_helper_hash = snapshot["spa_ast_helper_sha256"]
+    wire = snapshot["wire"]
+    wire_adapters = wire.get("adapters", {}) if isinstance(wire, dict) else {}
     if overlap := commands & WITHDRAWN_CLI_COMMANDS:
         errors.append(f"withdrawn CLI commands advertised: {sorted(overlap)}")
     if overlap := groups & WITHDRAWN_CLI_GROUPS:
@@ -719,16 +770,77 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         errors.append(f"required core frontend modules unreachable: {sorted(missing_modules)}")
     if extra_modules := reachable_modules - CORE_FRONTEND_MODULES:
         errors.append(f"unknown or frozen frontend modules reachable: {sorted(extra_modules)}")
+    if (
+        not isinstance(frontend_hashes, dict)
+        or frontend_hashes.get("frontend/src/coreRoutes.ts") != CORE_ROUTE_GUARD_SHA256
+    ):
+        errors.append("runtime core-route guard differs from the reviewed semantic boundary")
+    if ast_helper_hash != SPA_AST_HELPER_SHA256:
+        errors.append("TypeScript AST helper differs from the reviewed semantic analyzer")
     for site in reachable_navigation:
         target = str(site.get("target", ""))
         route = target.split("?", 1)[0].split("#", 1)[0]
-        if route == "*":
+        if route in {"*", "@core-route-guard"}:
             continue
         if route.startswith(WITHDRAWN_SPA_PREFIXES):
             errors.append(f"frozen SPA target reachable: {route}")
             continue
         if not any(route == prefix or route.startswith(f"{prefix}/") for prefix in CORE_SPA_TARGET_PREFIXES):
             errors.append(f"unknown SPA target reachable: {route or '<empty>'}")
+    if set(wire_adapters) != set(CORE_WIRE_ADAPTERS):
+        errors.append("wire adapter set differs from the supported core adapters")
+    for name, (mcp_path, instruction_path, expected_transports) in CORE_WIRE_ADAPTERS.items():
+        adapter = wire_adapters.get(name)
+        if not isinstance(adapter, dict):
+            continue
+        if adapter.get("mcp_path") != mcp_path or adapter.get("instruction_path") != instruction_path:
+            errors.append(f"wire adapter {name} uses a noncanonical managed path")
+        transports = adapter.get("transports", {})
+        if not isinstance(transports, dict) or set(transports) != expected_transports:
+            errors.append(f"wire adapter {name} exposes incorrect transports")
+            continue
+        for transport_name, contract in transports.items():
+            if not isinstance(contract, dict):
+                errors.append(f"wire adapter {name}/{transport_name} contract is malformed")
+                continue
+            expected_url = {
+                "sse": "http://127.0.0.1:9877/sse",
+                "stdio": None,
+                "streamable-http": "http://127.0.0.1:9877/mcp",
+            }[transport_name]
+            if contract.get("url") != expected_url:
+                errors.append(f"wire adapter {name}/{transport_name} uses an incorrect URL")
+            if contract.get("mcp_action") != "create" or contract.get("rule_action") != "create":
+                errors.append(f"wire adapter {name}/{transport_name} action is not atomic creation")
+            config_content = contract.get("config_content")
+            instruction_content = contract.get("instruction_content")
+            if not isinstance(config_content, str) or "brains" not in config_content.lower():
+                errors.append(f"wire adapter {name}/{transport_name} config content is invalid")
+            if expected_url is not None and (
+                not isinstance(config_content, str) or expected_url not in config_content
+            ):
+                errors.append(f"wire adapter {name}/{transport_name} config omits its URL")
+            if transport_name == "stdio" and (
+                not isinstance(config_content, str)
+                or "--mode" not in config_content
+                or "stdio" not in config_content
+                or "sqlite:////surface/brains.db" not in config_content
+            ):
+                errors.append(f"wire adapter {name}/stdio config omits its process contract")
+            if transport_name != "stdio" and (
+                not isinstance(config_content, str)
+                or not any(
+                    marker in config_content
+                    for marker in ("<redacted>", "BRAINS_MCP_BEARER_TOKEN")
+                )
+            ):
+                errors.append(f"wire adapter {name}/{transport_name} config omits authentication")
+            if not isinstance(instruction_content, str) or not all(
+                marker in instruction_content for marker in ("brains:wire:start", "brains:wire:end")
+            ):
+                errors.append(f"wire adapter {name}/{transport_name} instructions omit sentinels")
+            elif wire_rule_body not in instruction_content:
+                errors.append(f"wire adapter {name}/{transport_name} instructions omit core guidance")
     for term in ("search_semantic", "graph_query", "graph_neighbors"):
         if term in wire_rule:
             errors.append(f"wire guidance advertises {term}")
