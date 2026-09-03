@@ -121,8 +121,8 @@ the gateway may have multiple workers and MCP is a separate process; changing on
 handling process would not establish stack convergence. Values take effect after a
 supervised-stack restart. A validation or apply failure restores the prior runtime overlay. Frozen and
 withdrawn provider, email, bridge, gateway-preamble, alternate-storage, and telemetry
-fields are neither returned nor accepted by this surface. The legacy `/admin/config`
-writer remains deletion inventory and keeps configuration containment incomplete.
+fields are neither returned nor accepted by this surface. The deleted legacy browser
+has no alternate configuration writer.
 
 Supported secret rules:
 

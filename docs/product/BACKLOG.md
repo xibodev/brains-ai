@@ -19,12 +19,6 @@ empty and a human explicitly approves thawing it.
 
 ## P1 — Core completion
 
-### BL-P1-05 - Complete supported configuration containment
-
-- **Action:** Limit the normal configuration experience to supported local service, MCP, SQLite, and harness settings with explicit restart behavior, and delete the remaining legacy writable configuration surface.
-- **Done when:** Browser and API tests prove frozen and withdrawn settings are neither displayed nor writable through any route and supported changes are redacted, attributable, restart-aware, concurrency-safe, and recoverable.
-- **Maps to:** F7, B6, B8; J9, J11.
-
 ### BL-P1-09 - Validate local readiness and recovery
 
 - **Action:** Make readiness distinguish gateway/MCP protocol state, SQLite integrity, queue/mailbox progress, and declared backup, restore, and rollback capability in the supported local topology.
@@ -54,14 +48,6 @@ empty and a human explicitly approves thawing it.
 - **Action:** Remove semantic and graph recommendations from default wire guidance and use the existing non-embedding knowledge and substring/symbol lookup path.
 - **Done when:** A fresh normal installation performs a Workspace lookup without embeddings and distinguishes empty results from unavailable capabilities across CLI, MCP, wire copy, and browser guidance.
 - **Maps to:** B2, B3, B6, B8; J7, J11.
-
-## P2 — Core containment
-
-### BL-P2-01 - Complete legacy browser deletion
-
-- **Action:** Delete remaining legacy browser HTML, templates, static assets, routes, flags, commands, and activation code.
-- **Done when:** Normal and opt-in route inventories prove the legacy browser cannot be launched or reached and supported `/app` authentication and operations remain intact.
-- **Maps to:** F0, F7, B9; J9-J11.
 
 ## P3 — Core experience
 

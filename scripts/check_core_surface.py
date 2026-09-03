@@ -114,6 +114,19 @@ def inventory() -> dict[str, object]:
             )
             if parse_topic(topic) is not None
         ),
+        "legacy_browser_source": sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in (
+                ROOT / "src/brains/dashboard",
+                ROOT / "src/brains/web/static",
+                ROOT / "src/brains/web/templates/dashboard",
+                ROOT / "src/brains/admin/service.py",
+                ROOT / "src/brains/admin/ui.py",
+                ROOT / "src/brains/web/filters.py",
+                ROOT / "src/brains/web/icons.py",
+            )
+            if path.is_file() or (path.is_dir() and any(child.is_file() for child in path.rglob("*")))
+        ),
     }
 
 
@@ -134,6 +147,7 @@ def violations(snapshot: dict[str, object]) -> list[str]:
     wire_rule = str(snapshot["wire_rule"]).lower()
     realtime_org_channels = set(snapshot["realtime_org_channels"])
     withdrawn_realtime_topics = list(snapshot["withdrawn_realtime_topics_accepted"])
+    legacy_browser_source = list(snapshot["legacy_browser_source"])
     if overlap := commands & WITHDRAWN_CLI_COMMANDS:
         errors.append(f"withdrawn CLI commands advertised: {sorted(overlap)}")
     if overlap := groups & WITHDRAWN_CLI_GROUPS:
@@ -209,6 +223,8 @@ def violations(snapshot: dict[str, object]) -> list[str]:
         errors.append(f"non-core realtime Org channels advertised: {sorted(realtime_org_channels)}")
     if withdrawn_realtime_topics:
         errors.append(f"withdrawn realtime topics accepted: {withdrawn_realtime_topics}")
+    if legacy_browser_source:
+        errors.append(f"deleted legacy browser source remains: {legacy_browser_source}")
     for term in ("search_semantic", "graph_query", "graph_neighbors"):
         if term in wire_rule:
             errors.append(f"wire guidance advertises {term}")

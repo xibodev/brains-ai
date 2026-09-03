@@ -1,31 +1,31 @@
-{% extends "partials/_html.html" %}
-{% from "partials/_macros.html" import notice %}
-
-{% block title %}Brains Admin · Sign in{% endblock %}
-
-{% block body %}
-<main class="auth-shell">
-  <div class="auth-card panel">
-    <div class="auth-card__brand">brains · admin</div>
-    <h1 class="auth-card__title">Sign in</h1>
-    <p class="auth-card__hint muted">
-      Paste your admin key below. The key is generated on first run and stored at
-      <code>~/.brains/admin-key</code>. View it with
-      <code>brains-ai admin-key show --reveal</code> or rotate it with
-      <code>brains-ai admin-key rotate</code>. You can also override it by setting
-      <code>BRAINS_API_KEY</code>.
-    </p>
-    {% if error %}{{ notice(error, tone='danger') }}{% endif %}
-    <form method="post" action="/admin/login" class="form-grid">
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Brains · Sign in</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #101114; color: #f3f4f6; }
+    main { width: min(28rem, calc(100% - 2rem)); }
+    form { display: grid; gap: 1rem; padding: 1.5rem; border: 1px solid #353841; border-radius: .75rem; background: #191b20; }
+    label { font-weight: 650; }
+    input, button { box-sizing: border-box; width: 100%; min-height: 2.75rem; border-radius: .4rem; font: inherit; }
+    input { border: 1px solid #525866; padding: .65rem; background: #101114; color: inherit; }
+    button { border: 0; padding: .65rem 1rem; background: #cdd3ff; color: #101114; font-weight: 700; cursor: pointer; }
+    .error { color: #ffb4ab; }
+  </style>
+</head>
+<body>
+  <main>
+    <form method="post" action="/admin/login">
+      <h1>Sign in to Brains</h1>
+      {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
       {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}" />{% endif %}
-      <div class="form-row">
-        <label class="form-label" for="key">Admin key</label>
-        <input class="form-control" type="password" id="key" name="key" autocomplete="off" autofocus />
-      </div>
-      <div class="form-actions">
-        <button type="submit" class="btn is-primary">Sign in</button>
-      </div>
+      <label for="key">Admin key</label>
+      <input type="password" id="key" name="key" autocomplete="off" autofocus required />
+      <button type="submit">Sign in</button>
     </form>
-  </div>
-</main>
-{% endblock %}
+  </main>
+</body>
+</html>

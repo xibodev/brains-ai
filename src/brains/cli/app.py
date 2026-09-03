@@ -475,28 +475,6 @@ def unwire_cli(
     _print_json(report)
 
 
-@app.command("dashboard")
-def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
-    """Run the retired legacy dashboard (opt-in only).
-
-    The modern console is served by the gateway at /app. This surface is
-    retired from the normal install; start it explicitly with
-    BRAINS_LEGACY_SURFACES=1.
-    """
-    from brains.experimental import LEGACY_SURFACES_ENV, legacy_surfaces_enabled
-
-    if not legacy_surfaces_enabled():
-        typer.echo(
-            f"error: the legacy dashboard is retired from the normal install "
-            f"(use the gateway console at /app, or set {LEGACY_SURFACES_ENV}=1 to run it)",
-            err=True,
-        )
-        raise typer.Exit(2)
-    from brains.dashboard.app import app as dashboard_app
-
-    uvicorn.run(dashboard_app, host=host, port=port)
-
-
 # ---------------------------------------------------------------------------
 # OS service (autostart serve-all)
 # ---------------------------------------------------------------------------

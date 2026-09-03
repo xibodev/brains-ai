@@ -32,9 +32,25 @@ REQUIRED_WHEEL_FILES = (
 #: Directories inside the wheel that must not be empty.
 REQUIRED_WHEEL_TREES = (
     "brains/web/spa/assets/",
-    "brains/web/static/",
     "brains/web/templates/",
     "brains/storage/sql_migrations/",
+)
+
+FORBIDDEN_WHEEL_PREFIXES = (
+    "brains/dashboard/",
+    "brains/web/static/",
+    "brains/web/templates/dashboard/",
+)
+FORBIDDEN_WHEEL_FILES = (
+    "brains/admin/service.py",
+    "brains/admin/ui.py",
+    "brains/web/filters.py",
+    "brains/web/icons.py",
+    "brains/web/templates/admin/base.html",
+    "brains/web/templates/admin/config.html",
+    "brains/web/templates/admin/overview.html",
+    "brains/web/templates/admin/secrets.html",
+    "brains/web/templates/admin/test.html",
 )
 
 #: Paths every sdist must carry so the tree can be rebuilt from it.
@@ -64,6 +80,12 @@ def check_wheel(path: Path) -> list[str]:
         for tree in REQUIRED_WHEEL_TREES:
             if not any(name.startswith(tree) and not name.endswith("/") for name in names):
                 errors.append(f"{path.name}: {tree} ships no files")
+        for prefix in FORBIDDEN_WHEEL_PREFIXES:
+            if any(name.startswith(prefix) for name in names):
+                errors.append(f"{path.name}: ships deleted legacy tree {prefix}")
+        for member in FORBIDDEN_WHEEL_FILES:
+            if member in names:
+                errors.append(f"{path.name}: ships deleted legacy file {member}")
         migrations = {name for name in names if name.startswith("brains/storage/sql_migrations/")}
         if not any(name.endswith(".sql") for name in migrations):
             errors.append(f"{path.name}: brains/storage/sql_migrations ships no .sql delta")
@@ -78,6 +100,16 @@ def check_sdist(path: Path) -> list[str]:
         for member in REQUIRED_SDIST_FILES:
             if member not in names:
                 errors.append(f"{path.name}: missing {member}")
+        for prefix in (
+            "src/brains/dashboard/",
+            "src/brains/web/static/",
+            "src/brains/web/templates/dashboard/",
+        ):
+            if any(name.startswith(prefix) for name in names):
+                errors.append(f"{path.name}: ships deleted legacy tree {prefix}")
+        for member in (f"src/{name}" for name in FORBIDDEN_WHEEL_FILES):
+            if member in names:
+                errors.append(f"{path.name}: ships deleted legacy file {member}")
     return errors
 
 
@@ -108,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"- {error}")
         return 1
-    print("distribution ships the SPA bundle, baseline DDL and SQL migrations")
+    print("distribution ships core runtime data and excludes the deleted legacy browser")
     return 0
 
 

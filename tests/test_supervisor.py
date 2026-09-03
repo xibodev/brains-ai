@@ -23,7 +23,6 @@ import brains.control.supervisor as supervisor
 
 
 def test_build_children_includes_gateway_and_mcp_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("BRAINS_LEGACY_SURFACES", raising=False)
     parser = supervisor._build_parser()
     args = parser.parse_args([])
     children = supervisor._build_children(args)

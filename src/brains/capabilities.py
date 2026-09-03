@@ -88,7 +88,6 @@ WITHDRAWN_CLI_COMMANDS = frozenset(
     {
         "run",
         "prune-traces",
-        "dashboard",
         "copilot-login",
         "copilot-status",
         "copilot-logout",
