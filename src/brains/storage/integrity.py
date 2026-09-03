@@ -754,14 +754,20 @@ def _repair_preflight_integrity_check(conn: sqlite3.Connection) -> tuple[str, ..
         return integrity_check(conn)
     except sqlite3.DatabaseError as exc:
         error_code = getattr(exc, "sqlite_errorcode", None)
-        primary_code = error_code & 0xFF if isinstance(error_code, int) else None
         corruption_codes = {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
-        message = str(exc).casefold()
-        corruption_message = any(
-            marker in message
-            for marker in ("database disk image is malformed", "file is not a database")
-        )
-        if primary_code not in corruption_codes and not corruption_message:
+        if (
+            isinstance(error_code, int)
+            and not isinstance(error_code, bool)
+            and error_code >= 0
+        ):
+            is_corruption = error_code & 0xFF in corruption_codes
+        else:
+            message = str(exc).casefold()
+            is_corruption = any(
+                marker in message
+                for marker in ("database disk image is malformed", "file is not a database")
+            )
+        if not is_corruption:
             raise
         raise DatabaseCorruptError(
             "refusing to repair a database because SQLite could not complete "

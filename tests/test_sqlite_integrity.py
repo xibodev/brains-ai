@@ -1524,6 +1524,59 @@ def test_repair_normalizes_raised_malformed_page_error_before_backup(isolated_db
     assert not archive.exists()
 
 
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        sqlite3.SQLITE_CORRUPT,
+        sqlite3.SQLITE_NOTADB,
+        sqlite3.SQLITE_CORRUPT | (1 << 8),
+    ],
+)
+def test_repair_preflight_normalizes_explicit_corruption_codes(monkeypatch, error_code):
+    corrupt = sqlite3.DatabaseError("integrity scan stopped")
+    corrupt.sqlite_errorcode = error_code
+
+    def raise_corrupt(_conn):
+        raise corrupt
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_corrupt)
+
+    with pytest.raises(integrity.DatabaseCorruptError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value.__cause__ is corrupt
+
+
+def test_repair_preflight_uses_canonical_message_without_error_code(monkeypatch):
+    corrupt = sqlite3.DatabaseError("database disk image is malformed")
+
+    def raise_corrupt(_conn):
+        raise corrupt
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_corrupt)
+
+    with pytest.raises(integrity.DatabaseCorruptError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value.__cause__ is corrupt
+
+
+def test_repair_preflight_explicit_noncorrupt_code_outranks_corruption_text(monkeypatch):
+    busy = sqlite3.DatabaseError("database disk image is malformed")
+    busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    def raise_busy(_conn):
+        raise busy
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_busy)
+
+    with pytest.raises(sqlite3.DatabaseError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value is busy
+    assert not isinstance(caught.value, integrity.DatabaseCorruptError)
+
+
 def test_repair_does_not_normalize_unrelated_database_error(isolated_db, monkeypatch):
     archive = isolated_db.parent / "unrelated-error.tar.gz"
     unrelated = sqlite3.OperationalError("database is locked")
