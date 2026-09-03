@@ -21,8 +21,8 @@ empty and a human explicitly approves thawing it.
 
 ### BL-P1-05 - Complete supported configuration containment
 
-- **Action:** Limit the normal configuration experience to supported local service, MCP, SQLite, and harness settings with explicit reload or restart behavior.
-- **Done when:** Browser and API tests prove frozen and withdrawn settings are neither displayed nor writable and supported changes are redacted, attributable, reloadable, and recoverable.
+- **Action:** Limit the normal configuration experience to supported local service, MCP, SQLite, and harness settings with explicit restart behavior, and delete the remaining legacy writable configuration surface.
+- **Done when:** Browser and API tests prove frozen and withdrawn settings are neither displayed nor writable through any route and supported changes are redacted, attributable, restart-aware, concurrency-safe, and recoverable.
 - **Maps to:** F7, B6, B8; J9, J11.
 
 ### BL-P1-09 - Validate local readiness and recovery

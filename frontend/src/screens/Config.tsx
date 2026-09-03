@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { api, formatApiError } from "../api/client";
 import type {
   QueueHealthReport,
   ReadinessReport,
   RecoveryPolicyReport,
+  CoreConfiguration,
+  CoreConfigurationField,
 } from "../api/types";
 import { AsyncBoundary } from "../components/EmptyState";
 import { MasterDetail, type RailItem } from "../components/MasterDetail";
@@ -15,6 +17,7 @@ import { useAsync } from "../store/useAsync";
 import { ScreenHead } from "./ScreenHead";
 
 const SECTIONS: RailItem[] = [
+  { key: "local", label: "Local service", section: "Config" },
   { key: "mcp", label: "MCP servers", section: "Config" },
   { key: "health", label: "Health & recovery", section: "Config" },
 ];
@@ -29,7 +32,7 @@ export function Config() {
     <div style={{ height: "100%" }}>
       <ScreenHead eyebrow={`Config ▸ ${labelFor(section)}`} title="Configure" />
       <MasterDetail items={SECTIONS} activeKey={section} onSelect={(key) => navigate(`/operations/config/${key}`)} railOnLeft>
-        {section === "health" ? <Health /> : <McpConfig />}
+        {section === "health" ? <Health /> : section === "local" ? <LocalConfig /> : <McpConfig />}
       </MasterDetail>
     </div>
   );
@@ -37,6 +40,84 @@ export function Config() {
 
 function labelFor(key: string): string {
   return SECTIONS.find((section) => section.key === key)?.label ?? key;
+}
+
+function LocalConfig() {
+  const state = useAsync<CoreConfiguration>(() => api.operatorConfiguration(), []);
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<Record<string, string | number | boolean>>({});
+  const [saving, setSaving] = useState(false);
+  const [outcome, setOutcome] = useState<"live_reload" | "restart_required" | null>(null);
+  useEffect(() => {
+    if (!state.data) return;
+    setDraft(Object.fromEntries(state.data.fields.filter((field) => field.editable).map((field) => [field.key, field.value])));
+  }, [state.data]);
+
+  const save = async (data: CoreConfiguration) => {
+    const changes = Object.fromEntries(
+      data.fields
+        .filter((field) => field.editable && draft[field.key] !== field.value)
+        .map((field) => [field.key, draft[field.key]]),
+    );
+    if (Object.keys(changes).length === 0) return;
+    setOutcome(null);
+    setSaving(true);
+    try {
+      const result = await api.operatorUpdateConfiguration(data.revision, changes);
+      setOutcome(result.apply_mode);
+      toast(result.restart_required ? "Saved. Restart required to converge." : "Saved and reloaded.");
+      state.refetch();
+    } catch (error) {
+      toast(formatApiError("Configuration update", error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <AsyncBoundary state={state} emptyTitle="Configuration unavailable" emptyBody="The supported configuration summary could not be loaded.">
+      {(data) => (
+        <div>
+          <div className="eyebrow"><span>Supported local configuration</span></div>
+          <h2 style={{ margin: "8px 0 8px" }}>Effective settings</h2>
+          <p className="meta">Only local service, Streamable HTTP MCP, SQLite, and supported harness posture is exposed. Secret values and filesystem locations are omitted.</p>
+          <div className="card-list" style={{ marginTop: 16 }}>
+            {data.fields.map((field) => (
+              <ConfigurationField key={field.key} field={field} value={draft[field.key] ?? field.value} onChange={(value) => setDraft((current) => ({ ...current, [field.key]: value }))} />
+            ))}
+          </div>
+          <div className="row" style={{ marginTop: 16, gap: 8 }}>
+            <button className="btn small" disabled={saving} onClick={() => void save(data)}>{saving ? "Saving…" : "Save supported changes"}</button>
+            {outcome && <StatusPill label={outcome === "restart_required" ? "restart required" : "reloaded"} tone={outcome === "restart_required" ? "warning" : "positive"} />}
+          </div>
+          <SoftCard style={{ marginTop: 16 }}>
+            <strong>Harness wiring</strong>
+            <div className="card-list" style={{ marginTop: 10 }}>
+              {data.harnesses.map((harness) => (
+                <div className="row spread" key={harness.tool}>
+                  <span>{harness.tool}</span>
+                  <span className="meta">{harness.mcp_wired ? harness.mcp_transport ?? "wired" : harness.detected ? "detected, not wired" : "not detected"}</span>
+                </div>
+              ))}
+            </div>
+          </SoftCard>
+        </div>
+      )}
+    </AsyncBoundary>
+  );
+}
+
+function ConfigurationField({ field, value, onChange }: { field: CoreConfigurationField; value: string | number | boolean; onChange: (value: string | number | boolean) => void }) {
+  return (
+    <div className="row spread">
+      <div><strong>{field.key}</strong><div className="meta">{field.source} · {field.apply_mode.replace("_", " ")}</div></div>
+      {!field.editable ? <code>{String(field.value)}</code> : typeof field.value === "boolean" ? (
+        <input aria-label={field.key} type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
+      ) : (
+        <input aria-label={field.key} type="number" value={Number(value)} min={0} onChange={(event) => onChange(Number(event.target.value))} style={{ width: 130 }} />
+      )}
+    </div>
+  );
 }
 
 function McpConfig() {

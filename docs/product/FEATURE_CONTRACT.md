@@ -173,16 +173,16 @@ authorized Workspace; it does not expose execution-model onboarding.
 **Promise:** Operations presents redacted effective state and permits only approved
 non-secret/encrypted writes with explicit reload or restart behavior.
 
-**Lifecycle:** advertised/partial for the local service, MCP, and secret posture.
+**Lifecycle:** advertised/partial for the local service, MCP, SQLite, and harness posture.
 Gateway/provider, Runtime, automation, bridge, Postgres, telemetry, and legacy-admin
 activation are withdrawn. Email/SMTP and GitHub integration are frozen.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
 | AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial for local service/MCP probes; external integration probes are frozen or withdrawn. |
-| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial for supported service and MCP state; withdrawn provider, bridge, SMTP, and generic configuration are absent from supported surfaces. |
-| AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised at E1/E2 for current typed writes; browser E4 remains open. |
-| AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised/partial; handling-process reload exists for some settings, full convergence requires restart/probe. |
+| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial. The modern positive local service/MCP/SQLite/harness manifest omits secrets, filesystem locations, and frozen or withdrawn fields; legacy `/admin/config` remains until BL-P2-01 deletion. |
+| AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised. The modern Config screen labels effective read-only fields and the three approved non-secret writes. |
+| AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised. Every supported write is saved atomically and explicitly requires supervised-stack restart because workers and MCP do not share process memory. Failed apply restores the previous overlay. |
 
 ### F8 - GitHub linkage
 

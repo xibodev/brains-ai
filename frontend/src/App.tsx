@@ -26,12 +26,12 @@ export function App() {
                   <Route path="/coordination" element={<OperatorCoordination />} />
                   <Route path="/governance" element={<Governance />} />
                   <Route path="/operations" element={<Operations />} />
-                  <Route path="/operations/config" element={<Navigate to="/operations/config/mcp" replace />} />
+                  <Route path="/operations/config" element={<Navigate to="/operations/config/local" replace />} />
                   <Route path="/operations/config/:section" element={<Config />} />
                   <Route path="/act" element={<Act />} />
 
                   <Route path="/inbox" element={<Navigate to="/governance" replace />} />
-                  <Route path="/config" element={<Navigate to="/operations/config/mcp" replace />} />
+                  <Route path="/config" element={<Navigate to="/operations/config/local" replace />} />
                   <Route path="*" element={<Navigate to="/command-center" replace />} />
                 </Route>
               </Routes>

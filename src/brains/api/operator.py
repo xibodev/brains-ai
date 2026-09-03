@@ -169,6 +169,11 @@ class PatternDecisionBody(BaseModel):
     approved: bool = True
 
 
+class CoreConfigurationBody(BaseModel):
+    expected_revision: str = Field(min_length=64, max_length=64)
+    changes: dict[str, Any] = Field(min_length=1, max_length=10)
+
+
 class FeedbackReportBody(BaseModel):
     category: str
     severity: str
@@ -1084,6 +1089,47 @@ def operations(principal: Principal = Depends(require_operator_principal)) -> di
     from brains.control.operations import operations_snapshot
 
     return operations_snapshot()
+
+
+@router.get("/configuration")
+def core_configuration(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict[str, Any]:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("install configuration is available to the bootstrap admin only")
+    from brains.control.configuration import configuration_summary
+
+    try:
+        return configuration_summary()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="supported configuration is unavailable"
+        ) from exc
+
+
+@router.put("/configuration")
+def update_core_configuration(
+    body: CoreConfigurationBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict[str, Any]:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("install configuration is available to the bootstrap admin only")
+    from brains.control.configuration import (
+        ConfigurationConflict,
+        ConfigurationError,
+        apply_configuration,
+    )
+
+    try:
+        return apply_configuration(
+            body.changes,
+            expected_revision=body.expected_revision,
+            actor=principal.describe(),
+        )
+    except ConfigurationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/capabilities")

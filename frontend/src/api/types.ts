@@ -929,6 +929,41 @@ export interface OperatorOperations {
   };
 }
 
+export interface CoreConfigurationField {
+  key: string;
+  category: "service" | "mcp" | "sqlite";
+  value: string | number | boolean;
+  editable: boolean;
+  apply_mode: "read_only" | "live_reload" | "restart_required";
+  source: string;
+}
+
+export interface CoreHarnessConfiguration {
+  tool: "copilot" | "claude" | "codex" | "opencode";
+  detected: boolean;
+  mcp_wired: boolean;
+  mcp_transport: string | null;
+  rule_wired: boolean;
+  mailbox_notification_mode: string | null;
+}
+
+export interface CoreConfiguration {
+  revision: string;
+  fields: CoreConfigurationField[];
+  harnesses: CoreHarnessConfiguration[];
+  redaction: string;
+}
+
+export interface CoreConfigurationUpdate {
+  ok: boolean;
+  revision: string;
+  apply_mode: "live_reload" | "restart_required";
+  reload_applied: boolean;
+  restart_required: boolean;
+  audit_id: number;
+  changed_fields: string[];
+}
+
 export type OperatorTransport = "native_http" | "thin_adapter" | "host_contract";
 
 export interface OperatorCapability {
