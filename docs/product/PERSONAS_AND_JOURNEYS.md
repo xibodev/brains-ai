@@ -156,8 +156,9 @@ data remains readable during upgrade while exposure is removed.
 
 **Acceptance IDs:** AC-F1-01 through AC-F1-06, AC-B6-01.
 
-**Evidence gaps:** BL-P0-09 must prove zero discovery/activation and direct-call refusal.
-Replacement research is isolated and does not reactivate J2.
+**Current boundary:** Enrollment, Runtime, daemon, and activation behavior has no
+supported discovery or activation surface; retained rows and source are
+compatibility-only.
 
 ## J3 - Create and bind a Persona
 
@@ -192,8 +193,8 @@ attribution while discovery and activation are removed.
 
 **Acceptance IDs:** AC-F2-01 through AC-F2-06, AC-F0-04.
 
-**Evidence gaps:** BL-P0-09 must prove Persona/Skill/Spawn containment. Existing tests
-show source behavior only and do not make the feature available.
+**Current boundary:** Persona, Skill, and spawn behavior has no supported discovery or
+activation surface; retained rows and source are compatibility-only.
 
 ## J4 - Create and operate a Pod
 
@@ -226,8 +227,8 @@ remain compatible while exposure is removed.
 
 **Acceptance IDs:** AC-F5-01 through AC-F5-04, AC-F4-06.
 
-**Evidence gaps:** BL-P0-09 must prove containment; replacement research does not
-reactivate J4.
+**Current boundary:** Pod and legacy Squad behavior has no supported discovery or
+activation surface; retained rows and source are compatibility-only.
 
 ## J5 - Create a Project and link a Workspace
 
@@ -260,8 +261,8 @@ historical Project links remain intact while Project exposure is removed.
 
 **Acceptance IDs:** AC-F4-01, AC-F0-05, AC-B2-02, AC-B5-01.
 
-**Evidence gaps:** Existing browser coverage describes frozen source. BL-P0-09 must
-retain Workspace behavior while removing Project discovery and activation.
+**Current boundary:** Workspace behavior remains supported; Project discovery and
+activation are absent from the shipped browser and product APIs.
 
 ## J6 - Create, assign, and dispatch an Issue
 
@@ -295,8 +296,8 @@ remain attributable while all assignment/dispatch exposure is removed.
 
 **Acceptance IDs:** AC-F4-01 through AC-F4-07, AC-F3-03, AC-F8-01, AC-F8-02.
 
-**Evidence gaps:** BL-P0-09 must prove Issue/dispatch containment. Existing E1/E2 code
-and tests are compatibility evidence only.
+**Current boundary:** Issue and dispatch behavior has no supported discovery or
+activation surface; retained data is compatibility-only.
 
 ## J7 - Dispatch and watch a Session
 
@@ -437,8 +438,9 @@ which processes need restart, and which source-level capabilities are withdrawn.
 
 **Acceptance IDs:** AC-F7-01 through AC-F7-04, AC-F8-03, AC-F8-04, AC-B1-04, AC-B7-03.
 
-**Evidence gaps:** BL-P0-09 must remove frozen and withdrawn configuration discovery and
-activation. GitHub operation and multi-process reload are frozen, not active evidence gaps.
+**Current boundary:** Frozen and withdrawn configuration is not discoverable or
+activatable. Supported local service and MCP configuration remains redacted; GitHub
+operation and multi-process reload are frozen.
 
 ## J10 - Manage Org, members, usage, and reusable guidance
 

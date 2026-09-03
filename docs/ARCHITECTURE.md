@@ -203,8 +203,9 @@ and isolated end-to-end UAT drive engineering revision.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
-backend state. BL-P0-09 decides what must remain to open an existing store. New product
-work must not depend on those rows merely because they exist.
+backend state. Those rows remain only where required to open or migrate an existing
+store; they do not register or activate a product capability. New product work must not
+depend on them merely because they exist.
 
 ### Schema evolution
 
