@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from brains.config import DEFAULT_DB_URL, Settings, _canonical_default_db_url
+from brains.config import (
+    DEFAULT_DB_URL,
+    Settings,
+    _canonical_default_db_url,
+    _enforce_subsystem_extras,
+)
 
 
 @pytest.fixture
@@ -49,10 +54,11 @@ def test_explicit_absolute_sqlite_url_is_preserved(isolated_env, tmp_path):
     assert s.db_url == explicit
 
 
-def test_postgres_url_is_preserved(isolated_env):
+def test_historical_postgres_url_is_rejected_at_activation(isolated_env):
     explicit = "postgresql+psycopg://user:pw@db.example.com:5432/brains"
     s = Settings(db_url=explicit)
-    assert s.db_url == explicit
+    with pytest.raises(ValueError, match="withdrawn"):
+        _enforce_subsystem_extras(s)
 
 
 def test_default_field_resolves_when_no_env(isolated_env):

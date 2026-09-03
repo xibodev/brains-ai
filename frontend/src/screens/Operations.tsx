@@ -1,6 +1,5 @@
 import { useNavigate } from "react-router-dom";
 import { api, formatApiError } from "../api/client";
-import { relativeTime } from "../components/format";
 import {
   OperatorCard,
   OperatorMiniList,
@@ -16,16 +15,6 @@ export function Operations() {
   const state = useAsync(() => api.operatorOperations(), []);
   const { toast } = useToast();
   const data = state.data;
-
-  const verifyTool = async (name: string) => {
-    try {
-      await api.operatorVerifyTool(name);
-      toast(`${name} verification recorded`);
-      state.refetch();
-    } catch (error) {
-      toast(formatApiError("Verify tool", error));
-    }
-  };
 
   return (
     <div className="operator-page" data-testid="operations">
@@ -47,7 +36,6 @@ export function Operations() {
               ["Storage", data.readiness.components.storage.state],
               ["Queues", data.readiness.components.queue.state],
               ["Durable mail", data.readiness.components.durable_mail.state],
-              ["Tools", `${data.tools.length} registered`],
               ["Recovery", data.recovery.ready ? "ready" : "incomplete"],
             ].map(([name, value]) => <div key={name}><span>+</span><strong>{name}</strong><small>{value}</small></div>)}
           </section>
@@ -70,30 +58,15 @@ export function Operations() {
               <button className="operator-button" onClick={() => void api.repairQueueHealth(false).then(() => toast("Queue repair preview complete")).catch((error) => toast(formatApiError("Preview queue repair", error)))}>Preview repair</button>
             </OperatorCard>
 
-            <OperatorCard kicker="Tools" title="Registered capabilities" action={<OperatorStatus tone="native">Native HTTP</OperatorStatus>} className="operator-operation-card">
-              <div className="operator-op-number">{data.tools.filter((tool) => tool.is_available).length} available</div>
-              <p>Verification is bounded to registered executable discovery and records an audit event.</p>
-              <div className="operator-tool-list">
-                {data.tools.slice(0, 5).map((tool) => <button key={tool.name} onClick={() => void verifyTool(tool.name)}><span><strong>{tool.display_name}</strong><small>{relativeTime(tool.last_verified_at)}</small></span><OperatorStatus tone={tool.is_available ? "ready" : "warning"}>{tool.is_available ? "available" : "missing"}</OperatorStatus></button>)}
-                {!data.tools.length && <span className="operator-muted">No tools registered.</span>}
-              </div>
-            </OperatorCard>
-
             <OperatorCard kicker="Storage and recovery" title="Durability policy" action={<OperatorStatus tone={data.recovery.ready ? "ready" : "warning"}>{data.recovery.ready ? "ready" : "incomplete"}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{data.recovery.policy.missing_fields.length} gaps</div>
               <p>Backup and restore stay disabled in the browser until typed preview and confirmation routes exist.</p>
               <OperatorMiniList rows={[
                 { label: "Retention", value: data.recovery.policy.retention_days == null ? "Not set" : `${data.recovery.policy.retention_days} days` },
-                { label: "Restore drill", value: data.recovery.policy.last_restore_drill_at ? relativeTime(data.recovery.policy.last_restore_drill_at) : "Not recorded" },
+                { label: "Restore drill", value: data.recovery.policy.last_restore_drill_at ? "recorded" : "Not recorded" },
                 { label: "Schema compatibility", value: data.recovery.compatibility.migration_healthy ? "Healthy" : "Degraded" },
               ]} />
               <button className="operator-button" disabled>Backup adapter required</button>
-            </OperatorCard>
-
-            <OperatorCard kicker="Access and configuration" title="Operators and settings" action={<OperatorStatus tone="adapter">Mixed HTTP</OperatorStatus>} className="operator-operation-card">
-              <div className="operator-op-number">{data.operators.length} operators</div>
-              <p>Org membership and encrypted settings are native; remaining workspace-access operations stay explicit gaps.</p>
-              <div className="operator-action-row"><button className="operator-button" onClick={() => navigate("/operations/access")}>Manage access</button><button className="operator-button" onClick={() => navigate("/operations/config")}>Configuration</button></div>
             </OperatorCard>
 
             <OperatorCard kicker="Host contracts" title="Service and wiring" action={<OperatorStatus tone="host">Host contract</OperatorStatus>} className="operator-operation-card">

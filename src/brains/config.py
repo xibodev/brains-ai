@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from brains.extras import ExtraNotInstalledError, require_extra
+from brains.extras import ExtraNotInstalledError
 
 
 class ModelRoute(BaseModel):
@@ -636,31 +636,24 @@ def _apply_payload(base: Settings, payload: dict[str, Any]) -> Settings:
 
 
 def _enforce_subsystem_extras(settings_obj: Settings) -> None:
-    """Fail loud at startup when an enabled subsystem is missing its pip extra.
-
-    Walks the registered ``(subsystem_path, extra_name)`` pairs and asks
-    :func:`brains.extras.require_extra` to assert the extra is importable.
-    Postgres is a special case: it's gated on the ``storage.backend``
-    string rather than an ``enabled`` flag.
-    """
+    """Fail closed when historical config attempts withdrawn activation."""
     subs = settings_obj.subsystems
-    if subs.storage.backend == "postgres":
-        require_extra("postgres", "subsystems.storage (backend=postgres)")
+    if subs.storage.backend != "sqlite" or not settings_obj.db_url.startswith("sqlite:"):
+        raise ValueError("Postgres runtime storage is withdrawn; SQLite is required")
     bridges = subs.bridges
-    bridge_pairs = (
-        ("subsystems.bridges.telegram", "telegram", bridges.telegram.enabled),
-        ("subsystems.bridges.slack", "slack", bridges.slack.enabled),
-        ("subsystems.bridges.whatsapp", "whatsapp", bridges.whatsapp.enabled),
+    withdrawn = (
+        ("subsystems.bridges.telegram", bridges.telegram.enabled),
+        ("subsystems.bridges.slack", bridges.slack.enabled),
+        ("subsystems.bridges.whatsapp", bridges.whatsapp.enabled),
         (
             "subsystems.bridges.whatsapp_web",
-            "whatsapp_web",
             getattr(getattr(bridges, "whatsapp_web", None), "enabled", False),
         ),
-        ("subsystems.otel", "otel", subs.otel.enabled),
+        ("subsystems.otel", subs.otel.enabled),
     )
-    for path, extra_name, is_on in bridge_pairs:
+    for path, is_on in withdrawn:
         if is_on:
-            require_extra(extra_name, path)
+            raise ValueError(f"{path} is withdrawn and cannot be enabled")
 
 
 def load_settings() -> Settings:

@@ -98,7 +98,11 @@ def _coordination_start_lock(workspace_path: str, tool: str, operator: str | Non
 
                 while True:
                     try:
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        msvcrt.locking(  # type: ignore[attr-defined]
+                            handle.fileno(),
+                            msvcrt.LK_NBLCK,  # type: ignore[attr-defined]
+                            1,
+                        )
                         break
                     except OSError:
                         time.sleep(0.05)
@@ -106,7 +110,11 @@ def _coordination_start_lock(workspace_path: str, tool: str, operator: str | Non
                     yield
                 finally:
                     handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    msvcrt.locking(  # type: ignore[attr-defined]
+                        handle.fileno(),
+                        msvcrt.LK_UNLCK,  # type: ignore[attr-defined]
+                        1,
+                    )
             else:
                 import fcntl
 

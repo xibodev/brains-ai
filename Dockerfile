@@ -1,8 +1,7 @@
 # Build a slim runtime image for `brains-ai serve-all`.
 #
 # Image entrypoint runs the supervisor that brings up the gateway (:8787),
-# browser/API gateway (:8787) and MCP server (:9877). The retired dashboard
-# child (:9876) is opt-in only. State lives under /data which is
+# browser/API service (:8787) and MCP server (:9877). State lives under /data which is
 # meant to be a mounted volume so `brains.db`, `brains.runtime.yaml`, and
 # `~/.brains` survive container restarts.
 #

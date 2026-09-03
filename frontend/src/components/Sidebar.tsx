@@ -1,5 +1,4 @@
 import { NavLink, useNavigate } from "react-router-dom";
-import { useOperator } from "../store/OperatorContext";
 
 interface Item {
   to: string;
@@ -17,7 +16,6 @@ const NAVIGATION: Item[] = [
 
 export function Sidebar() {
   const navigate = useNavigate();
-  const { catalog } = useOperator();
 
   const renderItem = (it: Item) => (
     <NavLink
@@ -46,11 +44,6 @@ export function Sidebar() {
           <button className="control-act-button" onClick={() => navigate("/act")}>
             <span>Act</span><kbd>Ctrl K</kbd>
           </button>
-          <div className="control-labs-note">
-            <strong>Labs {catalog?.labs_enabled ? "on" : "off"}.</strong>
-            <span>Execution-model screens stay outside the normal operator surface.</span>
-            {catalog?.labs_enabled && <NavLink to="/labs">Open Labs</NavLink>}
-          </div>
         </div>
       </aside>
       <nav className="control-mobile-nav">

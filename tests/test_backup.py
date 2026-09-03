@@ -24,7 +24,6 @@ import brains.storage.migrations as migrations_module
 from brains.audit import _reset_key_cache
 from brains.backup import (
     BackupError,
-    BackupToolUnavailable,
     ManifestMismatch,
     UnsupportedBackend,
     create_backup,
@@ -447,22 +446,19 @@ def test_restore_backup_unsupported_backend_raises(isolated_sqlite, monkeypatch)
 # ----------------------------------------------------------------------
 
 
-def test_backup_postgres_requires_pg_dump(isolated_sqlite, monkeypatch):
-    """Postgres path must raise BackupToolUnavailable if pg_dump is missing."""
+def test_backup_postgres_runtime_is_withdrawn(isolated_sqlite, monkeypatch):
     monkeypatch.setattr(backup_module, "_current_backend", lambda: "postgres")
     monkeypatch.setattr(
         backup_module,
         "_current_db_url",
         lambda: "postgresql+psycopg://x:y@localhost/brains",
     )
-    monkeypatch.setattr(backup_module.shutil, "which", lambda name: None)
-    with pytest.raises(BackupToolUnavailable):
+    with pytest.raises(UnsupportedBackend, match="withdrawn"):
         create_backup(isolated_sqlite / "x.tar.gz")
 
 
-def test_restore_postgres_requires_psql(isolated_sqlite, monkeypatch):
-    """Restore Postgres path must raise BackupToolUnavailable if psql is missing."""
-    # Build a manifest-only archive marked postgres so we hit psql check.
+def test_restore_postgres_runtime_is_withdrawn(isolated_sqlite, monkeypatch):
+    """Historical Postgres archives remain inspectable but cannot activate a backend."""
     extract_dir = isolated_sqlite / "ext"
     extract_dir.mkdir()
     manifest = extract_dir / "manifest.json"
@@ -495,8 +491,7 @@ def test_restore_postgres_requires_psql(isolated_sqlite, monkeypatch):
         "_current_db_url",
         lambda: "postgresql+psycopg://x:y@localhost/brains",
     )
-    monkeypatch.setattr(backup_module.shutil, "which", lambda name: None)
-    with pytest.raises(BackupToolUnavailable):
+    with pytest.raises(UnsupportedBackend, match="withdrawn"):
         restore_backup(archive)
 
 

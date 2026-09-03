@@ -68,11 +68,10 @@ database; the `brains_*` MCP tools and the `brains-ai` CLI hit the same store. S
 your use of brains to the task — under-coordinating drifts, over-coordinating wastes
 tokens.
 
-**Quick lookup** ("where is X", "how does Y work", "what calls Z"): skip the session
-ceremony. Make ONE retrieval call and read its inline results instead of grepping
-files:
-- `brains_orient` / `brains_search_semantic` → ranked code snippets;
-- `brains_graph_neighbors` / `brains_graph_query` → callers, impact, structure.
+**Quick lookup** ("where is X", "how does Y work"): skip the session ceremony.
+Use `brains_knowledge_search` for recorded knowledge or `brains_search_repo` for
+substring/symbol lookup. Empty results mean no match; neither path requires an
+embedding model or graph index.
 
 **Non-trivial, multi-step, or COLLABORATIVE work** (editing a shared repo, work others
 may touch, a multi-session effort): coordinate, in order —
@@ -87,8 +86,8 @@ may touch, a multi-session effort): coordinate, in order —
 Rules of thumb: **retrieve, don't grep; reuse recorded knowledge, don't re-derive or
 re-record it; validate before you hand off; coordinate only when others are involved.**
 Keep tool calls and outputs lean — fewer round-trips and shorter messages cost less. If a
-retrieval call returns a hint that the workspace isn't indexed, heed it (embed once, or
-fall back to substring/grep) instead of silently re-searching. If MCP is unreachable, use
+retrieval call reports that the workspace is unavailable, use the supported
+substring/symbol lookup or report that state instead of silently re-searching. If MCP is unreachable, use
 the `brains-ai` CLI — same store.
 """
 

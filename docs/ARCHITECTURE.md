@@ -29,9 +29,9 @@ Architecture descriptions use four lifecycle states:
 | Target-only | Stable future contract with no current product surface. |
 | Withdrawn | Frozen or retired implementation. Source/data may remain for compatibility, but there is no supported activation path. |
 
-At HEAD, BL-P0-09 remains open: routes, commands, tools, flags, extras, tables, and
-modules for withdrawn features still exist. The architecture records that mismatch; it
-does not turn source presence into product availability.
+The shipped composition is defined by `brains.capabilities` and checked from generated
+CLI, MCP, OpenAPI, browser, package-extra, example, and wire inventories. Historical
+modules and tables may remain importable only to open and migrate existing SQLite data.
 
 ## Supported topology
 
@@ -43,7 +43,7 @@ Gateway process                         MCP process
   - /app Workspace-first SPA              - coordination tools
   - protected native API                  - local or authenticated transport
   - WS/SSE realtime                       - bounded maintenance
-  - signed GitHub ingress                       |
+  - protected core API                         |
       |                                          |
       +------------------+-----------------------+
                          v
@@ -72,7 +72,7 @@ The normal browser surface is `/app`:
 - Act, which launches named typed capabilities rather than shell or arbitrary MCP.
 
 The retired dashboard/admin HTML process and execution-model screens are not part of
-this topology even though source routes and assets remain pending containment.
+this topology. Only the sign-in and sign-out cookie endpoints remain under `/admin`.
 
 ## Process boundaries
 
@@ -99,14 +99,11 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Application composition | Gateway app, protected routes, SPA, startup state | `src/brains/main.py` |
 | Advertised | Identity and authorization | Credential resolution, principals, Org/Workspace capability checks | `src/brains/authz` |
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
-| Advertised | Coordination controls | Sessions, tasks, claims, handoffs, messages, topics, peer help, knowledge, patterns, checkpoints | `src/brains/control`, `src/brains/mcp` |
+| Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
 | Advertised | Realtime | Closed topics, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
 | Advertised | Service operations | CLI, wiring, service renderers, supervisor, readiness | `src/brains/cli`, `src/brains/wire`, `src/brains/service` |
-| Advertised | GitHub ingress | Signature, repository scope, delivery identity, replay refusal | `src/brains/api/webhooks.py` |
-| Advertised | Agent feedback inbox | Redacted ordinary feedback and human-only triage/promotion | `src/brains/control` |
-| Admission candidate | Ephemeral peer review | Fenced disposable tracked snapshot; not field-active until default activation and worker transport are corrected | `src/brains/control`, Runtime compatibility endpoints |
 | Withdrawn | Execution model | Runtimes, Personas, Pods, Projects, Issues, execution onboarding/Sessions | `src/brains/api`, `src/brains/daemon`, execution-model frontend screens |
 | Withdrawn | Automation | Managed Skills, recurring definitions, generic triggers, scheduled auto-fire | `src/brains/control`, `src/brains/mcp`, Automation frontend |
 | Withdrawn | Model edge | OpenAI/Anthropic facades, router, providers, LiteLLM, tool launcher | `src/brains/api`, `src/brains/router`, `src/brains/providers` |
@@ -114,9 +111,8 @@ The supported processes have separate memory and one shared SQLite store.
 | Withdrawn | Alternate services | Postgres, OpenTelemetry export, messaging bridges, WhatsApp Web | storage adapters, observability, bridges, `services/wa-web` |
 | Withdrawn | Legacy browser | Dashboard and legacy admin HTML/static assets | `src/brains/dashboard`, `src/brains/admin` |
 
-Withdrawn modules retain their previous authorization and validation checks while they
-remain mounted. Those checks limit current source risk; they do not define a supported
-feature or permission to activate it.
+Withdrawn modules are not mounted, registered, packaged as optional extras, or linked
+from the browser. Their internal checks are compatibility defense, not activation.
 
 ## Durable state
 
@@ -125,14 +121,11 @@ projection, never authority.
 
 Advertised durable families include:
 
-- operators, credentials, Orgs, members, Workspaces, aliases, and memberships;
+- local operator identity, Workspaces, aliases, and compatibility scope rows;
 - coordination Sessions and events;
-- tasks, claims, handoffs, legacy Session-addressed mailbox rows, topics, peer help,
-  checkpoints, snapshots, and knowledge;
+- tasks, claims, handoffs, durable mailbox rows, peer help, checkpoints, snapshots, and knowledge;
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
-- feedback, event context, adoption events, and ephemeral-review attempt metadata;
-- realtime replay rows, integration delivery identity, usage attribution, secure local
-  settings, and migration state.
+- event context, realtime replay rows, secure local settings, and migration state.
 
 Migration 150 reserves the durable-mailbox data boundary:
 
@@ -191,14 +184,8 @@ masked hint on reads. Verification defaults to a constant content-free notificat
 full subject/body forwarding is a distinct explicit consent state. The local delivery
 transaction snapshots only destination reference and copy mode into one outbox row.
 
-The scheduler leases that row after commit. A required audit attempt precedes SMTP I/O,
-and the outbox ID supplies a stable RFC Message-ID. Known pre-send failures back off and
-retry; any send-stage exception, lost outcome audit, or expired send lease is terminally
-uncertain so Brains does not knowingly duplicate an external copy. Mode/destination
-changes fence live sends and cancel work that has not started. Neither SMTP outcome nor
-configuration changes modify the local message/delivery/read record. No destination or
-mail content enters audit/event metadata, and no inbound email path exists. Synthetic
-SMTP evidence does not certify a real provider.
+Historical notification and SMTP rows are retained for migration compatibility only;
+the core scheduler does not lease them or perform external delivery.
 
 Durable-mail readiness is a bootstrap-admin-only count projection over those
 authoritative rows. It
@@ -216,8 +203,9 @@ and isolated end-to-end UAT drive engineering revision.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
-backend state. BL-P0-09 decides what must remain to open an existing store. New product
-work must not depend on those rows merely because they exist.
+backend state. Those rows remain only where required to open or migrate an existing
+store; they do not register or activate a product capability. New product work must not
+depend on them merely because they exist.
 
 ### Schema evolution
 
@@ -310,39 +298,11 @@ mutation, insertion, deletion, truncation, missing/forged heads, and count diver
 under the stated key model. A stolen audit key can forge history; an in-process action
 gate cannot contain an external harness that bypasses it. Both limits remain explicit.
 
-## Experimental features
-
-The experimental label records uncertainty in normal-use behavior. It does not start a
-field trial or create a telemetry requirement. BL-P1-15 is the advertised ordinary
-feedback path; the mis-scoped BL-P1-16 analytics projection is removed.
-
-Ephemeral peer review is an implemented admission candidate, not a supported experiment,
-until normal peer help defaults to existing peers and its worker transport is separated
-from withdrawn Runtime execution.
-
-Each experimental feature needs a user promise, full UAT, truthful activation, a feedback
-path, disable/rollback behavior, and revision/withdrawal criteria. None may silently
-widen normal-product readiness or authority.
-
-Ephemeral peer review may reuse narrowly scoped Runtime compatibility endpoints while
-BL-P0-09 separates them from withdrawn Runtime execution. The reviewer receives a
-temporary Git-tracked snapshot rather than the registered source path; bounded output
-is accepted only if the source fingerprint remains unchanged. This is not a universal
-network-confinement claim.
-
 ## External boundary
 
-Signed GitHub ingress is the only advertised external integration. It requires the
-expected signature, delivery/event identity, exact repository-to-Org binding, and
-durable replay refusal. Live GitHub operation remains unverified.
-
-BL-P1-19 proposes a separate outbound path: local defect evidence is redacted,
-clustered, deduplicated, compared with public issues, and presented as an exact payload.
-A human must choose discard, link existing, create, or comment. The effect then uses the
-governed GitHub path. No background upload or automatic issue creation is allowed.
-
-Generic webhooks, relay, email-to-agent behavior, Telegram, Slack, WhatsApp, and
-WhatsApp Web are not part of this boundary.
+Core has no external integration boundary. GitHub linkage, generic webhooks, public
+relay, SMTP copies, model gateways, telemetry exporters, and messaging bridges are not
+mounted or packaged as normal-install capabilities.
 
 ## Recovery boundary
 
@@ -372,8 +332,7 @@ No deployment is established by this document.
 
 ## Current limitations
 
-1. BL-P0-09 has not yet removed every withdrawn discovery and activation path.
-2. Presence can remain stale when a harness does not end/detach or renew correctly.
+1. Presence can remain stale when a harness does not end/detach or renew correctly.
 3. Cross-process realtime is durable on replay but not live fan-out.
 4. The action boundary is cooperative and in-process, not universal process/network
    confinement.
@@ -381,5 +340,5 @@ No deployment is established by this document.
    convergence are incomplete.
 6. SQLite foreign-key enforcement is opt-in until existing stores are proven clean.
 7. Recovery mechanics exist, but exact-candidate backup/restore/rollback E4 is absent.
-8. Legacy and withdrawn source increases import, packaging, and security surface until
-   separately reviewed removal.
+8. Legacy and withdrawn source that remains for data compatibility still requires
+   separately reviewed deletion where compatibility no longer needs it.

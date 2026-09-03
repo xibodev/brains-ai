@@ -17,7 +17,7 @@ does not by itself advertise a feature.
 | Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, explicitly labelled in this contract; full UAT still applies. |
 | Target-only | Future product contract with no current product surface. |
 | Withdrawn | Known-faulty or retired implementation, unadvertised and non-activatable by contract. |
-| Source compatibility | Code or data remains temporarily for existing stores or until BL-P0-09 removes exposure. Presence is not availability. |
+| Source compatibility | Code or data retained solely to open or migrate existing stores; it is not registered, routed, advertised, or activatable. Presence is not availability. |
 | Missing | An advertised contract is absent from current HEAD. |
 
 Evidence levels are defined in [QUALITY_GATES.md](../QUALITY_GATES.md). Source and test
@@ -50,8 +50,8 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 stable supported surfaces, receive actionable errors, and launch only typed, truthfully
 available actions.
 
-**Lifecycle:** advertised/partial. Execution-model screens and redirects still present
-in source are BL-P0-09 containment debt.
+**Lifecycle:** advertised/partial. Execution-model screens and redirects are absent from
+the shipped SPA route inventory.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
@@ -59,7 +59,7 @@ in source are BL-P0-09 containment debt.
 | AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
 | AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised/partial; some screens still collapse failures into empty state. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
-| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes await removal. |
+| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes are absent. |
 
 **Failure behavior:** Authentication failure leads to sign-in or a structured error.
 Unknown/unauthorized entities never silently select another entity.
@@ -113,9 +113,9 @@ and execution supervision are frozen or withdrawn; see [FROZEN_BACKLOG.md](FROZE
 | AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised; terminal transitions cannot resurrect and atomically release task, claim, mailbox, and command ownership. |
 | AC-F3-03 | Session actions update linked Issue state/comments with attribution. | Withdrawn with Project/Issue execution; Workspace task/handoff attribution remains under B2. |
 | AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Advertised/partial; human routing is separate from authorization and complete publish E4 remains open. |
-| AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox/topics remain B2 capabilities. |
+| AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox communication remains a B2 capability. |
 | AC-F3-06 | Stop is authorized, durable, delivered to the Runtime, and reconciled. | Withdrawn with Runtime execution; coordination Session end is separate. |
-| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and entity-authorized. | Advertised at E1/E2; closed topics, replay, and revalidation exist, browser reconnect E4 is open. |
+| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and supported-stream-authorized. | Advertised at E1/E2; closed subscription grammar, replay, and revalidation exist, browser reconnect E4 is open. |
 
 **Failure behavior:** Reconnect uses scoped durable state. Unsupported process delivery
 or stop is refused rather than queued or reported as successful.
@@ -166,7 +166,7 @@ authorized Workspace; it does not expose execution-model onboarding.
 | AC-F6-02 | Execution onboarding composes Org, machine, Persona, work, and dispatch. | Withdrawn/source compatibility. |
 | AC-F6-03 | Every execution-onboarding step has complete UX/recovery states. | Withdrawn target criterion. |
 | AC-F6-04 | Completion lands on attributable execution or a clear blocker. | Withdrawn target criterion. |
-| AC-F6-05 | Clean-state browser evidence proves the flow without seeded success. | Current need is containment plus Workspace-first J1 evidence. |
+| AC-F6-05 | Clean-state browser evidence proves the flow without seeded success. | The withdrawn flow has no discovery or activation surface; Workspace-first J1 evidence remains open. |
 
 ### F7 - Supported configuration truth
 
@@ -180,7 +180,7 @@ activation are withdrawn. Email/SMTP and GitHub integration are frozen.
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
 | AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial for local service/MCP probes; external integration probes are frozen or withdrawn. |
-| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial; withdrawn fields still require BL-P0-09 containment. |
+| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial for supported service and MCP state; withdrawn provider, bridge, SMTP, and generic configuration are absent from supported surfaces. |
 | AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised at E1/E2 for current typed writes; browser E4 remains open. |
 | AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised/partial; handling-process reload exists for some settings, full convergence requires restart/probe. |
 
@@ -248,11 +248,11 @@ LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility on
 ### B2 - Coordination plane and MCP
 
 **Promise:** Agents share coordination Sessions, tasks, claims, handoffs, messages,
-topics, decisions, knowledge, tool records, and checkpoints through stable scoped
-MCP/CLI/browser surfaces.
+decisions, knowledge, tool records, and checkpoints through stable scoped MCP/CLI/browser
+surfaces.
 
 **Lifecycle:** advertised/partial for the local coordination plane. Feedback intelligence,
-automatic patterns, and peer-review spawning are frozen.
+topic boards, pattern proposal/routing/use, and peer-review spawning are frozen.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
@@ -260,7 +260,7 @@ automatic patterns, and peer-review spawning are frozen.
 - AC-B2-04: mutation tools authenticate, scope, and human-gate where required.
 
 Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
-successor transfer, interest-scoped topics, concurrent retry dedupe, live-Session- and
+successor transfer, concurrent retry dedupe, live-Session- and
 Workspace-bound atomic task/claim/handoff ownership, Workspace browser adapters, and
 durable mailbox identity/attachment plus address-based local delivery. Mailbox
 registration validates supported canonical
@@ -433,5 +433,6 @@ workflow can contradict or bypass it.
 - AC-B9-02: authentication/authorization remain consistent until retired mounts are removed.
 - AC-B9-03: duplicate or unsupported workflows are unreachable and their assets/launch paths are removed.
 
-Remaining routes, templates, static assets, flags, and commands are BL-P0-09/BL-P2-01
-containment debt. Shared authentication code is not an activation contract.
+Legacy templates, route definitions, flags, and commands remain deletion debt under
+BL-P2-01, but are not mounted or registered. Shared sign-in authentication code is not
+an activation contract.

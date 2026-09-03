@@ -1153,18 +1153,8 @@ def _replay_authorization(snapshot: dict[str, Any]) -> Authorization:
 
 
 def _notify(code: str, request: GovernedRequest) -> None:
-    """Relay the pending approval to configured bridges.
-
-    Best-effort by design and *only* for the approval-relay control path:
-    failing to reach a phone must not authorise anything, and it does not -
-    the action stays blocked either way.
-    """
-    try:
-        from brains.exec.relay import notify_pending_approval
-
-        notify_pending_approval(code, request.action, request.summary, request.cwd or "")
-    except Exception:  # noqa: BLE001 - notification is not part of the decision
-        return
+    """Keep approval notification local; withdrawn bridges must never activate."""
+    del code, request
 
 
 # --- phase 3: execute ------------------------------------------------------

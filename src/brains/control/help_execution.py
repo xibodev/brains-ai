@@ -776,6 +776,11 @@ def complete_review(
 
 
 def run_local_review(code: str) -> dict[str, Any] | None:
+    raise ValueError("ephemeral peer execution is withdrawn")
+
+
+def _withdrawn_run_local_review_compat(code: str) -> dict[str, Any] | None:
+    """Unreachable historical implementation retained for data-boundary archaeology."""
     with SessionLocal() as session:
         execution = session.get(HelpRequestExecution, code)
         if execution is None or shutil.which(execution.required_tool) is None:
@@ -827,7 +832,12 @@ def _worker(code: str) -> None:
 
 
 def schedule_help_review(code: str) -> bool:
-    """Start one best-effort local worker; durable scheduler/Runtime polling recovers it."""
+    """Refuse historical automatic-review launch requests."""
+    return False
+
+
+def _withdrawn_schedule_help_review_compat(code: str) -> bool:
+    """Unreachable historical implementation retained for data-boundary archaeology."""
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     with _INFLIGHT_LOCK:
@@ -849,7 +859,12 @@ def schedule_help_review(code: str) -> bool:
 
 
 def dispatch_due_help_reviews(limit: int = 5) -> list[str]:
-    """Recover queued local reviews after process restart without blocking the scheduler."""
+    """Ignore historical queued review rows without launching processes."""
+    return []
+
+
+def _withdrawn_dispatch_due_help_reviews_compat(limit: int = 5) -> list[str]:
+    """Unreachable historical implementation retained for data-boundary archaeology."""
     init_db()
     now = utc_now()
     with SessionLocal() as session:

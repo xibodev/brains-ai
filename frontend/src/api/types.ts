@@ -794,12 +794,8 @@ export interface OperatorCoordination {
   tasks: OperatorTask[];
   claims: OperatorClaim[];
   handoffs: OperatorHandoff[];
-  topics: Array<{ topic: string; posts: number; last_post_at?: string | null }>;
-  topic_posts: Array<Record<string, unknown>>;
   knowledge: OperatorKnowledge[];
   signals: OperatorSignal[];
-  patterns: OperatorPattern[];
-  live_agents: OperatorAgent[];
 }
 
 export interface MailboxAccess {
@@ -931,9 +927,6 @@ export interface OperatorOperations {
     listeners?: { gateway?: boolean; mcp?: boolean };
     service_pid?: Record<string, unknown>;
   };
-  tools: OperatorTool[];
-  operators: Array<Record<string, unknown>>;
-  labs_enabled: boolean;
 }
 
 export type OperatorTransport = "native_http" | "thin_adapter" | "host_contract";

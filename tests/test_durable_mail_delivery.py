@@ -967,16 +967,6 @@ def test_browser_mailbox_selector_reports_truthful_open_and_send_capabilities(
 
     assert list_browser_mailboxes()[0]["can_send"] is True
 
-    coordination = client.get("/v1/operator/coordination")
-    assert coordination.status_code == 200, coordination.text
-    projected = next(
-        row
-        for row in coordination.json()["live_agents"]
-        if row["session_id"] == agent["session"]["session_id"]
-    )
-    assert projected["mailbox_address"] == agent["mailbox"]["address"]
-    assert projected["mailbox_deep_link"] == agent_row["deep_link"]
-
     api_principal = principal_for_operator_slug("admin")
     assert api_principal is not None
     with pytest.raises(MailboxUnavailableError, match="mailbox unavailable"):

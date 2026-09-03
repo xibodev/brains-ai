@@ -194,31 +194,6 @@ def test_capability_catalog_never_presents_shell_execution(client, auth_headers)
     assert all(not row["enabled"] for row in rows if row["transport"] != "native_http")
 
 
-def test_member_capabilities_disable_install_and_global_admin_actions(client):
-    org = orgs_ctl.create_org(_slug("org"), "Org")
-    headers = _operator(client, org["id"])
-    body = client.get("/v1/operator/capabilities", headers=headers).json()
-    assert body["install_admin"] is False
-    by_key = {row["key"]: row for row in body["data"]}
-    for key in ("pattern.decide", "audit.verify", "tool.verify", "queue.repair.preview"):
-        assert by_key[key]["enabled"] is False
-        assert "bootstrap admin" in by_key[key]["reason"]
-
-
-def test_browser_topic_post_is_workspace_scoped_without_default_blast(
-    client, auth_headers, tmp_path
-):
-    org = orgs_ctl.create_org(_slug("org"), "Org")
-    workspace = register_workspace(str(tmp_path / "topics"), slug=_slug("topics"), org_id=org["id"])
-    response = client.post(
-        "/v1/operator/topics",
-        json={"workspace": workspace.slug, "topic": "status", "subject": "Scoped update"},
-        headers=auth_headers,
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["notified_workspaces"] == []
-
-
 def test_browser_knowledge_persists_authenticated_operator(client, auth_headers, tmp_path):
     org = orgs_ctl.create_org(_slug("org"), "Org")
     workspace = register_workspace(
@@ -233,13 +208,3 @@ def test_browser_knowledge_persists_authenticated_operator(client, auth_headers,
     with SessionLocal() as session:
         row = session.query(KnowledgeEntry).filter_by(code=response.json()["code"]).one()
         assert row.created_by_operator_id is not None
-
-
-def test_unscoped_browser_topic_post_is_refused(client, auth_headers):
-    response = client.post(
-        "/v1/operator/topics",
-        json={"topic": "release", "subject": "Status"},
-        headers=auth_headers,
-    )
-    assert response.status_code == 400
-    assert "workspace" in response.text

@@ -38,22 +38,6 @@ def test_build_children_includes_gateway_and_mcp_by_default(monkeypatch) -> None
     assert "streamable-http" in by_name["mcp"].argv
 
 
-def test_build_children_dashboard_is_explicit_opt_in(monkeypatch) -> None:
-    monkeypatch.delenv("BRAINS_LEGACY_SURFACES", raising=False)
-    parser = supervisor._build_parser()
-
-    by_flag = supervisor._build_children(parser.parse_args(["--dashboard"]))
-    assert {c.name for c in by_flag} == {"gateway", "dashboard", "mcp"}
-
-    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
-    by_env = supervisor._build_children(parser.parse_args([]))
-    assert {c.name for c in by_env} == {"gateway", "dashboard", "mcp"}
-
-    # --no-dashboard is a back-compat veto that wins over the env opt-in.
-    vetoed = supervisor._build_children(parser.parse_args(["--no-dashboard"]))
-    assert {c.name for c in vetoed} == {"gateway", "mcp"}
-
-
 def test_build_children_respects_no_mcp() -> None:
     parser = supervisor._build_parser()
     args = parser.parse_args(["--no-mcp"])
@@ -69,20 +53,12 @@ def test_mcp_child_argv_passes_port_override() -> None:
     assert "brains.mcp.server" in children["mcp"].argv
 
 
-def test_build_children_respects_disable_flags() -> None:
-    parser = supervisor._build_parser()
-    args = parser.parse_args(["--no-dashboard", "--no-mcp"])
-    children = supervisor._build_children(args)
-    assert {c.name for c in children} == {"gateway"}
-
-
 def test_child_argv_passes_host_and_port_overrides() -> None:
     parser = supervisor._build_parser()
-    args = parser.parse_args(["--dashboard", "--gateway-port", "18787"])
+    args = parser.parse_args(["--gateway-port", "18787"])
     children = {c.name: c for c in supervisor._build_children(args)}
     assert "18787" in children["gateway"].argv
     assert "brains.main:app" in children["gateway"].argv
-    assert "brains.dashboard.app:app" in children["dashboard"].argv
 
 
 def test_state_dir_respects_env_override(tmp_path, monkeypatch) -> None:
@@ -286,7 +262,7 @@ def test_pidfile_verifies_as_running_for_this_process(tmp_path, monkeypatch) -> 
 
 def test_run_returns_2_when_all_children_disabled(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    rc = supervisor.run(["--no-gateway", "--no-dashboard", "--no-mcp"])
+    rc = supervisor.run(["--no-gateway", "--no-mcp"])
     assert rc == 2
 
 
@@ -321,8 +297,8 @@ def test_run_preflights_every_enabled_listener_with_actual_host(tmp_path, monkey
         lambda _args: (_ for _ in ()).throw(AssertionError("children must not start")),
     )
 
-    assert supervisor.run(["--dashboard"]) == 3
-    assert checked == [("127.0.0.1", 8787), ("127.0.0.1", 9876), ("mcp-host", 9877)]
+    assert supervisor.run([]) == 3
+    assert checked == [("127.0.0.1", 8787), ("mcp-host", 9877)]
 
 
 def test_run_waits_in_a_degraded_state_for_a_blocked_listener(tmp_path, monkeypatch) -> None:

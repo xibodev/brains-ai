@@ -71,6 +71,7 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
     plan: list[Gate] = [
         Gate("documentation contract", script("scripts/check_docs.py")),
         Gate("generated traceability contract", script("scripts/check_traceability.py")),
+        Gate("core surface boundary", script("scripts/check_core_surface.py")),
         Gate("ruff lint", tool("ruff", "check", ".")),
         Gate("ruff format", tool("ruff", "format", "--check", ".")),
         Gate("mypy", tool("mypy")),
