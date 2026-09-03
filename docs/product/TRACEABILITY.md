@@ -158,7 +158,7 @@ stores. Runtime backend selection accepts SQLite only and rejects Postgres.
 | J8 | `j08-governance-session-control.spec.ts` | approval/ask/gate plus durable mailbox authorization/delivery/SMTP tests | Browser coverage asserts one-time governance resolution, fail-closed legacy session-control navigation, and container-only mailbox selector/read/compose/reply/forward/SMTP-status/reload/responsive journeys. |
 | J9 | `j09-config-settings.spec.ts` | F7/F8 configuration and access source tests | Browser coverage targets the supported local Operations configuration contract without Labs or frozen access activation. |
 | J10 | `j10-automation.spec.ts` | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Withdrawn automation and multi-user access journeys assert containment only. |
-| J11 | `j11-console-clean.spec.ts`, `j11-operator-web-hardening.spec.ts` | auth, error, WS, privacy tests | Route-specific success, exclusive refresh failure, scope-hidden not-found, connection-degradation, two-width control reachability, contrast, and tab/combobox/modal keyboard/focus contracts are present; multi-process realtime evidence remains open. |
+| J11 | `j11-console-clean.spec.ts`, `j11-operator-web-hardening.spec.ts` | auth, error, WS, privacy tests | Route-specific and nested-boundary success/loading/empty/error/authorization, exclusive refresh failure, scope-hidden not-found, connection degradation, two-width viewport/overflow reachability, rendered-text contrast, and APG tab/combobox/modal keyboard/focus contracts are present; multi-process realtime evidence remains frozen. |
 
 The backend acceptance module covers advertised F0/F3 local behavior and direct
 containment outcomes for withdrawn F1/F2/F4-F10 activation. Test presence is E2

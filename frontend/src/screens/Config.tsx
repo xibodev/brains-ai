@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
+import { api } from "../api/client";
 import type {
   QueueHealthReport,
   ReadinessReport,
@@ -68,15 +68,15 @@ function LocalConfig() {
       setOutcome(result.apply_mode);
       toast(result.restart_required ? "Saved. Restart required to converge." : "Saved and reloaded.");
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Configuration update", error));
+    } catch {
+      toast("Configuration could not be updated. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <AsyncBoundary state={state} emptyTitle="Configuration unavailable" emptyBody="The supported configuration summary could not be loaded.">
+    <AsyncBoundary state={state} boundary="config-local" isEmpty={(data) => !data.fields.length && !data.harnesses.length} emptyTitle="Configuration unavailable" emptyBody="No supported configuration fields or harnesses are available.">
       {(data) => (
         <div>
           <div className="eyebrow"><span>Supported local configuration</span></div>
@@ -153,14 +153,14 @@ function Health() {
       const summary = result.actions.map((action) => `${action.code}=${apply ? (action.applied_rows ?? 0) : (action.would_affect_rows ?? 0)}`).join(", ");
       toast(apply ? `Repair applied: ${summary}` : `Dry-run: ${summary}`);
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Repair", error));
+    } catch {
+      toast("The repair could not be completed. Retry after checking authorization and local service status.");
     } finally {
       setRepairing(false);
     }
   };
   return (
-    <AsyncBoundary state={state} emptyTitle="No health data" emptyBody="Operational health is unavailable.">
+    <AsyncBoundary state={state} boundary="config-health" isEmpty={(data) => !Object.keys(data.readiness.components).length} emptyTitle="No health data" emptyBody="No dependency health data is available.">
       {(data) => (
         <div>
           <div className="eyebrow"><span>Operational health</span></div>

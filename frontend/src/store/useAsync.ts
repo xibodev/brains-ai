@@ -4,13 +4,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+export type AsyncErrorKind = "unauthorized" | "not_found" | "error" | null;
 type AsyncSnapshot<T> = Pick<AsyncState<T>, "data" | "loading" | "error" | "errorKind">;
+
+export function classifyAsyncError(reason: unknown): Exclude<AsyncErrorKind, null> {
+  const status = typeof reason === "object" && reason !== null && "status" in reason
+    ? Number((reason as { status?: unknown }).status)
+    : undefined;
+  return status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : "error";
+}
 
 export interface AsyncState<T> {
   data: T | undefined;
   loading: boolean;
   error: string | null;
-  errorKind: "unauthorized" | "not_found" | "error" | null;
+  errorKind: AsyncErrorKind;
   refetch: () => void;
   setData: (updater: (prev: T | undefined) => T) => void;
 }
@@ -43,13 +51,10 @@ export function useAsync<T>(
       })
       .catch((e: unknown) => {
         if (!cancelled) {
-          const status = typeof e === "object" && e !== null && "status" in e
-            ? Number((e as { status?: unknown }).status)
-            : undefined;
           setState({
             data: undefined,
             loading: false,
-            errorKind: status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : "error",
+            errorKind: classifyAsyncError(e),
             error: e instanceof Error ? e.message : String(e),
           });
         }

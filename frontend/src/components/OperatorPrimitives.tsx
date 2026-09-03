@@ -71,6 +71,7 @@ export function OperatorState({
   empty,
   emptyTitle = "Nothing here yet",
   emptyBody = "This view will fill as durable work is recorded.",
+  boundary,
 }: {
   loading: boolean;
   error?: string | null;
@@ -78,10 +79,11 @@ export function OperatorState({
   empty?: boolean;
   emptyTitle?: string;
   emptyBody?: string;
+  boundary?: string;
 }) {
   if (loading) {
     return (
-      <div className="operator-state" role="status" data-async-state="loading">
+      <div className="operator-state" role="status" data-async-state="loading" data-boundary={boundary}>
         <span className="operator-loader" />
         <strong>Reading durable state</strong>
       </div>
@@ -97,9 +99,9 @@ export function OperatorState({
       ? "Sign in with an authorized local operator before using this view."
       : kind === "not_found"
         ? "The requested resource is unavailable or outside your visible scope."
-        : error;
+        : "This view could not be loaded. Retry after checking the local service status.";
     return (
-      <div className="operator-state error" role="alert" data-async-state={kind ?? "error"}>
+      <div className="operator-state error" role="alert" data-async-state={kind ?? "error"} data-boundary={boundary}>
         <strong>{title}</strong>
         <span>{detail}</span>
       </div>
@@ -107,13 +109,13 @@ export function OperatorState({
   }
   if (empty) {
     return (
-      <div className="operator-state" data-async-state="empty">
+      <div className="operator-state" data-async-state="empty" data-boundary={boundary}>
         <strong>{emptyTitle}</strong>
         <span>{emptyBody}</span>
       </div>
     );
   }
-  return <span className="visually-hidden" role="status" data-async-state="success">Ready</span>;
+  return <span className="visually-hidden" role="status" data-async-state="success" data-boundary={boundary}>Ready</span>;
 }
 
 export function OperatorMiniList({

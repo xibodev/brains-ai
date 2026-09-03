@@ -20,6 +20,7 @@ export function OperatorCoordination() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
   const state = useAsync(() => api.operatorCoordination(), []);
   const data = state.data;
+  const empty = Boolean(data && !data.tasks.length && !data.claims.length && !data.handoffs.length && !data.knowledge.length && !data.signals.length);
   const tasks = data?.tasks.filter((task) => filter === "all" || task.status === filter) ?? [];
 
   const openAct = (capability: string) =>
@@ -37,10 +38,10 @@ export function OperatorCoordination() {
           </>
         }
       />
-      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} />
-      {data && (
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="coordination" emptyTitle="No coordination state" emptyBody="No tasks, claims, handoffs, knowledge, or signals are currently visible." />
+      {!state.loading && !state.error && <MailboxWorkspace />}
+      {data && !empty && (
         <>
-          <MailboxWorkspace />
           <div className="operator-filterbar">
             <div className="operator-filter-chips">
               {FILTERS.map((name) => (

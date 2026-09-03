@@ -67,6 +67,7 @@ export function CommandPalette() {
           role="combobox"
           aria-label="Find a view or typed action"
           aria-autocomplete="list"
+          aria-haspopup="listbox"
           aria-expanded="true"
           aria-controls="command-palette-results"
           aria-activedescendant={results[active] ? `command-palette-option-${active}` : undefined}
@@ -89,6 +90,7 @@ export function CommandPalette() {
               id={`command-palette-option-${i}`}
               className={i === active ? "active" : ""}
               role="option"
+              tabIndex={-1}
               aria-selected={i === active}
               onMouseEnter={() => setActive(i)}
               onClick={() => go(c.to)}

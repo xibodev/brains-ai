@@ -31,6 +31,7 @@ export function AsyncBoundary<T>({
   emptyBody,
   emptyAction,
   isEmpty,
+  boundary,
   children,
 }: {
   state: { data: T | undefined; loading: boolean; error: string | null; errorKind?: "unauthorized" | "not_found" | "error" | null };
@@ -38,17 +39,18 @@ export function AsyncBoundary<T>({
   emptyBody?: string;
   emptyAction?: ReactNode;
   isEmpty?: (data: T) => boolean;
+  boundary?: string;
   children: (data: T) => ReactNode;
 }) {
-  if (state.loading) return <div data-async-state="loading"><Loading /></div>;
+  if (state.loading) return <div data-async-state="loading" data-boundary={boundary}><Loading /></div>;
   if (state.error) {
     const detail = state.errorKind === "unauthorized"
       ? "Sign in with an authorized local operator before using this view."
       : state.errorKind === "not_found"
         ? "The requested resource is unavailable or outside your visible scope."
-        : state.error;
+      : "This view could not be loaded. Retry after checking the local service status.";
     return (
-      <div data-async-state={state.errorKind ?? "error"} role="alert">
+      <div data-async-state={state.errorKind ?? "error"} data-boundary={boundary} role="alert">
       <EmptyState
         title={state.errorKind === "unauthorized" ? "Authorization required" : state.errorKind === "not_found" ? "Requested resource not found" : "Couldn't load this"}
         body={detail}
@@ -62,7 +64,7 @@ export function AsyncBoundary<T>({
     (Array.isArray(data) && data.length === 0) ||
     (isEmpty ? isEmpty(data) : false);
   if (empty) {
-    return <div data-async-state="empty"><EmptyState title={emptyTitle} body={emptyBody} action={emptyAction} /></div>;
+    return <div data-async-state="empty" data-boundary={boundary}><EmptyState title={emptyTitle} body={emptyBody} action={emptyAction} /></div>;
   }
-  return <div data-async-state="success">{children(data)}</div>;
+  return <div data-async-state="success" data-boundary={boundary}>{children(data)}</div>;
 }

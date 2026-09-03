@@ -12,7 +12,7 @@ import {
   countByStatus,
 } from "../components/OperatorPrimitives";
 import { isCurrent } from "../components/sessionScope";
-import { useAsync } from "../store/useAsync";
+import { classifyAsyncError, useAsync, type AsyncErrorKind } from "../store/useAsync";
 
 type WorkspaceTab = "overview" | "work" | "communication" | "knowledge" | "activity" | "access";
 const WORKSPACE_TABS: WorkspaceTab[] = ["overview", "work", "communication", "knowledge", "activity", "access"];
@@ -115,6 +115,15 @@ export function Workspaces() {
                     >{name}</button>
                   ))}
                 </div>
+                {WORKSPACE_TABS.filter((name) => name !== tab).map((name) => (
+                  <div
+                    key={name}
+                    id={`workspace-panel-${name}`}
+                    role="tabpanel"
+                    aria-labelledby={`workspace-tab-${name}`}
+                    hidden
+                  />
+                ))}
                 <div
                   id={`workspace-panel-${tab}`}
                   role="tabpanel"
@@ -157,6 +166,7 @@ function LookupPanel({ slug }: { slug: string }) {
   const [query, setQuery] = useState("");
   const [lookup, setLookup] = useState<WorkspaceLookupEnvelope>();
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<AsyncErrorKind>(null);
   const [loading, setLoading] = useState(false);
   const currentWorkspace = useRef<string | null>(slug);
   const request = useRef<AbortController | null>(null);
@@ -167,6 +177,7 @@ function LookupPanel({ slug }: { slug: string }) {
     setQuery("");
     setLookup(undefined);
     setError(null);
+    setErrorKind(null);
     setLoading(false);
     return () => request.current?.abort();
   }, [slug]);
@@ -175,6 +186,7 @@ function LookupPanel({ slug }: { slug: string }) {
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     setLookup(undefined);
     request.current?.abort();
     const controller = new AbortController();
@@ -192,7 +204,8 @@ function LookupPanel({ slug }: { slug: string }) {
       }
     } catch (reason) {
       if (!controller.signal.aborted && isCurrent(currentWorkspace, requestedWorkspace)) {
-        setError(reason instanceof Error ? reason.message : "Lookup failed");
+        setError("Source lookup unavailable");
+        setErrorKind(classifyAsyncError(reason));
       }
     } finally {
       if (request.current === controller && isCurrent(currentWorkspace, requestedWorkspace)) {
@@ -208,10 +221,16 @@ function LookupPanel({ slug }: { slug: string }) {
       <input aria-label="Source query" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void run(); }} />
       <button className="operator-button primary" disabled={loading || !query.trim()} onClick={() => void run()}>{loading ? "Looking…" : "Lookup"}</button>
     </div>
-    {error && <p role="alert">{error}</p>}
-    {lookup?.status === "unavailable" && <p role="status">Workspace source is unavailable ({lookup.reason.replaceAll("_", " ")}).</p>}
-    {lookup?.status === "empty" && <p role="status">No source matches.</p>}
-    {lookup?.status === "limited" && <p role="status">Lookup is incomplete ({lookup.incomplete_reasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}). Results may be partial.</p>}
-    {(lookup?.status === "ok" || lookup?.status === "limited") && <div className="operator-work-list">{lookup.results.map((row) => <div className="operator-work-item" key={`${row.path}:${row.line}`}><div><code>{row.path}:{row.line}</code><OperatorStatus>{row.match}</OperatorStatus></div>{row.symbol && <strong>{row.symbol}</strong>}<pre>{row.snippet}</pre></div>)}</div>}
+    <OperatorState
+      loading={loading}
+      error={error || (lookup?.status === "unavailable" ? "Workspace source unavailable" : null)}
+      kind={error ? errorKind : lookup?.status === "unavailable" ? "error" : null}
+      empty={!loading && !error && (!lookup || lookup.status === "empty")}
+      boundary="lookup"
+      emptyTitle={lookup?.status === "empty" ? "No source matches" : "Enter a source query"}
+      emptyBody={lookup?.status === "empty" ? "Try a different substring or symbol." : "Lookup starts only when you submit a query."}
+    />
+    {!loading && !error && lookup?.status === "limited" && <p role="status">Lookup is incomplete ({lookup.incomplete_reasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}). Results may be partial.</p>}
+    {!loading && !error && (lookup?.status === "ok" || lookup?.status === "limited") && <div className="operator-work-list">{lookup.results.map((row) => <div className="operator-work-item" key={`${row.path}:${row.line}`}><div><code>{row.path}:{row.line}</code><OperatorStatus>{row.match}</OperatorStatus></div>{row.symbol && <strong>{row.symbol}</strong>}<pre>{row.snippet}</pre></div>)}</div>}
   </OperatorCard>;
 }
