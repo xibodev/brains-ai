@@ -30,9 +30,3 @@ empty and a human explicitly approves thawing it.
 - **Action:** Install consented body-free hook or plugin wakeups where a supported harness permits them and expose truthful pull fallback everywhere else.
 - **Done when:** Supported-harness journeys prove wakeup or pull fallback, bounded retry and uncertainty, and zero message-body or credential disclosure.
 - **Maps to:** F3, B2, B8; J7, J8, J11.
-
-### BL-P1-14 - Complete harness identity and presence lifecycle
-
-- **Action:** Preserve raw adapter provenance and close native-ID extraction, renewal, detach, conflict, binding recovery, restart, and resume gaps across supported harnesses.
-- **Done when:** Idle, abrupt-exit, restart, Workspace movement, conflict, and resume journeys keep identity, activity, ownership, and reachability distinct and recoverable.
-- **Maps to:** F3, B2, B8; J7, J8, J11.

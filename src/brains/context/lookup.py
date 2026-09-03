@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal
+
+from typing_extensions import TypedDict
 
 LookupStatus = Literal["ok", "empty", "limited", "unavailable"]
 

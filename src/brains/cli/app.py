@@ -447,6 +447,7 @@ def wire_cli(
         rules=not no_rules,
         force=force,
         dry_run=dry_run,
+        verify_harness_versions=True,
     )
     _print_json(report)
     if report.get("ok") is False:
@@ -2460,6 +2461,34 @@ def session_heartbeat_cli(
             mailbox_notification_mode=mailbox_notification_mode,
         )
     )
+
+
+@app.command("adapter-attach")
+def adapter_attach_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+):
+    """Attach an authoritative supported-harness Session at a turn boundary."""
+    if adapter != "opencode":
+        raise typer.BadParameter("adapter is not supported for lifecycle attachment")
+    from brains.control.opencode_lifecycle import attach_opencode_session
+
+    _print_json(attach_opencode_session(workspace, native_tool_session_id))
+
+
+@app.command("adapter-detach")
+def adapter_detach_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+):
+    """Best-effort terminal detach for a supported native harness deletion."""
+    if adapter != "opencode":
+        raise typer.BadParameter("adapter is not supported for lifecycle detachment")
+    from brains.control.opencode_lifecycle import delete_opencode_session
+
+    _print_json(delete_opencode_session(workspace, native_tool_session_id))
 
 
 @mailbox_app.command("register")
