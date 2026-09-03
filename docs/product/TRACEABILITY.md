@@ -24,7 +24,7 @@ The user-centered outcome and evidence view of this matrix is
 
 | Feature | Personas | Journeys and ACs | User action | SPA route/component | API / WS | Control/service | Data / migration | Test/evidence presence and gap |
 |---|---|---|---|---|---|---|---|---|
-| F0 Console foundation | P1, P2, P3 | J1, J11; AC-F0-01..05 | Sign in, inspect Command Center, enter a Workspace, launch a typed action | `/app/command-center`, `/app/workspaces*`, `/app/act`; `AppShell`, `OperatorProvider`, `CommandCenter`, `Workspaces`, `Act` | `/admin/login`; `/v1/operator/overview`; Workspace projections; capability catalog | local auth plus Workspace/task/claim/handoff controls | local operator, Workspaces, coordination rows; retained Org rows are compatibility scope | Advertised. `test_operator_console_api.py` and `j11-console-clean.spec.ts` exist; exact-candidate browser evidence remains pending. |
+| F0 Console foundation | P1, P2, P3 | J1, J11; AC-F0-01..05 | Sign in, inspect Command Center, enter a Workspace, launch a typed action | `/app`, `/app/command-center`, `/app/workspaces*`, `/app/act`; `AppShell`, `OperatorProvider`, typed async boundaries, `NotFound` | `/admin/login`; `/v1/operator/overview`; Workspace projections; capability catalog | local auth plus Workspace/task/claim/handoff controls | local operator, Workspaces, coordination rows; retained Org rows are compatibility scope | Advertised at E1/E2. J11 covers exclusive page, refresh, nested mailbox/lookup, Workspace list/detail, configuration, governance, operations, and capability states at desktop/mobile widths; route-specific content; scope-hidden not-found behavior; connection degradation; APG keyboard/focus behavior; solid-background rendered contrast for visible text, displayed form values, and normal/focus/hover controls; and original-layout horizontal/overflow checks followed by normal-keyboard full-viewport, center-hit, and trial-click reachability. |
 | F1 Connect machine | P1, P4 | J2; AC-F1-01..06 | Withdrawn target; no supported action | Absent from shipped SPA | Runtime routes not composed | frozen enrollment, Runtime, and daemon controls | `registered_tools`, `runtimes`, `enrolment_tokens`; 122 | Historical store compatibility only. |
 | F2 Personas | P1, P2, P7 | J3; AC-F2-01..06 | Withdrawn target; no supported action | Absent from shipped SPA | Persona/Spawn routes not composed | frozen Persona, assignment, Runtime, and Skill controls | `personas`, `agent_sessions`, `persona_skills`; 120/121/138 | Historical store compatibility only. |
 | F3 Coordination Sessions and HITL | P1, P4, P5, P7 | J7, J8, J11; AC-F3-01..07 | Coordinate durable local work, route/resolve decisions, checkpoint/resume/end | `/app/governance`, `/app/coordination`, `/app/workspaces/:slug`; withdrawn execution Session UI remains in source | local governance/coordination; approval route/escalate/resolve; typed event scope; `/v1/ws`; `/v1/events` | leased coordination Session lifecycle with strict terminal cleanup, atomic ownership, idempotent checkpoints/handoffs, event taxonomy/scope, mailbox/successor continuity, decisions, local realtime | `agent_sessions`, `events`, `event_contexts`, continuity rows; feedback/routing rows are frozen inventory | Advertised local coordination. Feedback intelligence, automatic patterns, peer-review admission, cross-process fanout, running-agent control, and execution supervision are frozen or withdrawn. |
@@ -57,19 +57,19 @@ basename. Withdrawn execution-model and Labs routes are absent rather than gated
 
 | Route | Component/behavior | Feature/journey | Current gap |
 |---|---|---|---|
-| `/app` | Redirect to `/app/command-center` | F0, J1, J11 | The normal console starts from cross-Workspace durable state, not onboarding or an entity list. |
+| `/app` | `CommandCenter` without URL rewriting | F0, J1, J11 | The normal console starts from cross-Workspace durable state, not onboarding or an entity list. |
 | `/app/command-center` | `CommandCenter` | F0, F3, B2, B8, J11 | Readiness and audit posture are install-admin-only. |
 | `/app/workspaces` | `Workspaces` portfolio and first visible control room | F0, F3, B2, J5-J8 | Workspace import has no typed HTTP contract and is disabled. |
 | `/app/workspaces/:slug` | `Workspaces`, including Knowledge-tab source lookup | F0, F3, B2, B3, J5-J8, J11 | `:slug` is consumed; unauthorized and unknown Workspaces are both 404. Lookup distinguishes complete no-match, incomplete scan, and unreadable/missing root without exposing absolute result paths. Requests are aborted and response-bound to the selected Workspace so a late result cannot cross a Workspace switch. |
 | `/app/coordination` | `OperatorCoordination`, `MailboxWorkspace` | F3, B2, J5-J8 | Tasks, claims, handoffs, durable mail, and knowledge remain Workspace-attributable. The mailbox desk is human-bound; agent mailboxes are browser read-only without adapter proof. |
 | `/app/governance` | `Governance` | F3, B4, J8, J11 | Resolution and audit verification are native; audit-chain detail is install-admin-only. |
 | `/app/operations` | `Operations` | F7, F9, B5, B6, B8, J9-J11 | Host mutations, logs, backup, and restore remain disabled pending typed contracts. |
-| `/app/operations/config` | Redirect to `/app/operations/config/local` | F7, J9 | The default configuration entry lands on the supported local manifest. |
+| `/app/operations/config` | `Config` local section without URL rewriting | F7, J9 | The default configuration entry renders the supported local manifest. |
 | `/app/operations/config/:section` | `Config` | F7, F8, B8, J9 | Local service exposes the positive supported manifest and approved writes; MCP guidance and operational health remain read-only. |
 | `/app/act` | `Act` typed capability launcher | F0, F3, B2, B4-B6, J11 | No generic shell or MCP-call endpoint; missing adapters are labeled and disabled. |
-| `/app/inbox` | Redirect to `/app/governance` | F3, J8 | Compatibility redirect; Inbox is no longer primary navigation. |
-| `/app/config` | Redirect to `/app/operations/config/local` | F7, J9 | Compatibility only. |
-| `/app/*` | Redirect to Command Center | F0, J11 | Unknown top-level URLs recover to the canonical start; entity not-found behavior remains inside parameterized routes. |
+| `/app/inbox` | `NotFound` | F0, J11 | The retired alias does not silently select a different supported screen. |
+| `/app/config` | `NotFound` | F0, J11 | The retired alias does not silently select a different supported screen. |
+| `/app/*` | `NotFound` | F0, J11 | Unknown and withdrawn URLs remain in place and disclose neither route inventory nor resource existence. |
 
 ## Native API and realtime family inventory
 
@@ -156,9 +156,9 @@ stores. Runtime backend selection accepts SQLite only and rejects Postgres.
 | J6 | `j06-issues.spec.ts` | F4 Issue/dispatch source tests | Withdrawn journey now asserts containment only: no Issue activation controls and direct Issue URLs fail closed. |
 | J7 | `j07-sessions.spec.ts`; `test_nonembedding_lookup.py`; `test_operator_console_api.py` | F3 coordination and B3 lookup tests | Browser source lookup shares the CLI/MCP envelope; fresh-source, no-write, result-state, scope, and non-disclosure behavior is blocking E3 coverage. Durable task/handoff browser coverage remains on Act, Coordination, and Workspace surfaces. |
 | J8 | `j08-governance-session-control.spec.ts` | approval/ask/gate plus durable mailbox authorization/delivery/SMTP tests | Browser coverage asserts one-time governance resolution, fail-closed legacy session-control navigation, and container-only mailbox selector/read/compose/reply/forward/SMTP-status/reload/responsive journeys. |
-| J9 | `j09-config-settings.spec.ts` | F7/F8 configuration and access source tests | Browser coverage targets advertised Operations config/access sections without Labs activation. |
-| J10 | `j10-automation.spec.ts` | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Withdrawn automation journey now asserts containment only while keeping advertised Access surface checks. |
-| J11 | `j11-console-clean.spec.ts` | auth, error, WS, privacy tests | Blocking CI; accessibility, route-contract depth, and multi-process realtime evidence remain incomplete. |
+| J9 | `j09-config-settings.spec.ts` | F7/F8 configuration and access source tests | Browser coverage targets the supported local Operations configuration contract without Labs or frozen access activation. |
+| J10 | `j10-automation.spec.ts` | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Withdrawn automation and multi-user access journeys assert containment only. |
+| J11 | `j11-console-clean.spec.ts`, `j11-operator-web-hardening.spec.ts` | auth, error, WS, privacy tests | Route-specific and nested-boundary success/loading/empty/error/authorization at both widths, exclusive refresh failure, generic/config/scope-hidden not-found, connection degradation, original-layout horizontal/overflow checks plus keyboard-scrolled center-hit actionability, solid-background rendered text/form-value and control-state contrast, and APG tab/combobox/modal keyboard/focus contracts are present; multi-process realtime evidence remains frozen. |
 
 The backend acceptance module covers advertised F0/F3 local behavior and direct
 containment outcomes for withdrawn F1/F2/F4-F10 activation. Test presence is E2

@@ -47,8 +47,8 @@ test('J8.2 withdrawn execution-control routes fail closed while governance remai
   ]) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(page).toHaveURL(/\/app\/command-center$/);
-    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page).toHaveURL(route);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   }
 
   await page.goto('/app/governance');
@@ -139,9 +139,7 @@ test('J8.4 mailbox desk is keyboard reachable and responsive', async ({ page, co
 
   await desk.getByLabel('Open mailbox').selectOption('operator:admin@brains');
   await expect(desk.getByRole('button', { name: 'Compose mail' })).toBeEnabled();
-  const emailCopy = desk.getByLabel('External email copy');
-  await expect(emailCopy.getByLabel('Email address')).toBeVisible();
-  await expect(emailCopy.getByText('One-way only. Local Brains mail stays authoritative.')).toBeVisible();
+  await expect(desk.getByLabel('External email copy')).toHaveCount(0);
   await desk.getByRole('button', { name: 'Compose mail' }).focus();
   await page.keyboard.press('Enter');
   await expect(desk.getByRole('heading', { name: 'Compose mail' })).toBeVisible();
