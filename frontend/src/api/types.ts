@@ -790,6 +790,25 @@ export interface OperatorWorkspaceDetail {
   events: OperatorEvent[];
 }
 
+export interface WorkspaceLookupResult {
+  path: string;
+  line: number;
+  end_line: number;
+  snippet: string;
+  symbol: string | null;
+  match: "symbol" | "text";
+}
+
+export interface WorkspaceLookupEnvelope {
+  status: "ok" | "empty" | "limited" | "unavailable";
+  reason: string;
+  query: string;
+  results: WorkspaceLookupResult[];
+  scanned_files: number;
+  truncated: boolean;
+  incomplete_reasons: string[];
+}
+
 export interface OperatorCoordination {
   tasks: OperatorTask[];
   claims: OperatorClaim[];

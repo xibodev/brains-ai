@@ -49,12 +49,6 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Idle, abrupt-exit, restart, Workspace movement, conflict, and resume journeys keep identity, activity, ownership, and reachability distinct and recoverable.
 - **Maps to:** F3, B2, B8; J7, J8, J11.
 
-### BL-P1-18 - Complete truthful default lookup guidance
-
-- **Action:** Remove semantic and graph recommendations from default wire guidance and use the existing non-embedding knowledge and substring/symbol lookup path.
-- **Done when:** A fresh normal installation performs a Workspace lookup without embeddings and distinguishes empty results from unavailable capabilities across CLI, MCP, wire copy, and browser guidance.
-- **Maps to:** B2, B3, B6, B8; J7, J11.
-
 ## P2 — Core containment
 
 ### BL-P2-01 - Complete legacy browser deletion

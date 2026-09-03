@@ -29,6 +29,7 @@ import type {
   OperatorTransitionResult,
   OperatorWorkspace,
   OperatorWorkspaceDetail,
+  WorkspaceLookupEnvelope,
   MailboxAccess,
   MailboxAddress,
   MailboxMessageList,
@@ -172,6 +173,11 @@ export const api = {
     request<{ data: OperatorWorkspace[] }>("/operator/workspaces").then((body) => body.data),
   operatorWorkspace: (slug: string) =>
     request<OperatorWorkspaceDetail>(`/operator/workspaces/${encodeURIComponent(slug)}`),
+  operatorWorkspaceLookup: (slug: string, query: string, limit = 10, signal?: AbortSignal) =>
+    request<WorkspaceLookupEnvelope>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/lookup${qs({ q: query, limit })}`,
+      { signal },
+    ),
   operatorCoordination: () => request<OperatorCoordination>("/operator/coordination"),
   operatorMailboxAccess: () =>
     request<{ data: MailboxAccess[] }>("/operator/mailboxes/access").then((body) => body.data),
