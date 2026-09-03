@@ -517,11 +517,16 @@ path.
 
 **Acceptance IDs:** AC-F0-01 through AC-F0-05, AC-F3-01, AC-F3-07, AC-F9-03, AC-B8-01 through AC-B8-04, AC-B9-01 through AC-B9-03.
 
-**Evidence gaps:** The J11 browser matrix contains exclusive loading, empty, error,
-and authorization states for each supported nested operator boundary; scope-hidden
-deep links; route-specific nested content; two-width viewport and overflow-ancestor
-control reachability; rendered-text contrast for success and failure states; connection
-degradation; and APG tab, combobox, and modal keyboard/focus assertions.
+**Evidence gaps:** None for the current browser scope. The J11 browser matrix contains
+exclusive loading, empty, error, and authorization/privacy states for Workspace list
+and detail, configuration, governance, operations, capability actions, mailbox access,
+messages, thread, composer Workspace and address-book sources, and source lookup. It
+also covers scope-hidden deep links, route-specific nested content, connection
+degradation, APG tab/combobox/modal keyboard behavior, and desktop/mobile actionability
+through viewport and overflow-ancestor intersection, center-point occlusion, and trial
+click checks without scripted scrolling. Rendered contrast is computed for all visible
+text on every supported route and required state, including each visible interactive
+control in its normal, focus, and hover states.
 Realtime authorization, cursor replay, gap
 signalling and revocation are asserted at the API and unit level
 (`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a

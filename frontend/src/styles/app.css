@@ -1364,6 +1364,11 @@ body {
   background: var(--control-blue);
 }
 
+.operator-button.primary:hover:not(:disabled) {
+  color: #fff;
+  background: #1f47a8;
+}
+
 .operator-button.danger {
   border-color: #d49a93;
   color: var(--control-red);
@@ -1381,6 +1386,11 @@ body {
   border-color: rgba(255, 255, 255, 0.17);
   color: #fff;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.operator-button.inverse:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .operator-button:disabled {
@@ -3289,6 +3299,11 @@ body {
 }
 
 @media (max-width: 650px) {
+  html,
+  body {
+    scroll-padding-bottom: 80px;
+  }
+
   body {
     font-size: 13px;
   }
@@ -3326,7 +3341,11 @@ body {
   }
 
   .control-main {
-    padding: 24px 15px 42px;
+    padding: 24px 15px 120px;
+  }
+
+  .control-main :is(a, button, input, select, textarea) {
+    scroll-margin-block: 72px;
   }
 
   .operator-page,
@@ -3574,7 +3593,7 @@ body {
   .control-mobile-nav {
     position: fixed;
     left: 0;
-    right: 0;
+    right: calc(100% / 6);
     bottom: 0;
     z-index: 40;
     height: 64px;
@@ -3609,13 +3628,14 @@ body {
 
   .control-mobile-act {
     position: fixed;
-    right: 16px;
-    bottom: 78px;
+    right: 0;
+    bottom: 0;
     z-index: 42;
-    min-width: 74px;
-    min-height: 40px;
+    width: calc(100% / 6);
+    min-width: 0;
+    min-height: 64px;
     border: 0;
-    border-radius: 99px;
+    border-radius: 0;
     display: flex;
     align-items: center;
     justify-content: center;

@@ -15,6 +15,7 @@ async function exerciseBoundary(
     endpoint: string;
     emptyBody: unknown;
     open: () => Promise<void>;
+    unauthorizedState?: 'unauthorized' | 'not_found';
   },
 ) {
   for (const outcome of ['empty', 'error', 'unauthorized'] as BoundaryOutcome[]) {
@@ -32,8 +33,11 @@ async function exerciseBoundary(
     await options.open();
     const boundary = page.locator(`[data-boundary="${options.boundary}"]`);
     await expect(boundary).toHaveAttribute('data-async-state', 'loading');
+    expect(await renderedContrastViolations(page), `${options.boundary} loading contrast`).toEqual([]);
     release();
-    await expect(boundary).toHaveAttribute('data-async-state', outcome);
+    const expected = outcome === 'unauthorized' ? (options.unauthorizedState ?? 'unauthorized') : outcome;
+    await expect(boundary).toHaveAttribute('data-async-state', expected);
+    expect(await renderedContrastViolations(page), `${options.boundary} ${expected} contrast`).toEqual([]);
     await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
     await page.unroute(options.endpoint);
     await page.goto('/app/command-center');
@@ -81,10 +85,17 @@ async function renderedContrastViolations(page: Page): Promise<string[]> {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       const hasDirectText = Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && Boolean(node.textContent?.trim()));
-      return hasDirectText && !element.closest(':disabled') && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      const hasTextualInputValue = element instanceof HTMLInputElement
+        && !['checkbox', 'radio', 'range', 'color', 'file', 'image', 'button', 'submit', 'reset', 'hidden'].includes(element.type)
+        && Boolean(element.value || element.placeholder);
+      const hasFormText = hasTextualInputValue
+        || (element instanceof HTMLTextAreaElement && Boolean(element.value || element.placeholder));
+      return (hasDirectText || hasFormText) && !element.closest(':disabled') && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     });
     return candidates.flatMap((element, index) => {
-      const style = getComputedStyle(element);
+      const usesPlaceholder = (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)
+        && !element.value && Boolean(element.placeholder);
+      const style = getComputedStyle(element, usesPlaceholder ? '::placeholder' : null);
       const foreground = parse(style.color);
       if (!foreground) return [];
       let opacity = foreground.a;
@@ -101,6 +112,52 @@ async function renderedContrastViolations(page: Page): Promise<string[]> {
         : [];
     });
   });
+}
+
+async function assertResponsiveControls(page: Page, route: string, viewport: { width: number; height: number }) {
+  const controls = page.locator('a:visible, button:visible:not(:disabled), input:visible:not(:disabled), select:visible:not(:disabled), textarea:visible:not(:disabled)');
+  for (let index = 0; index < await controls.count(); index += 1) {
+    const control = controls.nth(index);
+    await control.focus();
+    const failures = await control.evaluate((element, controlIndex) => {
+      const node = element as HTMLElement;
+      const rect = node.getBoundingClientRect();
+      const issues: string[] = [];
+      const label = node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent?.trim().slice(0, 48) || node.tagName;
+      if (node.matches(':disabled') || getComputedStyle(node).pointerEvents === 'none') issues.push(`control ${controlIndex} (${label}) is disabled`);
+      if (rect.width <= 0 || rect.height <= 0) issues.push(`control ${controlIndex} (${label}) has no rendered box`);
+      if (rect.left < -1 || rect.right > window.innerWidth + 1 || rect.bottom <= 0 || rect.top >= window.innerHeight) {
+        issues.push(`control ${controlIndex} (${label}) does not intersect the viewport horizontally and vertically`);
+      }
+      for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        const clipX = /(hidden|clip|auto|scroll)/.test(style.overflowX);
+        const clipY = /(hidden|clip|auto|scroll)/.test(style.overflowY);
+        if (!clipX && !clipY) continue;
+        const boundary = ancestor.getBoundingClientRect();
+        const intersectsX = rect.right > boundary.left && rect.left < boundary.right;
+        const intersectsY = rect.bottom > boundary.top && rect.top < boundary.bottom;
+        if ((clipX && !intersectsX) || (clipY && !intersectsY)) {
+          issues.push(`control ${controlIndex} (${label}) does not intersect overflow ancestor ${ancestor.className || ancestor.tagName}`);
+          break;
+        }
+        if ((clipX && (rect.left < boundary.left - 1 || rect.right > boundary.right + 1))
+          || (clipY && (rect.top < boundary.top - 1 || rect.bottom > boundary.bottom + 1))) {
+          issues.push(`control ${controlIndex} (${label}) is clipped by overflow ancestor ${ancestor.className || ancestor.tagName}`);
+          break;
+        }
+      }
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      if (centerX >= 0 && centerX < window.innerWidth && centerY >= 0 && centerY < window.innerHeight) {
+        const hit = document.elementFromPoint(centerX, centerY);
+        if (!hit || (hit !== node && !node.contains(hit))) issues.push(`control ${controlIndex} (${label}) is occluded at its center by ${(hit as HTMLElement | null)?.className || hit?.tagName || 'nothing'}`);
+      }
+      return issues;
+    }, index);
+    expect(failures, `${route} control ${index} must be reachable without scripted scrolling`).toEqual([]);
+    await control.click({ trial: true });
+  }
 }
 
 const CORE_ROUTES = [
@@ -144,33 +201,7 @@ for (const viewport of [
         expect(box.x, `${route.path} container ${index} started outside the viewport`).toBeGreaterThanOrEqual(-1);
         expect(box.x + box.width, `${route.path} container ${index} ended outside the viewport`).toBeLessThanOrEqual(viewport.width + 1);
       }
-      const controls = page.locator('a:visible, button:visible, input:visible, select:visible, textarea:visible');
-      for (let index = 0; index < await controls.count(); index += 1) {
-        const control = controls.nth(index);
-        const box = await control.boundingBox();
-        if (!box) continue;
-        expect(box.width, `${route.path} control ${index} is wider than the viewport`).toBeLessThanOrEqual(viewport.width + 1);
-        expect(box.x, `${route.path} control ${index} starts outside the viewport`).toBeGreaterThanOrEqual(-1);
-        expect(box.x + box.width, `${route.path} control ${index} cannot be reached horizontally`).toBeLessThanOrEqual(viewport.width + 1);
-      }
-      const clipped = await controls.evaluateAll((nodes) => nodes.flatMap((node, index) => {
-        const element = node as HTMLElement;
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        const failures: string[] = [];
-        if (rect.width <= 0 || rect.height <= 0 || style.pointerEvents === 'none') failures.push(`control ${index} is not actionable`);
-        for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
-          const ancestorStyle = getComputedStyle(ancestor);
-          if (!/(hidden|clip|auto|scroll)/.test(ancestorStyle.overflowX)) continue;
-          const ancestorRect = ancestor.getBoundingClientRect();
-          if (rect.left < ancestorRect.left - 1 || rect.right > ancestorRect.right + 1) {
-            failures.push(`control ${index} is horizontally clipped by ${ancestor.className || ancestor.tagName}`);
-            break;
-          }
-        }
-        return failures;
-      }));
-      expect(clipped, `${route.path} has clipped or non-actionable controls`).toEqual([]);
+      await assertResponsiveControls(page, route.path, viewport);
     }
     consoleGuard.assertClean();
   });
@@ -183,6 +214,7 @@ test('J11 unknown routes and configuration sections stay put and disclose no req
   await expect(page.getByTestId('not-found')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   await expect(page.getByText(privateLookingPath)).toHaveCount(0);
+  expect(await renderedContrastViolations(page), 'unknown route contrast').toEqual([]);
 
   await page.goto('/app/operations/config/not-a-section');
   await expect(page).toHaveURL('/app/operations/config/not-a-section');
@@ -281,6 +313,26 @@ test('J11 page and configuration boundaries expose loading, empty, error, and un
   }
 });
 
+test('J11 Workspace list exposes loading, empty, error, and unauthorized without backend detail', async ({ page }) => {
+  await exerciseBoundary(page, {
+    boundary: 'workspace-list',
+    endpoint: '**/v1/operator/workspaces',
+    emptyBody: { data: [] },
+    open: () => page.goto('/app/workspaces').then(() => undefined),
+  });
+});
+
+test('J11 Workspace detail exposes loading, empty, error, and privacy-preserving denied state', async ({ page }) => {
+  await exerciseBoundary(page, {
+    boundary: 'workspace-detail',
+    endpoint: '**/v1/operator/workspaces/e2e-workspace',
+    emptyBody: {},
+    unauthorizedState: 'not_found',
+    open: () => page.goto('/app/workspaces/e2e-workspace').then(() => undefined),
+  });
+  await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
+});
+
 test('J11 capability catalog exposes loading, empty, error, and unauthorized without stale actions', async ({ page }) => {
   await exerciseBoundary(page, {
     boundary: 'act-catalog',
@@ -303,6 +355,31 @@ test('J11 mailbox access and message boundaries expose every typed state without
     endpoint: '**/v1/operator/mailboxes/inbox**',
     emptyBody: { mailbox: 'synthetic', cursor: 0, unread_count: 0, messages: [] },
     open: () => page.goto('/app/coordination').then(() => undefined),
+  });
+});
+
+test('J11 mail composer Workspace boundary exposes every typed state without backend detail', async ({ page }) => {
+  await exerciseBoundary(page, {
+    boundary: 'mail-compose-workspaces',
+    endpoint: '**/v1/operator/workspaces',
+    emptyBody: { data: [] },
+    open: async () => {
+      await page.goto('/app/coordination');
+      await page.getByRole('button', { name: 'Compose mail' }).click();
+    },
+  });
+});
+
+test('J11 mail address book exposes every typed state without backend detail', async ({ page }) => {
+  await exerciseBoundary(page, {
+    boundary: 'mail-address-book',
+    endpoint: '**/v1/operator/mailboxes?workspace=*',
+    emptyBody: { data: [] },
+    open: async () => {
+      await page.goto('/app/coordination');
+      await page.getByRole('button', { name: 'Compose mail' }).click();
+      await expect(page.locator('[data-boundary="mail-compose-workspaces"]')).toHaveAttribute('data-async-state', 'success');
+    },
   });
 });
 
@@ -329,6 +406,7 @@ test('J11 mailbox thread boundary exposes loading, empty, error, and unauthorize
     await expect(boundary).toHaveAttribute('data-async-state', 'loading');
     release();
     await expect(boundary).toHaveAttribute('data-async-state', outcome);
+    expect(await renderedContrastViolations(page), `mail-thread ${outcome} contrast`).toEqual([]);
     await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
     await page.unroute('**/v1/operator/mailboxes/threads/**');
   }
@@ -358,6 +436,7 @@ test('J11 source lookup boundary exposes loading, empty, error, and unauthorized
     await expect(boundary).toHaveAttribute('data-async-state', 'loading');
     release();
     await expect(boundary).toHaveAttribute('data-async-state', outcome);
+    expect(await renderedContrastViolations(page), `lookup ${outcome} contrast`).toEqual([]);
     await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
     await page.unroute('**/v1/operator/workspaces/e2e-workspace/lookup**');
   }
@@ -471,43 +550,20 @@ test('J11 a capability-catalog authorization failure exposes no stale actions', 
   await expect(page.locator('.operator-capability, .operator-action-sheet')).toHaveCount(0);
 });
 
-test('J11 rendered text meets WCAG AA in success, loading, empty, error, unauthorized, focus, and hover states', async ({ page }) => {
+test('J11 rendered text meets WCAG AA across every supported route and interactive state', async ({ page }) => {
   for (const viewport of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
-    for (const route of ['/app/command-center', '/app/workspaces/e2e-workspace', '/app/coordination']) {
-      await page.goto(route);
-      const interactive = page.locator('a:visible, button:visible').first();
-      if (await interactive.count()) {
-        await interactive.focus();
-        expect(await renderedContrastViolations(page), `${route} focus at ${viewport.width}px`).toEqual([]);
-        await interactive.hover();
-        expect(await renderedContrastViolations(page), `${route} hover at ${viewport.width}px`).toEqual([]);
+    for (const route of CORE_ROUTES) {
+      await page.goto(route.path);
+      expect(await renderedContrastViolations(page), `${route.path} normal at ${viewport.width}px`).toEqual([]);
+      const interactive = page.locator('a:visible, button:visible:not(:disabled), input:visible:not(:disabled), select:visible:not(:disabled), textarea:visible:not(:disabled)');
+      for (let index = 0; index < await interactive.count(); index += 1) {
+        const control = interactive.nth(index);
+        await control.focus();
+        expect(await renderedContrastViolations(page), `${route.path} control ${index} focus at ${viewport.width}px`).toEqual([]);
+        await control.hover();
+        expect(await renderedContrastViolations(page), `${route.path} control ${index} hover at ${viewport.width}px`).toEqual([]);
       }
-    }
-
-    for (const state of ['loading', 'empty', 'error', 'unauthorized'] as const) {
-      let release!: () => void;
-      const held = new Promise<void>((resolve) => { release = resolve; });
-      await page.route('**/v1/operator/workspaces', async (route) => {
-        if (state === 'loading') await held;
-        const status = state === 'error' ? 503 : state === 'unauthorized' ? 403 : 200;
-        await route.fulfill({
-          status,
-          contentType: 'application/json',
-          body: JSON.stringify(state === 'empty' ? { data: [] } : state === 'loading' ? { data: [] } : { detail: 'SENSITIVE-BACKEND-DETAIL' }),
-        });
-      });
-      await page.goto('/app/workspaces');
-      if (state === 'loading') {
-        await expect(page.locator('[data-async-state="loading"]')).toBeVisible();
-        expect(await renderedContrastViolations(page), `loading at ${viewport.width}px`).toEqual([]);
-        release();
-        await expect(page.locator('[data-async-state="empty"]')).toBeVisible();
-      } else {
-        await expect(page.locator(`[data-async-state="${state}"]`)).toBeVisible();
-        expect(await renderedContrastViolations(page), `${state} at ${viewport.width}px`).toEqual([]);
-      }
-      await page.unroute('**/v1/operator/workspaces');
     }
   }
 });
@@ -519,6 +575,7 @@ test('J11 realtime loss is a visible degraded state while durable HTTP remains a
   await page.goto('/app/command-center');
   await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
   await expect(page.locator('[data-connection-state="degraded"]')).toContainText('Durable HTTP state remains available');
+  expect(await renderedContrastViolations(page), 'degraded realtime contrast').toEqual([]);
 });
 
 test('J11 command palette traps focus, closes with Escape, and restores its opener', async ({ page }) => {
@@ -532,6 +589,19 @@ test('J11 command palette traps focus, closes with Escape, and restores its open
   await expect(combobox).toBeFocused();
   await expect(combobox).toHaveAttribute('aria-expanded', 'true');
   await expect(combobox).toHaveAttribute('aria-controls', 'command-palette-results');
+  await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
+  expect(await renderedContrastViolations(page), 'command palette normal contrast').toEqual([]);
+  const paletteControls = dialog.locator('button:visible:not(:disabled), input:visible:not(:disabled)');
+  for (let index = 0; index < await paletteControls.count(); index += 1) {
+    await paletteControls.nth(index).focus();
+    expect(await renderedContrastViolations(page), `command palette control ${index} focus contrast`).toEqual([]);
+    await paletteControls.nth(index).hover();
+    expect(await renderedContrastViolations(page), `command palette control ${index} hover contrast`).toEqual([]);
+  }
+  await combobox.focus();
+  await page.mouse.move(0, 0);
+  await combobox.fill('zz-no-match');
+  await combobox.fill('');
   await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
   await page.keyboard.press('ArrowDown');
   await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-1');
