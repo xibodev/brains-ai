@@ -188,12 +188,29 @@ for (const [file, sourceFile] of files) {
   }
   const navigateFunctions = new Set(navigateAliases);
   const locationAliases = new Set(["location"]);
+  const historyAliases = new Set(["history"]);
+  const historyFunctions = new Set();
+  const memberName = (node) => {
+    if (ts.isPropertyAccessExpression(node)) return node.name.text;
+    if (ts.isElementAccessExpression(node) && node.argumentExpression && ts.isStringLiteral(unwrap(node.argumentExpression))) {
+      return unwrap(node.argumentExpression).text;
+    }
+    return null;
+  };
+  const memberOwner = (node) =>
+    ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? node.expression : null;
   const isLocationObject = (node) => {
     node = unwrap(node);
     if (ts.isIdentifier(node)) return locationAliases.has(node.text);
     return ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) && ["window", "globalThis"].includes(node.expression.text) &&
       node.name.text === "location";
+  };
+  const isHistoryObject = (node) => {
+    node = unwrap(node);
+    if (ts.isIdentifier(node)) return historyAliases.has(node.text);
+    const owner = memberOwner(node);
+    return owner && ts.isIdentifier(owner) && ["window", "globalThis"].includes(owner.text) && memberName(node) === "history";
   };
   const namespacedRouterMember = (node) =>
     ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) &&
@@ -232,6 +249,25 @@ for (const [file, sourceFile] of files) {
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
       isLocationObject(node.initializer)
     ) locationAliases.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      isHistoryObject(node.initializer)
+    ) historyAliases.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      ["pushState", "replaceState"].includes(memberName(unwrap(node.initializer))) &&
+      isHistoryObject(memberOwner(unwrap(node.initializer)))
+    ) historyFunctions.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer &&
+      isHistoryObject(node.initializer)
+    ) {
+      for (const element of node.name.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const method = element.propertyName?.getText(sourceFile) || element.name.text;
+        if (["pushState", "replaceState"].includes(method)) historyFunctions.add(element.name.text);
+      }
+    }
     ts.forEachChild(node, discover);
   }
   discover(sourceFile);
@@ -284,6 +320,18 @@ for (const [file, sourceFile] of files) {
       ["assign", "replace"].includes(node.expression.name.text) && node.arguments.length
     ) {
       record(sourceFile, node, "location", node.arguments[0], coreRouteAliases);
+    } else if (
+      ts.isCallExpression(node) &&
+      ((ts.isIdentifier(node.expression) && historyFunctions.has(node.expression.text)) ||
+        (["pushState", "replaceState"].includes(memberName(node.expression)) &&
+          isHistoryObject(memberOwner(node.expression))))
+    ) {
+      if (node.arguments.length >= 3) {
+        record(sourceFile, node, "history-state", node.arguments[2], coreRouteAliases);
+      } else {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "history-state", line });
+      }
     } else if (ts.isBinaryExpression(node)) {
       const assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
       const directLocation = isLocationObject(node.left);

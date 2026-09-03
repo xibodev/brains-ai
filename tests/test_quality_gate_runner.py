@@ -37,7 +37,12 @@ def test_gate_commands_share_the_ci_runner(monkeypatch) -> None:
     assert commands["documentation contract"][: len(prefix)] == prefix
     assert commands["ruff lint"][: len(prefix)] == prefix
     assert commands["contract self-tests"][: len(prefix)] == prefix
+    assert commands["core surface boundary"][: len(prefix)] == prefix
+    assert commands["core surface boundary"][-2:] == ["--dist", "dist"]
     assert commands["distribution contents"][: len(prefix)] == prefix
+    names = [gate.name for gate in plan]
+    assert names.index("build wheel + sdist") < names.index("core surface boundary")
+    assert names.index("core surface boundary") < names.index("distribution contents")
 
 
 def test_main_syncs_once_before_running_gates(monkeypatch) -> None:
@@ -59,16 +64,19 @@ def test_main_syncs_once_before_running_gates(monkeypatch) -> None:
     assert all("--no-sync" in command for command in calls[2:8])
 
 
-def test_docs_ci_installs_declared_parser_before_core_surface() -> None:
+def test_package_ci_builds_fresh_artifacts_before_core_surface() -> None:
     workflow = (_PATH.parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    docs_job = workflow.split("  docs:\n", 1)[1].split("\n  lint:\n", 1)[0]
+    package_job = workflow.split("  package:\n", 1)[1].split("\n  native-installation-probe:\n", 1)[
+        0
+    ]
 
-    setup = docs_job.index("actions/setup-node@v4")
-    pinned = docs_job.index("node-version: 22")
-    install = docs_job.index("npm ci --ignore-scripts")
-    checker = docs_job.index("python scripts/check_core_surface.py")
-    self_tests = docs_job.index("tests/test_core_surface_manifest.py")
-    assert setup < pinned < install < checker < self_tests
+    setup = package_job.index("actions/setup-node@v4")
+    pinned = package_job.index('node-version: "22"')
+    install = package_job.index("npm ci --ignore-scripts")
+    build = package_job.index("uv build")
+    checker = package_job.index("python scripts/check_core_surface.py --dist dist")
+    distribution = package_job.index("python scripts/check_distribution.py")
+    assert setup < pinned < install < build < checker < distribution
 
 
 def test_local_runner_fails_clearly_without_parser_installer(monkeypatch, capsys) -> None:

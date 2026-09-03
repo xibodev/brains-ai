@@ -61,6 +61,18 @@ def test_spa_ast_helper_fails_clearly_without_declared_parser(
     assert "npm ci --ignore-scripts" in capsys.readouterr().out
 
 
+def test_spa_ast_helper_semantic_hash_normalizes_line_endings(tmp_path) -> None:
+    helper = tmp_path / "helper.mjs"
+    helper.write_bytes(b'const route = "/";\nexport { route };\n')
+    lf_hash = check_core_surface._semantic_text_sha256(helper)
+
+    helper.write_bytes(b'const route = "/";\r\nexport { route };\r\n')
+    assert check_core_surface._semantic_text_sha256(helper) == lf_hash
+
+    helper.write_bytes(b'const route = "/labs";\r\nexport { route };\r\n')
+    assert check_core_surface._semantic_text_sha256(helper) != lf_hash
+
+
 @pytest.mark.parametrize(
     ("section", "rogue"),
     [
@@ -89,6 +101,92 @@ def test_positive_manifest_rejects_rogue_surface(section: str, rogue: str) -> No
     values.append(rogue)
 
     assert check_core_surface.manifest_violations(actual, expected)
+
+
+@pytest.mark.parametrize("kind", ["source", "sdist", "wheel"])
+@pytest.mark.parametrize("mutation", ["missing", "extra", "stale"])
+def test_manifest_rejects_distribution_inventory_drift(kind: str, mutation: str) -> None:
+    expected = _manifest()
+    expected["distribution"] = {
+        "source": ["src/brains/__init__.py"],
+        "sdist": ["pyproject.toml"],
+        "wheel": ["brains/__init__.py"],
+    }
+    actual = copy.deepcopy(expected)
+    expected_members = expected["distribution"][kind]
+    actual_members = actual["distribution"][kind]
+    assert isinstance(expected_members, list) and expected_members
+    assert isinstance(actual_members, list)
+    if mutation == "missing":
+        actual_members.pop()
+    elif mutation == "extra":
+        actual_members.append("rogue/member")
+        actual_members.sort()
+    else:
+        expected_members[-1] = "stale/reviewed-member"
+        expected_members.sort()
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any(f"distribution.{kind}" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        None,
+        {},
+        {"source": ["src/brains/__init__.py"], "sdist": ["pyproject.toml"]},
+        {
+            "source": ["src/brains/__init__.py"],
+            "sdist": ["pyproject.toml"],
+            "wheel": ["brains/__init__.py"],
+            "extra": ["rogue/member"],
+        },
+        {"source": [], "sdist": ["pyproject.toml"], "wheel": ["brains/__init__.py"]},
+        {
+            "source": ["src/brains/z.py", "src/brains/a.py"],
+            "sdist": ["pyproject.toml"],
+            "wheel": ["brains/__init__.py"],
+        },
+        {
+            "source": ["src/brains/__init__.py", "src/brains/__init__.py"],
+            "sdist": ["pyproject.toml"],
+            "wheel": ["brains/__init__.py"],
+        },
+        {
+            "source": ["src/brains/__init__.py"],
+            "sdist": ["pyproject.toml"],
+            "wheel": [1],
+        },
+    ],
+)
+def test_manifest_rejects_malformed_distribution_inventory(malformed) -> None:
+    expected = _manifest()
+    expected["distribution"] = {
+        "source": ["src/brains/__init__.py"],
+        "sdist": ["pyproject.toml"],
+        "wheel": ["brains/__init__.py"],
+    }
+    actual = copy.deepcopy(expected)
+    if malformed is None:
+        actual.pop("distribution", None)
+    else:
+        actual["distribution"] = malformed
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any("distribution" in error for error in errors)
+
+
+def test_manifest_generation_requires_fresh_wheel_and_sdist(tmp_path, monkeypatch, capsys) -> None:
+    manifest = tmp_path / "CORE_SURFACE.json"
+    original = '{"preserved": true}\n'
+    manifest.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(check_core_surface, "MANIFEST", manifest)
+    monkeypatch.setattr(check_core_surface, "_require_frontend_parser", lambda: None)
+
+    assert check_core_surface.main(["--write-manifest"]) == 1
+    assert "failed closed" in capsys.readouterr().out
+    assert manifest.read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize("mode", ["normal", "all_opt_in"])
@@ -148,6 +246,18 @@ def test_canonical_docs_allow_explicit_boundary_prose() -> None:
     assert not check_core_surface._canonical_doc_advertisements(
         {"docs/product/TRACEABILITY.md": source}
     )
+
+
+def test_negative_doc_clause_does_not_exempt_mixed_positive_claim() -> None:
+    findings = check_core_surface._canonical_doc_advertisements(
+        {
+            "docs/product/TRACEABILITY.md": (
+                "Labs is unavailable, but users can use the dashboard.\n"
+            )
+        }
+    )
+
+    assert any(finding.endswith("surface:dashboard") for finding in findings)
 
 
 @pytest.mark.parametrize(
@@ -484,6 +594,9 @@ def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None
         'export function App() { return <Route path={"/" + "labs"} />; }\n',
         'import { LabsHome as Core } from "./screens/Labs"; export function App() { return <Core />; }\n',
         'const Core = import("./screens/Labs"); export function App() { return <div>{Core}</div>; }\n',
+        'window.history.pushState({}, "", "/labs"); export function App() { return <div />; }\n',
+        'const h = globalThis["history"]; h.replaceState(null, "", "/labs"); export function App() { return <div />; }\n',
+        'const push = window.history.pushState; push({}, "", "/labs"); export function App() { return <div />; }\n',
     ],
 )
 def test_ast_reachability_rejects_expression_alias_and_dynamic_import_bypasses(
@@ -617,6 +730,25 @@ def test_ast_reachability_fails_closed_on_compound_location_write(tmp_path) -> N
     (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
     (source / "App.tsx").write_text(
         'export function App() { window.location.pathname += "/labs"; return <div />; }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
+
+
+def test_ast_reachability_fails_closed_on_dynamic_history_state_target(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(
+        "export function App() { "
+        'window.history.pushState({}, "", window.location.pathname); '
+        "return <div />; }\n",
         encoding="utf-8",
     )
 
@@ -826,12 +958,14 @@ def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> Non
                 assert transport["url"] in transport["config_content"]
 
 
-def test_checker_fails_closed_without_disclosing_inventory_error(monkeypatch, capsys) -> None:
-    def fail() -> dict[str, object]:
+def test_checker_fails_closed_without_disclosing_inventory_error(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    def fail(_dist) -> dict[str, object]:
         raise RuntimeError("sensitive inventory detail")
 
     monkeypatch.setattr(check_core_surface, "full_inventory", fail)
-    assert check_core_surface.main([]) == 1
+    assert check_core_surface.main(["--dist", str(tmp_path)]) == 1
     output = capsys.readouterr().out
     assert "failed closed (RuntimeError)" in output
     assert "sensitive inventory detail" not in output

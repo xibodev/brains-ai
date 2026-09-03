@@ -65,6 +65,9 @@ REQUIRED_SDIST_FILES = (
     "src/brains/storage/baseline/sqlite.sql",
 )
 
+SOURCE_ROOT = "src/brains"
+SOURCE_TOP_LEVEL = ("Dockerfile", "LICENSE", "README.md", "pyproject.toml")
+
 
 def _one(paths: list[Path], kind: str) -> tuple[Path | None, list[str]]:
     if not paths:
@@ -73,6 +76,29 @@ def _one(paths: list[Path], kind: str) -> tuple[Path | None, list[str]]:
         names = ", ".join(sorted(path.name for path in paths))
         return None, [f"expected exactly one {kind}, found: {names}"]
     return paths[0], []
+
+
+def source_inventory(root: Path = ROOT) -> list[str]:
+    """Return the normalized product/package source file inventory."""
+
+    missing = [name for name in SOURCE_TOP_LEVEL if not (root / name).is_file()]
+    if missing:
+        raise ValueError("required product source input is unavailable")
+    members = list(SOURCE_TOP_LEVEL)
+    source = root / SOURCE_ROOT
+    if not source.is_dir():
+        raise ValueError("product source tree is unavailable")
+    members.extend(
+        path.relative_to(root).as_posix()
+        for path in source.rglob("*")
+        if path.is_file()
+        and "__pycache__" not in path.parts
+        and not path.name.endswith((".pyc", ".pyo"))
+    )
+    normalized = sorted(members)
+    if not normalized or len(normalized) != len(set(normalized)):
+        raise ValueError("source inventory is malformed")
+    return normalized
 
 
 def wheel_inventory(path: Path) -> list[str]:
@@ -104,6 +130,28 @@ def sdist_inventory(path: Path) -> list[str]:
     return sorted(name.split("/", 1)[1] for name in names)
 
 
+def distribution_inventory(dist: Path, root: Path = ROOT) -> dict[str, list[str]]:
+    """Build one strict source/wheel/sdist inventory from fresh inputs."""
+
+    wheel, wheel_errors = _one(sorted(dist.glob("*.whl")), "wheel")
+    sdist, sdist_errors = _one(sorted(dist.glob("*.tar.gz")), "sdist")
+    if wheel_errors or sdist_errors or wheel is None or sdist is None:
+        raise ValueError("fresh wheel and sdist are required")
+    if check_wheel(wheel, compare_manifest=False) or check_sdist(sdist, compare_manifest=False):
+        raise ValueError("fresh distribution violates the artifact contract")
+    inventory = {
+        "source": source_inventory(root),
+        "wheel": wheel_inventory(wheel),
+        "sdist": sdist_inventory(sdist),
+    }
+    if any(
+        not members or members != sorted(members) or len(members) != len(set(members))
+        for members in inventory.values()
+    ):
+        raise ValueError("fresh distribution inventory is malformed")
+    return inventory
+
+
 def _manifest_inventory(kind: str) -> list[str]:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     distribution = payload.get("distribution") if isinstance(payload, dict) else None
@@ -127,7 +175,7 @@ def _exact_errors(path: Path, kind: str, actual: list[str]) -> list[str]:
     return []
 
 
-def check_wheel(path: Path) -> list[str]:
+def check_wheel(path: Path, *, compare_manifest: bool = True) -> list[str]:
     errors: list[str] = []
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
@@ -151,11 +199,12 @@ def check_wheel(path: Path) -> list[str]:
     except (OSError, ValueError, zipfile.BadZipFile):
         errors.append(f"{path.name}: wheel inventory is malformed")
     else:
-        errors.extend(_exact_errors(path, "wheel", members))
+        if compare_manifest:
+            errors.extend(_exact_errors(path, "wheel", members))
     return errors
 
 
-def check_sdist(path: Path) -> list[str]:
+def check_sdist(path: Path, *, compare_manifest: bool = True) -> list[str]:
     errors: list[str] = []
     with tarfile.open(path) as archive:
         # Members are prefixed with `<name>-<version>/`.
@@ -178,7 +227,8 @@ def check_sdist(path: Path) -> list[str]:
     except (OSError, ValueError, tarfile.TarError):
         errors.append(f"{path.name}: sdist inventory is malformed")
     else:
-        errors.extend(_exact_errors(path, "sdist", members))
+        if compare_manifest:
+            errors.extend(_exact_errors(path, "sdist", members))
     return errors
 
 
@@ -219,11 +269,10 @@ def main(argv: list[str] | None = None) -> int:
             payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError
-            payload["distribution"] = {
-                "wheel": wheel_inventory(wheel),
-                "sdist": sdist_inventory(sdist),
-            }
-            MANIFEST.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            payload["distribution"] = distribution_inventory(dist, ROOT)
+            MANIFEST.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             print("distribution contract failed:\n- core surface manifest is unavailable")
             return 1

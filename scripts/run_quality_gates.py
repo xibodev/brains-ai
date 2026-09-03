@@ -82,7 +82,6 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
         [
             Gate("documentation contract", script("scripts/check_docs.py")),
             Gate("generated traceability contract", script("scripts/check_traceability.py")),
-            Gate("core surface boundary", script("scripts/check_core_surface.py")),
             Gate("ruff lint", tool("ruff", "check", ".")),
             Gate("ruff format", tool("ruff", "format", "--check", ".")),
             Gate("mypy", tool("mypy")),
@@ -122,6 +121,12 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
     # gate is reported as unavailable rather than silently passed.
     if shutil.which("uv"):
         plan.append(Gate("build wheel + sdist", ["uv", "build"]))
+        plan.append(
+            Gate(
+                "core surface boundary",
+                [*script("scripts/check_core_surface.py"), "--dist", "dist"],
+            )
+        )
         plan.append(Gate("distribution contents", script("scripts/check_distribution.py")))
     return plan
 

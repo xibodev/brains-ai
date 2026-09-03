@@ -17,6 +17,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts import check_distribution as distribution_contract
+except ModuleNotFoundError:  # direct ``python scripts/check_core_surface.py``
+    import check_distribution as distribution_contract  # type: ignore[no-redef]
+
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
 sys.path.insert(0, str(ROOT / "src"))
@@ -46,7 +51,7 @@ CORE_SPA_TARGET_PREFIXES = (
     "/workspaces",
 )
 CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
-SPA_AST_HELPER_SHA256 = "0ea1c5dd9ccfe700c41b8b78ea92e78838e901ccae52aa9d64ebbe181dd7c473"
+SPA_AST_HELPER_SHA256 = "f74e4b0b96dfdc4ae76756f7ad0ca4c69c4621e05967a79203f8dc59aab75705"
 CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
@@ -240,6 +245,15 @@ DOC_POSITIVE_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 DOC_PATH = re.compile(r"(?<![:/A-Za-z0-9])/[A-Za-z0-9_{}][A-Za-z0-9_{}./:-]*")
+DOC_CLAUSE_BOUNDARY = re.compile(
+    r"\b(?:but|however|while|whereas|yet)\b|[.;|](?=\s|$)", re.IGNORECASE
+)
+
+
+def _doc_clauses(line: str) -> list[str]:
+    """Split prose so a negative claim cannot exempt a separate positive claim."""
+
+    return [clause.strip(" :-") for clause in DOC_CLAUSE_BOUNDARY.split(line) if clause.strip()]
 
 
 def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
@@ -260,8 +274,6 @@ def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
                 continue
             if not stripped or stripped.startswith("<!--"):
                 continue
-            negative = DOC_NEGATIVE_CONTEXT.search(stripped) is not None
-            positive = DOC_POSITIVE_CONTEXT.search(stripped) is not None
             code_tokens = re.findall(r"`([^`\n]+)`", stripped)
 
             for command in re.findall(r"\bbrains-ai\s+([a-z][a-z0-9-]*)", stripped):
@@ -269,9 +281,7 @@ def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
                     re.search(rf"\bbrains-ai\s+{re.escape(command)}\b", token)
                     for token in code_tokens
                 )
-                if command in withdrawn_commands and (
-                    in_fence or inline_command or (positive and not negative)
-                ):
+                if command in withdrawn_commands and (in_fence or inline_command):
                     findings.add(f"{relative}:{line_number}:cli:{command}")
 
             links = set(re.findall(r"\]\((/[^)\s]+)", stripped))
@@ -279,23 +289,38 @@ def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
             for link in links:
                 paths[link.split("?", 1)[0].split("#", 1)[0]] = True
             for path, is_link in paths.items():
-                if not (in_fence or is_link or (positive and not negative)):
+                if not (in_fence or is_link):
                     continue
                 if path.startswith(("/dashboard", *WITHDRAWN_SPA_PREFIXES)) or withdrawn_http_path(
                     path
                 ):
                     findings.add(f"{relative}:{line_number}:path:{path}")
 
-            if negative:
-                continue
-            if in_fence or positive:
+            if in_fence:
                 for token in code_tokens:
                     normalized = token.strip().lower().replace("-", " ")
                     if normalized in withdrawn_code_names:
                         findings.add(f"{relative}:{line_number}:surface:{normalized}")
 
-            if positive:
-                lowered = stripped.lower().replace("-", " ")
+            for clause in _doc_clauses(stripped):
+                negative = DOC_NEGATIVE_CONTEXT.search(clause) is not None
+                positive = DOC_POSITIVE_CONTEXT.search(clause) is not None
+                if negative or not positive:
+                    continue
+                for command in re.findall(r"\bbrains-ai\s+([a-z][a-z0-9-]*)", clause):
+                    if command in withdrawn_commands:
+                        findings.add(f"{relative}:{line_number}:cli:{command}")
+                for path in DOC_PATH.findall(clause):
+                    normalized_path = path.rstrip(":").split("?", 1)[0].split("#", 1)[0]
+                    if normalized_path.startswith(
+                        ("/dashboard", *WITHDRAWN_SPA_PREFIXES)
+                    ) or withdrawn_http_path(normalized_path):
+                        findings.add(f"{relative}:{line_number}:path:{normalized_path}")
+                for token in re.findall(r"`([^`\n]+)`", clause):
+                    normalized = token.strip().lower().replace("-", " ")
+                    if normalized in withdrawn_code_names:
+                        findings.add(f"{relative}:{line_number}:surface:{normalized}")
+                lowered = clause.lower().replace("-", " ")
                 for name in WITHDRAWN_DOC_SURFACE_TERMS:
                     if re.search(rf"\b{re.escape(name)}\b", lowered):
                         findings.add(f"{relative}:{line_number}:surface:{name}")
@@ -467,6 +492,13 @@ def _frontend_source_hashes() -> dict[str, str]:
         relative = path.relative_to(ROOT).as_posix()
         hashes[relative] = hashlib.sha256(source.encode("utf-8")).hexdigest()
     return hashes
+
+
+def _semantic_text_sha256(path: Path) -> str:
+    """Hash reviewed text independently of the checkout's line endings."""
+
+    source = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(source).hexdigest()
 
 
 def _frontend_reachability(
@@ -769,9 +801,7 @@ def inventory() -> dict[str, object]:
         "frontend_reachable_modules": frontend_reachable_modules,
         "frontend_dormant_modules": frontend_dormant_modules,
         "frontend_import_graph": frontend_import_graph,
-        "spa_ast_helper_sha256": hashlib.sha256(
-            (ROOT / "scripts/inventory_spa_surface.mjs").read_bytes()
-        ).hexdigest(),
+        "spa_ast_helper_sha256": _semantic_text_sha256(ROOT / "scripts/inventory_spa_surface.mjs"),
         "frontend_source_sha256": frontend_source_hashes,
         "config_sections": config_sections,
         "config_read_keys": read_keys,
@@ -1085,6 +1115,29 @@ def manifest_violations(actual: dict[str, object], expected: dict[str, object]) 
     actual_modes = actual.get("modes")
     if not isinstance(expected_modes, dict) or not isinstance(actual_modes, dict):
         return ["core surface mode inventory is malformed"]
+    expected_distribution = expected.get("distribution")
+    actual_distribution = actual.get("distribution")
+    for label, value in (
+        ("reviewed", expected_distribution),
+        ("generated", actual_distribution),
+    ):
+        if not isinstance(value, dict) or set(value) != {"source", "sdist", "wheel"}:
+            errors.append(f"{label} distribution inventory is missing or malformed")
+            continue
+        for kind in ("source", "sdist", "wheel"):
+            members = value.get(kind)
+            if (
+                not isinstance(members, list)
+                or not members
+                or not all(isinstance(member, str) and member for member in members)
+                or members != sorted(members)
+                or len(members) != len(set(members))
+            ):
+                errors.append(f"{label} distribution.{kind} inventory is malformed")
+    if isinstance(expected_distribution, dict) and isinstance(actual_distribution, dict):
+        errors.extend(
+            _exact_differences(expected_distribution, actual_distribution, "distribution")
+        )
     for mode in ("normal", "all_opt_in"):
         expected_snapshot = expected_modes.get(mode)
         actual_snapshot = actual_modes.get(mode)
@@ -1127,9 +1180,12 @@ def _isolated_inventory(*, all_opt_in: bool) -> dict[str, Any]:
     return payload
 
 
-def full_inventory() -> dict[str, Any]:
+def full_inventory(dist: Path | None = None) -> dict[str, Any]:
+    if dist is None:
+        raise RuntimeError("fresh wheel and sdist inputs are required")
     return {
         "schema_version": 1,
+        "distribution": distribution_contract.distribution_inventory(dist, ROOT),
         "modes": {
             "normal": _isolated_inventory(all_opt_in=False),
             "all_opt_in": _isolated_inventory(all_opt_in=True),
@@ -1145,13 +1201,20 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Write the reviewed positive manifest; never used by CI.",
     )
+    parser.add_argument(
+        "--dist",
+        type=Path,
+        help="Directory containing exactly one freshly built wheel and sdist.",
+    )
     args = parser.parse_args(argv)
     try:
         _require_frontend_parser()
         if args.snapshot_only:
             print(json.dumps(inventory(), sort_keys=True))
             return 0
-        actual = full_inventory()
+        if args.dist is None:
+            raise RuntimeError("fresh wheel and sdist inputs are required")
+        actual = full_inventory(args.dist.resolve())
         if args.write_manifest:
             unsafe = [
                 f"{mode}: {error}"
@@ -1160,18 +1223,6 @@ def main(argv: list[str] | None = None) -> int:
             ]
             if unsafe:
                 raise RuntimeError("generated inventory violates the core boundary")
-            existing: dict[str, object] = {}
-            if MANIFEST.exists():
-                loaded = json.loads(MANIFEST.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    existing = loaded
-            actual.update(
-                {
-                    key: value
-                    for key, value in existing.items()
-                    if key not in {"schema_version", "modes"}
-                }
-            )
             MANIFEST.write_text(
                 json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
