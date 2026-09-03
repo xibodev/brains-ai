@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from scripts.check_core_surface import inventory, violations
 
 def test_generated_core_surface_inventory_has_no_withdrawn_activation() -> None:
     assert violations(inventory()) == []
+    assert inventory()["legacy_browser_source"] == []
 
 
 def test_realtime_inventory_rejects_historical_execution_topics() -> None:
@@ -138,3 +140,74 @@ def test_withdrawn_http_direct_calls_fail_closed(method: str, path: str) -> None
     with TestClient(app) as client:
         response = client.request(method, path)
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/dashboard"),
+        ("get", "/dashboard/operators"),
+        ("get", "/admin"),
+        ("get", "/admin/overview"),
+        ("get", "/admin/config"),
+        ("post", "/admin/config"),
+        ("get", "/admin/test"),
+        ("get", "/admin/secrets"),
+        ("get", "/admin/healthz"),
+        ("get", "/admin/api/config"),
+        ("post", "/admin/api/config"),
+        ("get", "/static/brains/brains.css"),
+    ],
+)
+def test_former_legacy_opt_in_cannot_restore_browser(
+    method: str, path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
+    from brains.main import app
+
+    with TestClient(app) as client:
+        response = client.request(method, path)
+    assert response.status_code == 404
+
+
+def test_route_inventory_retains_only_modern_cookie_endpoints_under_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BRAINS_LEGACY_SURFACES", "1")
+    from brains.main import app
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert {path for path in paths if path.startswith("/admin")} == {
+        "/admin/login",
+        "/admin/logout",
+    }
+    assert not any(path.startswith(("/dashboard", "/static/brains")) for path in paths)
+
+
+def test_modern_app_authentication_survives_legacy_deletion() -> None:
+    from brains.api.auth import BROWSER_AUTH_COOKIE
+    from brains.main import app
+
+    with TestClient(app) as client:
+        assert client.get("/admin/login").status_code == 200
+        signed_in = client.post(
+            "/admin/login",
+            data={"key": "local-dev-key"},
+            follow_redirects=False,
+        )
+        assert signed_in.status_code == 303
+        assert signed_in.headers["location"] == "/app"
+        assert client.get("/app").status_code == 200
+
+        signed_out = client.get("/admin/logout", follow_redirects=False)
+        assert signed_out.status_code == 303
+        assert signed_out.headers["location"] == "/admin/login"
+        assert BROWSER_AUTH_COOKIE not in client.cookies
+
+
+def test_only_modern_login_template_remains() -> None:
+    root = Path(__file__).resolve().parents[1]
+    templates = root / "src/brains/web/templates"
+    assert sorted(path.relative_to(templates).as_posix() for path in templates.rglob("*.html")) == [
+        "admin/login.html"
+    ]

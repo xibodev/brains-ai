@@ -62,7 +62,7 @@ Issues="https://github.com/xibodev/brains-ai/issues"
 where=["src"]
 
 [tool.setuptools.package-data]
-"brains.web" = ["templates/**/*.html", "static/**/*.css", "static/**/*.js", "spa/**/*"]
+"brains.web" = ["templates/admin/login.html", "spa/**/*"]
 # The frozen baseline DDL and any SQL-file migrations are the schema contract;
 # an installed wheel that omits them cannot create or upgrade a database.
 "brains.storage" = ["baseline/*.sql", "sql_migrations/*.sql"]

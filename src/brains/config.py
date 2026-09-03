@@ -474,7 +474,7 @@ ADMIN_EDITABLE_KEYS = frozenset(
 # Every other field treats the literal ``${ENV:...}`` string as a plain
 # value, so a hostile admin can't smuggle a secret out via, say,
 # ``models.default.model: "${ENV:BRAINS_API_KEY}"``. The write-side
-# validators in ``brains.admin.service`` reject the syntax up front for
+# configuration-control validators reject the syntax up front for
 # fields outside this set.
 ENV_REF_ALLOWED_FIELDS = frozenset({"openai_compatible_api_key"})
 

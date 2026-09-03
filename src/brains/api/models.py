@@ -132,7 +132,7 @@ def models():
     data: list[dict] = []
     seen_ids: set[str] = set()
 
-    # 1. Brains tier aliases (slash + legacy hyphen + claude-prefixed).
+    # 1. Brains tier aliases (slash + historical hyphen + claude-prefixed).
     if settings.router.enabled:
         # ``brains/auto`` is gated — listing it when routing is off
         # would advertise a feature that 404s.

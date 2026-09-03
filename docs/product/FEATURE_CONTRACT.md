@@ -173,14 +173,14 @@ authorized Workspace; it does not expose execution-model onboarding.
 **Promise:** Operations presents redacted effective state and permits only approved
 non-secret/encrypted writes with explicit reload or restart behavior.
 
-**Lifecycle:** advertised/partial for the local service, MCP, SQLite, and harness posture.
+**Lifecycle:** advertised for the local service, MCP, SQLite, and harness posture.
 Gateway/provider, Runtime, automation, bridge, Postgres, telemetry, and legacy-admin
 activation are withdrawn. Email/SMTP and GitHub integration are frozen.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
 | AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial for local service/MCP probes; external integration probes are frozen or withdrawn. |
-| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial. The modern positive local service/MCP/SQLite/harness manifest omits secrets, filesystem locations, and frozen or withdrawn fields; legacy `/admin/config` remains until BL-P2-01 deletion. |
+| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised. The positive local service/MCP/SQLite/harness manifest omits secrets, filesystem locations, and frozen or withdrawn fields, and no legacy writer remains. |
 | AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised. The modern Config screen labels effective read-only fields and the three approved non-secret writes. |
 | AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised. Every supported write is saved atomically and explicitly requires supervised-stack restart because workers and MCP do not share process memory. Failed apply restores the previous overlay. |
 
@@ -432,17 +432,18 @@ policy backed by a verified candidate and audited isolated drill. `/health` rema
 liveness only. Frozen model-gateway/provider, SMTP, multi-process, Runtime/Postgres, and
 external-integration state does not degrade normal readiness.
 
-### B9 - Retired legacy browser surfaces
+### B9 - Deleted legacy browser surfaces
 
 **Promise:** Users encounter one deliberate modern browser contract and no retired
 workflow can contradict or bypass it.
 
-**Lifecycle:** withdrawn for dashboard and legacy admin HTML. `/app` remains advertised.
+**Lifecycle:** `/app` is advertised. Dashboard and legacy admin HTML, routes, commands,
+flags, templates, helpers, and static assets are physically absent.
 
-- AC-B9-01: `/app`, `/dashboard`, and `/admin` responsibilities/retirement are explicit.
-- AC-B9-02: authentication/authorization remain consistent until retired mounts are removed.
+- AC-B9-01: `/app` is the sole browser product; `/admin/login` and `/admin/logout`
+  only support its cookie lifecycle.
+- AC-B9-02: normal and former-opt-in route inventories reject every deleted browser path.
 - AC-B9-03: duplicate or unsupported workflows are unreachable and their assets/launch paths are removed.
 
-Legacy templates, route definitions, flags, and commands remain deletion debt under
-BL-P2-01, but are not mounted or registered. Shared sign-in authentication code is not
-an activation contract.
+Shared sign-in authentication code is part of the modern `/app` contract, not a legacy
+browser activation path.

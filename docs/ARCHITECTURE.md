@@ -110,7 +110,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Withdrawn | Model edge | OpenAI/Anthropic facades, router, providers, LiteLLM, tool launcher | `src/brains/api`, `src/brains/router`, `src/brains/providers` |
 | Withdrawn | Advanced context | Semantic indexing/search, embeddings, graph, external freshness | `src/brains/context` |
 | Withdrawn | Alternate services | Postgres, OpenTelemetry export, messaging bridges, WhatsApp Web | storage adapters, observability, bridges, `services/wa-web` |
-| Withdrawn | Legacy browser | Dashboard and legacy admin HTML/static assets | `src/brains/dashboard`, `src/brains/admin` |
+| Deleted | Legacy browser | No dashboard/admin browser implementation or static assets remain; only `/admin/login` and `/admin/logout` support the modern SPA cookie lifecycle | `brains.admin.routes`, `brains.web.spa` |
 
 Withdrawn modules are not mounted, registered, packaged as optional extras, or linked
 from the browser. Their internal checks are compatibility defense, not activation.

@@ -12,10 +12,6 @@ Independent gates:
 - ``BRAINS_MCP_EXPERIMENTAL=1``  — experimental MCP tools (semantic/graph
   retrieval, session chat delivery) and Autopilot *scheduled auto-fire*.
   Manual fire stays ungated.
-- ``BRAINS_LEGACY_SURFACES=1``   — the retired legacy browser surfaces
-  (``/dashboard`` app + gateway-mounted ``/admin`` HTML pages). The JSON
-  APIs under ``/admin/api/*`` stay available either way; only human-facing
-  HTML retires.
 - ``BRAINS_UI_LABS=1`` — unfinished execution-model screens in the modern
   console (Personas, Pods, Projects, Issues, Sessions, Runtimes, Automation,
   and onboarding). They stay routable only behind this explicit UI opt-in.
@@ -29,7 +25,6 @@ from __future__ import annotations
 import os
 
 EXPERIMENTAL_ENV = "BRAINS_MCP_EXPERIMENTAL"
-LEGACY_SURFACES_ENV = "BRAINS_LEGACY_SURFACES"
 GATEWAY_ENV = "BRAINS_EXPERIMENTAL_GATEWAY"
 UI_LABS_ENV = "BRAINS_UI_LABS"
 
@@ -82,12 +77,6 @@ def experimental_enabled() -> bool:
     return _env_flag(EXPERIMENTAL_ENV)
 
 
-def legacy_surfaces_enabled() -> bool:
-    """True when ``BRAINS_LEGACY_SURFACES`` opts this process back into the
-    retired legacy browser surfaces (dashboard child, gateway /admin HTML)."""
-    return _env_flag(LEGACY_SURFACES_ENV)
-
-
 def gateway_experimental_enabled() -> bool:
     """True when ``BRAINS_EXPERIMENTAL_GATEWAY`` opts this process into the
     model-serving surface (OpenAI/Anthropic-compatible proxy routes and the
@@ -118,9 +107,6 @@ EXPERIMENTAL_GATES: dict[str, str] = {
     EXPERIMENTAL_ENV: (
         "experimental MCP tools (semantic/graph retrieval, session chat "
         "delivery), Autopilot scheduled auto-fire, and their CLI equivalents"
-    ),
-    LEGACY_SURFACES_ENV: (
-        "retired legacy browser surfaces (dashboard child process, gateway /admin HTML pages)"
     ),
     GATEWAY_ENV: (
         "the model-serving surface: OpenAI/Anthropic-compatible proxy routes "

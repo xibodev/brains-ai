@@ -10,12 +10,6 @@ connect to, so it is supervised by default alongside the gateway. Pass
 ``--no-mcp`` to leave it out. Its bind host is driven by ``BRAINS_MCP_BIND``
 / ``BRAINS_MCP_ALLOW_PUBLIC`` per the MCP auth design.
 
-The legacy dashboard (``brains.dashboard.app`` on :9876) is a retired
-surface: it is supervised only when explicitly requested with
-``--dashboard`` or ``BRAINS_LEGACY_SURFACES=1`` (see
-``brains.experimental``). ``--no-dashboard`` remains accepted as a no-op
-veto for back-compatibility.
-
 Features:
 * Combined logging to ``<state_dir>/sessions/service.log`` (rotated at 5MB).
 * Restart-on-crash with exponential backoff (1s \u2192 60s, capped).
@@ -28,7 +22,7 @@ Features:
 
 Run:
 
-    brains serve-all [--no-gateway] [--dashboard] [--no-mcp]
+    brains serve-all [--no-gateway] [--no-mcp]
     python -m brains.control.supervisor [...]
 """
 

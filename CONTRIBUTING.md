@@ -113,7 +113,7 @@ ran, and on which platform, when you describe evidence.
 | `src/brains/backup`, `audit` | Recovery and audit capabilities |
 | `frontend` | Brains React SPA source |
 | `src/brains/web/spa` | Checked-in built SPA included in the Python package |
-| `src/brains/dashboard`, `admin` | Legacy server-rendered surfaces |
+| `src/brains/admin/routes.py` | Modern `/app` sign-in/sign-out cookie endpoints only |
 | `tests` | Python contracts and Brains acceptance tests |
 | `tests/e2e` | Playwright journey contracts |
 | `sandbox`, `sandbox/battle` | Isolated harness definitions, not proof records |

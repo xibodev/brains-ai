@@ -1,12 +1,10 @@
 """Mount the built operator SPA (WS4) on the FastAPI app.
 
-The SPA is a separate, additional surface from the existing Jinja
-admin/dashboard served by :func:`brains.web.mount_static`. It is built by
+The SPA is the supported browser surface. It is built by
 ``frontend/`` (Vite) into ``brains/web/spa`` and shipped in the wheel via
 package-data (see ``pyproject.toml``).
 
-Serving model (mirrors ``mount_static``'s ``importlib.resources`` path
-resolution so it works editable + wheel):
+Serving uses ``importlib.resources`` path resolution so it works editable + wheel:
 
 - Static assets are mounted at ``/app`` (StaticFiles, ``html=True``).
 - A catch-all GET under ``/app/{path}`` serves ``index.html`` so the
@@ -18,7 +16,7 @@ If the build directory is absent (dev checkout without an ``npm run
 build``), the mount degrades gracefully: it logs a warning and skips,
 rather than crashing app import.
 
-The lead wires this in ``main.py`` after ``mount_static(app)``::
+The gateway wires this in ``main.py``::
 
     from brains.web.spa import mount_spa
     mount_spa(app)

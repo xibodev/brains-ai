@@ -16,7 +16,7 @@ Rate limiting is a per-credential sliding-window counter scoped to
 the secret's hash rather than by the secret itself, so no raw credential sits
 in process memory for the lifetime of the window.
 
-Browser surfaces (``/admin/*``, ``/dashboard/*``, ``/app``) accept an *opaque*
+The modern browser surface (``/app``) accepts an *opaque*
 signed token in the ``brains_admin_key`` cookie instead of the raw API key, so
 a leaked cookie can be expired without rotating the key itself. The cookie is
 signed with the key it was minted for, so it resolves to that key's principal
@@ -157,7 +157,7 @@ def require_api_key(
     policy.require_operator(principal, operation="the model gateway")
 
 
-# Cookie name used by the dashboard + admin browser surfaces.
+# Cookie name used by the modern operator console.
 BROWSER_AUTH_COOKIE = "brains_admin_key"
 
 # Session lifetime for the signed browser cookie.
@@ -230,7 +230,7 @@ def require_browser_auth(
     Accepts the same Authorization/x-api-key headers as the API. In
     addition, it accepts a signed opaque token in the ``brains_admin_key``
     cookie (minted by ``mint_browser_token`` on ``/admin/login``). The
-    legacy ``?key=`` query parameter is still honored as a script
+    compatibility ``?key=`` query parameter is still honored as a script
     convenience but should not be used by browsers - see SECURITY.md.
 
     Authentication is not enough on these surfaces. Two principals are refused
