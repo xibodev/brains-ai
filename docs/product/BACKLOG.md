@@ -19,12 +19,6 @@ empty and a human explicitly approves thawing it.
 
 ## P1 — Core completion
 
-### BL-P1-05 - Complete supported configuration containment
-
-- **Action:** Limit the normal configuration experience to supported local service, MCP, SQLite, and harness settings with explicit reload or restart behavior.
-- **Done when:** Browser and API tests prove frozen and withdrawn settings are neither displayed nor writable and supported changes are redacted, attributable, reloadable, and recoverable.
-- **Maps to:** F7, B6, B8; J9, J11.
-
 ### BL-P1-09 - Validate local readiness and recovery
 
 - **Action:** Make readiness distinguish gateway/MCP protocol state, SQLite integrity, queue/mailbox progress, and declared backup, restore, and rollback capability in the supported local topology.

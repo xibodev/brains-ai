@@ -19,6 +19,8 @@ import type {
   CoordinationOverview,
   OperatorCapabilityCatalog,
   OperatorCoordination,
+  CoreConfiguration,
+  CoreConfigurationUpdate,
   OperatorGovernance,
   OperatorKnowledge,
   OperatorOperations,
@@ -225,6 +227,15 @@ export const api = {
     ),
   operatorGovernance: () => request<OperatorGovernance>("/operator/governance"),
   operatorOperations: () => request<OperatorOperations>("/operator/operations"),
+  operatorConfiguration: () => request<CoreConfiguration>("/operator/configuration"),
+  operatorUpdateConfiguration: (
+    expectedRevision: string,
+    changes: Record<string, string | number | boolean>,
+  ) =>
+    request<CoreConfigurationUpdate>("/operator/configuration", {
+      method: "PUT",
+      body: JSON.stringify({ expected_revision: expectedRevision, changes }),
+    }),
   operatorCapabilities: () =>
     request<OperatorCapabilityCatalog>("/operator/capabilities"),
   operatorCreateTask: (

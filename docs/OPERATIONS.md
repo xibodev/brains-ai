@@ -112,6 +112,17 @@ must assume a long-lived process keeps its loaded value until that process expli
 reloads or restarts. A write is not complete until its response states the required
 reload/restart behavior and the affected process passes its probe.
 
+The modern Config screen and `GET /v1/operator/configuration` expose only a positive,
+redacted manifest of local service, Streamable HTTP MCP, SQLite, and supported harness
+posture. `PUT /v1/operator/configuration` accepts only the advertised non-secret fields,
+requires bootstrap-admin authentication plus the revision returned by GET, and records
+the resolved operator in the audit trail. Rate-limit changes reload in the handling
+process. SQLite busy-timeout and foreign-key changes are persisted atomically and return
+`restart_required`; they take effect for newly opened SQLite connections after service
+restart. A validation or apply failure restores the prior runtime overlay. Frozen and
+withdrawn provider, email, bridge, gateway-preamble, alternate-storage, and telemetry
+fields are neither returned nor accepted by this surface.
+
 Supported secret rules:
 
 - environment values remain outside Git;
