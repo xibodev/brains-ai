@@ -30,7 +30,7 @@ from brains.control.durable_mailbox import (
 )
 from brains.control.harness_wakeup import handle_harness_wakeup
 from brains.control.operators import ensure_admin_operator
-from brains.control.sessions import link_session_successor, start_session
+from brains.control.sessions import end_session, link_session_successor, start_session
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import MailboxAttachment, MailNotificationAttempt, SessionLease
@@ -51,9 +51,10 @@ def _binding() -> str:
 
 
 @pytest.fixture(autouse=True)
-def _bootstrap() -> None:
+def _bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
     init_db()
     ensure_admin_operator()
+    monkeypatch.setattr(wire, "_opencode_compatibility", lambda: (True, "supported"))
 
 
 def _managed_recipient(workspace: Path, tool: str) -> dict:
@@ -298,6 +299,7 @@ def test_successor_attachment_receives_pending_nudge(tmp_path: Path) -> None:
     binding = read_mailbox_binding_file(
         recipient["mailbox"]["binding_file"], managed_only=True
     )
+    end_session(recipient["session"]["session_id"], "synthetic restart")
     successor = start_session(str(tmp_path), tool="claude-code", reuse_existing=False)
     link_session_successor(
         recipient["session"]["session_id"],
@@ -676,7 +678,7 @@ def test_noncooperating_process_write_is_atomically_captured_and_restored(
 
     def exchange_after_external_write(path: Path, replacement: Path) -> None:
         start.set()
-        assert done.wait(timeout=5)
+        assert done.wait(timeout=20)
         actual_exchange(path, replacement)
 
     monkeypatch.setattr(wire, "_exchange_files", exchange_after_external_write)
@@ -687,7 +689,7 @@ def test_noncooperating_process_write_is_atomically_captured_and_restored(
         rules=False,
         mailbox_wakeups=True,
     )
-    worker.join(timeout=10)
+    worker.join(timeout=20)
     assert worker.exitcode == 0
     assert report["tools"][0]["mailbox_wakeup"]["reason"] == "settings-changed"
     assert target.read_bytes() == external

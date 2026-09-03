@@ -1442,7 +1442,7 @@ def wire(
                         "display": adapter.display,
                         "detected": detected,
                         "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
-                        "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                        "mailbox_notification_mode": "pull",
                         "lifecycle_plugin": {
                             "path": str(_opencode_plugin_path(home)),
                             "action": "error",
@@ -1461,7 +1461,7 @@ def wire(
                     "display": adapter.display,
                     "detected": detected,
                     "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
-                    "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                    "mailbox_notification_mode": "pull",
                     "lifecycle_plugin": plugin_preflight,
                 }
             )
