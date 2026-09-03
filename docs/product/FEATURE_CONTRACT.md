@@ -303,12 +303,16 @@ secrets never enter result, event, or intent shapes. Lease, terminal detach, suc
 resume journeys preserve identity separately from activity, ownership, and reachability
 across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
 threaded message and per-recipient delivery/read rows are active for durable local mail.
-The supported OpenCode wire adapter invokes this lifecycle end to end. Its checked
-disposable probe uses the pinned real binary and a local synthetic provider to prove
-autoload, first-turn attachment, renewal, killed-process expiry, same-ID recovery,
-Workspace-conflict refusal, native deletion, revocation, old-proof rejection, and a
-body-, credential-, path-, and native-ID-free journal. Unsupported versions and
-unowned plugin paths fail closed without changing the operator's plugin.
+The supported OpenCode wire adapter invokes this lifecycle end to end. Every installation
+path requires the exact supported OpenCode version before configuration mutation. Its
+owned plugin invokes the absolute Brains interpreter/module command with only the
+explicit SQLite and state-directory environment, so `PATH` shadowing and unrelated
+credentials cannot cross the hook boundary. The checked disposable probe uses the
+pinned real binary and a local synthetic provider to prove autoload, first-turn
+attachment, renewal, killed-process expiry, same-ID recovery, explicit nonzero
+Workspace-conflict refusal, recoverable native deletion, revocation, old-proof
+rejection, and a body-, credential-, path-, and native-ID-free journal. Unsupported
+versions and unowned plugin paths fail closed without changing operator configuration.
 Notification attempt state is active through migration 151 and the CLI/MCP adapter
 protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
 reports pull until it installs a stronger adapter. Migration 152 preserves constrained

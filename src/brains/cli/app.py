@@ -447,7 +447,6 @@ def wire_cli(
         rules=not no_rules,
         force=force,
         dry_run=dry_run,
-        verify_harness_versions=True,
     )
     _print_json(report)
     if report.get("ok") is False:
@@ -725,7 +724,7 @@ def setup_cli(
         True,
         "--wire/--no-wire",
         help="Register brains MCP into installed agentic tools (Copilot CLI, "
-        "Claude Code, Codex). Default: yes.",
+        "Claude Code, Codex, OpenCode). Default: yes.",
     ),
     transport: str = typer.Option(
         "streamable-http",

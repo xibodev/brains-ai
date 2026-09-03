@@ -18,13 +18,27 @@ from brains.control.opencode_lifecycle import attach_opencode_session, delete_op
 from brains.storage.db import SessionLocal
 from brains.storage.models import AgentSession, Mailbox, MailboxAttachment, SessionLease
 from brains.wire import (
-    OPENCODE_PLUGIN,
     OPENCODE_SUPPORTED_VERSION,
     WireContext,
+    render_opencode_plugin,
     status,
     unwire,
     wire,
 )
+
+
+@pytest.fixture(autouse=True)
+def _compatible_opencode(monkeypatch: pytest.MonkeyPatch) -> None:
+    from brains import wire as wire_module
+
+    monkeypatch.setattr(wire_module.shutil, "which", lambda _name: "/bin/opencode")
+    monkeypatch.setattr(
+        wire_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed", (), {"returncode": 0, "stdout": "opencode 1.18.25\n"}
+        )(),
+    )
 
 
 def _expire(session_id: str) -> None:
@@ -131,6 +145,39 @@ def test_native_delete_terminally_detaches_and_rejects_old_identity(tmp_path: Pa
         )
 
 
+def test_native_delete_retry_repairs_finalize_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from brains.control import opencode_lifecycle as lifecycle
+
+    workspace = tmp_path / "delete-repair"
+    workspace.mkdir()
+    native_id = "ses_delete_repair_123456"
+    attached = attach_opencode_session(str(workspace), native_id)
+    real_finalize = lifecycle.finalize_session
+    monkeypatch.setattr(
+        lifecycle,
+        "finalize_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic failure")),
+    )
+    with pytest.raises(RuntimeError, match="adapter identity is unavailable"):
+        delete_opencode_session(str(workspace), native_id)
+    with SessionLocal() as session:
+        mailbox = session.query(Mailbox).filter_by(native_tool_session_id=native_id).one()
+        agent = session.get(AgentSession, attached["session_id"])
+        assert mailbox.status == "retired"
+        assert agent is not None and agent.state == "running"
+
+    monkeypatch.setattr(lifecycle, "finalize_session", real_finalize)
+    assert delete_opencode_session(str(workspace), native_id) == {
+        "ok": True,
+        "state": "already-deleted",
+    }
+    with SessionLocal() as session:
+        repaired = session.get(AgentSession, attached["session_id"])
+        assert repaired is not None and repaired.state == "completed"
+
+
 def mailbox_ctl_path(session, mailbox: Mailbox) -> str:
     from brains.control import durable_mailbox as mailbox_ctl
     from brains.storage.models import Workspace
@@ -177,20 +224,29 @@ def test_cli_is_opencode_only_and_does_not_echo_native_identity(tmp_path: Path) 
 
 def test_wire_owns_exact_dependency_free_global_plugin(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    report = wire(home, WireContext(transport="stdio"), tools=["opencode"], force=True)
+    ctx = WireContext(transport="stdio")
+    report = wire(home, ctx, tools=["opencode"], force=True)
     plugin = home / ".config/opencode/plugins/brains-lifecycle.js"
+    rendered = render_opencode_plugin(ctx)
     assert report["ok"] is True
-    assert plugin.read_text(encoding="utf-8") == OPENCODE_PLUGIN
-    assert "chat.message" in OPENCODE_PLUGIN
-    assert "session.deleted" in OPENCODE_PLUGIN
-    assert "adapter-detach" in OPENCODE_PLUGIN
-    assert "await child.exited" in OPENCODE_PLUGIN
-    assert "sessionID" in OPENCODE_PLUGIN
-    assert "@opencode-ai/plugin" not in OPENCODE_PLUGIN
+    assert plugin.read_text(encoding="utf-8") == rendered
+    assert "chat.message" in rendered
+    assert "session.deleted" in rendered
+    assert "adapter-detach" in rendered
+    assert "Brains lifecycle detach failed" in rendered
+    assert "await child.exited" in rendered
+    assert "sessionID" in rendered
+    assert "@opencode-ai/plugin" not in rendered
+    assert "brains-ai" not in rendered
+    assert "process.env" not in rendered
+    assert '"BRAINS_DB_URL"' in rendered
+    assert '"BRAINS_STATE_DIR"' in rendered
+    assert '"PATH"' not in rendered
     assert status(home)["tools"][-1]["lifecycle_plugin"] == "managed"
     removed = unwire(home, tools=["opencode"])
     assert removed["tools"][0]["lifecycle_plugin"]["action"] == "remove"
     assert not plugin.exists()
+    assert not plugin.with_suffix(".sha256").exists()
 
 
 def test_wire_refuses_and_unwire_preserves_unowned_plugin(tmp_path: Path) -> None:
@@ -211,7 +267,6 @@ def test_wire_fails_closed_outside_pinned_opencode_version(
 ) -> None:
     from brains import wire as wire_module
 
-    monkeypatch.setattr(wire_module.shutil, "which", lambda _name: "/bin/opencode")
     monkeypatch.setattr(
         wire_module.subprocess,
         "run",
@@ -225,9 +280,32 @@ def test_wire_fails_closed_outside_pinned_opencode_version(
         WireContext(transport="stdio"),
         tools=["opencode"],
         force=True,
-        verify_harness_versions=True,
     )
     assert report["ok"] is False
     assert report["tools"][0]["lifecycle_plugin"]["action"] == "error"
     assert not (home / ".config/opencode/plugins/brains-lifecycle.js").exists()
+    assert not (home / ".config/opencode/opencode.json").exists()
     assert OPENCODE_SUPPORTED_VERSION not in str(report)
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout"),
+    [(0, "opencode unknown\n"), (1, ""), (0, "opencode 1.18.24\n")],
+)
+def test_opencode_compatibility_requires_the_exact_pinned_version(
+    returncode: int,
+    stdout: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from brains import wire as wire_module
+
+    monkeypatch.setattr(
+        wire_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Completed", (), {"returncode": returncode, "stdout": stdout}
+        )(),
+    )
+    compatible, detail = wire_module._opencode_compatibility()
+    assert compatible is False
+    assert OPENCODE_SUPPORTED_VERSION not in detail

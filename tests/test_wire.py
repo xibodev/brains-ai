@@ -28,6 +28,11 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def compatible_opencode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wire, "_opencode_compatibility", lambda: (True, "compatible"))
+
+
 def _sse_ctx() -> wire.WireContext:
     return wire.WireContext(transport="sse", url="http://127.0.0.1:9877/sse", api_key="TESTKEY")
 

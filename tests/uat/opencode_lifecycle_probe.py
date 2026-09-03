@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -78,6 +80,15 @@ def main() -> None:
     moved = root / "moved"
     for path in (home, state, workspace, moved):
         path.mkdir(parents=True)
+    shadow = root / "shadow"
+    shadow.mkdir()
+    shadow_sentinel = root / "path-shadow-invoked"
+    shadow_cli = shadow / "brains-ai"
+    shadow_cli.write_text(
+        f"#!/bin/sh\nprintf invoked > {shadow_sentinel}\nexit 0\n",
+        encoding="utf-8",
+    )
+    shadow_cli.chmod(0o755)
     os.environ.update(
         {
             "HOME": str(home),
@@ -86,6 +97,8 @@ def main() -> None:
             "BRAINS_STATE_DIR": str(state),
             "BRAINS_DB_URL": f"sqlite:///{(state / 'brains.db').as_posix()}",
             "BRAINS_PREWARM_INDEX_ON_SESSION": "0",
+            "PATH": f"{shadow}:{os.environ.get('PATH', '')}",
+            "UNRELATED_SYNTHETIC_CREDENTIAL": "must-not-cross-plugin-boundary",
         }
     )
 
@@ -133,10 +146,28 @@ def main() -> None:
         WireContext(transport="stdio"),
         tools=["opencode"],
         force=True,
-        verify_harness_versions=True,
     )
     if not report["ok"]:
         raise RuntimeError("OpenCode compatibility or plugin wiring failed")
+    plugin_path = Path(report["tools"][0]["lifecycle_plugin"]["path"])
+    plugin_text = plugin_path.read_text(encoding="utf-8")
+    command_match = re.search(r"(?m)^  const command = (\[.*\])$", plugin_text)
+    environment_match = re.search(r"(?m)^  const lifecycleEnv = (\{.*\})$", plugin_text)
+    if (
+        "brains-ai" in plugin_text
+        or "process.env" in plugin_text
+        or "UNRELATED_SYNTHETIC_CREDENTIAL" in plugin_text
+        or "must-not-cross-plugin-boundary" in plugin_text
+        or command_match is None
+        or json.loads(command_match.group(1)) != [os.path.abspath(sys.executable), "-m", "brains"]
+        or environment_match is None
+        or json.loads(environment_match.group(1))
+        != {
+            "BRAINS_DB_URL": os.environ["BRAINS_DB_URL"],
+            "BRAINS_STATE_DIR": str(state.resolve()),
+        }
+    ):
+        raise RuntimeError("OpenCode plugin command or environment boundary is unsafe")
 
     environment = dict(os.environ)
     command = [
@@ -170,14 +201,23 @@ def main() -> None:
             return (row, attachment.session_id) if attachment is not None else None
 
     try:
-        mailbox, first_brains_id = _wait(registration)
+        # A clean OpenCode home may need to populate its local provider catalog
+        # before loading global plugins. Keep that bootstrap bounded while
+        # allowing the awaited turn-boundary hook to become observable.
+        mailbox, first_brains_id = _wait(registration, timeout=120)
     except RuntimeError as exc:
         first.terminate()
-        first.wait(timeout=5)
+        try:
+            first.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            first.kill()
+            first.wait(timeout=5)
         raise RuntimeError("OpenCode did not attach") from exc
     native_id = mailbox.native_tool_session_id
     if not native_id:
         raise RuntimeError("authoritative OpenCode Session ID was not attached")
+    if shadow_sentinel.exists():
+        raise RuntimeError("OpenCode lifecycle used a PATH-shadowed executable")
     from brains.control import durable_mailbox as mailbox_ctl
     from brains.storage.models import Workspace
 
@@ -225,6 +265,7 @@ def main() -> None:
         [
             "opencode",
             "run",
+            "--print-logs",
             "--format",
             "json",
             "--model",
@@ -241,7 +282,11 @@ def main() -> None:
         timeout=90,
         check=False,
     )
-    del moved_result
+    moved_output = moved_result.stdout + moved_result.stderr
+    if moved_result.returncode == 0:
+        raise RuntimeError("Workspace conflict returned success from OpenCode")
+    if "Brains lifecycle attach failed" not in moved_output:
+        raise RuntimeError("Workspace conflict error was not explicit in OpenCode output")
     with SessionLocal() as session:
         rows = session.query(Mailbox).filter_by(native_tool_session_id=native_id).all()
         if len(rows) != 1 or rows[0].workspace_id != mailbox.workspace_id:

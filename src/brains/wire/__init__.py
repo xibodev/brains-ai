@@ -25,19 +25,21 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from brains.config import _canonical_default_db_url
+from brains.config import _canonical_default_db_url, brains_state_dir
 from brains.mcp.transport import (
     MCP_CLIENT_BEARER_ENV,
     MCP_MODE_SSE,
@@ -61,17 +63,20 @@ TOML_START = "# >>> brains:wire:start (managed by `brains wire`; do not edit ins
 TOML_END = "# <<< brains:wire:end <<<"
 OPENCODE_PLUGIN_HEADER = "// brains:opencode-lifecycle:v1 (managed; do not edit)"
 OPENCODE_SUPPORTED_VERSION = "1.18.25"
-OPENCODE_PLUGIN = (
+_OPENCODE_PLUGIN_TEMPLATE = (
     OPENCODE_PLUGIN_HEADER
     + """
-export const BrainsLifecycle = async ({ directory }) => ({
+export const BrainsLifecycle = async ({ directory }) => {
+  const lifecycleEnv = __BRAINS_LIFECYCLE_ENV__
+  const command = __BRAINS_LIFECYCLE_COMMAND__
+  return ({
   "chat.message": async (input) => {
     const sessionID = input && input.sessionID
     if (typeof sessionID !== "string" || sessionID.length === 0) return
-    const child = Bun.spawn([
-      "brains-ai", "adapter-attach", "--adapter", "opencode",
+    const child = Bun.spawn([...command,
+      "adapter-attach", "--adapter", "opencode",
       "--native-tool-session-id", sessionID, "--workspace", directory,
-    ], { stdout: "ignore", stderr: "ignore", env: process.env })
+    ], { stdout: "ignore", stderr: "ignore", env: lifecycleEnv })
     const exitCode = await child.exited
     if (exitCode !== 0) throw new Error("Brains lifecycle attach failed")
   },
@@ -84,13 +89,15 @@ export const BrainsLifecycle = async ({ directory }) => ({
     const sessionID = info && info.id
     const workspace = info && info.directory
     if (typeof sessionID !== "string" || typeof workspace !== "string") return
-    const child = Bun.spawn([
-      "brains-ai", "adapter-detach", "--adapter", "opencode",
+    const child = Bun.spawn([...command,
+      "adapter-detach", "--adapter", "opencode",
       "--native-tool-session-id", sessionID, "--workspace", workspace,
-    ], { stdout: "ignore", stderr: "ignore", env: process.env })
-    await child.exited
+    ], { stdout: "ignore", stderr: "ignore", env: lifecycleEnv })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error("Brains lifecycle detach failed")
   },
-})
+  })
+}
 """
 )
 
@@ -148,7 +155,7 @@ class WireContext:
     url: str = field(default_factory=mcp_http_url)
     api_key: str = ""
     bearer_token_env_var: str = MCP_CLIENT_BEARER_ENV
-    python: str = "python"
+    python: str = field(default_factory=lambda: sys.executable)
     # Default to the absolute per-machine brain so a bare ``WireContext()``
     # can never embed a CWD-relative ``sqlite:///brains.db`` into a tool's
     # MCP config (which would fragment state into a per-workspace DB). The
@@ -164,6 +171,24 @@ class WireContext:
 
     def auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+
+def render_opencode_plugin(ctx: WireContext) -> str:
+    """Render a PATH-independent plugin with only the state inputs it needs."""
+    if not ctx.db_url.startswith("sqlite:///"):
+        raise ValueError("OpenCode lifecycle requires the supported SQLite store")
+    interpreter_path = Path(os.path.abspath(sys.executable))
+    if not interpreter_path.is_file():
+        raise RuntimeError("installed Brains interpreter is unavailable")
+    interpreter = str(interpreter_path)
+    command = [interpreter, "-m", "brains"]
+    environment = {
+        "BRAINS_DB_URL": ctx.db_url,
+        "BRAINS_STATE_DIR": str(brains_state_dir().resolve()),
+    }
+    return _OPENCODE_PLUGIN_TEMPLATE.replace(
+        "__BRAINS_LIFECYCLE_COMMAND__", json.dumps(command)
+    ).replace("__BRAINS_LIFECYCLE_ENV__", json.dumps(environment, sort_keys=True))
 
 
 # --- per-tool MCP entry builders -----------------------------------------
@@ -566,6 +591,19 @@ def _opencode_plugin_path(home: Path) -> Path:
     return home / ".config" / "opencode" / "plugins" / "brains-lifecycle.js"
 
 
+def _opencode_plugin_manifest_path(home: Path) -> Path:
+    return _opencode_plugin_path(home).with_suffix(".sha256")
+
+
+def _opencode_plugin_is_owned(home: Path, content: str) -> bool:
+    manifest = _opencode_plugin_manifest_path(home)
+    try:
+        expected = manifest.read_text(encoding="ascii").strip()
+    except OSError:
+        return False
+    return hmac.compare_digest(expected, hashlib.sha256(content.encode("utf-8")).hexdigest())
+
+
 def _opencode_compatibility() -> tuple[bool, str]:
     executable = shutil.which("opencode")
     if executable is None:
@@ -588,24 +626,35 @@ def _opencode_compatibility() -> tuple[bool, str]:
     return True, "compatible"
 
 
-def _wire_opencode_plugin(home: Path, dry_run: bool) -> dict[str, Any]:
+def _wire_opencode_plugin(home: Path, ctx: WireContext, dry_run: bool) -> dict[str, Any]:
     path = _opencode_plugin_path(home)
+    manifest = _opencode_plugin_manifest_path(home)
+    rendered = render_opencode_plugin(ctx)
     result: dict[str, Any] = {"path": str(path)}
     if path.exists():
         try:
             existing = path.read_text(encoding="utf-8")
         except OSError:
             existing = ""
-        if existing != OPENCODE_PLUGIN:
+        if not _opencode_plugin_is_owned(home, existing):
             return {**result, "action": "conflict", "detail": "plugin path is not Brains-managed"}
-        return {**result, "action": "unchanged"}
+        if existing == rendered:
+            return {**result, "action": "unchanged"}
+        if not dry_run:
+            _write(path, rendered)
+            _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
+        return {**result, "action": "update"}
+    if manifest.exists():
+        return {**result, "action": "conflict", "detail": "plugin ownership is inconsistent"}
     if not dry_run:
-        _write(path, OPENCODE_PLUGIN)
+        _write(path, rendered)
+        _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
     return {**result, "action": "create"}
 
 
 def _unwire_opencode_plugin(home: Path, dry_run: bool) -> dict[str, Any]:
     path = _opencode_plugin_path(home)
+    manifest = _opencode_plugin_manifest_path(home)
     result: dict[str, Any] = {"path": str(path)}
     if not path.exists():
         return {**result, "action": "absent"}
@@ -613,10 +662,11 @@ def _unwire_opencode_plugin(home: Path, dry_run: bool) -> dict[str, Any]:
         existing = path.read_text(encoding="utf-8")
     except OSError:
         existing = ""
-    if existing != OPENCODE_PLUGIN:
+    if not _opencode_plugin_is_owned(home, existing):
         return {**result, "action": "skipped", "detail": "plugin path is not Brains-managed"}
     if not dry_run:
         path.unlink()
+        manifest.unlink()
     return {**result, "action": "remove"}
 
 
@@ -656,7 +706,6 @@ def wire(
     rules: bool = True,
     force: bool = False,
     dry_run: bool = False,
-    verify_harness_versions: bool = False,
 ) -> dict[str, Any]:
     """Wire brains into the selected (or all detected) tools.
 
@@ -738,7 +787,7 @@ def wire(
     for adapter in adapters:
         detected = adapter.detect(home)
         warnings: list[str] = []
-        if adapter.name == "opencode" and verify_harness_versions:
+        if adapter.name == "opencode":
             compatible, detail = _opencode_compatibility()
             if not compatible:
                 report["tools"].append(
@@ -756,7 +805,9 @@ def wire(
                     }
                 )
                 continue
-        plugin_preflight = _wire_opencode_plugin(home, True) if adapter.name == "opencode" else None
+        plugin_preflight = (
+            _wire_opencode_plugin(home, ctx, True) if adapter.name == "opencode" else None
+        )
         if plugin_preflight is not None and plugin_preflight.get("action") == "conflict":
             report["tools"].append(
                 {
@@ -785,7 +836,7 @@ def wire(
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
         if adapter.name == "opencode":
-            entry["lifecycle_plugin"] = _wire_opencode_plugin(home, dry_run)
+            entry["lifecycle_plugin"] = _wire_opencode_plugin(home, ctx, dry_run)
         if warnings:
             entry["warnings"] = warnings
         report["tools"].append(entry)
@@ -869,10 +920,9 @@ def status(home: Path) -> dict[str, Any]:
         lifecycle_plugin = None
         if plugin_path is not None:
             try:
+                content = plugin_path.read_text(encoding="utf-8")
                 lifecycle_plugin = (
-                    "managed"
-                    if plugin_path.read_text(encoding="utf-8") == OPENCODE_PLUGIN
-                    else "conflict"
+                    "managed" if _opencode_plugin_is_owned(home, content) else "conflict"
                 )
             except FileNotFoundError:
                 lifecycle_plugin = "absent"

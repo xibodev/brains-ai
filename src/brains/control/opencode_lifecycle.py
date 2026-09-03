@@ -118,6 +118,17 @@ def _active_session_id(mailbox_id: int) -> str | None:
         return row.session_id if row is not None else None
 
 
+def _latest_session_id(mailbox_id: int) -> str | None:
+    with db_module.SessionLocal() as session:
+        row = (
+            session.query(MailboxAttachment)
+            .filter(MailboxAttachment.mailbox_id == mailbox_id)
+            .order_by(MailboxAttachment.id.desc())
+            .first()
+        )
+        return row.session_id if row is not None else None
+
+
 def attach_opencode_session(workspace_path: str, native_tool_session_id: str) -> dict[str, Any]:
     """Attach or renew one authoritative OpenCode Session without exposing its proof."""
     native_id = mailbox_ctl.validate_native_tool_session_id(native_tool_session_id)
@@ -208,7 +219,18 @@ def delete_opencode_session(workspace_path: str, native_tool_session_id: str) ->
             raise RuntimeError("adapter identity is unavailable")
         mailbox, _workspace = matches[0]
         if mailbox.status != "active":
-            _journal("session.deleted", native_id, None, "already-deleted")
+            session_id = _latest_session_id(mailbox.id)
+            if session_id is not None:
+                try:
+                    finalize_session(
+                        session_id,
+                        state="completed",
+                        summary="native session deleted",
+                    )
+                except Exception as exc:
+                    _journal("session.deleted", native_id, session_id, "repair-failed")
+                    raise RuntimeError("adapter identity is unavailable") from exc
+            _journal("session.deleted", native_id, session_id, "already-deleted")
             return {"ok": True, "state": "already-deleted"}
         session_id = _active_session_id(mailbox.id)
         if session_id is None:

@@ -348,9 +348,13 @@ start/reuse/heartbeat/resume/successor transitions, cursor continuity, scope, an
 terminal detach. Isolated E4 covers real native-ID extraction and cross-harness offline
 mail/resume between OpenCode/Codex and OpenCode/Claude. For pinned OpenCode 1.18.25 it
 also executes the installed global plugin through first turn, abrupt process exit,
-lease expiry, same-ID restart, Workspace conflict, native deletion, revocation, and
-old-proof refusal. Other harnesses retain explicit manual lifecycle controls and make no
-automatic hook claim; multi-hour host idle/restart remains installation evidence work.
+lease expiry, same-ID restart, explicit nonzero Workspace conflict, retryable native
+deletion, revocation, and old-proof refusal. Every plugin installation path verifies the
+exact supported version before mutation; the hook uses an absolute Brains interpreter
+with a minimal state environment, and the probe proves a shadowed `PATH` executable and
+unrelated credentials are ignored. Other harnesses retain explicit manual lifecycle
+controls and make no automatic hook claim; multi-hour host idle/restart remains
+installation evidence work.
 
 ## J8 - Ask, approve, steer, chat, and stop
 

@@ -104,6 +104,34 @@ def test_setup_no_wire_skips_wire_step(
     assert wire_step.get("skipped") is True
 
 
+def test_setup_fails_closed_before_installing_incompatible_opencode_plugin(
+    isolated_home: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from brains import wire as wire_module
+
+    (isolated_home / ".config/opencode").mkdir(parents=True)
+    monkeypatch.setattr(
+        wire_module,
+        "_opencode_compatibility",
+        lambda: (False, "OpenCode version could not be verified"),
+    )
+    workspace = tmp_path / "unsupported-opencode"
+    workspace.mkdir()
+    result = CliRunner().invoke(
+        app,
+        ["setup", "--path", str(workspace), "--transport", "stdio", "--json"],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    wire_step = next(step for step in payload["steps"] if step["step"] == "wire")
+    assert wire_step["report"]["ok"] is False
+    assert wire_step["report"]["tools"][0]["lifecycle_plugin"]["action"] == "error"
+    assert not (isolated_home / ".config/opencode/plugins/brains-lifecycle.js").exists()
+    assert not (isolated_home / ".config/opencode/opencode.json").exists()
+
+
 def test_setup_rejects_bad_transport(
     isolated_home: Path,
     tmp_path: Path,
