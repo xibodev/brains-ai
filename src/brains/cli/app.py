@@ -4665,7 +4665,7 @@ def daemon_start_cli(
 
 
 # --------------------------------------------------------------------------- #
-# readiness / queue-health / recovery-policy — B8, BL-P1-09, BL-P1-12
+# readiness / queue-health / recovery-policy — B8, BL-P1-09
 #
 # CLI mirrors of GET /v1/admin/readiness, GET/POST /v1/admin/queue-health(/repair)
 # and GET /v1/admin/recovery-policy — the same control-layer functions the API
@@ -4695,7 +4695,7 @@ def readiness_cli() -> None:
 
 
 queue_health_app = typer.Typer(
-    help="Coordination queue health + continuity repair (BL-P1-12): family "
+    help="Coordination queue health + continuity repair (B8): family "
     "summary, orphan/stale detection, and dry-run/apply repair."
 )
 app.add_typer(queue_health_app, name="queue-health")

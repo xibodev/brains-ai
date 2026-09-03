@@ -185,11 +185,13 @@ Mailbox wakeup hooks are separate, explicit consent:
 brains-ai wire --mailbox-wakeups
 ```
 
-This installs Brains-owned stop hooks for Copilot CLI and Claude Code only. Their
-documented turn boundary can request one more turn with a constant, body-free prompt.
-Codex notification commands cannot continue a completed turn, and the supported
-OpenCode version/hook lifecycle is not pinned, so both remain truthful pull-only
-adapters. A hook conflict or MCP wiring failure leaves that adapter in pull mode.
+This installs the Brains-owned supported stop hook for Claude Code only. Its verified
+turn boundary can request one more turn with a constant, body-free prompt. Copilot CLI,
+Codex, and OpenCode remain truthful pull-only adapters until their exact generated
+configuration and continuation behavior pass a pinned real-binary journey. A hook
+conflict or MCP wiring failure leaves that adapter in pull mode. Claude settings changes
+are cross-process locked, atomically replaced, and restored byte-for-byte only while the
+owned manifest still matches; a concurrent external edit fails closed and is preserved.
 
 Probe without changing configuration:
 
@@ -364,8 +366,8 @@ it does not claim agent wakeup, live harness delivery, or SMTP copy.
 
 Migration `151_mail_notification_state` constrains attachment modes and the
 `queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. An
-installed Copilot CLI or Claude Code stop hook may explicitly register
-`turn_boundary`; Codex and OpenCode remain pull-only through supported wiring.
+installed Claude Code stop hook may explicitly register `turn_boundary`; Copilot CLI,
+Codex, and OpenCode remain pull-only through supported wiring.
 For a stronger mode, `mailbox notification-take` claims one attempt and returns only the
 fixed nudge `Brains mailbox: new mail is waiting. Pull your durable inbox.` plus bounded
 attempt metadata. It never returns subject, body, sender, recipient, or delivery

@@ -1,5 +1,5 @@
 """CLI tests for ``brains-ai readiness``, ``queue-health status/repair``,
-and ``recovery-policy`` (B8, BL-P1-09, BL-P1-12).
+and ``recovery-policy`` (B8, BL-P1-09).
 """
 
 from __future__ import annotations

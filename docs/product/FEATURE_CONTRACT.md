@@ -274,10 +274,10 @@ idempotent operation IDs, and cursor continuity now use migration 150 rows. Agen
 operations require current attachment plus binding; operator-inbox reads require a
 browser/local human channel. A proof-bound, body-free local notification take/settle
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
-preserving pull fallback. Explicitly consented wiring installs Brains-owned stop hooks
-for Copilot CLI and Claude Code, whose turn boundaries emit only the fixed nudge. Codex
-and OpenCode remain truthfully pull-only because supported wiring has no proven
-continuation boundary for them. Abandoned claims have a bounded lease and three-attempt
+preserving pull fallback. Explicitly consented wiring can install a Brains-owned
+supported stop hook for Claude Code; an isolated pinned-binary journey verifies its
+generated configuration discovery and continuation. Copilot CLI, Codex, and OpenCode remain
+truthfully pull-only. Abandoned claims have a bounded lease and three-attempt
 uncertainty limit; local mail remains authoritative throughout. SMTP rows and adapters
 are frozen compatibility inventory.
 Isolated UAT covers explicit real native-ID extraction, offline delivery, successor

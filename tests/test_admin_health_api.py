@@ -1,5 +1,5 @@
 """Tests for the bootstrap-admin operational health surface (B8, BL-P1-09,
-BL-P1-12): ``GET /v1/admin/readiness``, ``GET /v1/admin/queue-health``,
+B8/BL-P1-09): ``GET /v1/admin/readiness``, ``GET /v1/admin/queue-health``,
 ``POST /v1/admin/queue-health/repair``, and ``GET /v1/admin/recovery-policy``.
 
 These are protected, distinct from the open liveness-only ``GET /health``:

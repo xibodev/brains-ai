@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -30,6 +31,18 @@ from brains.control.sessions import start_session
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import MailboxAttachment, MailNotificationAttempt
+
+
+def _locked_cas_worker(
+    target: str,
+    lock: str,
+    start,
+    results,
+    replacement: bytes,
+) -> None:
+    start.wait(timeout=5)
+    with wire._path_lock(Path(lock)):
+        results.put(wire._cas_bytes(Path(target), b"original", replacement))
 
 
 def _native(tool: str) -> str:
@@ -357,7 +370,9 @@ def test_wakeup_dry_run_reports_plan_without_claiming_install(harness_home: Path
     )
 
     assert all(row["mailbox_notification_mode"] == "pull" for row in report["tools"])
-    assert all(row["mailbox_wakeup"]["planned_mode"] == "turn_boundary" for row in report["tools"])
+    by_tool = {row["tool"]: row for row in report["tools"]}
+    assert by_tool["copilot-cli"]["mailbox_wakeup"]["reason"] == "adapter-unavailable"
+    assert by_tool["claude-code"]["mailbox_wakeup"]["planned_mode"] == "turn_boundary"
     assert not (harness_home / ".copilot" / "hooks" / "brains.json").exists()
     assert not (harness_home / ".claude" / "settings.json").exists()
 
@@ -376,7 +391,7 @@ def test_consented_wire_is_idempotent_reversible_and_truthful(harness_home: Path
         mailbox_wakeups=True,
     )
     by_tool = {row["tool"]: row for row in first["tools"]}
-    assert by_tool["copilot-cli"]["mailbox_notification_mode"] == "turn_boundary"
+    assert by_tool["copilot-cli"]["mailbox_notification_mode"] == "pull"
     assert by_tool["claude-code"]["mailbox_notification_mode"] == "turn_boundary"
     assert by_tool["codex"]["mailbox_wakeup"] == {
         "action": "unavailable",
@@ -388,7 +403,7 @@ def test_consented_wire_is_idempotent_reversible_and_truthful(harness_home: Path
         row["mailbox_wakeup"]["action"] in {"unchanged", "unavailable"} for row in second["tools"]
     )
     status = {row["tool"]: row for row in wire.status(harness_home)["tools"]}
-    assert status["copilot-cli"]["mailbox_wakeup"]["installed"] is True
+    assert status["copilot-cli"]["mailbox_wakeup"]["installed"] is False
     assert status["claude-code"]["mailbox_wakeup"]["installed"] is True
     assert status["codex"]["mailbox_wakeup"]["reason"] == "adapter-unavailable"
     assert status["opencode"]["mailbox_notification_mode"] == "pull"
@@ -396,22 +411,14 @@ def test_consented_wire_is_idempotent_reversible_and_truthful(harness_home: Path
     removed = wire.unwire(harness_home, rules=False)
     assert all(row["mailbox_wakeup"]["action"] in {"remove", "absent"} for row in removed["tools"])
     assert not (harness_home / ".copilot" / "hooks" / "brains.json").exists()
+    assert not (harness_home / ".claude" / "settings.json").exists()
     assert wire.status(harness_home)["tools"][0]["mailbox_notification_mode"] == "pull"
 
 
 def test_claude_wakeup_preserves_unrelated_hooks(harness_home: Path) -> None:
     settings_path = harness_home / ".claude" / "settings.json"
-    existing = {
-        "hooks": {
-            "Stop": [
-                {
-                    "matcher": "",
-                    "hooks": [{"type": "command", "command": "synthetic-existing-hook"}],
-                }
-            ]
-        }
-    }
-    settings_path.write_text(json.dumps(existing), encoding="utf-8")
+    original = b'{\r\n  "hooks": {\r\n    "Stop": [{"matcher":"", "hooks":[{"type":"command","command":"synthetic-existing-hook"}]}]\r\n  }\r\n}\r\n'
+    settings_path.write_bytes(original)
 
     wire.wire(
         harness_home,
@@ -422,10 +429,96 @@ def test_claude_wakeup_preserves_unrelated_hooks(harness_home: Path) -> None:
     )
     wire.unwire(harness_home, tools=["claude-code"], rules=False)
 
-    assert json.loads(settings_path.read_text(encoding="utf-8")) == existing
+    assert settings_path.read_bytes() == original
 
 
-def test_copilot_managed_hook_path_conflict_fails_closed(harness_home: Path) -> None:
+@pytest.mark.parametrize(
+    "original",
+    [None, b"{}", b'{"hooks":{}}\n', b'{"hooks":{"Stop":[]}}\r\n'],
+)
+def test_claude_wakeup_restores_exact_prior_shape(
+    harness_home: Path,
+    original: bytes | None,
+) -> None:
+    settings_path = harness_home / ".claude" / "settings.json"
+    if original is not None:
+        settings_path.write_bytes(original)
+
+    installed = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    assert installed["ok"] is True
+    state = harness_home / ".claude" / ".brains-wakeup"
+    manifest = json.loads((state / "manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest) == {
+        "version",
+        "target",
+        "prior_exists",
+        "prior_sha256",
+        "installed_sha256",
+    }
+    assert "synthetic-existing-hook" not in json.dumps(manifest)
+
+    removed = wire.unwire(harness_home, tools=["claude-code"], rules=False)
+    assert removed["tools"][0]["mailbox_wakeup"]["action"] == "remove"
+    if original is None:
+        assert not settings_path.exists()
+    else:
+        assert settings_path.read_bytes() == original
+    assert not (state / "manifest.json").exists()
+    assert not (state / "prior-settings.bin").exists()
+    assert not state.exists()
+
+
+def test_claude_unwire_preserves_external_edit_and_fails_closed(harness_home: Path) -> None:
+    settings_path = harness_home / ".claude" / "settings.json"
+    wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    external = b'{"operator":"concurrent-edit"}\n'
+    settings_path.write_bytes(external)
+
+    removed = wire.unwire(harness_home, tools=["claude-code"], rules=False)
+
+    assert removed["tools"][0]["mailbox_wakeup"]["reason"] == "settings-changed"
+    assert settings_path.read_bytes() == external
+
+
+def test_shared_settings_lock_and_cas_serialize_real_processes(tmp_path: Path) -> None:
+    target = tmp_path / "settings.json"
+    lock = tmp_path / "settings.lock"
+    target.write_bytes(b"original")
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Event()
+    results = ctx.Queue()
+    workers = [
+        ctx.Process(
+            target=_locked_cas_worker,
+            args=(str(target), str(lock), start, results, replacement),
+        )
+        for replacement in (b"brains-edit", b"operator-edit")
+    ]
+    for worker in workers:
+        worker.start()
+    start.set()
+    for worker in workers:
+        worker.join(timeout=10)
+        assert worker.exitcode == 0
+
+    outcomes = sorted([results.get(timeout=2), results.get(timeout=2)])
+    assert outcomes == [False, True]
+    assert target.read_bytes() in {b"brains-edit", b"operator-edit"}
+
+
+def test_copilot_wakeup_stays_pull_and_preserves_existing_file(harness_home: Path) -> None:
     path = harness_home / ".copilot" / "hooks" / "brains.json"
     path.parent.mkdir(parents=True)
     path.write_text('{"operator":"owned"}', encoding="utf-8")
@@ -438,11 +531,11 @@ def test_copilot_managed_hook_path_conflict_fails_closed(harness_home: Path) -> 
         mailbox_wakeups=True,
     )
 
-    assert report["ok"] is False
-    assert report["tools"][0]["mailbox_wakeup"]["reason"] == "managed-path-conflict"
+    assert report["ok"] is True
+    assert report["tools"][0]["mailbox_wakeup"]["reason"] == "adapter-unavailable"
     assert json.loads(path.read_text(encoding="utf-8")) == {"operator": "owned"}
     status = {row["tool"]: row for row in wire.status(harness_home)["tools"]}
-    assert status["copilot-cli"]["mailbox_wakeup"]["reason"] == "managed-path-conflict"
+    assert status["copilot-cli"]["mailbox_wakeup"]["reason"] == "adapter-unavailable"
 
 
 def test_mcp_conflict_prevents_wakeup_install(harness_home: Path) -> None:

@@ -154,7 +154,7 @@ export const api = {
     request<UsageSummary>(`/orgs/${org}/usage${qs({ days })}`),
 
 
-  // --- operational health (B8, BL-P1-09, BL-P1-12; bootstrap-admin only) ---
+  // --- operational health (B8, BL-P1-09; bootstrap-admin only) ---
   readiness: () => request<ReadinessReport>("/admin/readiness"),
   queueHealth: () => request<QueueHealthReport>("/admin/queue-health"),
   repairQueueHealth: (apply: boolean) =>

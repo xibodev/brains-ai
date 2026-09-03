@@ -25,11 +25,15 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import json
 import os
 import re
+import tempfile
+import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -238,7 +242,10 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".copilot" / "copilot-instructions.md",
         _detect=lambda h: (h / ".copilot").is_dir(),
         _json_entry=_copilot_entry,
-        wakeup_mode="turn_boundary",
+        # The hook schema is retained for compatibility tests, but wiring stays
+        # pull-only until a pinned real Copilot binary proves discovery and
+        # continuation from the generated file.
+        wakeup_mode=None,
     ),
     "claude-code": ToolAdapter(
         name="claude-code",
@@ -310,6 +317,75 @@ def _write(path: Path, text: str, *, secure: bool = False) -> None:
         _harden(path)
 
 
+def _snapshot(path: Path) -> bytes | None:
+    return path.read_bytes() if path.exists() else None
+
+
+def _digest(content: bytes | None) -> str | None:
+    return hashlib.sha256(content).hexdigest() if content is not None else None
+
+
+def _atomic_bytes(path: Path, content: bytes, *, secure: bool = False) -> None:
+    """Replace *path* atomically with bytes staged in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if secure:
+            _harden(tmp)
+        os.replace(tmp, path)
+        if secure:
+            _harden(path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _cas_bytes(
+    path: Path,
+    expected: bytes | None,
+    content: bytes | None,
+    *,
+    secure: bool = False,
+) -> bool:
+    """Mutate only when a last-moment byte-for-byte re-read matches *expected*."""
+    if _snapshot(path) != expected:
+        return False
+    if content is None:
+        if path.exists():
+            path.unlink()
+        return True
+    _atomic_bytes(path, content, secure=secure)
+    return True
+
+
+@contextmanager
+def _path_lock(path: Path, *, timeout: float = 2.0):
+    """Fail-closed cross-process lock for one shared harness settings file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    fd: int | None = None
+    while fd is None:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("settings-busy") from None
+            time.sleep(0.025)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            path.unlink()
+        with contextlib.suppress(OSError):
+            path.parent.rmdir()
+
+
 def _replace_sentinel_block(text: str, start: str, end: str, block: str) -> str:
     """Return ``text`` with the region between sentinels replaced by ``block``.
 
@@ -343,6 +419,26 @@ def _copilot_wakeup_path(home: Path) -> Path:
 
 def _claude_wakeup_path(home: Path) -> Path:
     return home / ".claude" / "settings.json"
+
+
+def _claude_wakeup_state_paths(home: Path) -> tuple[Path, Path, Path]:
+    state = home / ".claude" / ".brains-wakeup"
+    return state / "settings.lock", state / "manifest.json", state / "prior-settings.bin"
+
+
+def _read_wakeup_manifest(path: Path) -> dict[str, Any] | None:
+    data, invalid = _read_json(path)
+    required = {"version", "target", "prior_exists", "prior_sha256", "installed_sha256"}
+    if invalid or set(data) != required or data.get("version") != 1:
+        return None
+    if data.get("target") != "settings.json" or not isinstance(data.get("prior_exists"), bool):
+        return None
+    if not isinstance(data.get("installed_sha256"), str):
+        return None
+    prior_sha = data.get("prior_sha256")
+    if prior_sha is not None and not isinstance(prior_sha, str):
+        return None
+    return data
 
 
 def _copilot_wakeup_document() -> dict[str, Any]:
@@ -390,10 +486,17 @@ def _wakeup_status(adapter: ToolAdapter, home: Path) -> dict[str, Any]:
         )
     else:
         path = _claude_wakeup_path(home)
+        _lock, manifest_path, _backup_path = _claude_wakeup_state_paths(home)
         data, parse_error = _read_json(path)
         hooks = data.get("hooks") if not parse_error else None
         entries = hooks.get("Stop") if isinstance(hooks, dict) else None
-        installed = isinstance(entries, list) and _claude_wakeup_entry() in entries
+        manifest = _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+        installed = (
+            isinstance(entries, list)
+            and _claude_wakeup_entry() in entries
+            and manifest is not None
+            and manifest["installed_sha256"] == _digest(_snapshot(path))
+        )
         if installed:
             reason = "installed"
         elif parse_error:
@@ -402,6 +505,8 @@ def _wakeup_status(adapter: ToolAdapter, home: Path) -> dict[str, Any]:
             reason = "hooks-invalid"
         elif entries is not None and not isinstance(entries, list):
             reason = "stop-hooks-invalid"
+        elif isinstance(entries, list) and _claude_wakeup_entry() in entries:
+            reason = "ownership-missing"
         else:
             reason = "consent-required"
     return {
@@ -428,24 +533,75 @@ def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
         return {"action": action, "mode": adapter.wakeup_mode}
 
     path = _claude_wakeup_path(home)
-    data, parse_error = _read_json(path)
-    if parse_error:
-        return {"action": "conflict", "mode": "pull", "reason": "settings-invalid"}
-    hooks = data.setdefault("hooks", {})
-    if not isinstance(hooks, dict):
-        return {"action": "conflict", "mode": "pull", "reason": "hooks-invalid"}
-    entries = hooks.setdefault("Stop", [])
-    if not isinstance(entries, list):
-        return {"action": "conflict", "mode": "pull", "reason": "stop-hooks-invalid"}
-    expected = _claude_wakeup_entry()
-    action = "unchanged" if expected in entries else ("update" if path.exists() else "create")
-    if action != "unchanged":
-        entries.append(expected)
-        if dry_run:
-            return {"action": action, "mode": "pull", "planned_mode": adapter.wakeup_mode}
-        _backup(path)
-        _write(path, json.dumps(data, indent=2) + "\n")
-    return {"action": action, "mode": adapter.wakeup_mode}
+    lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+
+    def prepare() -> tuple[dict[str, Any] | None, bytes | None, str | None]:
+        before = _snapshot(path)
+        data, parse_error = _read_json(path)
+        if parse_error:
+            return None, before, "settings-invalid"
+        hooks = data.setdefault("hooks", {})
+        if not isinstance(hooks, dict):
+            return None, before, "hooks-invalid"
+        entries = hooks.setdefault("Stop", [])
+        if not isinstance(entries, list):
+            return None, before, "stop-hooks-invalid"
+        entries.append(_claude_wakeup_entry())
+        return data, before, None
+
+    if dry_run:
+        data, before, error = prepare()
+        if error:
+            return {"action": "conflict", "mode": "pull", "reason": error}
+        return {
+            "action": "update" if before is not None else "create",
+            "mode": "pull",
+            "planned_mode": adapter.wakeup_mode,
+        }
+    try:
+        with _path_lock(lock_path):
+            current_bytes = _snapshot(path)
+            existing_manifest = (
+                _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+            )
+            if existing_manifest is not None:
+                if existing_manifest["installed_sha256"] == _digest(current_bytes):
+                    return {"action": "unchanged", "mode": adapter.wakeup_mode}
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            current_data, before, error = prepare()
+            if error:
+                return {"action": "conflict", "mode": "pull", "reason": error}
+            assert current_data is not None
+            entries = cast("dict[str, Any]", current_data["hooks"])["Stop"]
+            if entries.count(_claude_wakeup_entry()) > 1:
+                return {"action": "conflict", "mode": "pull", "reason": "ownership-missing"}
+            installed = (json.dumps(current_data, indent=2) + "\n").encode()
+            manifest = {
+                "version": 1,
+                "target": "settings.json",
+                "prior_exists": before is not None,
+                "prior_sha256": _digest(before),
+                "installed_sha256": _digest(installed),
+            }
+            if before is not None:
+                _atomic_bytes(backup_path, before, secure=True)
+            _atomic_bytes(
+                manifest_path,
+                (json.dumps(manifest, indent=2) + "\n").encode(),
+                secure=True,
+            )
+            if not _cas_bytes(path, before, installed, secure=True):
+                with contextlib.suppress(OSError):
+                    manifest_path.unlink()
+                with contextlib.suppress(OSError):
+                    backup_path.unlink()
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            return {
+                "action": "update" if before is not None else "create",
+                "mode": adapter.wakeup_mode,
+            }
+    except TimeoutError:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-busy"}
 
 
 def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, Any]:
@@ -463,24 +619,32 @@ def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str,
         return {"action": "remove", "mode": "pull"}
 
     path = _claude_wakeup_path(home)
-    data, parse_error = _read_json(path)
-    if parse_error:
-        return {"action": "conflict", "mode": "pull", "reason": "settings-invalid"}
-    hooks = data.get("hooks")
-    entries = hooks.get("Stop") if isinstance(hooks, dict) else None
-    expected = _claude_wakeup_entry()
-    if not isinstance(entries, list) or expected not in entries:
+    lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+    manifest = _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+    if manifest is None:
         return {"action": "absent", "mode": "pull"}
-    managed_hooks = cast("dict[str, Any]", hooks)
-    entries.remove(expected)
-    if not entries:
-        managed_hooks.pop("Stop")
-    if not managed_hooks:
-        data.pop("hooks")
-    if not dry_run:
-        _backup(path)
-        _write(path, json.dumps(data, indent=2) + "\n")
-    return {"action": "remove", "mode": "pull"}
+    if dry_run:
+        return {"action": "remove", "mode": "pull"}
+    try:
+        with _path_lock(lock_path):
+            manifest = _read_wakeup_manifest(manifest_path)
+            current = _snapshot(path)
+            if manifest is None or manifest["installed_sha256"] != _digest(current):
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            prior: bytes | None = None
+            if manifest["prior_exists"]:
+                prior = _snapshot(backup_path)
+                if prior is None or manifest["prior_sha256"] != _digest(prior):
+                    return {"action": "conflict", "mode": "pull", "reason": "backup-invalid"}
+            if not _cas_bytes(path, current, prior, secure=True):
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            with contextlib.suppress(OSError):
+                backup_path.unlink()
+            with contextlib.suppress(OSError):
+                manifest_path.unlink()
+            return {"action": "remove", "mode": "pull"}
+    except TimeoutError:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-busy"}
 
 
 # --- JSON mcp wiring (Copilot, Claude) -----------------------------------

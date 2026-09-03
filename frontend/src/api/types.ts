@@ -555,7 +555,7 @@ export interface ConfigSummary {
   secrets_managed?: string;
 }
 
-// --- operational health (B8, BL-P1-09, BL-P1-12) ---
+// --- operational health (B8, BL-P1-09) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
 // protected ready/degraded verdict for storage/migration, coordination queues,
 // durable mailbox state, and recovery-policy configuration.

@@ -446,7 +446,7 @@ class MailboxMessage(Base):
 
 
 class Mailbox(Base):
-    """One durable agent or operator mailbox (BL-P1-12/BL-P1-14).
+    """One durable agent or operator mailbox (B2/BL-P1-14).
 
     Agent mailboxes are addressed by canonical Workspace, tool, and validated
     tool-native Session id. The native id is an address component, never an
