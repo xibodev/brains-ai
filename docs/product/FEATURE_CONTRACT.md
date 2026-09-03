@@ -275,8 +275,8 @@ operations require current attachment plus binding; operator-inbox reads require
 browser/local human channel. A proof-bound, body-free local notification take/settle
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
 preserving pull fallback. Explicitly consented wiring can install a Brains-owned
-supported stop hook for Claude Code; an isolated pinned-binary journey verifies its
-generated configuration discovery and continuation. Copilot CLI, Codex, and OpenCode remain
+candidate stop hook for Claude Code; isolated pinned-binary discovery and continuation are
+proven, while crash recovery and platform owner-only state remain BL-P1-12 work. Copilot CLI, Codex, and OpenCode remain
 truthfully pull-only. Abandoned claims have a bounded lease and three-attempt
 uncertainty limit; local mail remains authoritative throughout. SMTP rows and adapters
 are frozen compatibility inventory.

@@ -174,12 +174,13 @@ attachment may create one idempotent attempt per delivery/incarnation. CLI/MCP a
 atomically claim it, receive only a constant body-free nudge, and settle the observed
 result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
 local delivery. With explicit consent, `wire --mailbox-wakeups` installs a managed
-supported stop hook for Claude Code. At its turn boundary, an existing proof-bound
+candidate stop hook for Claude Code. At its turn boundary, an existing proof-bound
 attachment may emit the constant nudge and request one continuation; abandoned claims
 are lease-reclaimed and become uncertain after three attempts. Copilot CLI, Codex, and
 OpenCode remain pull-only because their generated configuration and continuation
 behavior has no equivalent real-binary proof. Claude settings mutation is cross-process
-locked, atomic, CAS-guarded, and exactly reversible while its owner manifest matches.
+locked and uses a recoverable atomic exchange that preserves displaced bytes; BL-P1-12
+remains open until crash recovery and owner-only state pass the supported platform gates.
 Brains does not retain a generic live model-input channel.
 
 Migration 152 activates the reserved per-operator SMTP setting and outbox rows. The

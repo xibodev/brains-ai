@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 import uuid
@@ -106,6 +107,9 @@ def _seed(home: Path, workspace: Path, native_id: str) -> Path:
 
 
 def main() -> int:
+    renderer_commit = os.environ.get("BRAINS_RENDERER_COMMIT", "")
+    if re.fullmatch(r"[0-9a-f]{40}", renderer_commit) is None:
+        raise RuntimeError("committed-renderer-identity-unavailable")
     home = Path(os.environ["HOME"]).resolve()
     if any(home.iterdir()):
         raise RuntimeError("probe-home-not-empty")
@@ -185,7 +189,11 @@ def main() -> int:
         )
     if _MessagesHandler.requests < 2:
         raise RuntimeError("generated-stop-output-not-honored")
-    print(json.dumps({"ok": True, "requests": _MessagesHandler.requests}))
+    print(
+        json.dumps(
+            {"ok": True, "requests": _MessagesHandler.requests, "renderer_commit": renderer_commit}
+        )
+    )
     return 0
 
 

@@ -397,10 +397,11 @@ Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
 reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
 refusal, and accepted/read state. E3 also covers fixed body-free notification claims,
 mode restrictions, concurrent claim/settle, detach/read fallback, binding proof,
-consented supported Claude Code stop-hook wiring, exact configuration restoration,
+consented candidate Claude Code stop-hook wiring, exact configuration restoration,
 cross-process conflict refusal, fixed-output protocol behavior, pull-only fallback for
 Copilot/Codex/OpenCode, bounded reclaim, and terminal uncertainty. An isolated pinned
-Claude binary verifies generated-config discovery and continuation. SMTP and external
+Claude binary verifies generated-config discovery and continuation; crash recovery and
+platform owner-only state remain BL-P1-12 work. SMTP and external
 notification adapters are frozen rather than active evidence gaps. Automatic native
 identity lifecycle, abrupt process exit, and the residual in-process governance boundary
 remain core concerns.

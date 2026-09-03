@@ -25,6 +25,7 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import hmac
 import json
@@ -40,6 +41,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from brains.config import _canonical_default_db_url
+from brains.control.durable_mailbox import (
+    protect_owner_only_bytes,
+    secure_owner_only_directory,
+    secure_owner_only_file,
+    unprotect_owner_only_bytes,
+)
 from brains.mcp.transport import (
     MCP_CLIENT_BEARER_ENV,
     MCP_MODE_SSE,
@@ -292,11 +299,8 @@ def _timestamp() -> str:
 
 
 def _harden(path: Path) -> None:
-    """Best-effort tighten a secret-bearing file to owner-only (POSIX)."""
-    if os.name == "nt":
-        return
-    with contextlib.suppress(OSError):
-        path.chmod(0o600)
+    """Tighten a secret-bearing file to the verified owner-only boundary."""
+    secure_owner_only_file(path)
 
 
 def _backup(path: Path, *, secure: bool = False) -> str | None:
@@ -345,21 +349,196 @@ def _atomic_bytes(path: Path, content: bytes, *, secure: bool = False) -> None:
             tmp.unlink()
 
 
-def _cas_bytes(
+def _exchange_files(target: Path, replacement: Path) -> None:
+    """Atomically exchange two files, preserving the displaced target bytes."""
+    if os.name == "nt":
+        staged = replacement.with_name(f".{replacement.name}.replacement")
+        staged.unlink(missing_ok=True)
+        os.link(replacement, staged)
+        replacement.unlink()
+        replace_file = ctypes.windll.kernel32.ReplaceFileW  # type: ignore[attr-defined]
+        if not replace_file(str(target), str(staged), str(replacement), 0, None, None):
+            staged.unlink(missing_ok=True)
+            raise OSError(
+                ctypes.get_last_error(),  # type: ignore[attr-defined]
+                "atomic settings exchange unavailable",
+            )
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError("atomic settings exchange unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(-100, os.fsencode(target), -100, os.fsencode(replacement), 2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, "atomic settings exchange unavailable")
+
+
+def _atomic_create(path: Path, content: bytes, *, secure: bool) -> bool:
+    """Create a complete file without replacing a concurrent winner."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if secure:
+            _harden(tmp)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        if secure:
+            _harden(path)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+_TRANSACTION_PHASE_HOOK: Callable[[str], None] | None = None
+
+
+def _transaction_phase(name: str) -> None:
+    if _TRANSACTION_PHASE_HOOK is not None:
+        _TRANSACTION_PHASE_HOOK(name)
+
+
+def _transactional_replace(
     path: Path,
     expected: bytes | None,
-    content: bytes | None,
+    desired: bytes | None,
+    journal_path: Path,
+    capture_path: Path,
     *,
-    secure: bool = False,
-) -> bool:
-    """Mutate only when a last-moment byte-for-byte re-read matches *expected*."""
-    if _snapshot(path) != expected:
+    operation: str,
+) -> tuple[bool, bytes | None]:
+    """Replace while atomically retaining whatever bytes were displaced.
+
+    A non-cooperating writer can win before or after the exchange, but its displaced
+    bytes are retained and restored when safe. Ambiguous races remain journaled and
+    fail closed for explicit recovery instead of discarding either version.
+    """
+    expected_hash = _digest(expected)
+    desired_hash = _digest(desired)
+    journal = {
+        "version": 1,
+        "operation": operation,
+        "target": "settings.json",
+        "expected_sha256": expected_hash,
+        "desired_sha256": desired_hash,
+    }
+
+    if journal_path.exists():
+        existing, invalid = _read_json(journal_path)
+        if invalid or existing != journal:
+            return False, None
+        current = _snapshot(path)
+        captured = _snapshot(capture_path)
+        if _digest(current) == desired_hash and _digest(captured) == expected_hash:
+            return True, captured
+        if _digest(current) == expected_hash and captured is None:
+            journal_path.unlink(missing_ok=True)
+        else:
+            return False, None
+
+    _atomic_bytes(
+        journal_path,
+        (json.dumps(journal, indent=2) + "\n").encode(),
+        secure=True,
+    )
+    _transaction_phase("prepared")
+    displaced: bytes | None = None
+    if expected is None:
+        if desired is None:
+            journal_path.unlink(missing_ok=True)
+            return True, None
+        if not _atomic_create(path, desired, secure=True):
+            journal_path.unlink(missing_ok=True)
+            return False, None
+    elif desired is None:
+        capture_path.unlink(missing_ok=True)
+        try:
+            os.replace(path, capture_path)
+        except FileNotFoundError:
+            journal_path.unlink(missing_ok=True)
+            return False, None
+        _harden(capture_path)
+        displaced = _snapshot(capture_path)
+    else:
+        capture_path.unlink(missing_ok=True)
+        _atomic_bytes(capture_path, desired, secure=True)
+        try:
+            _exchange_files(path, capture_path)
+        except OSError:
+            capture_path.unlink(missing_ok=True)
+            journal_path.unlink(missing_ok=True)
+            return False, None
+        _harden(path)
+        _harden(capture_path)
+        displaced = _snapshot(capture_path)
+    _transaction_phase("swapped")
+
+    current = _snapshot(path)
+    if _digest(current) != desired_hash or _digest(displaced) != expected_hash:
+        # Restore the exact displaced bytes only while our desired bytes still own
+        # the target. Otherwise preserve both the latest target and capture for an
+        # explicit retry/recovery instead of overwriting another external winner.
+        if _digest(current) == desired_hash and capture_path.exists():
+            if desired is None:
+                if _atomic_create(path, capture_path.read_bytes(), secure=True):
+                    capture_path.unlink(missing_ok=True)
+            else:
+                _exchange_files(path, capture_path)
+                capture_path.unlink(missing_ok=True)
+            journal_path.unlink(missing_ok=True)
+        return False, None
+    _transaction_phase("validated")
+    return True, displaced
+
+
+def _finish_transaction(journal_path: Path, capture_path: Path) -> None:
+    capture_path.unlink(missing_ok=True)
+    journal_path.unlink(missing_ok=True)
+
+
+def _write_prior_backup(path: Path, content: bytes) -> str:
+    protection, protected = protect_owner_only_bytes(content)
+    _atomic_bytes(path, protected, secure=True)
+    return protection
+
+
+def _read_prior_backup(path: Path, protection: str) -> bytes:
+    protected = _snapshot(path)
+    if protected is None:
+        raise OSError("settings recovery backup is unavailable")
+    return unprotect_owner_only_bytes(protection, protected)
+
+
+def _process_alive(pid: int) -> bool:
+    if pid <= 0:
         return False
-    if content is None:
-        if path.exists():
-            path.unlink()
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return ctypes.get_last_error() == 5  # type: ignore[attr-defined]
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
         return True
-    _atomic_bytes(path, content, secure=secure)
     return True
 
 
@@ -367,12 +546,29 @@ def _cas_bytes(
 def _path_lock(path: Path, *, timeout: float = 2.0):
     """Fail-closed cross-process lock for one shared harness settings file."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    secure_owner_only_directory(path.parent)
     deadline = time.monotonic() + timeout
     fd: int | None = None
     while fd is None:
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, f"{os.getpid()}\n".encode())
+                os.fsync(fd)
+                _harden(path)
+            except BaseException:
+                os.close(fd)
+                fd = None
+                path.unlink(missing_ok=True)
+                raise
         except FileExistsError:
+            try:
+                owner = int(path.read_text(encoding="ascii").strip())
+                if not _process_alive(owner):
+                    path.unlink(missing_ok=True)
+                    continue
+            except (OSError, UnicodeError, ValueError):
+                pass
             if time.monotonic() >= deadline:
                 raise TimeoutError("settings-busy") from None
             time.sleep(0.025)
@@ -426,10 +622,22 @@ def _claude_wakeup_state_paths(home: Path) -> tuple[Path, Path, Path]:
     return state / "settings.lock", state / "manifest.json", state / "prior-settings.bin"
 
 
+def _claude_wakeup_transaction_paths(home: Path) -> tuple[Path, Path]:
+    state = home / ".claude" / ".brains-wakeup"
+    return state / "transaction.json", state / "displaced-settings.bin"
+
+
 def _read_wakeup_manifest(path: Path) -> dict[str, Any] | None:
     data, invalid = _read_json(path)
-    required = {"version", "target", "prior_exists", "prior_sha256", "installed_sha256"}
-    if invalid or set(data) != required or data.get("version") != 1:
+    required = {
+        "version",
+        "target",
+        "prior_exists",
+        "prior_sha256",
+        "prior_protection",
+        "installed_sha256",
+    }
+    if invalid or set(data) != required or data.get("version") != 2:
         return None
     if data.get("target") != "settings.json" or not isinstance(data.get("prior_exists"), bool):
         return None
@@ -437,6 +645,8 @@ def _read_wakeup_manifest(path: Path) -> dict[str, Any] | None:
         return None
     prior_sha = data.get("prior_sha256")
     if prior_sha is not None and not isinstance(prior_sha, str):
+        return None
+    if data.get("prior_protection") not in {"none", "posix-owner", "windows-dpapi"}:
         return None
     return data
 
@@ -534,6 +744,7 @@ def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
 
     path = _claude_wakeup_path(home)
     lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+    journal_path, capture_path = _claude_wakeup_transaction_paths(home)
 
     def prepare() -> tuple[dict[str, Any] | None, bytes | None, str | None]:
         before = _snapshot(path)
@@ -566,8 +777,55 @@ def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
             )
             if existing_manifest is not None:
                 if existing_manifest["installed_sha256"] == _digest(current_bytes):
+                    if journal_path.exists():
+                        journal, invalid = _read_json(journal_path)
+                        captured = _snapshot(capture_path)
+                        if (
+                            invalid
+                            or journal.get("operation") != "install"
+                            or journal.get("desired_sha256") != _digest(current_bytes)
+                            or journal.get("expected_sha256") != _digest(captured)
+                        ):
+                            return {
+                                "action": "conflict",
+                                "mode": "pull",
+                                "reason": "recovery-required",
+                            }
+                        _finish_transaction(journal_path, capture_path)
                     return {"action": "unchanged", "mode": adapter.wakeup_mode}
                 return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            if journal_path.exists():
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if invalid or journal.get("operation") != "install":
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+                if _digest(current_bytes) == journal.get("expected_sha256") and captured is None:
+                    journal_path.unlink(missing_ok=True)
+                elif _digest(current_bytes) == journal.get("desired_sha256") and _digest(
+                    captured
+                ) == journal.get("expected_sha256"):
+                    if current_bytes is not None:
+                        _harden(path)
+                    protection = "none"
+                    if captured is not None:
+                        protection = _write_prior_backup(backup_path, captured)
+                    manifest = {
+                        "version": 2,
+                        "target": "settings.json",
+                        "prior_exists": captured is not None,
+                        "prior_sha256": _digest(captured),
+                        "prior_protection": protection,
+                        "installed_sha256": _digest(current_bytes),
+                    }
+                    _atomic_bytes(
+                        manifest_path,
+                        (json.dumps(manifest, indent=2) + "\n").encode(),
+                        secure=True,
+                    )
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "recovered", "mode": adapter.wakeup_mode}
+                else:
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
             current_data, before, error = prepare()
             if error:
                 return {"action": "conflict", "mode": "pull", "reason": error}
@@ -576,26 +834,34 @@ def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
             if entries.count(_claude_wakeup_entry()) > 1:
                 return {"action": "conflict", "mode": "pull", "reason": "ownership-missing"}
             installed = (json.dumps(current_data, indent=2) + "\n").encode()
+            replaced, displaced = _transactional_replace(
+                path,
+                before,
+                installed,
+                journal_path,
+                capture_path,
+                operation="install",
+            )
+            if not replaced:
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            protection = "none"
+            if displaced is not None:
+                protection = _write_prior_backup(backup_path, displaced)
             manifest = {
-                "version": 1,
+                "version": 2,
                 "target": "settings.json",
-                "prior_exists": before is not None,
-                "prior_sha256": _digest(before),
+                "prior_exists": displaced is not None,
+                "prior_sha256": _digest(displaced),
+                "prior_protection": protection,
                 "installed_sha256": _digest(installed),
             }
-            if before is not None:
-                _atomic_bytes(backup_path, before, secure=True)
             _atomic_bytes(
                 manifest_path,
                 (json.dumps(manifest, indent=2) + "\n").encode(),
                 secure=True,
             )
-            if not _cas_bytes(path, before, installed, secure=True):
-                with contextlib.suppress(OSError):
-                    manifest_path.unlink()
-                with contextlib.suppress(OSError):
-                    backup_path.unlink()
-                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            _transaction_phase("metadata")
+            _finish_transaction(journal_path, capture_path)
             return {
                 "action": "update" if before is not None else "create",
                 "mode": adapter.wakeup_mode,
@@ -620,8 +886,9 @@ def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str,
 
     path = _claude_wakeup_path(home)
     lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+    journal_path, capture_path = _claude_wakeup_transaction_paths(home)
     manifest = _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
-    if manifest is None:
+    if manifest is None and not journal_path.exists():
         return {"action": "absent", "mode": "pull"}
     if dry_run:
         return {"action": "remove", "mode": "pull"}
@@ -629,19 +896,61 @@ def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str,
         with _path_lock(lock_path):
             manifest = _read_wakeup_manifest(manifest_path)
             current = _snapshot(path)
-            if manifest is None or manifest["installed_sha256"] != _digest(current):
-                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            if manifest is None:
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if (
+                    not invalid
+                    and journal.get("operation") == "remove"
+                    and journal.get("desired_sha256") == _digest(current)
+                    and journal.get("expected_sha256") == _digest(captured)
+                ):
+                    backup_path.unlink(missing_ok=True)
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "remove", "mode": "pull"}
+                return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
             prior: bytes | None = None
             if manifest["prior_exists"]:
-                prior = _snapshot(backup_path)
-                if prior is None or manifest["prior_sha256"] != _digest(prior):
+                try:
+                    prior = _read_prior_backup(backup_path, manifest["prior_protection"])
+                except OSError:
                     return {"action": "conflict", "mode": "pull", "reason": "backup-invalid"}
-            if not _cas_bytes(path, current, prior, secure=True):
+                if manifest["prior_sha256"] != _digest(prior):
+                    return {"action": "conflict", "mode": "pull", "reason": "backup-invalid"}
+            if journal_path.exists():
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if invalid or journal.get("operation") != "remove":
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+                if _digest(current) == journal.get("desired_sha256") and _digest(
+                    captured
+                ) == journal.get("expected_sha256"):
+                    backup_path.unlink(missing_ok=True)
+                    manifest_path.unlink(missing_ok=True)
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "remove", "mode": "pull"}
+                if _digest(current) == journal.get("expected_sha256") and captured is None:
+                    journal_path.unlink(missing_ok=True)
+                else:
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+            if manifest["installed_sha256"] != _digest(current):
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            replaced, _displaced = _transactional_replace(
+                path,
+                current,
+                prior,
+                journal_path,
+                capture_path,
+                operation="remove",
+            )
+            if not replaced:
                 return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
             with contextlib.suppress(OSError):
-                backup_path.unlink()
-            with contextlib.suppress(OSError):
                 manifest_path.unlink()
+            _transaction_phase("metadata")
+            with contextlib.suppress(OSError):
+                backup_path.unlink()
+            _finish_transaction(journal_path, capture_path)
             return {"action": "remove", "mode": "pull"}
     except TimeoutError:
         return {"action": "conflict", "mode": "pull", "reason": "settings-busy"}

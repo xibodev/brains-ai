@@ -37,6 +37,12 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Documentation and CI fail whenever a frozen, withdrawn, or undocumented surface becomes discoverable or activatable in a normal installation.
 - **Maps to:** F0-F10, B1-B9; J1-J11.
 
+### BL-P1-12 - Complete supported harness wakeup adapters
+
+- **Action:** Install consented body-free hook or plugin wakeups where a supported harness permits them and expose truthful pull fallback everywhere else.
+- **Done when:** Supported-harness journeys prove wakeup or pull fallback, bounded retry and uncertainty, and zero message-body or credential disclosure.
+- **Maps to:** F3, B2, B8; J7, J8, J11.
+
 ### BL-P1-14 - Complete harness identity and presence lifecycle
 
 - **Action:** Preserve raw adapter provenance and close native-ID extraction, renewal, detach, conflict, binding recovery, restart, and resume gaps across supported harnesses.

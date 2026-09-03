@@ -22,15 +22,11 @@ from brains.control.durable_mailbox import (
     resolve_managed_notification_proof,
 )
 
-_TURN_BOUNDARY_TOOLS = frozenset({"copilot-cli", "claude-code"})
+_TURN_BOUNDARY_TOOLS = frozenset({"claude-code"})
 
 
 def _event_identity(tool: str, payload: dict[str, Any]) -> tuple[str, str, bool]:
-    if tool == "copilot-cli":
-        native_id = payload.get("sessionId")
-        workspace = payload.get("cwd")
-        already_continued = payload.get("stop_hook_active", False)
-    elif tool == "claude-code":
+    if tool == "claude-code":
         native_id = payload.get("session_id")
         workspace = payload.get("cwd")
         already_continued = payload.get("stop_hook_active", False)

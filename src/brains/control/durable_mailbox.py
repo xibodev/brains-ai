@@ -351,6 +351,35 @@ def _secure_binding_file(path: Path) -> None:
         raise OSError("mailbox binding file ACL contains an unexpected principal")
 
 
+def protect_owner_only_bytes(data: bytes) -> tuple[str, bytes]:
+    """Protect local recovery bytes with the platform's verified owner boundary."""
+    if os.name == "nt":
+        return "windows-dpapi", _windows_dpapi(data, protect=True)
+    return "posix-owner", data
+
+
+def unprotect_owner_only_bytes(protection: str, data: bytes) -> bytes:
+    """Reverse :func:`protect_owner_only_bytes` for the current user."""
+    if protection == "windows-dpapi" and os.name == "nt":
+        return _windows_dpapi(data, protect=False)
+    if protection == "posix-owner" and os.name != "nt":
+        return data
+    raise OSError("local recovery bytes are unavailable")
+
+
+def secure_owner_only_file(path: Path) -> None:
+    """Apply the verified owner-only POSIX mode or Windows DACL contract."""
+    _secure_binding_file(path)
+
+
+def secure_owner_only_directory(path: Path) -> None:
+    """Apply an owner-only boundary to a managed recovery directory."""
+    if os.name != "nt":
+        path.chmod(0o700)
+        return
+    _secure_binding_file(path)
+
+
 def _replace_managed_binding(path: Path, binding_secret: str) -> None:
     """Owner-only atomic replacement; the secret is never returned or logged."""
     _binding_hash(binding_secret)

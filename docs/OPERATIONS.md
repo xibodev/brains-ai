@@ -185,13 +185,13 @@ Mailbox wakeup hooks are separate, explicit consent:
 brains-ai wire --mailbox-wakeups
 ```
 
-This installs the Brains-owned supported stop hook for Claude Code only. Its verified
+This installs the Brains-owned candidate stop hook for Claude Code only. Its verified
 turn boundary can request one more turn with a constant, body-free prompt. Copilot CLI,
 Codex, and OpenCode remain truthful pull-only adapters until their exact generated
 configuration and continuation behavior pass a pinned real-binary journey. A hook
 conflict or MCP wiring failure leaves that adapter in pull mode. Claude settings changes
-are cross-process locked, atomically replaced, and restored byte-for-byte only while the
-owned manifest still matches; a concurrent external edit fails closed and is preserved.
+are cross-process locked and use a recoverable atomic exchange that captures displaced
+bytes. Ambiguous concurrent edits remain preserved for recovery instead of being discarded.
 
 Probe without changing configuration:
 

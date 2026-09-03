@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
+import subprocess
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -33,16 +35,10 @@ from brains.storage.migrations import init_db
 from brains.storage.models import MailboxAttachment, MailNotificationAttempt
 
 
-def _locked_cas_worker(
-    target: str,
-    lock: str,
-    start,
-    results,
-    replacement: bytes,
-) -> None:
+def _external_writer(target: str, start, done, replacement: bytes) -> None:
     start.wait(timeout=5)
-    with wire._path_lock(Path(lock)):
-        results.put(wire._cas_bytes(Path(target), b"original", replacement))
+    Path(target).write_bytes(replacement)
+    done.set()
 
 
 def _native(tool: str) -> str:
@@ -119,32 +115,19 @@ def _notification_attempt(session, recipient: dict) -> MailNotificationAttempt:
     )
 
 
-@pytest.mark.parametrize(
-    ("tool", "payload"),
-    [
-        (
-            "copilot-cli",
-            lambda native_id, workspace: {"sessionId": native_id, "cwd": str(workspace)},
-        ),
-        (
-            "claude-code",
-            lambda native_id, workspace: {
-                "hook_event_name": "Stop",
-                "session_id": native_id,
-                "cwd": str(workspace),
-                "stop_hook_active": False,
-            },
-        ),
-    ],
-)
-def test_supported_stop_hook_delivers_only_fixed_nudge(tool, payload, tmp_path: Path) -> None:
-    workspace = tmp_path / tool
-    recipient = _managed_recipient(workspace, tool)
+def test_supported_stop_hook_delivers_only_fixed_nudge(tmp_path: Path) -> None:
+    workspace = tmp_path / "claude-code"
+    recipient = _managed_recipient(workspace, "claude-code")
     private_body, sender_secret = _send_private_message(workspace, recipient)
 
     result = _invoke_handler(
-        tool,
-        payload(recipient["native_id"], workspace),
+        "claude-code",
+        {
+            "hook_event_name": "Stop",
+            "session_id": recipient["native_id"],
+            "cwd": str(workspace),
+            "stop_hook_active": False,
+        },
     )
 
     assert result == {
@@ -159,36 +142,21 @@ def test_supported_stop_hook_delivers_only_fixed_nudge(tool, payload, tmp_path: 
     assert recipient["mailbox"]["address"] not in rendered
 
 
-@pytest.mark.parametrize(
-    ("tool", "payload"),
-    [
-        (
-            "copilot-cli",
-            lambda native_id, workspace: {"sessionId": native_id, "cwd": str(workspace)},
-        ),
-        (
-            "claude-code",
-            lambda native_id, workspace: {
-                "hook_event_name": "Stop",
-                "session_id": native_id,
-                "cwd": str(workspace),
-                "stop_hook_active": False,
-            },
-        ),
-    ],
-)
-def test_generated_hook_command_emits_one_body_free_object(
-    tool,
-    payload,
-    tmp_path: Path,
-) -> None:
-    recipient = _managed_recipient(tmp_path, tool)
+def test_generated_hook_command_emits_one_body_free_object(tmp_path: Path) -> None:
+    recipient = _managed_recipient(tmp_path, "claude-code")
     private_body, sender_secret = _send_private_message(tmp_path, recipient)
 
     result = CliRunner().invoke(
         cli_app,
-        ["mailbox", "harness-wakeup", "--adapter", tool],
-        input=json.dumps(payload(recipient["native_id"], tmp_path)),
+        ["mailbox", "harness-wakeup", "--adapter", "claude-code"],
+        input=json.dumps(
+            {
+                "hook_event_name": "Stop",
+                "session_id": recipient["native_id"],
+                "cwd": str(tmp_path),
+                "stop_hook_active": False,
+            }
+        ),
     )
 
     assert result.exit_code == 0
@@ -196,6 +164,20 @@ def test_generated_hook_command_emits_one_body_free_object(
     assert private_body not in result.stdout
     assert sender_secret not in result.stdout
     assert recipient["native_id"] not in result.stdout
+
+
+def test_forged_legacy_copilot_hook_cannot_claim_or_settle(tmp_path: Path) -> None:
+    recipient = _managed_recipient(tmp_path, "copilot-cli")
+    _send_private_message(tmp_path, recipient)
+
+    result = _invoke_handler(
+        "copilot-cli",
+        {"sessionId": recipient["native_id"], "cwd": str(tmp_path)},
+    )
+
+    assert result == {"state": "pull", "reason": "adapter-unavailable", "output": {}}
+    with SessionLocal() as session:
+        assert _notification_attempt(session, recipient).status == "queued"
 
 
 def test_malformed_hook_input_fails_closed_with_one_empty_object() -> None:
@@ -210,7 +192,7 @@ def test_malformed_hook_input_fails_closed_with_one_empty_object() -> None:
 
 
 def test_output_failure_is_not_retried_or_settled(tmp_path: Path) -> None:
-    recipient = _managed_recipient(tmp_path, "copilot-cli")
+    recipient = _managed_recipient(tmp_path, "claude-code")
     _send_private_message(tmp_path, recipient)
     outputs: list[dict[str, str]] = []
 
@@ -219,8 +201,8 @@ def test_output_failure_is_not_retried_or_settled(tmp_path: Path) -> None:
         raise OSError("synthetic closed output")
 
     result = handle_harness_wakeup(
-        "copilot-cli",
-        {"sessionId": recipient["native_id"], "cwd": str(tmp_path)},
+        "claude-code",
+        {"session_id": recipient["native_id"], "cwd": str(tmp_path)},
         emit=fail_after_write,
     )
 
@@ -459,6 +441,7 @@ def test_claude_wakeup_restores_exact_prior_shape(
         "target",
         "prior_exists",
         "prior_sha256",
+        "prior_protection",
         "installed_sha256",
     }
     assert "synthetic-existing-hook" not in json.dumps(manifest)
@@ -492,30 +475,155 @@ def test_claude_unwire_preserves_external_edit_and_fails_closed(harness_home: Pa
     assert settings_path.read_bytes() == external
 
 
-def test_shared_settings_lock_and_cas_serialize_real_processes(tmp_path: Path) -> None:
-    target = tmp_path / "settings.json"
-    lock = tmp_path / "settings.lock"
-    target.write_bytes(b"original")
+def test_stale_process_lock_is_recovered(harness_home: Path) -> None:
+    lock, _manifest, _backup = wire._claude_wakeup_state_paths(harness_home)
+    lock.parent.mkdir(parents=True)
+    lock.write_text("99999999\n", encoding="ascii")
+
+    report = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+
+    assert report["ok"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows DPAPI/DACL contract")
+def test_windows_claude_recovery_state_is_dpapi_protected_and_owner_only(
+    harness_home: Path,
+) -> None:
+    settings = harness_home / ".claude" / "settings.json"
+    original = b'{"synthetic_secret":"not-a-real-secret"}\r\n'
+    settings.write_bytes(original)
+
+    report = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    assert report["ok"] is True
+    _lock, manifest, backup = wire._claude_wakeup_state_paths(harness_home)
+    assert backup.read_bytes() != original
+    from brains.control.durable_mailbox import (
+        _windows_binding_acl_sids,
+        _windows_current_user_sid,
+    )
+
+    sid = _windows_current_user_sid()
+    for path in (settings, manifest.parent, manifest, backup):
+        subprocess.run(["icacls", str(path), "/verify"], check=True, capture_output=True)
+        assert _windows_binding_acl_sids(path) == (sid,)
+
+    wire.unwire(harness_home, tools=["claude-code"], rules=False)
+    assert settings.read_bytes() == original
+
+
+def test_noncooperating_process_write_is_atomically_captured_and_restored(
+    harness_home: Path,
+    monkeypatch,
+) -> None:
+    target = harness_home / ".claude" / "settings.json"
+    target.write_bytes(b"{}\n")
+    external = b'{"operator":"simultaneous"}\n'
     ctx = multiprocessing.get_context("spawn")
     start = ctx.Event()
-    results = ctx.Queue()
-    workers = [
-        ctx.Process(
-            target=_locked_cas_worker,
-            args=(str(target), str(lock), start, results, replacement),
-        )
-        for replacement in (b"brains-edit", b"operator-edit")
-    ]
-    for worker in workers:
-        worker.start()
-    start.set()
-    for worker in workers:
-        worker.join(timeout=10)
-        assert worker.exitcode == 0
+    done = ctx.Event()
+    worker = ctx.Process(target=_external_writer, args=(str(target), start, done, external))
+    worker.start()
+    actual_exchange = wire._exchange_files
 
-    outcomes = sorted([results.get(timeout=2), results.get(timeout=2)])
-    assert outcomes == [False, True]
-    assert target.read_bytes() in {b"brains-edit", b"operator-edit"}
+    def exchange_after_external_write(path: Path, replacement: Path) -> None:
+        start.set()
+        assert done.wait(timeout=5)
+        actual_exchange(path, replacement)
+
+    monkeypatch.setattr(wire, "_exchange_files", exchange_after_external_write)
+    report = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    worker.join(timeout=10)
+    assert worker.exitcode == 0
+    assert report["tools"][0]["mailbox_wakeup"]["reason"] == "settings-changed"
+    assert target.read_bytes() == external
+
+
+@pytest.mark.parametrize("phase", ["prepared", "swapped", "validated", "metadata"])
+def test_install_transaction_recovers_after_each_crash_phase(
+    harness_home: Path,
+    monkeypatch,
+    phase: str,
+) -> None:
+    target = harness_home / ".claude" / "settings.json"
+    original = b'{"hooks":{"Stop":[]}}\r\n'
+    target.write_bytes(original)
+
+    def crash(name: str) -> None:
+        if name == phase:
+            raise SystemExit("synthetic transaction crash")
+
+    monkeypatch.setattr(wire, "_TRANSACTION_PHASE_HOOK", crash)
+    with pytest.raises(SystemExit, match="synthetic transaction crash"):
+        wire.wire(
+            harness_home,
+            _wire_context(),
+            tools=["claude-code"],
+            rules=False,
+            mailbox_wakeups=True,
+        )
+    monkeypatch.setattr(wire, "_TRANSACTION_PHASE_HOOK", None)
+
+    recovered = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    assert recovered["ok"] is True
+    removed = wire.unwire(harness_home, tools=["claude-code"], rules=False)
+    assert removed["tools"][0]["mailbox_wakeup"]["action"] == "remove"
+    assert target.read_bytes() == original
+
+
+@pytest.mark.parametrize("phase", ["prepared", "swapped", "validated", "metadata"])
+def test_remove_transaction_recovers_after_each_crash_phase(
+    harness_home: Path,
+    monkeypatch,
+    phase: str,
+) -> None:
+    target = harness_home / ".claude" / "settings.json"
+    original = b'{"hooks":{"Stop":[]}}\r\n'
+    target.write_bytes(original)
+    installed = wire.wire(
+        harness_home,
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=True,
+    )
+    assert installed["ok"] is True
+
+    def crash(name: str) -> None:
+        if name == phase:
+            raise SystemExit("synthetic transaction crash")
+
+    monkeypatch.setattr(wire, "_TRANSACTION_PHASE_HOOK", crash)
+    with pytest.raises(SystemExit, match="synthetic transaction crash"):
+        wire.unwire(harness_home, tools=["claude-code"], rules=False)
+    monkeypatch.setattr(wire, "_TRANSACTION_PHASE_HOOK", None)
+
+    recovered = wire.unwire(harness_home, tools=["claude-code"], rules=False)
+    assert recovered["tools"][0]["mailbox_wakeup"]["action"] == "remove"
+    assert target.read_bytes() == original
 
 
 def test_copilot_wakeup_stays_pull_and_preserves_existing_file(harness_home: Path) -> None:
