@@ -71,12 +71,12 @@ def test_summary_is_positive_redacted_core_manifest(
         lambda _home: {
             "tools": [
                 {
-                    "tool": "codex",
+                    "tool": "claude-code",
                     "detected": True,
                     "mcp_wired": True,
                     "mcp_transport": "streamable-http",
                     "rule_wired": True,
-                    "mailbox_notification_mode": "pull",
+                    "mailbox_notification_mode": "turn_boundary",
                     "mcp_path": secret,
                     "mcp_url": secret,
                 }
@@ -103,12 +103,12 @@ def test_summary_is_positive_redacted_core_manifest(
         assert forbidden not in rendered.lower()
     assert result["harnesses"] == [
         {
-            "tool": "codex",
+            "tool": "claude-code",
             "detected": True,
             "mcp_wired": True,
             "mcp_transport": "streamable-http",
             "rule_wired": True,
-            "mailbox_notification_mode": "pull",
+            "mailbox_notification_mode": "turn_boundary",
         }
     ]
 

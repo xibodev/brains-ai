@@ -99,8 +99,8 @@ def _file_lock(path: Path) -> Iterator[None]:
             with contextlib.suppress(OSError):
                 msvcrt.locking(  # type: ignore[attr-defined]
                     handle.fileno(),
-                    msvcrt.LK_UNLCK,
-                    1,  # type: ignore[attr-defined]
+                    msvcrt.LK_UNLCK,  # type: ignore[attr-defined]
+                    1,
                 )
         else:
             import fcntl
@@ -190,12 +190,12 @@ def configuration_summary() -> dict[str, Any]:
             "rule_wired": bool(row.get("rule_wired")),
             "mailbox_notification_mode": (
                 row.get("mailbox_notification_mode")
-                if row.get("mailbox_notification_mode") in {"pull", "plugin", "hook"}
+                if row.get("mailbox_notification_mode") in {"pull", "turn_boundary"}
                 else "pull"
             ),
         }
         for row in wire_rows
-        if row.get("tool") in {"copilot", "claude", "codex", "opencode"}
+        if row.get("tool") in {"copilot-cli", "claude-code", "codex", "opencode"}
     ]
     fields = [
         {

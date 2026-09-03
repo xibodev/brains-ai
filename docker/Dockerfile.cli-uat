@@ -30,6 +30,7 @@ RUN python3 -m venv /opt/brains-venv \
 
 COPY tests/uat/real_cli_actor.py /opt/uat/real_cli_actor.py
 COPY tests/uat/opencode_lifecycle_probe.py /opt/uat/opencode_lifecycle_probe.py
+COPY tests/uat/claude_wakeup_probe.py /opt/uat/claude_wakeup_probe.py
 
 RUN mkdir -p /workspace /run/credentials /opt/uat \
  && chown -R node:node /workspace /opt/uat
