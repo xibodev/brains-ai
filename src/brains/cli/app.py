@@ -168,6 +168,13 @@ def _print_json(value):
     print(json.dumps(value, indent=2, default=str))
 
 
+def _print_service_report(report: dict[str, Any]) -> None:
+    """Print a service result and give automation a truthful exit status."""
+    _print_json(report)
+    if report.get("ok") is False:
+        raise typer.Exit(code=1)
+
+
 def _require_experimental_cli(label: str) -> None:
     """Refuse an experimental command unless BRAINS_MCP_EXPERIMENTAL opts in.
 
@@ -482,6 +489,11 @@ def unwire_cli(
 
 @service_app.command("install")
 def service_install_cli(
+    label: str | None = typer.Option(
+        None,
+        "--label",
+        help="Optional Brains-namespaced service identity for isolated native hosts.",
+    ),
     gateway_port: int | None = typer.Option(
         None,
         "--gateway-port",
@@ -513,9 +525,10 @@ def service_install_cli(
             f"No service backend for platform {service_mod.current_platform()!r} "
             "(supported: windows, macos, linux)."
         )
-    _print_json(
+    _print_service_report(
         service_mod.install(
             dry_run=dry_run,
+            label=label,
             gateway_port=gateway_port,
             mcp_port=mcp_port,
         )
@@ -524,6 +537,7 @@ def service_install_cli(
 
 @service_app.command("uninstall")
 def service_uninstall_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be removed; change nothing."
     ),
@@ -531,39 +545,47 @@ def service_uninstall_cli(
     """Stop and remove the brains serve-all autostart service."""
     from brains import service as service_mod
 
-    _print_json(service_mod.uninstall(dry_run=dry_run))
+    _print_service_report(service_mod.uninstall(dry_run=dry_run, label=label))
 
 
 @service_app.command("status")
-def service_status_cli():
+def service_status_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Report whether the autostart service is installed + its run state."""
     from brains import service as service_mod
 
-    _print_json(service_mod.status())
+    _print_json(service_mod.status(label=label))
 
 
 @service_app.command("start")
-def service_start_cli():
+def service_start_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Start the installed service now."""
     from brains import service as service_mod
 
-    _print_json(service_mod.start())
+    _print_service_report(service_mod.start(label=label))
 
 
 @service_app.command("stop")
-def service_stop_cli():
+def service_stop_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Stop the running service (and reap the supervised child tree)."""
     from brains import service as service_mod
 
-    _print_json(service_mod.stop())
+    _print_service_report(service_mod.stop(label=label))
 
 
 @service_app.command("restart")
-def service_restart_cli():
+def service_restart_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Restart the service."""
     from brains import service as service_mod
 
-    _print_json(service_mod.restart())
+    _print_service_report(service_mod.restart(label=label))
 
 
 @service_app.command("logs")

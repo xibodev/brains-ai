@@ -29,6 +29,7 @@ import csv
 import getpass
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -45,6 +46,7 @@ SERVICE_LABEL = "brains-serve-all"
 WINDOWS_TASK_NAME = "BrainsServeAll"
 LAUNCHD_LABEL = "com.brains.serve-all"
 SYSTEMD_UNIT = "brains-serve-all.service"
+_SERVICE_LABEL_RE = re.compile(r"^brains-serve-all(?:-[a-z0-9][a-z0-9-]{0,39})?$")
 
 DEFAULT_GATEWAY_HOST = "127.0.0.1"
 DEFAULT_GATEWAY_PORT = 8787
@@ -129,6 +131,7 @@ def read_service_config() -> dict[str, Any]:
         "gateway_host": DEFAULT_GATEWAY_HOST,
         "gateway_port": DEFAULT_GATEWAY_PORT,
         "mcp_port": DEFAULT_MCP_PORT,
+        "service_label": SERVICE_LABEL,
     }
     try:
         raw = json.loads(service_config_path().read_text(encoding="utf-8"))
@@ -142,7 +145,16 @@ def read_service_config() -> dict[str, Any]:
         mcp_port = _valid_port(raw.get("mcp_port"), "mcp_port")
     except ValueError:
         return defaults
-    return {"gateway_host": host, "gateway_port": gateway_port, "mcp_port": mcp_port}
+    try:
+        label = validate_service_label(str(raw.get("service_label") or SERVICE_LABEL))
+    except ValueError:
+        label = SERVICE_LABEL
+    return {
+        "gateway_host": host,
+        "gateway_port": gateway_port,
+        "mcp_port": mcp_port,
+        "service_label": label,
+    }
 
 
 def write_service_config(spec: ServiceSpec) -> Path:
@@ -153,6 +165,7 @@ def write_service_config(spec: ServiceSpec) -> Path:
         "gateway_host": spec.gateway_host,
         "gateway_port": spec.gateway_port,
         "mcp_port": spec.mcp_port,
+        "service_label": spec.label,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return path
@@ -385,6 +398,33 @@ def current_user() -> str:
     return name
 
 
+def validate_service_label(label: str) -> str:
+    """Validate a logical Brains-owned service label.
+
+    Custom identities are deliberately confined to the Brains namespace so a
+    caller cannot make install/uninstall target an arbitrary native service.
+    """
+    if not _SERVICE_LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "service label must be 'brains-serve-all' or "
+            "'brains-serve-all-<lowercase letters, digits, hyphens>'"
+        )
+    return label
+
+
+def native_service_identity(platform: str, label: str = SERVICE_LABEL) -> str:
+    """Map a validated logical label to the platform-native identity."""
+    resolved = validate_service_label(label)
+    suffix = resolved.removeprefix(SERVICE_LABEL).removeprefix("-")
+    if platform == "windows":
+        return WINDOWS_TASK_NAME if not suffix else f"{WINDOWS_TASK_NAME}-{suffix}"
+    if platform == "macos":
+        return LAUNCHD_LABEL if not suffix else f"{LAUNCHD_LABEL}.{suffix}"
+    if platform == "linux":
+        return SYSTEMD_UNIT if not suffix else f"{SERVICE_LABEL}-{suffix}.service"
+    raise ValueError(f"unsupported service platform {platform!r}")
+
+
 @dataclass
 class ServiceSpec:
     """Everything a backend needs to render + register the service.
@@ -405,6 +445,7 @@ class ServiceSpec:
     mcp_port: int = DEFAULT_MCP_PORT
 
     def __post_init__(self) -> None:
+        self.label = validate_service_label(self.label)
         self.gateway_port = _valid_port(self.gateway_port, "gateway_port")
         self.mcp_port = _valid_port(self.mcp_port, "mcp_port")
         if self.gateway_port == self.mcp_port:
@@ -426,6 +467,7 @@ def _quote(token: str) -> str:
 def default_spec(
     executable: str | None = None,
     *,
+    label: str = SERVICE_LABEL,
     gateway_host: str = DEFAULT_GATEWAY_HOST,
     gateway_port: int | None = None,
     mcp_port: int | None = None,
@@ -473,6 +515,7 @@ def default_spec(
         gateway_port=resolved_gateway_port,
         mcp_port=resolved_mcp_port,
         description=description,
+        label=label,
     )
 
 
