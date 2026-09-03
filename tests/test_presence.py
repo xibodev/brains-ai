@@ -9,8 +9,6 @@ Covers:
 * It deliberately EXCLUDES the caller's own sessions, regardless of
   whether the caller is ``admin`` or a normal operator.
 * It deliberately omits ended sessions (``ended_at IS NOT NULL``).
-* The dashboard ``/dashboard/operators`` page renders without 500ing
-  and reflects the same projection (no workspace names or session ids).
 * The MCP tool ``brains.list_other_operators_active`` is registered and
   callable.
 """

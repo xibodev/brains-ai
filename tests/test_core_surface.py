@@ -185,6 +185,7 @@ def test_route_inventory_retains_only_modern_cookie_endpoints_under_admin(
 
 
 def test_modern_app_authentication_survives_legacy_deletion() -> None:
+    from brains.api.auth import BROWSER_AUTH_COOKIE
     from brains.main import app
 
     with TestClient(app) as client:
@@ -197,6 +198,11 @@ def test_modern_app_authentication_survives_legacy_deletion() -> None:
         assert signed_in.status_code == 303
         assert signed_in.headers["location"] == "/app"
         assert client.get("/app").status_code == 200
+
+        signed_out = client.get("/admin/logout", follow_redirects=False)
+        assert signed_out.status_code == 303
+        assert signed_out.headers["location"] == "/admin/login"
+        assert BROWSER_AUTH_COOKIE not in client.cookies
 
 
 def test_only_modern_login_template_remains() -> None:
