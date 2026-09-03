@@ -66,7 +66,7 @@ def test_service_status_requires_owned_pid_and_protocol_readiness(monkeypatch) -
     monkeypatch.setattr(
         service,
         "_backend",
-        lambda: type("Backend", (), {"status": staticmethod(lambda: {"installed": True})}),
+        lambda: type("Backend", (), {"status": staticmethod(lambda *_args: {"installed": True})}),
     )
     monkeypatch.setattr(service, "read_pidfile_record", lambda: {"pid": 42})
     monkeypatch.setattr(
@@ -90,7 +90,7 @@ def test_service_status_distinguishes_owned_manual_stale_and_unknown(monkeypatch
     monkeypatch.setattr(
         service,
         "_backend",
-        lambda: type("Backend", (), {"status": staticmethod(lambda: dict(backend_state))}),
+        lambda: type("Backend", (), {"status": staticmethod(lambda *_args: dict(backend_state))}),
     )
     monkeypatch.setattr(service, "read_pidfile_record", lambda: {"pid": 42})
     monkeypatch.setattr(service, "verify_pid", lambda _record: dict(pid_state))

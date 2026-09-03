@@ -1,0 +1,63 @@
+name: native service-manager evidence
+
+# This manual workflow proves real manager verbs on disposable hosted VMs. It
+# deliberately does not claim a logout/reboot boundary; the same checked
+# two-phase script must be run on persistent disposable VMs for BL-P0-06 E4.
+on:
+  workflow_dispatch:
+    inputs:
+      disposable_host_acknowledgement:
+        description: Type disposable-native-service-host
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  manager-cycle:
+    if: inputs.disposable_host_acknowledgement == 'disposable-native-service-host'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    env:
+      BRAINS_NATIVE_EVIDENCE_DISPOSABLE: disposable-native-service-host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Build and install the exact candidate wheel
+        shell: bash
+        run: |
+          uv build --wheel
+          python -m pip install "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          python -c "import glob,hashlib,os; p=glob.glob('dist/*.whl')[0]; open(os.environ['GITHUB_ENV'],'a',encoding='utf-8').write('BRAINS_EVIDENCE_WHEEL_SHA256='+hashlib.sha256(open(p,'rb').read()).hexdigest()+'\n')"
+      - name: Exercise native manager lifecycle without login claim
+        shell: bash
+        run: >-
+          python scripts/probe_native_service_lifecycle.py manager-cycle
+          --candidate "${{ github.sha }}"
+          --output native-service-evidence.json
+      - name: Cleanup disposable native identity
+        if: always()
+        shell: bash
+        run: >-
+          python scripts/probe_native_service_lifecycle.py cleanup
+          --candidate "${{ github.sha }}"
+          --output native-service-cleanup.json
+      - name: Upload sanitized native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-service-${{ matrix.os }}-${{ github.sha }}
+          path: |
+            native-service-evidence.json
+            native-service-evidence.xml
+            native-service-cleanup.json
+            native-service-cleanup.xml
+          if-no-files-found: error
+          retention-days: 14

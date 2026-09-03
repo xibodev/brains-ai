@@ -205,6 +205,13 @@ brains-ai service status
 brains-ai service logs
 ```
 
+Every mutating service command exits non-zero when its structured result reports
+failure. `service install --label brains-serve-all-<suffix>` provides an explicitly
+Brains-owned identity for disposable native validation; subsequent commands accept the
+same `--label`. Labels outside that namespace are refused. The default remains
+`brains-serve-all`. Linux installation does not change the account's independent linger
+policy. Failed deregistration retains the native definition for diagnosis and retry.
+
 `brains-ai service install` preflights the requested loopback gateway port. An
 explicit unavailable port is refused. When no port is supplied and the default
 cannot be bound, the installer selects a bindable fallback, writes it into the
@@ -513,6 +520,17 @@ withdrawn source are test-debt inputs, not acceptance evidence.
 - Native Task Scheduler, launchd, and systemd-user lifecycle execution still needs
   clean-host E4 after package installation; current native CI stops at definition
   rendering and reversible wiring rather than mutating the runner's service manager.
+  The guarded `probe_native_service_lifecycle.py` and manual workflow can collect
+  manager-cycle evidence on disposable hosts, but only a two-phase persistent VM run
+  across a real login/reboot can close the persistence requirement.
+  On such a VM, install the exact candidate wheel, export its SHA-256 as
+  `BRAINS_EVIDENCE_WHEEL_SHA256`, set
+  `BRAINS_NATIVE_EVIDENCE_DISPOSABLE=disposable-native-service-host`, then run the
+  probe's `prepare --candidate <full-commit-sha>` phase. After a genuine login or
+  reboot boundary, run the `verify` phase with the same full commit SHA and
+  `--login-transition-observed`. The probe refuses pre-existing Brains/client state or
+  a pre-existing namespaced manager identity and emits only sanitized JSON/JUnit
+  evidence; retain the disposable VM until teardown is confirmed.
 - Session end/detach and liveness renewal are not reliable across every harness.
 - Cross-process realtime live fan-out is absent.
 - Governed action confinement is cooperative and in-process.
