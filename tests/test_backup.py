@@ -267,6 +267,13 @@ def test_recovery_acceptance_refuses_incompatible_then_restores_with_rollback(
     assert incompatible_status["reason"] == "candidate-schema-incompatible"
     assert str(incompatible) not in str(incompatible_status)
 
+    tampered_verification = verify_backup(incompatible)
+    assert tampered_verification.ok is False
+    assert tampered_verification.checks["schema_versions_match"] is False
+    assert any(
+        "schema history does not match" in failure for failure in tampered_verification.failures
+    )
+
     db_module.engine.dispose()
     with pytest.raises(ManifestMismatch, match="target was not modified"):
         restore_backup(incompatible)

@@ -404,14 +404,19 @@ def schema_compatibility(manifest_versions: list[str]) -> dict[str, Any]:
 
 def _assert_schema_compatible(manifest: _Manifest) -> dict[str, Any]:
     compatibility = schema_compatibility(list(manifest.schema_versions))
-    if compatibility["unknown_migrations"]:
+    _assert_compatibility_result(compatibility)
+    return compatibility
+
+
+def _assert_compatibility_result(compatibility: dict[str, Any]) -> None:
+    unknown = compatibility["unknown_migrations"]
+    if unknown:
         raise SchemaIncompatible(
             "this archive was taken from a store that had applied migrations this build "
-            f"does not ship ({', '.join(compatibility['unknown_migrations'])}); restoring "
-            "it would leave a schema no installed migration can account for. Restore it "
-            "with the Brains build that wrote it."
+            f"does not ship ({', '.join(unknown)}); restoring it would leave a schema no "
+            "installed migration can account for. Restore it with the Brains build that "
+            "wrote it."
         )
-    return compatibility
 
 
 def _write_manifest(target_dir: Path, manifest: _Manifest) -> Path:
@@ -554,6 +559,29 @@ def _sqlite_foreign_key_violations(conn: sqlite3.Connection) -> int:
     return len(conn.execute("PRAGMA foreign_key_check").fetchall())
 
 
+def _sqlite_schema_versions(conn: sqlite3.Connection) -> list[str]:
+    """Applied migration IDs recorded inside one isolated SQLite image.
+
+    Reading the ledger from the image, rather than through the configured
+    runtime engine, binds ``manifest.schema_versions`` to the blob whose hash
+    was just checked. Historical ledgers have no ``status`` column; their rows
+    all represented applied migrations.
+    """
+    present = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_versions'"
+    ).fetchone()
+    if present is None:
+        return []
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info('schema_versions')").fetchall()
+    }
+    where = "WHERE status IS NULL OR status = 'applied'" if "status" in columns else ""
+    rows = conn.execute(
+        f"SELECT version, applied_at FROM schema_versions {where}"  # noqa: S608 - fixed SQL
+    ).fetchall()
+    return [str(row[0]) for row in sorted(rows, key=lambda row: (str(row[1]), str(row[0])))]
+
+
 def _sqlite_data_version(conn: sqlite3.Connection) -> int | None:
     """``PRAGMA data_version`` — diagnostic only.
 
@@ -580,6 +608,7 @@ def _sqlite_snapshot(path: Path) -> dict[str, Any]:
             "identity": _sqlite_identity(conn),
             "schema_objects": objects,
             "schema_fingerprint": _schema_fingerprint(objects),
+            "schema_versions": _sqlite_schema_versions(conn),
             "table_row_counts": _sqlite_table_row_counts(conn),
             "integrity_check": [
                 str(row[0]) for row in conn.execute("PRAGMA integrity_check").fetchall()
@@ -954,11 +983,16 @@ def restore_backup(
         raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
     if target_url is not None and not target_url.startswith("sqlite:"):
         raise UnsupportedBackend("Restore targets must use SQLite")
-    verification = verify_backup(archive)
+    # Prove the archive's bytes and manifest claims before interpreting an
+    # otherwise intact candidate as merely too new for this build. A manifest
+    # that only *claims* a future ledger fails the blob-ledger comparison and
+    # remains a ManifestMismatch rather than being mistaken for a newer store.
+    verification = verify_backup(archive, require_schema_compatible=False)
     if not verification.ok:
         raise ManifestMismatch(
             "restore candidate failed isolated verification; the target was not modified"
         )
+    _assert_compatibility_result(verification.checks["schema_compatibility"])
 
     rollback_archive: str | None = None
     destination = _resolve_sqlite_path(target_url or _current_db_url())
@@ -985,7 +1019,10 @@ def restore_backup(
 
     restored = _restore_sqlite(archive, target_url=target_url)
     post = _sqlite_snapshot(destination)
-    post_ok = tuple(post["integrity_check"]) == ("ok",) and int(post["foreign_key_violations"]) == 0
+    expected_fk_violations = verification.checks["manifest_foreign_key_violations"]
+    post_ok = tuple(post["integrity_check"]) == ("ok",) and (
+        post["foreign_key_violations"] == expected_fk_violations
+    )
     if not post_ok:
         if rollback_archive is not None:
             _restore_sqlite(Path(rollback_archive), target_url=target_url)
@@ -1055,6 +1092,7 @@ def verify_backup(
     *,
     expected_source_path: str | Path | None = None,
     source_lock: SourceWriteLock | None = None,
+    require_schema_compatible: bool = True,
 ) -> BackupVerification:
     """Restore an archive into an isolated temporary directory and verify it.
 
@@ -1077,6 +1115,12 @@ def verify_backup(
     write lock the caller is holding, defaults ``expected_source_path`` to it,
     and re-proves the lock before and after the binding, so the freshness
     verdict cannot go stale between this call and the mutation that follows.
+
+    ``require_schema_compatible=False`` is reserved for restore's error
+    precedence: it verifies every compatibility-independent archive claim
+    first, after which restore reports an otherwise intact newer store as
+    :class:`SchemaIncompatible`. Normal callers retain compatibility as part
+    of the verdict.
     """
     archive = Path(archive_path).expanduser().resolve()
     if not archive.exists():
@@ -1109,7 +1153,7 @@ def verify_backup(
         checks["blob_sha256_matches"] = True
         compatibility = schema_compatibility(list(manifest.schema_versions))
         checks["schema_compatibility"] = compatibility
-        if compatibility["unknown_migrations"]:
+        if require_schema_compatible and compatibility["unknown_migrations"]:
             failures.append(
                 "archive records migrations this build does not ship: "
                 + ", ".join(compatibility["unknown_migrations"])
@@ -1145,9 +1189,20 @@ def verify_backup(
                 + "; ".join(restored["integrity_check"])
             )
 
+        checks["manifest_schema_versions"] = list(manifest.schema_versions)
+        checks["restored_schema_versions"] = list(restored["schema_versions"])
+        checks["schema_versions_match"] = restored["schema_versions"] == manifest.schema_versions
+        if not checks["schema_versions_match"]:
+            failures.append("restored schema history does not match the manifest")
+
+        checks["manifest_foreign_key_violations"] = manifest.foreign_key_violations
         checks["foreign_key_violations"] = restored["foreign_key_violations"]
-        if int(restored["foreign_key_violations"]) != 0:
-            failures.append("foreign key verification failed")
+        checks["foreign_key_violations_match"] = (
+            manifest.foreign_key_violations is not None
+            and restored["foreign_key_violations"] == manifest.foreign_key_violations
+        )
+        if not checks["foreign_key_violations_match"]:
+            failures.append("restored foreign-key violation count does not match the manifest")
         checks["restored_table_count"] = len(restored["table_row_counts"])
 
         if manifest.schema_fingerprint:

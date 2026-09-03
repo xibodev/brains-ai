@@ -1677,15 +1677,20 @@ def test_backup_restore_refuses_a_newer_store(isolated_db, tmp_path, monkeypatch
     from brains import backup as backup_module
 
     init_db()
+    conn = _connect(isolated_db)
+    try:
+        conn.execute(
+            "INSERT INTO schema_versions (version, description, applied_at, status, backend) "
+            "VALUES ('900_from_the_future', 'newer build', '2030-01-01T00:00:00+00:00', "
+            "'applied', 'sqlite')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
     monkeypatch.setattr(
         backup_module, "_current_db_url", lambda: f"sqlite:///{isolated_db.as_posix()}"
     )
     archive = tmp_path / "newer.tar.gz"
-    monkeypatch.setattr(
-        backup_module,
-        "_current_schema_versions",
-        lambda: [*current_schema_versions(), "900_from_the_future"],
-    )
     backup_module.create_backup(archive)
 
     with pytest.raises(backup_module.SchemaIncompatible) as excinfo:
