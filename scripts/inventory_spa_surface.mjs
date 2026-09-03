@@ -152,16 +152,25 @@ function record(sourceFile, node, kind, expression, coreRouteAliases) {
 for (const [file, sourceFile] of files) {
   if (!file.endsWith(".ts") && !file.endsWith(".tsx")) continue;
   const routerAliases = new Map([["Route", "Route"], ["Navigate", "Navigate"], ["Link", "Link"], ["NavLink", "NavLink"]]);
+  const routerImportedAliases = new Set(routerAliases.keys());
+  const routerNamespaces = new Set();
   const navigateFactories = new Set(["useNavigate"]);
+  const navigateAliases = new Set(["navigate", "redirect"]);
   const coreRouteAliases = new Set();
   for (const statement of sourceFile.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const specifier = statement.moduleSpecifier.text;
+    const bindings = statement.importClause?.namedBindings;
+    if (specifier === "react-router-dom" && bindings && ts.isNamespaceImport(bindings)) {
+      routerNamespaces.add(bindings.name.text);
+    }
     for (const element of statement.importClause?.namedBindings?.elements || []) {
       const imported = element.propertyName?.text || element.name.text;
       if (specifier === "react-router-dom") {
+        routerImportedAliases.add(element.name.text);
         if (["Route", "Navigate", "Link", "NavLink"].includes(imported)) routerAliases.set(element.name.text, imported);
         if (imported === "useNavigate") navigateFactories.add(element.name.text);
+        if (imported === "redirect") navigateAliases.add(element.name.text);
       }
       const importedFile = resolveLocal(specifier, file);
       if (imported === "coreRoute" && importedFile && relative(importedFile) === "coreRoutes.ts") {
@@ -169,19 +178,61 @@ for (const [file, sourceFile] of files) {
       }
     }
   }
-  const navigateFunctions = new Set(["navigate", "redirect"]);
+  const navigateFunctions = new Set(navigateAliases);
+  const locationAliases = new Set(["location"]);
+  const isLocationObject = (node) => {
+    node = unwrap(node);
+    if (ts.isIdentifier(node)) return locationAliases.has(node.text);
+    return ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) && ["window", "globalThis"].includes(node.expression.text) &&
+      node.name.text === "location";
+  };
+  const namespacedRouterMember = (node) =>
+    ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) &&
+    routerNamespaces.has(node.expression.text) ? node.name.text : null;
   function discover(node) {
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      ts.isIdentifier(unwrap(node.initializer)) && routerNamespaces.has(unwrap(node.initializer).text)
+    ) routerNamespaces.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer &&
+      ts.isIdentifier(unwrap(node.initializer)) && routerNamespaces.has(unwrap(node.initializer).text)
+    ) {
+      for (const element of node.name.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const imported = element.propertyName?.getText(sourceFile) || element.name.text;
+        if (imported === "redirect") navigateFunctions.add(element.name.text);
+        if (imported === "useNavigate") navigateFactories.add(element.name.text);
+        if (["Route", "Navigate", "Link", "NavLink"].includes(imported)) {
+          routerAliases.set(element.name.text, imported);
+          routerImportedAliases.add(element.name.text);
+        }
+      }
+    }
     if (
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
       ts.isCallExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) &&
       navigateFactories.has(node.initializer.expression.text)
     ) navigateFunctions.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      namespacedRouterMember(node.initializer.expression) === "useNavigate"
+    ) navigateFunctions.add(node.name.text);
+    if (
+      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
+      isLocationObject(node.initializer)
+    ) locationAliases.add(node.name.text);
     ts.forEachChild(node, discover);
   }
   discover(sourceFile);
   function visit(node) {
     if (ts.isJsxOpeningLikeElement(node)) {
-      const importedTag = routerAliases.get(jsxTag(node));
+      const tag = jsxTag(node);
+      const namespaceTag = namespacedRouterMember(node.tagName);
+      const importedTag = routerAliases.get(tag) ||
+        (namespaceTag && ["Route", "Navigate", "Link", "NavLink"].includes(namespaceTag) ? namespaceTag : null);
       const attributeName = importedTag === "Route" ? "path" : importedTag ? "to" : jsxTag(node) === "a" ? "href" : null;
       if (attributeName) {
         const attribute = node.attributes.properties.find(
@@ -195,6 +246,14 @@ for (const [file, sourceFile] of files) {
               : null;
           if (expression) record(sourceFile, attribute, importedTag === "Route" ? "route" : "navigation", expression, coreRouteAliases);
         }
+      } else if (
+        (namespaceTag || routerImportedAliases.has(tag)) &&
+        node.attributes.properties.some(
+          (property) => ts.isJsxAttribute(property) && ["path", "to", "href"].includes(property.name.text),
+        )
+      ) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "unknown-router-jsx", line });
       }
     } else if (
       ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
@@ -202,16 +261,29 @@ for (const [file, sourceFile] of files) {
     ) {
       record(sourceFile, node, "navigate", node.arguments[0], coreRouteAliases);
     } else if (
+      ts.isCallExpression(node) && namespacedRouterMember(node.expression) === "redirect" &&
+      node.arguments.length
+    ) {
+      record(sourceFile, node, "navigate", node.arguments[0], coreRouteAliases);
+    } else if (
       ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-      ts.isIdentifier(node.expression.expression) && node.expression.expression.text === "location" &&
+      isLocationObject(node.expression.expression) &&
       ["assign", "replace"].includes(node.expression.name.text) && node.arguments.length
     ) {
       record(sourceFile, node, "location", node.arguments[0], coreRouteAliases);
-    } else if (
-      ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      ts.isPropertyAccessExpression(node.left) && node.left.getText(sourceFile) === "location.href"
-    ) {
-      record(sourceFile, node, "location", node.right, coreRouteAliases);
+    } else if (ts.isBinaryExpression(node)) {
+      const assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+      const directLocation = isLocationObject(node.left);
+      const locationProperty = ts.isPropertyAccessExpression(node.left) &&
+        isLocationObject(node.left.expression) &&
+        ["href", "pathname", "search", "hash"].includes(node.left.name.text);
+      if (directLocation || locationProperty) {
+        if (assignment) record(sourceFile, node, "location", node.right, coreRouteAliases);
+        else {
+          const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+          unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "location-write", line });
+        }
+      }
     } else if (
       ts.isPropertyAssignment(node) &&
       ((ts.isIdentifier(node.name) && node.name.text === "to") || (ts.isStringLiteral(node.name) && node.name.text === "to"))

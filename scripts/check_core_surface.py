@@ -46,7 +46,8 @@ CORE_SPA_TARGET_PREFIXES = (
     "/workspaces",
 )
 CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
-SPA_AST_HELPER_SHA256 = "548bf97df8979a910a034920c188c74bd725861d8de6bef694b4dacd14028cdf"
+SPA_AST_HELPER_SHA256 = "191f781d551fcd1eefbaed024e06ba871222fbe029342003782dd221f92136a2"
+CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
         "App.tsx",
@@ -99,6 +100,65 @@ CORE_WIRE_ADAPTERS = {
         {"sse", "stdio", "streamable-http"},
     ),
 }
+CORE_WIRE_METADATA = {
+    "claude-code": ("json", "mcpServers", "pull"),
+    "codex": ("toml", "mcpServers", "pull"),
+    "copilot-cli": ("json", "mcpServers", "pull"),
+    "opencode": ("json", "mcp", "pull"),
+}
+
+
+def _expected_wire_config(adapter: str, transport: str) -> dict[str, object]:
+    url = {
+        "sse": "http://127.0.0.1:9877/sse",
+        "streamable-http": "http://127.0.0.1:9877/mcp",
+    }.get(transport)
+    if transport == "stdio":
+        process = ["python", "-m", "brains.mcp.server", "--mode", "stdio"]
+        if adapter == "opencode":
+            server: dict[str, object] = {
+                "type": "local",
+                "command": process,
+                "environment": {"BRAINS_DB_URL": "sqlite:////surface/brains.db"},
+                "enabled": True,
+                "_brains_managed": True,
+            }
+            return {"mcp": {"brains": server}}
+        server = {
+            "command": process[0],
+            "args": process[1:],
+            "env": {"BRAINS_DB_URL": "sqlite:////surface/brains.db"},
+        }
+        if adapter == "claude-code":
+            server = {"type": "stdio", **server, "_brains_managed": True}
+        elif adapter == "copilot-cli":
+            server["_brains_managed"] = True
+        return {"mcp_servers" if adapter == "codex" else "mcpServers": {"brains": server}}
+    if adapter == "codex":
+        return {
+            "mcp_servers": {
+                "brains": {
+                    "url": url,
+                    "bearer_token_env_var": "BRAINS_MCP_BEARER_TOKEN",
+                }
+            }
+        }
+    server = {
+        "type": "remote" if adapter == "opencode" else ("sse" if transport == "sse" else "http"),
+        "url": url,
+        "headers": {"Authorization": "Bearer <redacted>"},
+    }
+    if adapter == "opencode":
+        server.update({"oauth": False, "enabled": True})
+    server["_brains_managed"] = True
+    return {"mcp" if adapter == "opencode" else "mcpServers": {"brains": server}}
+
+
+def _parse_wire_config(adapter: str, content: str) -> dict[str, object]:
+    parsed = tomllib.loads(content) if adapter == "codex" else json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("wire config root is not a mapping")
+    return parsed
 
 WITHDRAWN_FRONTEND_API_TOKENS = (
     "/admin/configuration/",
@@ -661,6 +721,8 @@ def inventory() -> dict[str, object]:
 
 
 def violations(snapshot: dict[str, Any]) -> list[str]:
+    from brains.wire import MD_END, MD_START
+
     errors: list[str] = []
     commands = set(snapshot["cli_commands"])
     groups = set(snapshot["cli_groups"])
@@ -687,6 +749,7 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     ast_helper_hash = snapshot["spa_ast_helper_sha256"]
     wire = snapshot["wire"]
     wire_adapters = wire.get("adapters", {}) if isinstance(wire, dict) else {}
+    wire_rule_hash = wire.get("rule_sha256") if isinstance(wire, dict) else None
     if overlap := commands & WITHDRAWN_CLI_COMMANDS:
         errors.append(f"withdrawn CLI commands advertised: {sorted(overlap)}")
     if overlap := groups & WITHDRAWN_CLI_GROUPS:
@@ -789,10 +852,24 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
             errors.append(f"unknown SPA target reachable: {route or '<empty>'}")
     if set(wire_adapters) != set(CORE_WIRE_ADAPTERS):
         errors.append("wire adapter set differs from the supported core adapters")
+    if (
+        wire_rule_hash != CORE_WIRE_RULE_SHA256
+        or hashlib.sha256(wire_rule_body.encode("utf-8")).hexdigest()
+        != CORE_WIRE_RULE_SHA256
+    ):
+        errors.append("wire guidance differs from the reviewed core guidance")
+    expected_instruction = f"{MD_START}\n{wire_rule_body.rstrip()}\n{MD_END}\n"
     for name, (mcp_path, instruction_path, expected_transports) in CORE_WIRE_ADAPTERS.items():
         adapter = wire_adapters.get(name)
         if not isinstance(adapter, dict):
             continue
+        expected_format, expected_servers_key, expected_notification = CORE_WIRE_METADATA[name]
+        if (
+            adapter.get("format") != expected_format
+            or adapter.get("json_servers_key") != expected_servers_key
+            or adapter.get("mailbox_notification_mode") != expected_notification
+        ):
+            errors.append(f"wire adapter {name} metadata differs from the supported contract")
         if adapter.get("mcp_path") != mcp_path or adapter.get("instruction_path") != instruction_path:
             errors.append(f"wire adapter {name} uses a noncanonical managed path")
         transports = adapter.get("transports", {})
@@ -814,33 +891,22 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
                 errors.append(f"wire adapter {name}/{transport_name} action is not atomic creation")
             config_content = contract.get("config_content")
             instruction_content = contract.get("instruction_content")
-            if not isinstance(config_content, str) or "brains" not in config_content.lower():
+            if not isinstance(config_content, str):
                 errors.append(f"wire adapter {name}/{transport_name} config content is invalid")
-            if expected_url is not None and (
-                not isinstance(config_content, str) or expected_url not in config_content
-            ):
-                errors.append(f"wire adapter {name}/{transport_name} config omits its URL")
-            if transport_name == "stdio" and (
-                not isinstance(config_content, str)
-                or "--mode" not in config_content
-                or "stdio" not in config_content
-                or "sqlite:////surface/brains.db" not in config_content
-            ):
-                errors.append(f"wire adapter {name}/stdio config omits its process contract")
-            if transport_name != "stdio" and (
-                not isinstance(config_content, str)
-                or not any(
-                    marker in config_content
-                    for marker in ("<redacted>", "BRAINS_MCP_BEARER_TOKEN")
+            else:
+                try:
+                    parsed_config = _parse_wire_config(name, config_content)
+                except (json.JSONDecodeError, tomllib.TOMLDecodeError, ValueError):
+                    errors.append(f"wire adapter {name}/{transport_name} config is malformed")
+                else:
+                    if parsed_config != _expected_wire_config(name, transport_name):
+                        errors.append(
+                            f"wire adapter {name}/{transport_name} config structure is not exact"
+                        )
+            if instruction_content != expected_instruction:
+                errors.append(
+                    f"wire adapter {name}/{transport_name} instructions are not exact"
                 )
-            ):
-                errors.append(f"wire adapter {name}/{transport_name} config omits authentication")
-            if not isinstance(instruction_content, str) or not all(
-                marker in instruction_content for marker in ("brains:wire:start", "brains:wire:end")
-            ):
-                errors.append(f"wire adapter {name}/{transport_name} instructions omit sentinels")
-            elif wire_rule_body not in instruction_content:
-                errors.append(f"wire adapter {name}/{transport_name} instructions omit core guidance")
     for term in ("search_semantic", "graph_query", "graph_neighbors"):
         if term in wire_rule:
             errors.append(f"wire guidance advertises {term}")

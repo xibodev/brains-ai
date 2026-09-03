@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
 
 import pytest
 
@@ -27,6 +28,23 @@ def _mutate_path(mapping: dict[str, object], dotted: str) -> None:
         target[leaf] = [*current, "changed"]
     else:
         target[leaf] = "changed"
+
+
+def test_spa_ast_helper_executes_directly_against_repository() -> None:
+    helper = check_core_surface.ROOT / "scripts/inventory_spa_surface.mjs"
+    source = check_core_surface.ROOT / "frontend/src"
+    completed = subprocess.run(
+        ["node", str(helper), str(source)],
+        cwd=check_core_surface.ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert "main.tsx" in payload["modules"]
+    assert "App.tsx" in payload["modules"]
+    assert payload["graph"]["main.tsx"]
+    assert payload["navigation"]
 
 
 @pytest.mark.parametrize(
@@ -362,6 +380,84 @@ def test_ast_reachability_fails_closed_on_unresolved_route_target(tmp_path) -> N
         check_core_surface._frontend_reachability(source)
 
 
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'import * as Router from "react-router-dom"; '
+        'export function App() { return <Router.Route path="/labs" />; }\n',
+        'import * as Router from "react-router-dom"; const RR = Router; '
+        'export function App() { return <RR.Route path="/labs" />; }\n',
+        'import { redirect as go } from "react-router-dom"; '
+        'export function App() { go("/labs"); return <div />; }\n',
+        'import * as Router from "react-router-dom"; const { redirect: go } = Router; '
+        'export function App() { go("/labs"); return <div />; }\n',
+        'export function App() { window.location.assign("/labs"); return <div />; }\n',
+        'export function App() { window.location.replace("/labs"); return <div />; }\n',
+        'export function App() { window.location.href = "/labs"; return <div />; }\n',
+        'export function App() { window.location.pathname = "/labs"; return <div />; }\n',
+        'export function App() { window.location = "/labs"; return <div />; }\n',
+        'export function App() { location = "/labs"; return <div />; }\n',
+        'const destination = window.location; '
+        'export function App() { destination.assign("/labs"); return <div />; }\n',
+    ],
+)
+def test_ast_reachability_detects_namespace_router_and_window_location(
+    tmp_path, app_source: str
+) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text(
+        'import { App } from "./App"; <App />;\n', encoding="utf-8"
+    )
+    (source / "App.tsx").write_text(app_source, encoding="utf-8")
+
+    _modules, _graph, sites = check_core_surface._frontend_reachability(source)
+    assert any(site["target"] == "/labs" for site in sites)
+
+
+def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text(
+        'import { App } from "./App"; <App />;\n', encoding="utf-8"
+    )
+    (source / "App.tsx").write_text(
+        'import * as Router from "react-router-dom"; '
+        'export function App() { return <Router.Form to="/labs" />; }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
+
+
+def test_ast_reachability_fails_closed_on_compound_location_write(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text(
+        'import { App } from "./App"; <App />;\n', encoding="utf-8"
+    )
+    (source / "App.tsx").write_text(
+        'export function App() { window.location.pathname += "/labs"; return <div />; }\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
+
+
 def test_ast_reachability_follows_configured_alias_and_reexport(tmp_path) -> None:
     source = tmp_path / "frontend/src"
     (source / "screens").mkdir(parents=True)
@@ -467,6 +563,61 @@ def test_wire_semantics_reject_drift_without_manifest_comparison() -> None:
                     field
                 ] = replacement
                 assert check_core_surface.violations(snapshot)
+
+
+def _wire_config_with_rogue_server(adapter_name: str, content: str) -> str:
+    if adapter_name == "codex":
+        return f'{content}\n[mcp_servers.rogue]\ncommand = "rogue"\n'
+    parsed = json.loads(content)
+    servers_key = "mcp" if adapter_name == "opencode" else "mcpServers"
+    parsed[servers_key]["rogue"] = {"command": "rogue"}
+    return json.dumps(parsed)
+
+
+def _wire_config_with_rogue_process(adapter_name: str, content: str) -> str:
+    if adapter_name == "codex":
+        return content.replace('command = "python"', 'command = "rogue"')
+    parsed = json.loads(content)
+    servers_key = "mcp" if adapter_name == "opencode" else "mcpServers"
+    server = parsed[servers_key]["brains"]
+    if adapter_name == "opencode":
+        server["command"][0] = "rogue"
+    else:
+        server["command"] = "rogue"
+    return json.dumps(parsed)
+
+
+def test_wire_semantics_reject_same_shape_regenerated_bypasses() -> None:
+    baseline = _manifest()["modes"]["normal"]
+    for adapter_name, adapter in baseline["wire"]["adapters"].items():
+        for transport_name, transport in adapter["transports"].items():
+            rogue_server = copy.deepcopy(baseline)
+            rogue_server["wire"]["adapters"][adapter_name]["transports"][transport_name][
+                "config_content"
+            ] = _wire_config_with_rogue_server(adapter_name, transport["config_content"])
+            assert any(
+                "config structure is not exact" in error
+                for error in check_core_surface.violations(rogue_server)
+            )
+
+            rogue_instruction = copy.deepcopy(baseline)
+            rogue_instruction["wire"]["adapters"][adapter_name]["transports"][transport_name][
+                "instruction_content"
+            ] = f'rogue guidance\n{transport["instruction_content"]}appended rogue guidance\n'
+            assert any(
+                "instructions are not exact" in error
+                for error in check_core_surface.violations(rogue_instruction)
+            )
+
+            if transport_name == "stdio":
+                rogue_process = copy.deepcopy(baseline)
+                rogue_process["wire"]["adapters"][adapter_name]["transports"][transport_name][
+                    "config_content"
+                ] = _wire_config_with_rogue_process(adapter_name, transport["config_content"])
+                assert any(
+                    "config structure is not exact" in error
+                    for error in check_core_surface.violations(rogue_process)
+                )
 
 
 def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> None:
