@@ -826,7 +826,7 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
 @router.get("/admin/queue-health")
 def queue_health_status(principal: Principal = Depends(require_operator_principal)) -> dict:
     """Bootstrap-admin coordination-queue health + orphan/stale diagnosis
-    (BL-P1-12): family summary (owner/scope/lifecycle/expiry + counts) plus
+    (B8): family summary (owner/scope/lifecycle/expiry + counts) plus
     bounded, non-destructive orphan/stale-lease detection. Nothing here
     mutates any row - see ``POST /v1/admin/queue-health/repair`` to act."""
     if not principal.is_bootstrap_admin:
@@ -852,7 +852,7 @@ def queue_health_repair(
     principal: Principal = Depends(require_operator_principal),
 ) -> dict:
     """Dry-run (default) or apply the objectively-safe continuity repairs
-    (BL-P1-12). ``apply=false`` (default) returns what *would* change,
+    (B8). ``apply=false`` (default) returns what *would* change,
     mutating nothing; ``apply=true`` performs exactly those actions via each
     family's own existing fenced helper and reports what was actually done.
     Never deletes unresolved work - see ``brains.control.queue_health``."""

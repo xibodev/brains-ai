@@ -315,11 +315,16 @@ Workspace-conflict refusal, recoverable native deletion, revocation, old-proof
 rejection, and a body-, credential-, path-, and native-ID-free journal. Unsupported
 versions and unowned plugin paths fail closed without changing operator configuration.
 Notification attempt state is active through migration 151 and the CLI/MCP adapter
-protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
-reports pull until it installs a stronger adapter. Migration 152 preserves constrained
-SMTP consent/outbox rows for compatibility without advertising external delivery.
-Concrete local harness wakeup and host-restart acceptance remain core work;
-real-provider SMTP is frozen.
+protocol; the fixed nudge carries no mail metadata or content. With explicit consent,
+`wire --mailbox-wakeups` installs the Claude Code stop-hook adapter and reports
+`turn_boundary` only while its managed configuration is present. Its claim lease,
+three-attempt uncertainty bound, recursion guard, successor resolution, and exact
+configuration restoration preserve pull as authoritative recovery. Copilot CLI, Codex,
+and OpenCode remain pull-only notification adapters; OpenCode's separately proven
+plugin still attaches identity at the awaited turn boundary. Migration 152 preserves
+constrained SMTP consent/outbox rows for compatibility without advertising external
+delivery. Native-platform atomic-exchange and owner-only recovery-state acceptance
+remain BL-P1-12 work; real-provider SMTP is frozen.
 
 ### B3 - Workspace knowledge and repository lookup
 

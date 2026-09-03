@@ -344,6 +344,16 @@ jobs:
           python -m pytest -q tests/test_durable_mailbox_registration.py \
             -k windows_managed_binding_is_dpapi_protected_and_acl_verified
 
+  claude-wakeup-probe:
+    name: pinned Claude wakeup probe
+    needs: [docs, lint, typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove generated Claude hook discovery and continuation
+        shell: pwsh
+        run: ./scripts/run_docker_claude_wakeup_probe.ps1
+
   privacy:
     name: privacy gate
     runs-on: ubuntu-latest

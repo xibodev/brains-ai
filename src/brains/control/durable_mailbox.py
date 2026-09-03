@@ -79,8 +79,8 @@ _BINDING_DOMAIN = b"brains-mailbox-binding-v1\0"
 _WINDOWS_BINDING_PREFIX = "dpapi-v1:"
 MAILBOX_NOTIFICATION_MODES = frozenset({"pull", "turn_boundary", "immediate"})
 _TOOL_NOTIFICATION_MODES = {
-    "copilot-cli": frozenset({"pull"}),
-    "claude-code": frozenset({"pull", "immediate"}),
+    "copilot-cli": frozenset({"pull", "turn_boundary"}),
+    "claude-code": frozenset({"pull", "turn_boundary"}),
     "codex": frozenset({"pull", "turn_boundary"}),
     "opencode": frozenset({"pull", "immediate"}),
 }
@@ -349,6 +349,35 @@ def _secure_binding_file(path: Path) -> None:
     # entries. The managed file needs no explicit access principal except its user.
     if acl_sids != (sid,):
         raise OSError("mailbox binding file ACL contains an unexpected principal")
+
+
+def protect_owner_only_bytes(data: bytes) -> tuple[str, bytes]:
+    """Protect local recovery bytes with the platform's verified owner boundary."""
+    if os.name == "nt":
+        return "windows-dpapi", _windows_dpapi(data, protect=True)
+    return "posix-owner", data
+
+
+def unprotect_owner_only_bytes(protection: str, data: bytes) -> bytes:
+    """Reverse :func:`protect_owner_only_bytes` for the current user."""
+    if protection == "windows-dpapi" and os.name == "nt":
+        return _windows_dpapi(data, protect=False)
+    if protection == "posix-owner" and os.name != "nt":
+        return data
+    raise OSError("local recovery bytes are unavailable")
+
+
+def secure_owner_only_file(path: Path) -> None:
+    """Apply the verified owner-only POSIX mode or Windows DACL contract."""
+    _secure_binding_file(path)
+
+
+def secure_owner_only_directory(path: Path) -> None:
+    """Apply an owner-only boundary to a managed recovery directory."""
+    if os.name != "nt":
+        path.chmod(0o700)
+        return
+    _secure_binding_file(path)
 
 
 def _replace_managed_binding(path: Path, binding_secret: str) -> None:
@@ -1738,6 +1767,62 @@ def lookup_mailbox(
         )
 
 
+def resolve_managed_notification_proof(
+    workspace_path: str,
+    adapter: str,
+    native_tool_session_id: str,
+    *,
+    principal: Principal | None = None,
+) -> tuple[str, str, str]:
+    """Resolve an existing harness attachment to its owner-only proof.
+
+    This is deliberately not an attach/create path. A generated hook may use
+    only an already-current managed mailbox binding, so installing a hook
+    cannot guess identity or silently create another Session incarnation.
+    """
+    resolved = _principal_or_local(principal)
+    canonical_tool = canonical_mailbox_tool(adapter)
+    native_id = validate_native_tool_session_id(native_tool_session_id)
+    init_db()
+    with _db_module.SessionLocal() as session:
+        workspace = _authorized_workspace(
+            session,
+            resolved,
+            workspace_path=workspace_path,
+            capability=CAP_ORG_WRITE,
+        )
+        mailbox = _find_agent_mailbox(session, workspace.id, canonical_tool, native_id)
+        if mailbox is None:
+            raise MailboxUnavailableError("mailbox unavailable")
+        attachment = (
+            session.query(MailboxAttachment)
+            .filter(
+                MailboxAttachment.mailbox_id == mailbox.id,
+                MailboxAttachment.active_slot == 1,
+            )
+            .one_or_none()
+        )
+        agent = session.get(AgentSession, attachment.session_id) if attachment else None
+        if (
+            attachment is None
+            or agent is None
+            or not _attachment_session_is_current(session, agent)
+        ):
+            raise MailboxUnavailableError("mailbox unavailable")
+        path = _managed_binding_path(workspace, canonical_tool, native_id)
+        binding_secret = read_mailbox_binding_file(path, managed_only=True)
+        _assert_agent_identity(agent, workspace, resolved, canonical_tool)
+        operator_id = resolved.operator_id
+        assert operator_id is not None
+        _verify_existing_mailbox(
+            mailbox,
+            owner_operator_id=operator_id,
+            binding_hash=_binding_hash(binding_secret),
+            address=_mailbox_address(canonical_tool, native_id, workspace.slug),
+        )
+        return attachment.session_id, binding_secret, attachment.notification_mode
+
+
 __all__ = [
     "MailboxError",
     "MailboxUnavailableError",
@@ -1760,6 +1845,7 @@ __all__ = [
     "require_current_agent_mailbox_in_transaction",
     "register_agent_mailbox",
     "register_agent_mailbox_in_transaction",
+    "resolve_managed_notification_proof",
     "resume_agent_mailbox",
     "revoke_managed_agent_mailbox_binding",
     "rotate_managed_agent_mailbox_binding",
