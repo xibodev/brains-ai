@@ -382,7 +382,7 @@ def test_install_dry_run_touches_nothing(monkeypatch, tmp_path) -> None:
     assert written == []
 
 
-# --- PID identity — BL-P1-09 ------------------------------------------------
+# --- PID identity -----------------------------------------------------------
 #
 # The pidfile historically held a bare integer with no proof the recorded PID
 # still names the process that wrote it. These tests exercise the additive

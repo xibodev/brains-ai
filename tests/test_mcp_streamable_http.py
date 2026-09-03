@@ -17,6 +17,7 @@ import uvicorn
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+import brains.service.common as service_common
 from brains.api.auth import reset_rate_limit_state
 from brains.config import settings
 from brains.mcp.server import _build_http_app
@@ -127,6 +128,7 @@ def _serve_streamable_http_subprocess() -> Iterator[str]:
 
 def test_streamable_http_protocol_auth_and_host_contract(
     streamable_http_url: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = {
         "jsonrpc": "2.0",
@@ -170,6 +172,17 @@ def test_streamable_http_protocol_auth_and_host_contract(
     assert report["ready"] is True
     assert report["stage"] == "ready"
     assert report["tool_count"] > 0
+
+    from brains.control.readiness import mcp_protocol_readiness
+
+    monkeypatch.setattr(
+        service_common,
+        "read_service_config",
+        lambda: {"gateway_host": host, "mcp_port": int(raw_port)},
+    )
+    readiness = mcp_protocol_readiness()
+    assert readiness["ready"] is True
+    assert readiness["tool_count"] > 0
 
 
 @pytest.mark.acceptance

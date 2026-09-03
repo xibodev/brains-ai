@@ -555,10 +555,10 @@ export interface ConfigSummary {
   secrets_managed?: string;
 }
 
-// --- operational health (B8, BL-P1-09, BL-P1-12) ---
+// --- operational health (B8) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
-// protected ready/degraded verdict for storage/migration, coordination queues,
-// durable mailbox state, and recovery-policy configuration.
+// protected ready/degraded verdict for storage/migration, SQLite integrity,
+// authenticated MCP protocol, coordination queues, durable mailbox state, and recovery.
 
 export type HealthState = "ready" | "degraded";
 
@@ -571,6 +571,8 @@ export interface ReadinessReport {
   status: HealthState;
   components: {
     storage: ReadinessComponent;
+    sqlite_integrity: ReadinessComponent;
+    mcp_protocol: ReadinessComponent;
     queue: ReadinessComponent;
     durable_mail: ReadinessComponent;
     recovery_policy: ReadinessComponent;
@@ -640,6 +642,7 @@ export interface RecoveryPolicySummary {
   rpo_minutes: number | null;
   restore_drill_required: boolean;
   last_restore_drill_at: string | null;
+  restore_drill_error: string | null;
   complete: boolean;
   missing_fields: string[];
 }
@@ -653,6 +656,19 @@ export interface RecoveryPolicyReport {
     applied_schema_versions: number;
     compaction_prerequisite_ok: boolean | null;
     detail: string | null;
+  };
+  candidate: {
+    ready: boolean;
+    configured: boolean;
+    reason: string;
+    backend?: string;
+    data_fingerprint?: string | null;
+  };
+  last_drill: {
+    verified: boolean;
+    reason: string;
+    at: string | null;
+    data_fingerprint?: string;
   };
   reasons: string[];
 }

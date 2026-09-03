@@ -357,8 +357,10 @@ policy, and can be backed up, verified, restored, and rolled back safely.
 
 Ordered checksummed migrations, WAL/busy timeout, manifest backup, isolated
 verification, schema-compatibility refusal, dry-run-first repair, and redacted recovery
-policy exist. FK default enforcement and exact-candidate E4 remain open. Brains does not
-run a backup scheduler.
+policy exist. Restore candidates are verified before target mutation, live restores
+capture a verified rollback point and recheck integrity afterward, and isolated drills
+produce audited evidence. FK default enforcement remains open. Brains does not run a
+backup scheduler.
 
 Migration 150 has equivalent SQLite and PostgreSQL DDL so an existing compatibility
 store never records skipped work as applied. The supported product remains SQLite;
@@ -411,16 +413,16 @@ dependency failure, stale coordination state, and recovery posture.
 is removed.
 
 - AC-B8-01: `/health` remains an open liveness/inventory endpoint.
-- AC-B8-02: readiness checks supported dependencies, storage writes/migrations, service children, scheduler, wiring, and recovery.
+- AC-B8-02: readiness checks SQLite migration and quick/full/FK integrity, authenticated MCP protocol, queue/mailbox progress, and verified recovery posture.
 - AC-B8-03: logs/metrics are redacted and identify process boundaries.
 - AC-B8-04: multi-process failures and stale coordination presence are observable.
 
-Protected readiness currently reports bounded storage/migration, queue, durable-mail,
-and recovery policy. Readiness reports operational state only and does not infer adoption,
-behavior, or value. Child listener/protocol health, scheduler progress,
-registry/package/schema convergence, and supported wire transport remain open for the
-single supervised local service. Frozen SMTP, multi-process, Runtime/provider/Postgres,
-and external-integration state does not degrade normal readiness.
+Protected readiness reports each supported dependency independently with stable,
+secret-free reasons: SQLite migration and quick/full/FK checks, an authenticated MCP
+initialize plus tools/list handshake, queue and durable-mail progress, and recovery
+policy backed by a verified candidate and audited isolated drill. `/health` remains
+liveness only. Frozen model-gateway/provider, SMTP, multi-process, Runtime/Postgres, and
+external-integration state does not degrade normal readiness.
 
 ### B9 - Retired legacy browser surfaces
 

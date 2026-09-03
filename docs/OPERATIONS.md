@@ -71,7 +71,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
 | knowledge commands | Maintain reusable Workspace knowledge. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
-| `readiness`, `queue-health`, `recovery-policy` | Inspect supported operational posture. |
+| `readiness`, `queue-health`, `recovery-policy`, `recovery-drill` | Inspect supported operational posture and prove an isolated restore. |
 | `db migrations|migrate|diagnose|repair|fk-check` | Inspect or repair supported SQLite state. |
 | `backup`, `backup-inspect`, `db verify-backup`, `restore` | Create, verify, inspect, or restore manifest backups. |
 
@@ -284,17 +284,15 @@ brains-ai readiness
 GET /v1/admin/readiness
 ```
 
-At HEAD, readiness reports bounded storage/migration, coordination queue, durable-mail,
-and recovery-policy checks. Durable mail separates invalid registration/live attachment
-and aged unread state. A detached
+Readiness reports bounded SQLite migration and quick/full/FK integrity, authenticated
+MCP protocol, coordination queue, durable-mail, and verified recovery posture. Durable
+mail separates invalid registration/live attachment and aged unread state. A detached
 mailbox with unread accepted mail is reported but is not degraded until the unread-age
 threshold is crossed. Runtime execution is withdrawn and does not affect normal-product
-readiness. The active backlog still requires child
-listener/protocol health, scheduler progress, registry freshness, installed package and
-migration/schema identity, and configured wire transport checks.
+readiness. Each supported dependency degrades independently.
 
 No readiness field may return a secret or raw exception. A `ready` response still does
-not prove GitHub operation, browser journeys, backup/restore, ingress, or deployment.
+not prove GitHub operation, browser journeys, a live-store restore, ingress, or deployment.
 
 ## SQLite migrations and integrity
 
@@ -393,6 +391,8 @@ brains-ai backup-inspect
 brains-ai db verify-backup <archive> [--expect-source <sqlite-file>]
 brains-ai restore
 brains-ai recovery-policy
+brains-ai recovery-drill [archive]
+brains-ai readiness
 ```
 
 A valid archive has a readable manifest, verified payload hash, compatible schema
@@ -400,7 +400,24 @@ history, source identity where available, and a successful isolated restore. A b
 verification additionally proves the archive still represents the current source at
 the instant of the probe.
 
-Restore is destructive and requires explicit confirmation. Before rollback:
+With the owned service stopped and destructive restore explicitly approved, the bounded
+recovery probe for a named candidate is:
+
+```text
+brains-ai db verify-backup <candidate>
+brains-ai restore <candidate> --yes
+brains-ai recovery-drill <candidate>
+brains-ai readiness
+```
+
+Configure `BRAINS_BACKUP_CANDIDATE_PATH` to the same candidate before the final
+readiness call. Run the drill after a live restore because the restored database
+correctly does not contain audit events written only to the state it replaced.
+
+Restore is destructive and requires explicit confirmation. It validates the candidate
+before changing the target. A live restore captures and verifies a rollback archive
+under the state database's `recovery` directory (or at an explicitly supplied path),
+then runs SQLite integrity and foreign-key checks after replacement. Before rollback:
 
 1. stop the owned service tree so writers are quiescent;
 2. capture and verify a fresh backup of the state being replaced;
@@ -411,7 +428,19 @@ Restore is destructive and requires explicit confirmation. Before rollback:
 
 The recovery policy declares scope, schedule, retention, encryption owner, offsite
 owner/location, RTO, RPO, and restore-drill expectation. Brains does not schedule
-backups itself. A complete policy is not evidence that a backup or drill occurred.
+backups itself. Set `BRAINS_BACKUP_CANDIDATE_PATH` in local runtime configuration to
+the candidate used by readiness. A complete declaration or operator-entered date is
+not evidence that a backup or drill occurred; only a successful `recovery-drill`, which
+restores into disposable SQLite state and appends its outcome to the audit chain, counts
+for the matching candidate fingerprint.
+The readiness result identifies a verified candidate by its data fingerprint, never its
+local path.
+
+`brains-ai readiness` reports SQLite migration and quick/full/FK checks, an authenticated
+MCP initialize plus tools/list handshake, queue and durable-mail progress, and verified
+recovery posture independently. Stable reason codes identify the failed component
+without returning database paths, credentials, or raw exception messages. Model-gateway
+provider routing, Postgres, SMTP, and other frozen dependencies are not readiness inputs.
 
 ## Governance and audit
 
@@ -460,9 +489,6 @@ withdrawn source are test-debt inputs, not acceptance evidence.
 - Session end/detach and liveness renewal are not reliable across every harness.
 - Cross-process realtime live fan-out is absent.
 - Governed action confinement is cooperative and in-process.
-- Readiness lacks complete child, scheduler, registry, transport, and package/schema
-  convergence checks.
 - SQLite FK enforcement is not the default for unproven existing stores.
-- Exact-candidate backup/restore/rollback E4 is absent.
 - Dev Compose, shared-Postgres harnesses, UAT sidecars, and box deployment scaffolds
   contain withdrawn or inconsistent topology and are not supported deployment paths.
