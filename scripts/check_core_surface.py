@@ -15,7 +15,7 @@ import tempfile
 import tomllib
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     from scripts import check_distribution as distribution_contract
@@ -413,7 +413,16 @@ def _documented_ids(root: Path = ROOT) -> dict[str, object]:
 
 def _wire_inventory() -> dict[str, object]:
     from brains.mcp.transport import MCP_MODE_SSE, MCP_MODE_STDIO, MCP_MODE_STREAMABLE_HTTP
-    from brains.wire import ADAPTERS, RULE_BODY, build_wire_context, wire
+    from brains.wire import (
+        ADAPTERS,
+        OPENCODE_SUPPORTED_VERSION,
+        RULE_BODY,
+        _opencode_plugin_plan,
+        _wire_json,
+        _wire_rule,
+        build_wire_context,
+        wire,
+    )
 
     rendered: dict[str, object] = {}
     token_name = "BRAINS_MCP_BEARER_TOKEN"
@@ -435,27 +444,52 @@ def _wire_inventory() -> dict[str, object]:
                         python="python",
                         db_url="sqlite:////surface/brains.db",
                     )
-                    report = wire(
-                        home,
-                        context,
-                        tools=[name],
-                        rules=True,
-                        force=True,
-                        dry_run=False,
-                    )
-                    tool_reports = report.get("tools", [])
-                    if not report.get("ok") or len(tool_reports) != 1:
-                        raise RuntimeError(f"wire adapter {name} failed isolated generation")
-                    tool_report = tool_reports[0]
+                    plugin_plan: dict[str, str | Path] | None = None
+                    if name == "opencode":
+                        plugin_plan = _opencode_plugin_plan(
+                            home,
+                            context,
+                            verified_version=OPENCODE_SUPPORTED_VERSION,
+                            interpreter=Path("/surface/python"),
+                            state_dir=Path("/surface/state"),
+                        )
+                        tool_report = {
+                            "mcp": _wire_json(adapter, home, context, False),
+                            "rule": _wire_rule(adapter, home, False),
+                        }
+                    else:
+                        report = wire(
+                            home,
+                            context,
+                            tools=[name],
+                            rules=True,
+                            force=True,
+                            dry_run=False,
+                        )
+                        tool_reports = report.get("tools", [])
+                        if not report.get("ok") or len(tool_reports) != 1:
+                            raise RuntimeError(f"wire adapter {name} failed isolated generation")
+                        tool_report = tool_reports[0]
                     config_path = adapter.mcp_path(home)
                     instruction_path = adapter.instr_path(home)
-                    entries[transport] = {
+                    entry: dict[str, object] = {
                         "url": context.url if transport != MCP_MODE_STDIO else None,
                         "config_content": config_path.read_text(encoding="utf-8"),
                         "instruction_content": instruction_path.read_text(encoding="utf-8"),
                         "mcp_action": tool_report["mcp"].get("action"),
                         "rule_action": tool_report["rule"].get("action"),
                     }
+                    if plugin_plan is not None:
+                        entry["lifecycle_plugin"] = {
+                            "path": cast(Path, plugin_plan["path"]).relative_to(home).as_posix(),
+                            "manifest_path": cast(Path, plugin_plan["manifest_path"])
+                            .relative_to(home)
+                            .as_posix(),
+                            "content": plugin_plan["content"],
+                            "manifest_content": plugin_plan["manifest_content"],
+                            "verified_version": OPENCODE_SUPPORTED_VERSION,
+                        }
+                    entries[transport] = entry
             canonical_home = Path("/surface-home")
             rendered[name] = {
                 "format": adapter.mcp_format,

@@ -96,11 +96,12 @@ def _file_lock(path: Path) -> Iterator[None]:
             import msvcrt
 
             handle.seek(0)
+            unlock_flag = msvcrt.LK_UNLCK  # type: ignore[attr-defined]
             with contextlib.suppress(OSError):
                 msvcrt.locking(  # type: ignore[attr-defined]
                     handle.fileno(),
-                    msvcrt.LK_UNLCK,
-                    1,  # type: ignore[attr-defined]
+                    unlock_flag,
+                    1,
                 )
         else:
             import fcntl

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import timedelta
 from pathlib import Path
@@ -223,13 +224,27 @@ def test_cli_is_opencode_only_and_does_not_echo_native_identity(tmp_path: Path) 
 
 
 def test_wire_owns_exact_dependency_free_global_plugin(tmp_path: Path) -> None:
+    from brains import wire as wire_module
+
     home = tmp_path / "home"
     ctx = WireContext(transport="stdio")
+    verified_version, _detail = wire_module._opencode_compatibility()
+    assert verified_version == OPENCODE_SUPPORTED_VERSION
+    interpreter, state_dir = wire_module._opencode_runtime_inputs()
+    plan = wire_module._opencode_plugin_plan(
+        home,
+        ctx,
+        verified_version=verified_version,
+        interpreter=interpreter,
+        state_dir=state_dir,
+    )
     report = wire(home, ctx, tools=["opencode"], force=True)
     plugin = home / ".config/opencode/plugins/brains-lifecycle.js"
     rendered = render_opencode_plugin(ctx)
     assert report["ok"] is True
     assert plugin.read_text(encoding="utf-8") == rendered
+    assert plugin.read_text(encoding="utf-8") == plan["content"]
+    assert plugin.with_suffix(".sha256").read_text(encoding="utf-8") == plan["manifest_content"]
     assert "chat.message" in rendered
     assert "session.deleted" in rendered
     assert "adapter-detach" in rendered
@@ -288,6 +303,73 @@ def test_wire_fails_closed_outside_pinned_opencode_version(
     assert OPENCODE_SUPPORTED_VERSION not in str(report)
 
 
+def test_public_wire_has_no_version_verification_bypass(tmp_path: Path) -> None:
+    assert "verified_version" not in inspect.signature(wire).parameters
+    with pytest.raises(TypeError):
+        wire(  # type: ignore[call-arg]
+            tmp_path,
+            WireContext(transport="stdio"),
+            tools=["opencode"],
+            force=True,
+            verified_version=OPENCODE_SUPPORTED_VERSION,
+        )
+
+
+def test_internal_plugin_plan_requires_exact_verified_version(tmp_path: Path) -> None:
+    from brains import wire as wire_module
+
+    with pytest.raises(ValueError, match="outside the supported lifecycle contract"):
+        wire_module._opencode_plugin_plan(
+            tmp_path,
+            WireContext(transport="stdio"),
+            verified_version="0.0.0",
+            interpreter=Path("/surface/python"),
+            state_dir=Path("/surface/state"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("ctx", "interpreter", "state_dir"),
+    [
+        (WireContext(transport="stdio"), Path("python"), Path("/surface/state")),
+        (WireContext(transport="stdio"), Path("/surface/python"), Path("state")),
+        (
+            WireContext(transport="stdio", db_url="sqlite:///relative.db"),
+            Path("/surface/python"),
+            Path("/surface/state"),
+        ),
+    ],
+)
+def test_internal_plugin_plan_rejects_unvalidated_runtime_paths(
+    tmp_path: Path, ctx: WireContext, interpreter: Path, state_dir: Path
+) -> None:
+    from brains import wire as wire_module
+
+    with pytest.raises(ValueError, match="runtime paths must be absolute"):
+        wire_module._opencode_plugin_plan(
+            tmp_path,
+            ctx,
+            verified_version=OPENCODE_SUPPORTED_VERSION,
+            interpreter=interpreter,
+            state_dir=state_dir,
+        )
+
+
+def test_wire_fails_closed_when_opencode_binary_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from brains import wire as wire_module
+
+    monkeypatch.setattr(wire_module.shutil, "which", lambda _name: None)
+    home = tmp_path / "missing"
+    report = wire(home, WireContext(transport="stdio"), tools=["opencode"], force=True)
+
+    assert report["ok"] is False
+    assert report["tools"][0]["lifecycle_plugin"]["action"] == "error"
+    assert not (home / ".config/opencode/plugins/brains-lifecycle.js").exists()
+    assert not (home / ".config/opencode/opencode.json").exists()
+
+
 @pytest.mark.parametrize(
     ("returncode", "stdout"),
     [(0, "opencode unknown\n"), (1, ""), (0, "opencode 1.18.24\n")],
@@ -306,6 +388,6 @@ def test_opencode_compatibility_requires_the_exact_pinned_version(
             "Completed", (), {"returncode": returncode, "stdout": stdout}
         )(),
     )
-    compatible, detail = wire_module._opencode_compatibility()
-    assert compatible is False
+    verified_version, detail = wire_module._opencode_compatibility()
+    assert verified_version is None
     assert OPENCODE_SUPPORTED_VERSION not in detail

@@ -30,7 +30,11 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def compatible_opencode(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(wire, "_opencode_compatibility", lambda: (True, "compatible"))
+    monkeypatch.setattr(
+        wire,
+        "_opencode_compatibility",
+        lambda: (wire.OPENCODE_SUPPORTED_VERSION, "compatible"),
+    )
 
 
 def _sse_ctx() -> wire.WireContext:

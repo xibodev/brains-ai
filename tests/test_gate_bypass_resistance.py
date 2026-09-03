@@ -553,6 +553,7 @@ _KNOWN_UNGOVERNED_EXEC = (
     SRC / "brains/auth/copilot.py",
     SRC / "brains/backup/__init__.py",
     SRC / "brains/install/__init__.py",
+    SRC / "brains/wire/__init__.py",  # operator-invoked local client version preflight
     SRC / "brains/service/common.py",
     SRC / "brains/context/freshness.py",
     SRC / "brains/daemon/detect.py",
@@ -607,7 +608,7 @@ def test_ungoverned_exec_paths_are_acknowledged_not_discovered() -> None:
             found.add(path)
     unexpected = found - set(_KNOWN_UNGOVERNED_EXEC)
     assert not unexpected, (
-        "these modules exec directly and are not acknowledged in BL-P0-03: "
+        "these modules exec directly and are not in the reviewed operator-invoked inventory: "
         + ", ".join(sorted(str(p.relative_to(SRC)) for p in unexpected))
     )
 

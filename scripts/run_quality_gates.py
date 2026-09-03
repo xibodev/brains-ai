@@ -69,6 +69,18 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
             return [*runner, name, *args]
         return [sys.executable, "-m", name, *args]
 
+    def pytest(*args: str) -> list[str]:
+        return (
+            [*runner, "python", "-m", "pytest", *args]
+            if runner
+            else [
+                sys.executable,
+                "-m",
+                "pytest",
+                *args,
+            ]
+        )
+
     plan: list[Gate] = []
     if npm is not None:
         plan.append(
@@ -85,15 +97,14 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
             Gate("ruff lint", tool("ruff", "check", ".")),
             Gate("ruff format", tool("ruff", "format", "--check", ".")),
             Gate("mypy", tool("mypy")),
-            Gate("acceptance tests", tool("pytest", "-q", "-m", "acceptance")),
+            Gate("acceptance tests", pytest("-q", "-m", "acceptance")),
         ]
     )
     if fast:
         plan.append(
             Gate(
                 "contract self-tests",
-                tool(
-                    "pytest",
+                pytest(
                     "-q",
                     "tests/test_check_docs.py",
                     "tests/test_check_traceability.py",
@@ -103,7 +114,7 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
             )
         )
     else:
-        plan.append(Gate("unit + integration tests", tool("pytest", "-q", "--maxfail=20")))
+        plan.append(Gate("unit + integration tests", pytest("-q", "--maxfail=20")))
 
     if spa and npm is not None:
         plan.append(Gate("spa typecheck", [npm, "run", "typecheck"], cwd=ROOT / "frontend"))

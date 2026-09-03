@@ -37,6 +37,16 @@ def test_gate_commands_share_the_ci_runner(monkeypatch) -> None:
     assert commands["documentation contract"][: len(prefix)] == prefix
     assert commands["ruff lint"][: len(prefix)] == prefix
     assert commands["contract self-tests"][: len(prefix)] == prefix
+    assert commands["acceptance tests"][len(prefix) : len(prefix) + 3] == [
+        "python",
+        "-m",
+        "pytest",
+    ]
+    assert commands["contract self-tests"][len(prefix) : len(prefix) + 3] == [
+        "python",
+        "-m",
+        "pytest",
+    ]
     assert commands["core surface boundary"][: len(prefix)] == prefix
     assert commands["core surface boundary"][-2:] == ["--dist", "dist"]
     assert commands["distribution contents"][: len(prefix)] == prefix
@@ -77,6 +87,12 @@ def test_package_ci_builds_fresh_artifacts_before_core_surface() -> None:
     checker = package_job.index("python scripts/check_core_surface.py --dist dist")
     distribution = package_job.index("python scripts/check_distribution.py")
     assert setup < pinned < install < build < checker < distribution
+
+
+def test_ci_invokes_repo_tests_as_python_module() -> None:
+    workflow = (_PATH.parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "uv run pytest" not in workflow
+    assert workflow.count("uv run python -m pytest") == 4
 
 
 def test_local_runner_fails_clearly_without_parser_installer(monkeypatch, capsys) -> None:

@@ -956,6 +956,31 @@ def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> Non
             assert "brains" in transport["config_content"].lower()
             if transport["url"] is not None:
                 assert transport["url"] in transport["config_content"]
+            if name == "opencode":
+                plugin = transport["lifecycle_plugin"]
+                assert plugin["path"] == ".config/opencode/plugins/brains-lifecycle.js"
+                assert plugin["manifest_path"] == (
+                    ".config/opencode/plugins/brains-lifecycle.sha256"
+                )
+                assert plugin["verified_version"] == "1.18.25"
+                assert plugin["content"].startswith("// brains:opencode-lifecycle:v1")
+                assert plugin["manifest_content"].endswith("\n")
+
+
+@pytest.mark.parametrize("mutation", ["extra-content", "extra-slot"])
+def test_manifest_rejects_opencode_lifecycle_plan_mutation(mutation: str) -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    plugin = actual["modes"]["normal"]["wire"]["adapters"]["opencode"]["transports"]["stdio"][
+        "lifecycle_plugin"
+    ]
+    if mutation == "extra-content":
+        plugin["content"] += "\nprocess.env.UNREVIEWED\n"
+    else:
+        plugin["unreviewed_runtime_slot"] = "value"
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any("lifecycle_plugin" in error for error in errors)
 
 
 def test_checker_fails_closed_without_disclosing_inventory_error(

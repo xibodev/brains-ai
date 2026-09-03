@@ -70,7 +70,7 @@ jobs:
 
       - name: Contract self-tests
         run: >-
-          uv run pytest -q
+          uv run python -m pytest -q
           tests/test_check_docs.py
           tests/test_check_traceability.py
           tests/test_core_surface_manifest.py
@@ -131,12 +131,12 @@ jobs:
       # regression is attributable without reading the whole suite log.
       - name: Brains acceptance tests
         run: >
-          uv run pytest -q -m acceptance
+          uv run python -m pytest -q -m acceptance
           --junitxml=reports/acceptance-${{ matrix.python }}.xml
 
       - name: Unit + integration tests
         run: >
-          uv run pytest -q --maxfail=20
+          uv run python -m pytest -q --maxfail=20
           --junitxml=reports/pytest-${{ matrix.python }}.xml
           --cov=brains
           --cov-report=xml:coverage.xml
@@ -183,7 +183,7 @@ jobs:
       # the ledger can be wrong is detected rather than absorbed.
       - name: Migration and baseline contract
         run: >
-          uv run pytest -q
+          uv run python -m pytest -q
           tests/test_migration_contract.py
           tests/test_baseline_schema_generation.py
           tests/test_consolidation_migration.py

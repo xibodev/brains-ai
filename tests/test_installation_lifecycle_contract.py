@@ -163,7 +163,11 @@ def test_clean_home_service_and_wire_lifecycle_is_reversible(
         db_url=f"sqlite:///{(state / 'brains.sqlite').as_posix()}",
     )
     if tool == "opencode":
-        monkeypatch.setattr(wire, "_opencode_compatibility", lambda: (True, "compatible"))
+        monkeypatch.setattr(
+            wire,
+            "_opencode_compatibility",
+            lambda: (wire.OPENCODE_SUPPORTED_VERSION, "compatible"),
+        )
     wired = wire.wire(home, context, tools=[tool], rules=False, force=True)
     assert wired["ok"] is True
     selected = next(row for row in wire.status(home)["tools"] if row["tool"] == tool)
