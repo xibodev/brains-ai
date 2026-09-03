@@ -55,7 +55,7 @@ jobs:
 
       # Derives SPA routes, API client calls, mounted server routes, entities,
       # migrations and stable-ID test markers from source and fails on any
-      # orphan or unmatched surface (BL-P1-10).
+      # orphan or unmatched surface.
       - name: Generated traceability contract
         run: uv run python scripts/check_traceability.py
 
@@ -63,7 +63,12 @@ jobs:
         run: uv run python scripts/check_core_surface.py
 
       - name: Contract self-tests
-        run: uv run pytest -q tests/test_check_docs.py tests/test_check_traceability.py
+        run: >-
+          uv run pytest -q
+          tests/test_check_docs.py
+          tests/test_check_traceability.py
+          tests/test_core_surface_manifest.py
+          tests/test_distribution_contract.py
 
   lint:
     name: ruff lint + format

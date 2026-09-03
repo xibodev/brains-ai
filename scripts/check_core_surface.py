@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
+import ast
+import hashlib
 import inspect
 import json
+import os
 import re
+import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
 sys.path.insert(0, str(ROOT / "src"))
+
+HTTP_METHODS = {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"}
 
 WITHDRAWN_FRONTEND_API_TOKENS = (
     "/admin/configuration/",
@@ -35,33 +45,233 @@ from brains.capabilities import (  # noqa: E402
 )
 
 
+def _configuration_keys() -> tuple[list[str], list[str], list[str]]:
+    """Read the positive public configuration contract without loading settings."""
+
+    tree = ast.parse((ROOT / "src/brains/control/configuration.py").read_text(encoding="utf-8"))
+    readable: set[str] = set()
+    summary_writable: set[str] = set()
+    accepted_writable: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_EDITABLE"
+            and isinstance(node.value, ast.Dict)
+        ):
+            accepted_writable.update(
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+        if not isinstance(node, ast.Dict):
+            continue
+        values: dict[str, ast.expr] = {}
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                values[key.value] = value
+        public_key = values.get("key")
+        editable = values.get("editable")
+        if isinstance(public_key, ast.Constant) and isinstance(public_key.value, str):
+            readable.add(public_key.value)
+            if isinstance(editable, ast.Constant) and editable.value is True:
+                summary_writable.add(public_key.value)
+    if not readable or not summary_writable or not accepted_writable:
+        raise RuntimeError("public configuration manifest could not be extracted")
+    return sorted(readable), sorted(summary_writable), sorted(accepted_writable)
+
+
+def _all_opt_in_env() -> dict[str, str]:
+    from brains.experimental import EXPERIMENTAL_GATES
+
+    return {
+        **{name: "1" for name in EXPERIMENTAL_GATES},
+        "BRAINS_MCP_TOOLS": "all",
+    }
+
+
+def _experimental_gate_inventory() -> dict[str, str]:
+    from brains.experimental import EXPERIMENTAL_GATES
+
+    return dict(sorted(EXPERIMENTAL_GATES.items()))
+
+
+def _environment_names() -> list[str]:
+    names: set[str] = set()
+    for root in (ROOT / "src", ROOT / "frontend/src"):
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix in {".py", ".ts", ".tsx"}:
+                names.update(re.findall(r"\bBRAINS_[A-Z][A-Z0-9_]+\b", path.read_text(encoding="utf-8")))
+    return sorted(names)
+
+
+def _documented_ids() -> dict[str, object]:
+    canonical = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "docs/product/PRODUCT_BRIEF.md",
+            "docs/product/FEATURE_CONTRACT.md",
+            "docs/product/PERSONAS_AND_JOURNEYS.md",
+            "docs/product/USER_OUTCOME_SPEC.md",
+            "docs/product/TRACEABILITY.md",
+            "docs/product/BACKLOG.md",
+        )
+    }
+    feature = canonical["docs/product/FEATURE_CONTRACT.md"]
+    journeys = canonical["docs/product/PERSONAS_AND_JOURNEYS.md"]
+    backlog = canonical["docs/product/BACKLOG.md"]
+    stable_id = re.compile(
+        r"\b(?:BL-P[0-3]-\d+|AC-(?:F|B)\d+-\d+|F(?:10|\d)|B\d+|J(?:1[01]|\d)|P\d+|O\d+)\b"
+    )
+    return {
+        "features": sorted(set(re.findall(r"^### (F\d+)\b", feature, re.MULTILINE))),
+        "boundaries": sorted(set(re.findall(r"^### (B\d+)\b", feature, re.MULTILINE))),
+        "acceptance": sorted(set(re.findall(r"\b(AC-(?:F|B)\d+-\d+)\b", feature))),
+        "journeys": sorted(set(re.findall(r"^### (J\d+)\b", journeys, re.MULTILINE))),
+        "backlog": sorted(set(re.findall(r"^### (BL-P\d+-\d+)\b", backlog, re.MULTILINE))),
+        "by_file": {
+            path: sorted(set(stable_id.findall(source)))
+            for path, source in sorted(canonical.items())
+        },
+    }
+
+
+def _wire_inventory() -> dict[str, object]:
+    from brains.mcp.transport import MCP_MODE_SSE, MCP_MODE_STDIO, MCP_MODE_STREAMABLE_HTTP
+    from brains.wire import (
+        ADAPTERS,
+        MD_END,
+        MD_START,
+        RULE_BODY,
+        SERVER_KEY,
+        TOML_END,
+        TOML_START,
+        WireContext,
+        _replace_sentinel_block,
+    )
+
+    home = Path("/surface-home")
+    rendered: dict[str, object] = {}
+    for name, adapter in sorted(ADAPTERS.items()):
+        transports = [MCP_MODE_STREAMABLE_HTTP, MCP_MODE_STDIO]
+        if adapter.supports_sse:
+            transports.append(MCP_MODE_SSE)
+        entries: dict[str, object] = {}
+        for transport in transports:
+            context = WireContext(
+                transport=transport,
+                url="http://127.0.0.1:9877/mcp",
+                api_key="<redacted>",
+                bearer_token_env_var="BRAINS_MCP_BEARER_TOKEN",
+                python="python",
+                db_url="sqlite:////surface/brains.db",
+            )
+            if adapter._json_entry is not None:
+                managed_entry = {**adapter._json_entry(context), "_brains_managed": True}
+                config_content = (
+                    json.dumps(
+                        {adapter.json_servers_key: {SERVER_KEY: managed_entry}},
+                        indent=2,
+                    )
+                    + "\n"
+                )
+            elif adapter._toml_block is not None:
+                managed_entry = adapter._toml_block(context)
+                config_content = _replace_sentinel_block(
+                    "", TOML_START, TOML_END, managed_entry
+                )
+            else:
+                raise RuntimeError(f"wire adapter {name} has no renderer")
+            entries[transport] = {
+                "managed_entry": managed_entry,
+                "file_content": config_content,
+            }
+        instruction_content = _replace_sentinel_block(
+            "", MD_START, MD_END, RULE_BODY.rstrip("\n")
+        )
+        rendered[name] = {
+            "format": adapter.mcp_format,
+            "mcp_path": adapter.mcp_path(home).relative_to(home).as_posix(),
+            "instruction_path": adapter.instr_path(home).relative_to(home).as_posix(),
+            "json_servers_key": adapter.json_servers_key,
+            "mailbox_notification_mode": adapter.mailbox_notification_mode,
+            "transports": entries,
+            "instruction_content": instruction_content,
+        }
+    return {
+        "adapters": rendered,
+        "rule_sha256": hashlib.sha256(RULE_BODY.encode("utf-8")).hexdigest(),
+    }
+
+
 def inventory() -> dict[str, object]:
+    import typer
+
     from brains.cli.app import app as cli
     from brains.events.topics import ORG_CHANNELS, parse_topic
     from brains.extras import EXTRAS
     from brains.install import VALID_FEATURES
     from brains.main import app as http
-    from brains.mcp.server import TOOL_REGISTRY
+    from brains.mcp.server import TOOL_PREFIX, TOOL_REGISTRY, list_tools
     from brains.wire import RULE_BODY
 
-    def command_tree(typer_app, prefix: str = "") -> list[str]:
-        found = [
-            f"{prefix}{command.name}" for command in typer_app.registered_commands if command.name
-        ]
-        for group in typer_app.registered_groups:
-            if group.name and group.typer_instance is not None:
-                group_path = f"{prefix}{group.name}"
-                found.append(group_path)
-                found.extend(command_tree(group.typer_instance, f"{group_path} "))
-        return found
+    resolved_cli = typer.main.get_command(cli)
+    if not isinstance(getattr(resolved_cli, "commands", None), dict):
+        raise RuntimeError("CLI command inventory is not a group")
+    cli_tree: list[str] = []
+    cli_groups: list[str] = []
+    cli_nodes: dict[str, object] = {}
+    callback_paths: dict[str, list[str]] = {}
 
-    cli_tree = sorted(command_tree(cli))
-    commands = sorted(command.name for command in cli.registered_commands if command.name)
-    groups = sorted(group.name for group in cli.registered_groups if group.name)
+    def collect_commands(group: Any, prefix: str = "") -> None:
+        for name, command in group.commands.items():
+            path = f"{prefix}{name}"
+            cli_tree.append(path)
+            is_group = isinstance(getattr(command, "commands", None), dict)
+            if is_group:
+                cli_groups.append(path)
+            callback = command.callback
+            identity = (
+                f"{callback.__module__}.{callback.__qualname__}" if callback is not None else "<none>"
+            )
+            if callback is not None:
+                callback_paths.setdefault(identity, []).append(path)
+            cli_nodes[path] = {
+                "callback": identity,
+                "hidden": bool(command.hidden),
+                "kind": "group" if is_group else "command",
+            }
+            if is_group:
+                collect_commands(command, f"{path} ")
+
+    collect_commands(resolved_cli)
+    root_commands = sorted(
+        name
+        for name, command in resolved_cli.commands.items()
+        if not isinstance(getattr(command, "commands", None), dict)
+    )
+    root_groups = sorted(
+        name
+        for name, command in resolved_cli.commands.items()
+        if isinstance(getattr(command, "commands", None), dict)
+    )
     routes = sorted(http.openapi()["paths"])
     mounted_paths = sorted(path for route in http.routes if (path := getattr(route, "path", "")))
     app_source = (ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
     browser_routes = sorted(re.findall(r'<Route\s+path="([^"]+)"', app_source))
+    sidebar_source = (ROOT / "frontend/src/components/Sidebar.tsx").read_text(encoding="utf-8")
+    palette_source = (ROOT / "frontend/src/components/CommandPalette.tsx").read_text(
+        encoding="utf-8"
+    )
+    sidebar_routes = sorted(set(re.findall(r'\bto:\s*"([^"]+)"', sidebar_source)))
+    palette_routes = sorted(set(re.findall(r'\bto:\s*"([^"]+)"', palette_source)))
+    palette_dynamic_routes = sorted(
+        set(re.findall(r"\bto:\s*`([^`?]+)\?", palette_source))
+    )
+    browser_redirects = sorted(set(re.findall(r'<Navigate\s+to="([^"]+)"', app_source)))
+    sidebar_imperative_routes = sorted(
+        set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source))
+    )
     config_source = (ROOT / "frontend/src/screens/Config.tsx").read_text(encoding="utf-8")
     config_sections = sorted(re.findall(r'key:\s*"([^"]+)"', config_source))
     frontend_api_source = (ROOT / "frontend/src/api/client.ts").read_text(encoding="utf-8")
@@ -73,6 +283,8 @@ def inventory() -> dict[str, object]:
     )
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     extras = sorted(project["project"].get("optional-dependencies", {}))
+    read_keys, summary_write_keys, accepted_write_keys = _configuration_keys()
+    environment_names = _environment_names()
     mcp_contracts = {
         name: {
             "signature": str(inspect.signature(handler)),
@@ -81,15 +293,50 @@ def inventory() -> dict[str, object]:
         for name, handler in TOOL_REGISTRY.items()
     }
     return {
-        "cli_commands": commands,
-        "cli_groups": groups,
-        "cli_tree": cli_tree,
+        "cli_commands": root_commands,
+        "cli_groups": root_groups,
+        "cli_tree": sorted(cli_tree),
+        "cli_group_tree": sorted(cli_groups),
+        "cli_nodes": dict(sorted(cli_nodes.items())),
+        "cli_root_callback": (
+            f"{resolved_cli.callback.__module__}.{resolved_cli.callback.__qualname__}"
+            if resolved_cli.callback is not None
+            else "<none>"
+        ),
+        "cli_callbacks": {key: sorted(value) for key, value in sorted(callback_paths.items())},
+        "cli_aliases": sorted(
+            sorted(paths) for paths in callback_paths.values() if len(paths) > 1
+        ),
         "mcp_tools": sorted(TOOL_REGISTRY),
+        "mcp_tool_prefix": TOOL_PREFIX,
+        "mcp_advertised_tools": sorted(list_tools()),
         "mcp_contracts": mcp_contracts,
         "http_routes": routes,
         "mounted_paths": mounted_paths,
+        "http_operations": sorted(
+            f"{method.upper()} {path}"
+            for path, operations in http.openapi()["paths"].items()
+            for method in operations
+            if method.upper() in HTTP_METHODS
+        ),
         "browser_routes": browser_routes,
+        "browser_redirects": browser_redirects,
+        "sidebar_routes": sidebar_routes,
+        "sidebar_imperative_routes": sidebar_imperative_routes,
+        "palette_routes": palette_routes,
+        "palette_dynamic_routes": palette_dynamic_routes,
+        "spa_contract_sha256": {
+            "app": hashlib.sha256(app_source.encode("utf-8")).hexdigest(),
+            "sidebar": hashlib.sha256(sidebar_source.encode("utf-8")).hexdigest(),
+            "palette": hashlib.sha256(palette_source.encode("utf-8")).hexdigest(),
+        },
         "config_sections": config_sections,
+        "config_read_keys": read_keys,
+        "config_summary_write_keys": summary_write_keys,
+        "config_write_keys": accepted_write_keys,
+        "environment_names": environment_names,
+        "all_opt_in_environment_names": sorted(_all_opt_in_env()),
+        "experimental_gates": _experimental_gate_inventory(),
         "withdrawn_frontend_api_tokens": sorted(
             token
             for token in WITHDRAWN_FRONTEND_API_TOKENS
@@ -98,6 +345,17 @@ def inventory() -> dict[str, object]:
         "extras": extras,
         "runtime_extra_registry": sorted(EXTRAS),
         "install_features": sorted(VALID_FEATURES),
+        "package": {
+            "entry_points": project["project"].get("scripts", {}),
+            "dependencies": sorted(project["project"].get("dependencies", [])),
+            "optional_dependencies": {
+                key: sorted(value)
+                for key, value in sorted(project["project"].get("optional-dependencies", {}).items())
+            },
+            "package_data": project.get("tool", {}).get("setuptools", {}).get("package-data", {}),
+        },
+        "wire": _wire_inventory(),
+        "documented_ids": _documented_ids(),
         "wire_rule": RULE_BODY,
         "realtime_org_channels": sorted(ORG_CHANNELS),
         "withdrawn_realtime_topics_accepted": sorted(
@@ -140,6 +398,8 @@ def violations(snapshot: dict[str, object]) -> list[str]:
     mounted_paths = list(snapshot["mounted_paths"])
     browser_routes = list(snapshot["browser_routes"])
     config_sections = set(snapshot["config_sections"])
+    summary_write_keys = set(snapshot["config_summary_write_keys"])
+    accepted_write_keys = set(snapshot["config_write_keys"])
     withdrawn_frontend_api_tokens = list(snapshot["withdrawn_frontend_api_tokens"])
     extras = set(snapshot["extras"])
     runtime_extra_registry = set(snapshot["runtime_extra_registry"])
@@ -208,6 +468,8 @@ def violations(snapshot: dict[str, object]) -> list[str]:
         errors.append(f"withdrawn browser routes advertised: {blocked}")
     if blocked := config_sections & {"providers", "models", "integrations", "secrets", "email"}:
         errors.append(f"withdrawn configuration sections advertised: {sorted(blocked)}")
+    if summary_write_keys != accepted_write_keys:
+        errors.append("configuration summary and accepted write keys differ")
     if withdrawn_frontend_api_tokens:
         errors.append(f"withdrawn frontend API paths shipped: {withdrawn_frontend_api_tokens}")
     for required in ("/health", "/v1/operator/workspaces", "/v1/asks"):
@@ -231,12 +493,158 @@ def violations(snapshot: dict[str, object]) -> list[str]:
     return errors
 
 
-def main() -> int:
-    snapshot = inventory()
-    errors = violations(snapshot)
-    snapshot["violations"] = errors
-    print(json.dumps(snapshot, indent=2))
-    return 1 if errors else 0
+def _exact_differences(expected: Any, actual: Any, path: str = "surface") -> list[str]:
+    """Return bounded, non-secret differences from the reviewed manifest."""
+
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        errors: list[str] = []
+        expected_keys = set(expected)
+        actual_keys = set(actual)
+        if missing := sorted(expected_keys - actual_keys):
+            errors.append(f"{path}: missing key count={len(missing)}")
+        if extra := sorted(actual_keys - expected_keys):
+            errors.append(f"{path}: unexpected key count={len(extra)}")
+        for key in sorted(expected_keys & actual_keys):
+            errors.extend(_exact_differences(expected[key], actual[key], f"{path}.{key}"))
+        return errors
+    if expected != actual:
+        if isinstance(expected, list) and isinstance(actual, list):
+            try:
+                missing = sorted(set(expected) - set(actual))
+                extra = sorted(set(actual) - set(expected))
+            except TypeError:
+                missing, extra = [], []
+            if missing or extra:
+                return [f"{path}: missing count={len(missing)} unexpected count={len(extra)}"]
+            return [f"{path}: ordered content differs"]
+        return [f"{path}: reviewed value changed"]
+    return []
+
+
+def manifest_violations(
+    actual: dict[str, object], expected: dict[str, object]
+) -> list[str]:
+    errors: list[str] = []
+    if expected.get("schema_version") != 1:
+        errors.append("core surface manifest schema is missing or unsupported")
+        return errors
+    if actual.get("schema_version") != 1:
+        errors.append("generated core surface inventory schema is missing or unsupported")
+        return errors
+    expected_modes = expected.get("modes")
+    actual_modes = actual.get("modes")
+    if not isinstance(expected_modes, dict) or not isinstance(actual_modes, dict):
+        return ["core surface mode inventory is malformed"]
+    for mode in ("normal", "all_opt_in"):
+        expected_snapshot = expected_modes.get(mode)
+        actual_snapshot = actual_modes.get(mode)
+        if not isinstance(expected_snapshot, dict) or not isinstance(actual_snapshot, dict):
+            errors.append(f"{mode}: inventory is unavailable")
+            continue
+        errors.extend(f"{mode}: {error}" for error in violations(actual_snapshot))
+        errors.extend(_exact_differences(expected_snapshot, actual_snapshot, mode))
+    return errors
+
+
+def _isolated_inventory(*, all_opt_in: bool) -> dict[str, object]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("BRAINS_")
+    }
+    with tempfile.TemporaryDirectory(prefix="brains-core-surface-") as isolated_home:
+        env.update(
+            {
+                "HOME": isolated_home,
+                "USERPROFILE": isolated_home,
+                "XDG_CONFIG_HOME": isolated_home,
+                "BRAINS_DB_URL": "sqlite:///:memory:",
+                "BRAINS_RUNTIME_OVERLAY": str(Path(isolated_home) / "runtime.yaml"),
+            }
+        )
+        if all_opt_in:
+            env.update(_all_opt_in_env())
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--snapshot-only"],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=60,
+        )
+    if completed.returncode != 0:
+        raise RuntimeError("isolated core surface inventory failed")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError("isolated core surface inventory was malformed")
+    return payload
+
+
+def full_inventory() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "modes": {
+            "normal": _isolated_inventory(all_opt_in=False),
+            "all_opt_in": _isolated_inventory(all_opt_in=True),
+        },
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--write-manifest",
+        action="store_true",
+        help="Write the reviewed positive manifest; never used by CI.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        if args.snapshot_only:
+            print(json.dumps(inventory(), sort_keys=True))
+            return 0
+        actual = full_inventory()
+        if args.write_manifest:
+            unsafe = [
+                f"{mode}: {error}"
+                for mode, snapshot in actual["modes"].items()
+                for error in violations(snapshot)
+            ]
+            if unsafe:
+                raise RuntimeError("generated inventory violates the core boundary")
+            existing: dict[str, object] = {}
+            if MANIFEST.exists():
+                loaded = json.loads(MANIFEST.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    existing = loaded
+            actual.update(
+                {key: value for key, value in existing.items() if key not in {"schema_version", "modes"}}
+            )
+            MANIFEST.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            print(f"wrote reviewed core surface manifest: {MANIFEST.relative_to(ROOT)}")
+            return 0
+        expected = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        if not isinstance(expected, dict):
+            raise RuntimeError("core surface manifest must be an object")
+        errors = manifest_violations(actual, expected)
+        if errors:
+            print(json.dumps({"violations": errors}, indent=2, sort_keys=True))
+            return 1
+        print("reviewed core surface matches normal and all-opt-in inventories")
+        return 0
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "violations": [
+                        f"core surface inventory failed closed ({type(exc).__name__})"
+                    ]
+                },
+                indent=2,
+            )
+        )
+        return 1
 
 
 if __name__ == "__main__":

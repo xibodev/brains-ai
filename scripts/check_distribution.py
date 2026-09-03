@@ -15,12 +15,16 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 import tarfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
 
 #: Exact members every wheel must carry, relative to the package root.
 REQUIRED_WHEEL_FILES = (
@@ -70,6 +74,52 @@ def _one(paths: list[Path], kind: str) -> tuple[Path | None, list[str]]:
     return paths[0], []
 
 
+def wheel_inventory(path: Path) -> list[str]:
+    with zipfile.ZipFile(path) as archive:
+        return sorted(
+            re.sub(r"^brains_ai-[^/]+\.dist-info/", "brains_ai.dist-info/", member)
+            for member in archive.namelist()
+            if not member.endswith("/")
+        )
+
+
+def sdist_inventory(path: Path) -> list[str]:
+    with tarfile.open(path) as archive:
+        members = archive.getmembers()
+    if any(not member.isdir() and not member.isfile() for member in members):
+        raise ValueError("sdist contains a non-regular member")
+    names = [member.name for member in members if member.isfile()]
+    if not names or any("/" not in name for name in names):
+        raise ValueError("sdist file inventory has no single package root")
+    roots = {name.split("/", 1)[0] for name in names}
+    if len(roots) != 1 or not next(iter(roots)).startswith(("brains_ai-", "brains-ai-")):
+        raise ValueError("sdist file inventory has no single package root")
+    return sorted(name.split("/", 1)[1] for name in names)
+
+
+def _manifest_inventory(kind: str) -> list[str]:
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    distribution = payload.get("distribution") if isinstance(payload, dict) else None
+    expected = distribution.get(kind) if isinstance(distribution, dict) else None
+    if not isinstance(expected, list) or not all(isinstance(item, str) for item in expected):
+        raise ValueError(f"reviewed {kind} inventory is missing or malformed")
+    return expected
+
+
+def _exact_errors(path: Path, kind: str, actual: list[str]) -> list[str]:
+    try:
+        expected = _manifest_inventory(kind)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return [f"{path.name}: reviewed {kind} inventory is unavailable"]
+    expected_counts = Counter(expected)
+    actual_counts = Counter(actual)
+    missing = sum((expected_counts - actual_counts).values())
+    extra = sum((actual_counts - expected_counts).values())
+    if missing or extra:
+        return [f"{path.name}: {kind} inventory differs; missing={missing} unexpected={extra}"]
+    return []
+
+
 def check_wheel(path: Path) -> list[str]:
     errors: list[str] = []
     with zipfile.ZipFile(path) as archive:
@@ -89,6 +139,7 @@ def check_wheel(path: Path) -> list[str]:
         migrations = {name for name in names if name.startswith("brains/storage/sql_migrations/")}
         if not any(name.endswith(".sql") for name in migrations):
             errors.append(f"{path.name}: brains/storage/sql_migrations ships no .sql delta")
+    errors.extend(_exact_errors(path, "wheel", wheel_inventory(path)))
     return errors
 
 
@@ -110,6 +161,12 @@ def check_sdist(path: Path) -> list[str]:
         for member in (f"src/{name}" for name in FORBIDDEN_WHEEL_FILES):
             if member in names:
                 errors.append(f"{path.name}: ships deleted legacy file {member}")
+    try:
+        members = sdist_inventory(path)
+    except (OSError, ValueError, tarfile.TarError):
+        errors.append(f"{path.name}: sdist inventory is malformed")
+    else:
+        errors.extend(_exact_errors(path, "sdist", members))
     return errors
 
 
@@ -127,12 +184,39 @@ def check_distribution(dist: Path) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist", default=str(ROOT / "dist"), help="Directory holding the build.")
+    parser.add_argument(
+        "--write-manifest",
+        action="store_true",
+        help="Record exact normalized artifact members; never used by CI.",
+    )
     args = parser.parse_args(argv)
 
     dist = Path(args.dist).resolve()
     if not dist.is_dir():
         print(f"distribution contract failed:\n- {dist} does not exist")
         return 1
+
+    wheel, selection_errors = _one(sorted(dist.glob("*.whl")), "wheel")
+    sdist, sdist_errors = _one(sorted(dist.glob("*.tar.gz")), "sdist")
+    if args.write_manifest:
+        errors = [*selection_errors, *sdist_errors]
+        if errors or wheel is None or sdist is None:
+            print("distribution contract failed:\n- " + "\n- ".join(errors))
+            return 1
+        try:
+            payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError
+            payload["distribution"] = {
+                "wheel": wheel_inventory(wheel),
+                "sdist": sdist_inventory(sdist),
+            }
+            MANIFEST.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            print("distribution contract failed:\n- core surface manifest is unavailable")
+            return 1
+        print("wrote reviewed wheel and sdist inventories")
+        return 0
 
     errors = check_distribution(dist)
     if errors:

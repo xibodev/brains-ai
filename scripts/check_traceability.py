@@ -4,7 +4,7 @@
 presence, freshness headers, links, prohibited history, and the stable ID
 vocabulary. It cannot tell whether the documented surfaces still exist.
 
-This checker closes that gap (BL-P1-10). Every inventory below is derived from
+Every inventory below is derived from
 source at run time and compared against the canonical contract, so a new route,
 client call, entity, migration, journey spec, or acceptance criterion that no
 document knows about fails the gate, and a document that describes a surface
