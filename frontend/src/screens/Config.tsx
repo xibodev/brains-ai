@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
+import { coreRoute } from "../coreRoutes";
 import type {
   QueueHealthReport,
   ReadinessReport,
@@ -32,7 +33,7 @@ export function Config() {
   return (
     <div style={{ height: "100%" }}>
       <ScreenHead eyebrow={`Config ▸ ${labelFor(section)}`} title="Configure" />
-      <MasterDetail items={SECTIONS} activeKey={section} onSelect={(key) => navigate(`/operations/config/${key}`)} railOnLeft>
+      <MasterDetail items={SECTIONS} activeKey={section} onSelect={(key) => navigate(coreRoute(`/operations/config/${key}`))} railOnLeft>
         {section === "health" ? <Health /> : section === "local" ? <LocalConfig /> : <McpConfig />}
       </MasterDetail>
     </div>

@@ -51,7 +51,7 @@ CORE_SPA_TARGET_PREFIXES = (
     "/workspaces",
 )
 CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
-SPA_AST_HELPER_SHA256 = "bb7cbbc83ffa503971bfb5721a25c919a2e0c4e6426c4c422c4aee8ad8ba8499"
+SPA_AST_HELPER_SHA256 = "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e"
 CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
@@ -1037,7 +1037,13 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     for site in reachable_navigation:
         target = str(site.get("target", ""))
         route = target.split("?", 1)[0].split("#", 1)[0]
-        if route in {"*", "@core-route-guard", "@history-delta"}:
+        if route in {
+            "*",
+            "@anchor-click",
+            "@core-route-guard",
+            "@form-submit",
+            "@history-delta",
+        }:
             continue
         if route.startswith(WITHDRAWN_SPA_PREFIXES):
             errors.append(f"frozen SPA target reachable: {route}")

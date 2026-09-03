@@ -41,7 +41,7 @@ export function Workspaces() {
   const openAct = (capability: string) => {
     const query = new URLSearchParams({ capability });
     if (selectedSlug) query.set("workspace", selectedSlug);
-    navigate(`/act?${query.toString()}`);
+    navigate(coreRoute(`/act?${query.toString()}`));
   };
 
   return (
@@ -61,7 +61,7 @@ export function Workspaces() {
                 <button
                   key={item.slug}
                   className={`operator-workspace-choice ${item.slug === selectedSlug ? "selected" : ""}`}
-                  onClick={() => navigate(`/workspaces/${item.slug}`)}
+                  onClick={() => navigate(coreRoute(`/workspaces/${item.slug}`))}
                 >
                   <strong>{item.name || item.slug}</strong><small>{item.path}</small>
                   <span><OperatorStatus tone={item.live_agents ? "ready" : "neutral"}>{item.live_agents ? `${item.live_agents} live` : "quiet"}</OperatorStatus>{item.open_decisions > 0 && <OperatorStatus tone="warning">{item.open_decisions} decisions</OperatorStatus>}</span>

@@ -280,7 +280,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-BShml-R2.js",
+      "src/brains/web/spa/assets/index-4cCCKU8I.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -676,7 +676,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-BShml-R2.js",
+      "src/brains/web/spa/assets/index-4cCCKU8I.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -957,7 +957,7 @@
       "brains/storage/sql_migrations/__init__.py",
       "brains/web/__init__.py",
       "brains/web/spa.py",
-      "brains/web/spa/assets/index-BShml-R2.js",
+      "brains/web/spa/assets/index-4cCCKU8I.js",
       "brains/web/spa/assets/index-SXYrWt-w.css",
       "brains/web/spa/index.html",
       "brains/web/templates/admin/login.html",
@@ -25463,6 +25463,7 @@
         ],
         "backlog": [
           "BL-P0-06",
+          "BL-P1-10",
           "BL-P1-12"
         ],
         "boundaries": [
@@ -25478,13 +25479,16 @@
         ],
         "by_file": {
           "docs/product/BACKLOG.md": [
+            "B1",
             "B2",
             "B6",
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
+            "F10",
             "F3",
             "F7",
             "J1",
@@ -25805,6 +25809,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
             "F1",
@@ -26046,6 +26051,7 @@
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
+          "coreRoutes.ts",
           "store/useAsync.ts"
         ],
         "screens/Config.tsx": [
@@ -26056,6 +26062,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
+          "coreRoutes.ts",
           "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
@@ -26083,6 +26090,7 @@
           "components/MailboxWorkspace.tsx",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
+          "coreRoutes.ts",
           "store/useAsync.ts"
         ],
         "screens/ScreenHead.tsx": [
@@ -26184,8 +26192,8 @@
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
         "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "821e2a05887264987dc94cab84c865be49f5d016bd716a0d7cabcf8418127653",
-        "frontend/src/screens/Config.tsx": "61dac337a08b3823a62db61a012b382cea10f87664b8d306edb2bba87ee49d20",
+        "frontend/src/screens/CommandCenter.tsx": "f26f4782534cfa4b3fa199671f8acc577304ddefa22cc0396434fa02530a6391",
+        "frontend/src/screens/Config.tsx": "a6283abcaab96382dece1cf4a24e641c78afc9eec623cd851bf3fbc383aacaf3",
         "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
@@ -26194,7 +26202,7 @@
         "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
         "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
-        "frontend/src/screens/OperatorCoordination.tsx": "b3d03ac689e430099cb76554ff104f2bb8cc8c6c086d75052ad89087a4f67737",
+        "frontend/src/screens/OperatorCoordination.tsx": "3c87fe31728dc4d85597a4da22c8d2da6e608dc0b5aa9b11b38d09bf483e4cf4",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -26202,7 +26210,7 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "228a9f1f181475d88b35f830b52484cf171e3886951416aefd35520a9ce71b2e",
+        "frontend/src/screens/Workspaces.tsx": "eef78992683143d687a9617daf58dcb5d52430c20e31785b86762d3f3263061f",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
         "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
@@ -26973,75 +26981,9 @@
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 14,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 15,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 16,
-          "target": "/coordination"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 17,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 18,
-          "target": "/operations"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 47,
-          "target": "/act?capability=${dynamic}"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
           "line": 59,
           "target": "@core-route-guard"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 11,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 12,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 13,
-          "target": "/coordination"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 14,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 15,
-          "target": "/operations"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
@@ -27068,46 +27010,40 @@
           "target": "/governance"
         },
         {
-          "file": "frontend/src/screens/Act.tsx",
-          "kind": "navigate",
-          "line": 170,
-          "target": "@core-route-guard"
-        },
-        {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 47,
+          "line": 48,
           "target": "/act"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 47,
+          "line": 48,
           "target": "/workspaces"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 63,
-          "target": "/workspaces/${dynamic}"
+          "line": 64,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 88,
+          "line": 89,
           "target": "/governance"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 116,
+          "line": 117,
           "target": "/operations"
         },
         {
           "file": "frontend/src/screens/Config.tsx",
           "kind": "navigate",
-          "line": 35,
-          "target": "/operations/config/${dynamic}"
+          "line": 36,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/NotFound.tsx",
@@ -27130,32 +27066,32 @@
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 27,
-          "target": "/act?capability=${dynamic}"
+          "line": 28,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 58,
-          "target": "/workspaces/${dynamic}"
+          "line": 59,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 80,
-          "target": "/workspaces/${dynamic}"
+          "line": 81,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
           "line": 44,
-          "target": "/act?${dynamic}"
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
           "line": 64,
-          "target": "/workspaces/${dynamic}"
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
@@ -27179,7 +27115,7 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "bb7cbbc83ffa503971bfb5721a25c919a2e0c4e6426c4c422c4aee8ad8ba8499",
+      "spa_ast_helper_sha256": "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
@@ -51820,6 +51756,7 @@
         ],
         "backlog": [
           "BL-P0-06",
+          "BL-P1-10",
           "BL-P1-12"
         ],
         "boundaries": [
@@ -51835,13 +51772,16 @@
         ],
         "by_file": {
           "docs/product/BACKLOG.md": [
+            "B1",
             "B2",
             "B6",
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
+            "F10",
             "F3",
             "F7",
             "J1",
@@ -52162,6 +52102,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
             "F1",
@@ -52403,6 +52344,7 @@
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
+          "coreRoutes.ts",
           "store/useAsync.ts"
         ],
         "screens/Config.tsx": [
@@ -52413,6 +52355,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
+          "coreRoutes.ts",
           "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
@@ -52440,6 +52383,7 @@
           "components/MailboxWorkspace.tsx",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
+          "coreRoutes.ts",
           "store/useAsync.ts"
         ],
         "screens/ScreenHead.tsx": [
@@ -52541,8 +52485,8 @@
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
         "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "821e2a05887264987dc94cab84c865be49f5d016bd716a0d7cabcf8418127653",
-        "frontend/src/screens/Config.tsx": "61dac337a08b3823a62db61a012b382cea10f87664b8d306edb2bba87ee49d20",
+        "frontend/src/screens/CommandCenter.tsx": "f26f4782534cfa4b3fa199671f8acc577304ddefa22cc0396434fa02530a6391",
+        "frontend/src/screens/Config.tsx": "a6283abcaab96382dece1cf4a24e641c78afc9eec623cd851bf3fbc383aacaf3",
         "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
@@ -52551,7 +52495,7 @@
         "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
         "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
-        "frontend/src/screens/OperatorCoordination.tsx": "b3d03ac689e430099cb76554ff104f2bb8cc8c6c086d75052ad89087a4f67737",
+        "frontend/src/screens/OperatorCoordination.tsx": "3c87fe31728dc4d85597a4da22c8d2da6e608dc0b5aa9b11b38d09bf483e4cf4",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -52559,7 +52503,7 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "228a9f1f181475d88b35f830b52484cf171e3886951416aefd35520a9ce71b2e",
+        "frontend/src/screens/Workspaces.tsx": "eef78992683143d687a9617daf58dcb5d52430c20e31785b86762d3f3263061f",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
         "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
@@ -53330,75 +53274,9 @@
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 14,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 15,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 16,
-          "target": "/coordination"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 17,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 18,
-          "target": "/operations"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
-          "kind": "declarative-target",
-          "line": 47,
-          "target": "/act?capability=${dynamic}"
-        },
-        {
-          "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
           "line": 59,
           "target": "@core-route-guard"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 11,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 12,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 13,
-          "target": "/coordination"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 14,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/components/Sidebar.tsx",
-          "kind": "declarative-target",
-          "line": 15,
-          "target": "/operations"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
@@ -53425,46 +53303,40 @@
           "target": "/governance"
         },
         {
-          "file": "frontend/src/screens/Act.tsx",
-          "kind": "navigate",
-          "line": 170,
-          "target": "@core-route-guard"
-        },
-        {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 47,
+          "line": 48,
           "target": "/act"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 47,
+          "line": 48,
           "target": "/workspaces"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 63,
-          "target": "/workspaces/${dynamic}"
+          "line": 64,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 88,
+          "line": 89,
           "target": "/governance"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 116,
+          "line": 117,
           "target": "/operations"
         },
         {
           "file": "frontend/src/screens/Config.tsx",
           "kind": "navigate",
-          "line": 35,
-          "target": "/operations/config/${dynamic}"
+          "line": 36,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/NotFound.tsx",
@@ -53487,32 +53359,32 @@
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 27,
-          "target": "/act?capability=${dynamic}"
+          "line": 28,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 58,
-          "target": "/workspaces/${dynamic}"
+          "line": 59,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 80,
-          "target": "/workspaces/${dynamic}"
+          "line": 81,
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
           "line": 44,
-          "target": "/act?${dynamic}"
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
           "line": 64,
-          "target": "/workspaces/${dynamic}"
+          "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
@@ -53536,7 +53408,7 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "bb7cbbc83ffa503971bfb5721a25c919a2e0c4e6426c4c422c4aee8ad8ba8499",
+      "spa_ast_helper_sha256": "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",

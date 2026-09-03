@@ -19,6 +19,12 @@ empty and a human explicitly approves thawing it.
 
 ## P1 — Core completion
 
+### BL-P1-10 - Implement core-surface advertisement checks
+
+- **Action:** Generate CLI, MCP, alias, wire, route, navigation, configuration, extra, and documentation inventories that enforce the core/frozen boundary.
+- **Done when:** Documentation and CI fail whenever a frozen, withdrawn, or undocumented surface becomes discoverable or activatable in a normal installation.
+- **Maps to:** F0-F10, B1-B9; J1-J11.
+
 ### BL-P1-12 - Complete supported harness wakeup adapters
 
 - **Action:** Install consented body-free hook or plugin wakeups where a supported harness permits them and expose truthful pull fallback everywhere else.

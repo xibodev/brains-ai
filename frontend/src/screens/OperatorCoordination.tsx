@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { coreRoute } from "../coreRoutes";
 import type { OperatorTask } from "../api/types";
 import { relativeTime } from "../components/format";
 import { MailboxWorkspace } from "../components/MailboxWorkspace";
@@ -24,7 +25,7 @@ export function OperatorCoordination() {
   const tasks = data?.tasks.filter((task) => filter === "all" || task.status === filter) ?? [];
 
   const openAct = (capability: string) =>
-    navigate(`/act?capability=${encodeURIComponent(capability)}`);
+    navigate(coreRoute(`/act?capability=${encodeURIComponent(capability)}`));
 
   return (
     <div className="operator-page" data-testid="coordination">
@@ -55,7 +56,7 @@ export function OperatorCoordination() {
 
           <div className="operator-claim-strip">
             {data.claims.slice(0, 4).map((claim) => (
-              <button key={`${claim.workspace}-${claim.session_id}`} onClick={() => navigate(`/workspaces/${claim.workspace}`)}>
+              <button key={`${claim.workspace}-${claim.session_id}`} onClick={() => navigate(coreRoute(`/workspaces/${claim.workspace}`))}>
                 <strong>{claim.workspace} / {claim.scope}</strong>
                 <small>{claim.session_id.slice(0, 12)} / expires {relativeTime(claim.expires_at)}</small>
               </button>
@@ -77,7 +78,7 @@ export function OperatorCoordination() {
               <OperatorCard kicker="Handoffs" title="Ready for pickup" action={<OperatorStatus tone={data.handoffs.some((row) => row.status === "active") ? "warning" : "ready"}>{data.handoffs.filter((row) => row.status === "active").length}</OperatorStatus>}>
                 <div className="operator-work-list">
                   {data.handoffs.filter((row) => row.status === "active").slice(0, 4).map((handoff) => (
-                    <button className="operator-work-item" key={String(handoff.handoff_id || handoff.id)} onClick={() => navigate(`/workspaces/${handoff.workspace}`)}>
+                    <button className="operator-work-item" key={String(handoff.handoff_id || handoff.id)} onClick={() => navigate(coreRoute(`/workspaces/${handoff.workspace}`))}>
                       <strong>{handoff.title || "Untitled handoff"}</strong>
                       <small>{handoff.workspace} / {relativeTime(handoff.set_at || handoff.created_at)}</small>
                     </button>

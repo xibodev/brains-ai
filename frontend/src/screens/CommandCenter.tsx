@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { coreRoute } from "../coreRoutes";
 import { relativeTime } from "../components/format";
 import {
   OperatorCard,
@@ -60,7 +61,7 @@ export function CommandCenter() {
                     <button
                       className="operator-workspace-row"
                       key={workspace.slug}
-                      onClick={() => navigate(`/workspaces/${workspace.slug}`)}
+                      onClick={() => navigate(coreRoute(`/workspaces/${workspace.slug}`))}
                     >
                       <div><strong>{workspace.name || workspace.slug}</strong><code>{workspace.path}</code></div>
                       <div><b>{workspace.live_agents ? `${workspace.live_agents} live` : "Quiet"}</b><small>{relativeTime(workspace.last_touched_at)}</small></div>
