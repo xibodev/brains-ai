@@ -60,15 +60,15 @@ class FakeServiceManager:
 
         if self.platform == "macos":
             action = command[1]
-            if action == "load":
+            if action in {"bootstrap", "load"}:
                 self.installed = self.running = True
-            elif action == "unload":
+            elif action in {"bootout", "unload"}:
                 self.installed = self.running = False
-            elif action == "start":
+            elif action == "kickstart":
+                if not self.installed:
+                    return 1, "", "not loaded"
                 self.running = self.installed
-            elif action == "stop":
-                self.running = False
-            elif action == "list":
+            elif action in {"print", "list"}:
                 return (0, "loaded", "") if self.installed else (1, "", "not loaded")
             return 0, "ok", ""
 

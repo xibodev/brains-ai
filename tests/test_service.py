@@ -113,7 +113,7 @@ def test_service_status_requires_live_listeners(monkeypatch) -> None:
         lambda: type(
             "Backend",
             (),
-            {"status": staticmethod(lambda: {"installed": True, "state": "Running"})},
+            {"status": staticmethod(lambda *_args: {"installed": True, "state": "Running"})},
         ),
     )
     monkeypatch.setattr(
@@ -309,6 +309,16 @@ def test_windows_definition_path_under_state_dir(monkeypatch, tmp_path) -> None:
     assert p == tmp_path / "service" / "BrainsServeAll.xml"
 
 
+def test_namespaced_service_identity_is_confined_to_brains_namespace(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
+    custom = ServiceSpec(program="python", label="brains-serve-all-evidence-a1")
+    assert windows.definition_path(custom.label).name == "BrainsServeAll-evidence-a1.xml"
+    assert macos.plist_path(custom.label).name == "com.brains.serve-all.evidence-a1.plist"
+    assert linux.unit_path(custom.label).name == "brains-serve-all-evidence-a1.service"
+    with pytest.raises(ValueError, match="service label"):
+        ServiceSpec(program="python", label="unrelated-service")
+
+
 # --- macOS (launchd plist) -------------------------------------------------
 
 
@@ -321,6 +331,8 @@ def test_macos_plist_runatload_keepalive(spec: ServiceSpec) -> None:
     assert "<string>-m</string>" in plist
     assert "<string>brains</string>" in plist
     assert "<string>serve-all</string>" in plist
+    assert "<key>BRAINS_STATE_DIR</key>" in plist
+    assert spec.state_dir in plist
 
 
 def test_macos_plist_path_in_launchagents(monkeypatch, tmp_path) -> None:
@@ -340,6 +352,7 @@ def test_linux_unit_restart_and_target(spec: ServiceSpec) -> None:
     assert "WantedBy=default.target" in unit
     assert "ExecStart=" in unit and "-m brains serve-all" in unit
     assert "StartLimitIntervalSec=0" in unit
+    assert f'Environment="BRAINS_STATE_DIR={spec.state_dir.replace(chr(92), chr(92) * 2)}"' in unit
 
 
 def test_linux_unit_path_in_user_systemd(monkeypatch, tmp_path) -> None:
@@ -560,7 +573,7 @@ def test_service_status_reports_service_pid_block(monkeypatch, tmp_path) -> None
     monkeypatch.setattr(
         service,
         "_backend",
-        lambda: type("B", (), {"status": staticmethod(lambda: {"platform": "test"})}),
+        lambda: type("B", (), {"status": staticmethod(lambda *_args: {"platform": "test"})}),
     )
     report = service.status()
     assert "service_pid" in report
@@ -631,7 +644,7 @@ def test_windows_stop_reports_failed_tree_kill(monkeypatch, tmp_path) -> None:
 
 
 def test_windows_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
-    monkeypatch.setattr(windows, "stop", lambda: {"ok": False, "detail": "failed"})
+    monkeypatch.setattr(windows, "stop", lambda *_args: {"ok": False, "detail": "failed"})
     monkeypatch.setattr(windows, "start", lambda: pytest.fail("start must not run"))
     assert windows.restart()["ok"] is False
 
@@ -711,6 +724,6 @@ def test_macos_stop_reports_failed_child_kill(monkeypatch, tmp_path) -> None:
 
 
 def test_macos_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
-    monkeypatch.setattr(macos, "stop", lambda: {"ok": False, "detail": "failed"})
+    monkeypatch.setattr(macos, "stop", lambda *_args: {"ok": False, "detail": "failed"})
     monkeypatch.setattr(macos, "start", lambda: pytest.fail("start must not run"))
     assert macos.restart()["ok"] is False

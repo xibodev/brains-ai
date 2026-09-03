@@ -395,8 +395,12 @@ enabled listener on its actual bind host, holds a bounded degraded state while a
 the systemd unit suppresses restart for that configuration exit. Service status combines
 PID identity with bounded endpoint probes. Per-child protocol-aware watchdogs terminate
 an owned process tree that never serves or survives listener loss so the existing
-bounded restart loop can recover it. Deep child-protocol readiness and clean-host Windows
-E4 remain active backlog work.
+bounded restart loop can recover it. Install success now requires an owned protocol-ready
+process or compensating uninstall; native deregistration failure retains its definition.
+Windows uninstall stops the verified owned tree before deleting its task, macOS stop
+unloads the KeepAlive job, and Linux preserves the pre-existing linger policy.
+Brains-confined labels support isolated disposable-host validation, while actual native
+manager and login/reboot E4 remains active backlog work.
 
 ### B7 - Authenticated external events
 
