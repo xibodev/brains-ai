@@ -413,7 +413,7 @@ dependency failure, stale coordination state, and recovery posture.
 is removed.
 
 - AC-B8-01: `/health` remains an open liveness/inventory endpoint.
-- AC-B8-02: readiness checks SQLite migration and quick/full/FK integrity, the retained HTTP control gateway's identity/auth boundary, authenticated MCP protocol, queue/mailbox progress, and verified recovery posture; withdrawn model routing is excluded.
+- AC-B8-02: readiness checks SQLite migration and quick/full/FK integrity, the retained HTTP control gateway's identity/auth boundary, authenticated MCP protocol, queue/mailbox progress, and verified recovery posture; state-driven isolated failure drills prove each retained dependency degrades independently, and withdrawn model routing is excluded.
 - AC-B8-03: logs/metrics are redacted and identify process boundaries.
 - AC-B8-04: multi-process failures and stale coordination presence are observable.
 

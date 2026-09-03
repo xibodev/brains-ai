@@ -293,6 +293,10 @@ mailbox with unread accepted mail is reported but is not degraded until the unre
 threshold is crossed. Runtime execution is withdrawn and does not affect normal-product
 readiness. Each supported dependency degrades independently.
 
+Acceptance uses real isolated state transitions rather than replacing component probes:
+schema loss, foreign-key violation, stale queue work, invalid durable-mail registration,
+and missing, stale, or incompatible recovery evidence each drive their own bounded result.
+
 No readiness field may return a secret or raw exception. A `ready` response still does
 not prove GitHub operation, browser journeys, a live-store restore, ingress, or deployment.
 
