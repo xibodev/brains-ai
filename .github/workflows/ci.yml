@@ -400,6 +400,16 @@ jobs:
         if: always()
         run: docker rm -f brains-smoke || true
 
+  opencode-lifecycle-probe:
+    name: pinned OpenCode lifecycle probe
+    needs: [docs, lint, typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove plugin autoload and proof-bound restart lifecycle
+        shell: pwsh
+        run: ./scripts/run_docker_opencode_lifecycle_probe.ps1
+
   brains-e2e:
     name: Brains E2E (Playwright)
     needs: [docs, lint, typecheck, spa]
@@ -524,6 +534,7 @@ jobs:
       - native-installation-probe
       - privacy
       - docker-smoke
+      - opencode-lifecycle-probe
       - brains-e2e
     if: always()
     runs-on: ubuntu-latest

@@ -25,17 +25,21 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import hmac
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from brains.config import _canonical_default_db_url
+from brains.config import _canonical_default_db_url, brains_state_dir
 from brains.mcp.transport import (
     MCP_CLIENT_BEARER_ENV,
     MCP_MODE_SSE,
@@ -57,6 +61,45 @@ MD_START = "<!-- brains:wire:start (managed by `brains wire`; do not edit inside
 MD_END = "<!-- brains:wire:end -->"
 TOML_START = "# >>> brains:wire:start (managed by `brains wire`; do not edit inside) >>>"
 TOML_END = "# <<< brains:wire:end <<<"
+OPENCODE_PLUGIN_HEADER = "// brains:opencode-lifecycle:v1 (managed; do not edit)"
+OPENCODE_SUPPORTED_VERSION = "1.18.25"
+_OPENCODE_PLUGIN_TEMPLATE = (
+    OPENCODE_PLUGIN_HEADER
+    + """
+export const BrainsLifecycle = async ({ directory }) => {
+  const lifecycleEnv = __BRAINS_LIFECYCLE_ENV__
+  const command = __BRAINS_LIFECYCLE_COMMAND__
+  return ({
+  "chat.message": async (input) => {
+    const sessionID = input && input.sessionID
+    if (typeof sessionID !== "string" || sessionID.length === 0) return
+    const child = Bun.spawn([...command,
+      "adapter-attach", "--adapter", "opencode",
+      "--native-tool-session-id", sessionID, "--workspace", directory,
+    ], { stdout: "ignore", stderr: "ignore", env: lifecycleEnv })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error("Brains lifecycle attach failed")
+  },
+  // Generic events are best-effort. A delivered native deletion may revoke
+  // its exact proof-bound identity; missed idle/delete events still converge
+  // through lease expiry and the next awaited turn.
+  event: async ({ event }) => {
+    if (!event || event.type !== "session.deleted") return
+    const info = event.properties && event.properties.info
+    const sessionID = info && info.id
+    const workspace = info && info.directory
+    if (typeof sessionID !== "string" || typeof workspace !== "string") return
+    const child = Bun.spawn([...command,
+      "adapter-detach", "--adapter", "opencode",
+      "--native-tool-session-id", sessionID, "--workspace", workspace,
+    ], { stdout: "ignore", stderr: "ignore", env: lifecycleEnv })
+    const exitCode = await child.exited
+    if (exitCode !== 0) throw new Error("Brains lifecycle detach failed")
+  },
+  })
+}
+"""
+)
 
 # The "use brains first" rule injected into each tool's instruction file.
 # Clean-slate, brains-v2 specific — deliberately short so it survives at the
@@ -112,7 +155,7 @@ class WireContext:
     url: str = field(default_factory=mcp_http_url)
     api_key: str = ""
     bearer_token_env_var: str = MCP_CLIENT_BEARER_ENV
-    python: str = "python"
+    python: str = field(default_factory=lambda: sys.executable)
     # Default to the absolute per-machine brain so a bare ``WireContext()``
     # can never embed a CWD-relative ``sqlite:///brains.db`` into a tool's
     # MCP config (which would fragment state into a per-workspace DB). The
@@ -128,6 +171,24 @@ class WireContext:
 
     def auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+
+def render_opencode_plugin(ctx: WireContext) -> str:
+    """Render a PATH-independent plugin with only the state inputs it needs."""
+    if not ctx.db_url.startswith("sqlite:///"):
+        raise ValueError("OpenCode lifecycle requires the supported SQLite store")
+    interpreter_path = Path(os.path.abspath(sys.executable))
+    if not interpreter_path.is_file():
+        raise RuntimeError("installed Brains interpreter is unavailable")
+    interpreter = str(interpreter_path)
+    command = [interpreter, "-m", "brains"]
+    environment = {
+        "BRAINS_DB_URL": ctx.db_url,
+        "BRAINS_STATE_DIR": str(brains_state_dir().resolve()),
+    }
+    return _OPENCODE_PLUGIN_TEMPLATE.replace(
+        "__BRAINS_LIFECYCLE_COMMAND__", json.dumps(command)
+    ).replace("__BRAINS_LIFECYCLE_ENV__", json.dumps(environment, sort_keys=True))
 
 
 # --- per-tool MCP entry builders -----------------------------------------
@@ -526,6 +587,89 @@ def _unwire_rule(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
     return result
 
 
+def _opencode_plugin_path(home: Path) -> Path:
+    return home / ".config" / "opencode" / "plugins" / "brains-lifecycle.js"
+
+
+def _opencode_plugin_manifest_path(home: Path) -> Path:
+    return _opencode_plugin_path(home).with_suffix(".sha256")
+
+
+def _opencode_plugin_is_owned(home: Path, content: str) -> bool:
+    manifest = _opencode_plugin_manifest_path(home)
+    try:
+        expected = manifest.read_text(encoding="ascii").strip()
+    except OSError:
+        return False
+    return hmac.compare_digest(expected, hashlib.sha256(content.encode("utf-8")).hexdigest())
+
+
+def _opencode_compatibility() -> tuple[bool, str]:
+    executable = shutil.which("opencode")
+    if executable is None:
+        return False, "OpenCode executable is unavailable"
+    try:
+        completed = subprocess.run(
+            [executable, "--version"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, "OpenCode version could not be verified"
+    match = re.search(r"\b(\d+\.\d+\.\d+)\b", completed.stdout)
+    if completed.returncode != 0 or match is None:
+        return False, "OpenCode version could not be verified"
+    if match.group(1) != OPENCODE_SUPPORTED_VERSION:
+        return False, "OpenCode version is outside the supported lifecycle contract"
+    return True, "compatible"
+
+
+def _wire_opencode_plugin(home: Path, ctx: WireContext, dry_run: bool) -> dict[str, Any]:
+    path = _opencode_plugin_path(home)
+    manifest = _opencode_plugin_manifest_path(home)
+    rendered = render_opencode_plugin(ctx)
+    result: dict[str, Any] = {"path": str(path)}
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            existing = ""
+        if not _opencode_plugin_is_owned(home, existing):
+            return {**result, "action": "conflict", "detail": "plugin path is not Brains-managed"}
+        if existing == rendered:
+            return {**result, "action": "unchanged"}
+        if not dry_run:
+            _write(path, rendered)
+            _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
+        return {**result, "action": "update"}
+    if manifest.exists():
+        return {**result, "action": "conflict", "detail": "plugin ownership is inconsistent"}
+    if not dry_run:
+        _write(path, rendered)
+        _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
+    return {**result, "action": "create"}
+
+
+def _unwire_opencode_plugin(home: Path, dry_run: bool) -> dict[str, Any]:
+    path = _opencode_plugin_path(home)
+    manifest = _opencode_plugin_manifest_path(home)
+    result: dict[str, Any] = {"path": str(path)}
+    if not path.exists():
+        return {**result, "action": "absent"}
+    try:
+        existing = path.read_text(encoding="utf-8")
+    except OSError:
+        existing = ""
+    if not _opencode_plugin_is_owned(home, existing):
+        return {**result, "action": "skipped", "detail": "plugin path is not Brains-managed"}
+    if not dry_run:
+        path.unlink()
+        manifest.unlink()
+    return {**result, "action": "remove"}
+
+
 # --- public API -----------------------------------------------------------
 
 
@@ -643,6 +787,39 @@ def wire(
     for adapter in adapters:
         detected = adapter.detect(home)
         warnings: list[str] = []
+        if adapter.name == "opencode":
+            compatible, detail = _opencode_compatibility()
+            if not compatible:
+                report["tools"].append(
+                    {
+                        "tool": adapter.name,
+                        "display": adapter.display,
+                        "detected": detected,
+                        "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
+                        "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                        "lifecycle_plugin": {
+                            "path": str(_opencode_plugin_path(home)),
+                            "action": "error",
+                            "detail": detail,
+                        },
+                    }
+                )
+                continue
+        plugin_preflight = (
+            _wire_opencode_plugin(home, ctx, True) if adapter.name == "opencode" else None
+        )
+        if plugin_preflight is not None and plugin_preflight.get("action") == "conflict":
+            report["tools"].append(
+                {
+                    "tool": adapter.name,
+                    "display": adapter.display,
+                    "detected": detected,
+                    "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
+                    "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                    "lifecycle_plugin": plugin_preflight,
+                }
+            )
+            continue
         if ctx.transport == MCP_MODE_SSE and adapter.sse_experimental:
             warnings.append("SSE/remote MCP is experimental for this tool")
         if adapter.mcp_format == "json":
@@ -658,11 +835,15 @@ def wire(
         }
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
+        if adapter.name == "opencode":
+            entry["lifecycle_plugin"] = _wire_opencode_plugin(home, ctx, dry_run)
         if warnings:
             entry["warnings"] = warnings
         report["tools"].append(entry)
     report["ok"] = all(
-        entry["mcp"].get("action") not in {"error", "conflict"} for entry in report["tools"]
+        entry["mcp"].get("action") not in {"error", "conflict"}
+        and entry.get("lifecycle_plugin", {}).get("action") not in {"error", "conflict"}
+        for entry in report["tools"]
     )
     return report
 
@@ -685,6 +866,8 @@ def unwire(
         entry: dict[str, Any] = {"tool": adapter.name, "mcp": mcp}
         if rules:
             entry["rule"] = _unwire_rule(adapter, home, dry_run)
+        if adapter.name == "opencode":
+            entry["lifecycle_plugin"] = _unwire_opencode_plugin(home, dry_run)
         report["tools"].append(entry)
     return report
 
@@ -733,6 +916,18 @@ def status(home: Path) -> dict[str, Any]:
                 )
                 bearer_token_env_var = env_match.group(1) if env_match else None
         wired_rule = instr_path.exists() and MD_START in instr_path.read_text(encoding="utf-8")
+        plugin_path = _opencode_plugin_path(home) if adapter.name == "opencode" else None
+        lifecycle_plugin = None
+        if plugin_path is not None:
+            try:
+                content = plugin_path.read_text(encoding="utf-8")
+                lifecycle_plugin = (
+                    "managed" if _opencode_plugin_is_owned(home, content) else "conflict"
+                )
+            except FileNotFoundError:
+                lifecycle_plugin = "absent"
+            except OSError:
+                lifecycle_plugin = "unavailable"
         out.append(
             {
                 "tool": adapter.name,
@@ -749,6 +944,7 @@ def status(home: Path) -> dict[str, Any]:
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
                 "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "lifecycle_plugin": lifecycle_plugin,
             }
         )
     return {"tools": out}

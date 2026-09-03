@@ -277,11 +277,16 @@ browser/local human channel. A proof-bound, body-free local notification take/se
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
 preserving pull fallback. SMTP rows and adapters are frozen compatibility inventory.
 Isolated UAT covers explicit real native-ID extraction, offline delivery, successor
-recovery, and threaded replies for OpenCode/Codex and OpenCode/Claude. The adapter
+recovery, and threaded replies for OpenCode/Codex and OpenCode/Claude. OpenCode 1.18.25
+additionally has an owned dependency-free global plugin whose awaited `chat.message`
+hook attaches, renews, or recovers the authoritative native Session ID and Workspace.
+Delivered native delete events terminally revoke that proof-bound identity; missed
+idle/delete events converge through lease expiry and the next awaited turn. The adapter
 identity contract covers Copilot CLI, Claude Code, Codex, and OpenCode without guessing:
 it preserves the raw adapter label and reports native identity as resolved, unavailable,
-or ambiguous. Concrete hook/plugin installation, Copilot container credentials,
-real-provider review, and broad per-tool authorization remain open. The
+or ambiguous. Other harnesses keep explicit manual lifecycle controls rather than
+claiming an automatic hook. Copilot container credentials, real-provider review, and
+broad per-tool authorization remain open. The
 Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
 state, address-book selection, agent deep links, and responsive keyboard operation.
@@ -298,9 +303,16 @@ secrets never enter result, event, or intent shapes. Lease, terminal detach, suc
 resume journeys preserve identity separately from activity, ownership, and reachability
 across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
 threaded message and per-recipient delivery/read rows are active for durable local mail.
-No supported wire adapter yet extracts a native harness identifier and invokes this
-lifecycle end to end; BL-P1-14 remains open until real generated hook/plugin journeys
-prove that integration, including truthful unavailable and ambiguous outcomes.
+The supported OpenCode wire adapter invokes this lifecycle end to end. Every installation
+path requires the exact supported OpenCode version before configuration mutation. Its
+owned plugin invokes the absolute Brains interpreter/module command with only the
+explicit SQLite and state-directory environment, so `PATH` shadowing and unrelated
+credentials cannot cross the hook boundary. The checked disposable probe uses the
+pinned real binary and a local synthetic provider to prove autoload, first-turn
+attachment, renewal, killed-process expiry, same-ID recovery, explicit nonzero
+Workspace-conflict refusal, recoverable native deletion, revocation, old-proof
+rejection, and a body-, credential-, path-, and native-ID-free journal. Unsupported
+versions and unowned plugin paths fail closed without changing operator configuration.
 Notification attempt state is active through migration 151 and the CLI/MCP adapter
 protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
 reports pull until it installs a stronger adapter. Migration 152 preserves constrained
