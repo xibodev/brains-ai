@@ -1494,6 +1494,53 @@ def test_repair_refuses_a_genuinely_corrupt_database_before_backup_or_mutation(i
     assert not archive.exists()
 
 
+def test_repair_refuses_integrity_check_corruption_rows_before_backup(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "reported-corrupt.tar.gz"
+    monkeypatch.setattr(
+        integrity,
+        "integrity_check",
+        lambda _conn: ("*** in database main *** page 7 is never used",),
+    )
+
+    with pytest.raises(integrity.DatabaseCorruptError, match="integrity_check is not ok"):
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert not archive.exists()
+
+
+def test_repair_normalizes_raised_malformed_page_error_before_backup(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "raised-corrupt.tar.gz"
+    malformed = sqlite3.DatabaseError("database disk image is malformed")
+
+    def raise_malformed(_conn):
+        raise malformed
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_malformed)
+
+    with pytest.raises(integrity.DatabaseCorruptError, match="could not complete") as caught:
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert caught.value.__cause__ is malformed
+    assert not archive.exists()
+
+
+def test_repair_does_not_normalize_unrelated_database_error(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "unrelated-error.tar.gz"
+    unrelated = sqlite3.OperationalError("database is locked")
+
+    def raise_unrelated(_conn):
+        raise unrelated
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_unrelated)
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked") as caught:
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert caught.value is unrelated
+    assert not isinstance(caught.value, integrity.DatabaseCorruptError)
+    assert not archive.exists()
+
+
 def test_required_orphans_need_an_operator_unless_delete_orphans_is_requested(isolated_db):
     conn = _connect(isolated_db)
     try:

@@ -742,6 +742,33 @@ def integrity_check(conn: sqlite3.Connection) -> tuple[str, ...]:
     return tuple(str(row[0]) for row in conn.execute("PRAGMA integrity_check").fetchall())
 
 
+def _repair_preflight_integrity_check(conn: sqlite3.Connection) -> tuple[str, ...]:
+    """Normalize only SQLite's structural-corruption failures for repair.
+
+    SQLite builds differ on whether a damaged page is returned as an
+    ``integrity_check`` row or aborts the pragma with ``SQLITE_CORRUPT``.  Both
+    mean that repair must stop before creating a backup or mutating the store.
+    Other database failures keep their original exception and semantics.
+    """
+    try:
+        return integrity_check(conn)
+    except sqlite3.DatabaseError as exc:
+        error_code = getattr(exc, "sqlite_errorcode", None)
+        primary_code = error_code & 0xFF if isinstance(error_code, int) else None
+        corruption_codes = {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
+        message = str(exc).casefold()
+        corruption_message = any(
+            marker in message
+            for marker in ("database disk image is malformed", "file is not a database")
+        )
+        if primary_code not in corruption_codes and not corruption_message:
+            raise
+        raise DatabaseCorruptError(
+            "refusing to repair a database because SQLite could not complete "
+            f"PRAGMA integrity_check: {exc}"
+        ) from exc
+
+
 def foreign_key_violations(
     conn: sqlite3.Connection,
     *,
@@ -1730,7 +1757,7 @@ def repair_database(
             # database ``integrity_check``/``foreign_key_check`` the write
             # path runs. Convergence re-plans from invariants, not from a
             # repeated page scan.
-            engine_integrity = integrity_check(conn)
+            engine_integrity = _repair_preflight_integrity_check(conn)
             fk_rows = foreign_key_violations(conn)
             report = diagnose(
                 conn,
