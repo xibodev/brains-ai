@@ -11,9 +11,9 @@ from brains.context.code_graph import (
 from brains.context.docs_indexer import index_docs
 from brains.context.freshness import check_source
 from brains.context.graph_viz import graph_export as _graph_export
+from brains.context.lookup import lookup_workspace
 from brains.context.pack_builder import build_context_pack
 from brains.context.planner import plan
-from brains.context.repo_indexer import search_repo
 from brains.context.semantic import ORIENT_DOC_EXCLUDES, semantic_search_with_status
 from brains.control.claims import (
     claim_workspace,
@@ -250,15 +250,15 @@ def search_repo_tool(
     path: str | None = None,
     limit: int = 10,
 ):
+    """Bounded substring/symbol lookup with inline line-numbered snippets.
+
+    This is read-only and works on a fresh repository without preparation.
+    ``status`` distinguishes matches, no match, and an
+    unavailable workspace root.
+    """
     needle = query or q
-    if not needle:
-        raise ValueError("query is required")
     target_path = path or repo_path
-    return {
-        "query": needle,
-        "repo_path": target_path,
-        "results": search_repo(target_path, needle)[:limit],
-    }
+    return lookup_workspace(target_path, needle or "", limit=limit)
 
 
 def search_semantic_tool(

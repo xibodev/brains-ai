@@ -314,11 +314,14 @@ withdrawn.
 1. Start or resume a Workspace-scoped coordination Session. A supported adapter may
    atomically register/reattach its durable mailbox with native-ID and binding proof.
 2. Inspect or claim durable work.
-3. Record checkpoints, handoffs, messages, and scoped events.
-4. Renew presence while the harness is active; mailbox-bound Sessions prove their
+3. Retrieve recorded knowledge or run bounded read-only source lookup. Source lookup
+   reports matches, no match, and unavailable Workspace roots as distinct states and
+   returns only relative paths with line-numbered snippets.
+4. Record checkpoints, handoffs, messages, and scoped events.
+5. Renew presence while the harness is active; mailbox-bound Sessions prove their
    native ID and binding rather than treating `ses_*` as a credential.
-5. Backfill durable events before realtime continuation.
-6. End cleanly, or become dormant and release ownership after lease expiry.
+6. Backfill durable events before realtime continuation.
+7. End cleanly, or become dormant and release ownership after lease expiry.
 
 **UX states:** starting, active, disconnected, blocked, dormant, resumed, completed,
 failed, stale presence.

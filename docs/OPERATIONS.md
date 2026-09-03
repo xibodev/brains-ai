@@ -174,7 +174,12 @@ brains-ai wire --status
 ```
 
 The default wired guidance recommends only Workspace coordination, knowledge, and
-bounded substring/symbol repository lookup. It requires no semantic or graph index.
+bounded substring/symbol repository lookup. Use `brains_search_repo` over MCP or
+`brains-ai search-repo QUERY --path WORKSPACE`; the authenticated Workspace Knowledge
+tab uses the same control. Results are root-relative line-numbered snippets. `ok` means
+matches were found, `empty` means the readable Workspace had no match, and `unavailable`
+means the query or Workspace root could not be used. Lookup is read-only and needs no
+preparation.
 
 ## Service operation
 

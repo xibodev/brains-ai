@@ -70,8 +70,8 @@ tokens.
 
 **Quick lookup** ("where is X", "how does Y work"): skip the session ceremony.
 Use `brains_knowledge_search` for recorded knowledge or `brains_search_repo` for
-substring/symbol lookup. Empty results mean no match; neither path requires an
-embedding model or graph index.
+bounded substring/symbol lookup with inline source snippets. Check the returned
+status: `empty` means no match and `unavailable` means the Workspace cannot be read.
 
 **Non-trivial, multi-step, or COLLABORATIVE work** (editing a shared repo, work others
 may touch, a multi-session effort): coordinate, in order —

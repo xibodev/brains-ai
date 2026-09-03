@@ -8,14 +8,14 @@ from typing import Any
 import typer
 import uvicorn
 
-from brains.context.docs_indexer import index_docs, search_docs
+from brains.context.docs_indexer import index_docs
 from brains.context.freshness import check_source
 from brains.context.graph_viz import graph_export
+from brains.context.lookup import lookup_workspace
 from brains.context.planner import plan
 from brains.context.repo_indexer import (
     index_repo,
     index_repo_persisted,
-    search_repo,
     search_repo_persisted,
 )
 from brains.control.claims import (
@@ -1874,8 +1874,9 @@ def docs_index_cli(workspace: str = "."):
 
 
 @app.command("search-repo")
-def search_repo_cli(q: str, path: str = "."):
-    _print_json(search_docs(path, q) or search_repo(path, q))
+def search_repo_cli(q: str, path: str = ".", limit: int = 10):
+    """Read-only substring/symbol lookup with no preparation required."""
+    _print_json(lookup_workspace(path, q, limit=limit))
 
 
 @app.command("embed-repo")

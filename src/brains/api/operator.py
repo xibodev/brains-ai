@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from brains.authz import policy
 from brains.authz.deps import require_console_principal, require_operator_principal
 from brains.authz.principal import CAP_ORG_READ, CAP_ORG_WRITE, Principal
+from brains.context.lookup import LookupEnvelope, lookup_workspace
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
@@ -498,6 +499,18 @@ def workspace_detail(
         "signals": list_signals(workspace_path=workspace["path"], limit=50),
         "events": _events(principal, limit=200, workspace_id=workspace["id"]),
     }
+
+
+@router.get("/workspaces/{slug}/lookup")
+def workspace_lookup(
+    slug: str,
+    q: str = Query(default="", max_length=256),
+    limit: int = Query(default=10, ge=1, le=50),
+    principal: Principal = Depends(require_operator_principal),
+) -> LookupEnvelope:
+    """Return the same bounded source-lookup envelope as CLI and MCP."""
+    workspace = _workspace(principal, slug, CAP_ORG_READ)
+    return lookup_workspace(workspace["path"], q, limit=limit)
 
 
 @router.get("/coordination")
