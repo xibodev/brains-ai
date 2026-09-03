@@ -217,7 +217,7 @@ class ToolAdapter:
     json_servers_key: str = "mcpServers"
     supports_sse: bool = True
     sse_experimental: bool = False
-    mailbox_notification_mode: str = "pull"
+    wakeup_mode: str | None = None
 
     def mcp_path(self, home: Path) -> Path:
         return self._mcp_path(home)
@@ -238,6 +238,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".copilot" / "copilot-instructions.md",
         _detect=lambda h: (h / ".copilot").is_dir(),
         _json_entry=_copilot_entry,
+        wakeup_mode="turn_boundary",
     ),
     "claude-code": ToolAdapter(
         name="claude-code",
@@ -247,6 +248,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".claude" / "CLAUDE.md",
         _detect=lambda h: (h / ".claude").is_dir() or (h / ".claude.json").exists(),
         _json_entry=_claude_entry,
+        wakeup_mode="turn_boundary",
     ),
     "codex": ToolAdapter(
         name="codex",
@@ -329,6 +331,156 @@ def _strip_sentinel_block(text: str, start: str, end: str) -> str:
         re.DOTALL,
     )
     return pattern.sub("\n", text).lstrip("\n")
+
+
+_COPILOT_WAKEUP_COMMAND = "brains-ai mailbox harness-wakeup --adapter copilot-cli"
+_CLAUDE_WAKEUP_COMMAND = "brains-ai mailbox harness-wakeup --adapter claude-code"
+
+
+def _copilot_wakeup_path(home: Path) -> Path:
+    return home / ".copilot" / "hooks" / "brains.json"
+
+
+def _claude_wakeup_path(home: Path) -> Path:
+    return home / ".claude" / "settings.json"
+
+
+def _copilot_wakeup_document() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "hooks": {
+            "agentStop": [
+                {
+                    "type": "command",
+                    "bash": _COPILOT_WAKEUP_COMMAND,
+                    "powershell": _COPILOT_WAKEUP_COMMAND,
+                    "timeoutSec": 10,
+                }
+            ]
+        },
+    }
+
+
+def _claude_wakeup_entry() -> dict[str, Any]:
+    return {
+        "matcher": "",
+        "hooks": [
+            {
+                "type": "command",
+                "command": _CLAUDE_WAKEUP_COMMAND,
+                "timeout": 10,
+            }
+        ],
+    }
+
+
+def _wakeup_status(adapter: ToolAdapter, home: Path) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"installed": False, "mode": "pull", "reason": "adapter-unavailable"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        data, parse_error = _read_json(path)
+        installed = not parse_error and data == _copilot_wakeup_document()
+        reason = (
+            "installed"
+            if installed
+            else "managed-path-conflict"
+            if path.exists()
+            else "consent-required"
+        )
+    else:
+        path = _claude_wakeup_path(home)
+        data, parse_error = _read_json(path)
+        hooks = data.get("hooks") if not parse_error else None
+        entries = hooks.get("Stop") if isinstance(hooks, dict) else None
+        installed = isinstance(entries, list) and _claude_wakeup_entry() in entries
+        if installed:
+            reason = "installed"
+        elif parse_error:
+            reason = "settings-invalid"
+        elif hooks is not None and not isinstance(hooks, dict):
+            reason = "hooks-invalid"
+        elif entries is not None and not isinstance(entries, list):
+            reason = "stop-hooks-invalid"
+        else:
+            reason = "consent-required"
+    return {
+        "installed": installed,
+        "mode": adapter.wakeup_mode if installed else "pull",
+        "reason": reason,
+    }
+
+
+def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"action": "unavailable", "mode": "pull", "reason": "adapter-unavailable"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        expected = _copilot_wakeup_document()
+        current, parse_error = _read_json(path)
+        if path.exists() and (parse_error or current != expected):
+            return {"action": "conflict", "mode": "pull", "reason": "managed-path-conflict"}
+        action = "unchanged" if current == expected else "create"
+        if dry_run and action == "create":
+            return {"action": action, "mode": "pull", "planned_mode": adapter.wakeup_mode}
+        if action == "create":
+            _write(path, json.dumps(expected, indent=2) + "\n")
+        return {"action": action, "mode": adapter.wakeup_mode}
+
+    path = _claude_wakeup_path(home)
+    data, parse_error = _read_json(path)
+    if parse_error:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-invalid"}
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return {"action": "conflict", "mode": "pull", "reason": "hooks-invalid"}
+    entries = hooks.setdefault("Stop", [])
+    if not isinstance(entries, list):
+        return {"action": "conflict", "mode": "pull", "reason": "stop-hooks-invalid"}
+    expected = _claude_wakeup_entry()
+    action = "unchanged" if expected in entries else ("update" if path.exists() else "create")
+    if action != "unchanged":
+        entries.append(expected)
+        if dry_run:
+            return {"action": action, "mode": "pull", "planned_mode": adapter.wakeup_mode}
+        _backup(path)
+        _write(path, json.dumps(data, indent=2) + "\n")
+    return {"action": action, "mode": adapter.wakeup_mode}
+
+
+def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"action": "absent", "mode": "pull"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        data, parse_error = _read_json(path)
+        if not path.exists():
+            return {"action": "absent", "mode": "pull"}
+        if parse_error or data != _copilot_wakeup_document():
+            return {"action": "conflict", "mode": "pull", "reason": "managed-path-conflict"}
+        if not dry_run:
+            path.unlink()
+        return {"action": "remove", "mode": "pull"}
+
+    path = _claude_wakeup_path(home)
+    data, parse_error = _read_json(path)
+    if parse_error:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-invalid"}
+    hooks = data.get("hooks")
+    entries = hooks.get("Stop") if isinstance(hooks, dict) else None
+    expected = _claude_wakeup_entry()
+    if not isinstance(entries, list) or expected not in entries:
+        return {"action": "absent", "mode": "pull"}
+    managed_hooks = cast("dict[str, Any]", hooks)
+    entries.remove(expected)
+    if not entries:
+        managed_hooks.pop("Stop")
+    if not managed_hooks:
+        data.pop("hooks")
+    if not dry_run:
+        _backup(path)
+        _write(path, json.dumps(data, indent=2) + "\n")
+    return {"action": "remove", "mode": "pull"}
 
 
 # --- JSON mcp wiring (Copilot, Claude) -----------------------------------
@@ -559,6 +711,7 @@ def wire(
     *,
     tools: list[str] | None = None,
     rules: bool = True,
+    mailbox_wakeups: bool = False,
     force: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -613,7 +766,12 @@ def wire(
                     "bearer_token_env_available": False,
                     "detail": remediation,
                 },
-                "mailbox_notification_mode": codex.mailbox_notification_mode,
+                "mailbox_notification_mode": "pull",
+                "mailbox_wakeup": {
+                    "action": "skipped",
+                    "mode": "pull",
+                    "reason": "mcp-wiring-failed",
+                },
             }
         )
         return report
@@ -635,7 +793,12 @@ def wire(
                         "`brains-ai init` or `brains-ai setup` before remote wiring"
                     ),
                 },
-                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "mailbox_notification_mode": "pull",
+                "mailbox_wakeup": {
+                    "action": "skipped",
+                    "mode": "pull",
+                    "reason": "mcp-wiring-failed",
+                },
             }
         )
         return report
@@ -653,15 +816,24 @@ def wire(
             "display": adapter.display,
             "detected": detected,
             "mcp": mcp,
-            "mailbox_notification_mode": adapter.mailbox_notification_mode,
         }
+        if not mailbox_wakeups:
+            wakeup = {"action": "skipped", "mode": "pull", "reason": "consent-required"}
+        elif mcp.get("action") in {"error", "conflict"}:
+            wakeup = {"action": "skipped", "mode": "pull", "reason": "mcp-wiring-failed"}
+        else:
+            wakeup = _wire_wakeup(adapter, home, dry_run)
+        entry["mailbox_wakeup"] = wakeup
+        entry["mailbox_notification_mode"] = wakeup["mode"]
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
         if warnings:
             entry["warnings"] = warnings
         report["tools"].append(entry)
     report["ok"] = all(
-        entry["mcp"].get("action") not in {"error", "conflict"} for entry in report["tools"]
+        entry["mcp"].get("action") not in {"error", "conflict"}
+        and entry["mailbox_wakeup"].get("action") not in {"error", "conflict"}
+        for entry in report["tools"]
     )
     return report
 
@@ -681,7 +853,11 @@ def unwire(
             mcp = _unwire_json(adapter, home, dry_run)
         else:
             mcp = _unwire_toml(adapter, home, dry_run)
-        entry: dict[str, Any] = {"tool": adapter.name, "mcp": mcp}
+        entry: dict[str, Any] = {
+            "tool": adapter.name,
+            "mcp": mcp,
+            "mailbox_wakeup": _unwire_wakeup(adapter, home, dry_run),
+        }
         if rules:
             entry["rule"] = _unwire_rule(adapter, home, dry_run)
         report["tools"].append(entry)
@@ -732,6 +908,7 @@ def status(home: Path) -> dict[str, Any]:
                 )
                 bearer_token_env_var = env_match.group(1) if env_match else None
         wired_rule = instr_path.exists() and MD_START in instr_path.read_text(encoding="utf-8")
+        wakeup = _wakeup_status(adapter, home)
         out.append(
             {
                 "tool": adapter.name,
@@ -747,7 +924,8 @@ def status(home: Path) -> dict[str, Any]:
                 ),
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
-                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "mailbox_notification_mode": wakeup["mode"],
+                "mailbox_wakeup": wakeup,
             }
         )
     return {"tools": out}

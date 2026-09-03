@@ -396,6 +396,14 @@ def wire_cli(
     no_rules: bool = typer.Option(
         False, "--no-rules", help="Only wire the MCP entry; skip the instruction rule."
     ),
+    mailbox_wakeups: bool = typer.Option(
+        False,
+        "--mailbox-wakeups",
+        help=(
+            "Explicitly install supported body-free mailbox stop hooks; "
+            "other harnesses remain pull-only."
+        ),
+    ),
     force: bool = typer.Option(
         False, "--force", help="Wire even tools whose config dir is absent."
     ),
@@ -445,6 +453,7 @@ def wire_cli(
         ctx,
         tools=list(tool) or None,
         rules=not no_rules,
+        mailbox_wakeups=mailbox_wakeups,
         force=force,
         dry_run=dry_run,
     )
@@ -2913,6 +2922,31 @@ def mailbox_notification_settle_cli(
             error_code=error_code,
         )
     )
+
+
+@mailbox_app.command("harness-wakeup", hidden=True)
+def mailbox_harness_wakeup_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+):
+    """Translate one supported harness stop event into a body-free nudge."""
+    from brains.control.harness_wakeup import handle_harness_wakeup
+
+    raw = sys.stdin.read(32_769)
+    if len(raw) > 32_768:
+        _print_json({})
+        return
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    def emit(output: dict[str, str]) -> None:
+        _print_json(output)
+        sys.stdout.flush()
+
+    handle_harness_wakeup(adapter, payload, emit=emit)
 
 
 @app.command("session-link-successor")

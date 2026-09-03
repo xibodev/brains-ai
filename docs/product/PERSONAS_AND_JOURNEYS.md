@@ -382,6 +382,8 @@ message unread/read, help open/claimed/answered, unsupported.
   proof-bound incarnation resumes from its cursor.
 - Missing or failed notification adapter: preserve local acceptance and expose pull
   fallback; never inject peer-controlled mail text into model input.
+- Abandoned hook claim: reclaim it after the bounded lease; after three unconfirmed
+  attempts record delivery uncertainty and leave durable mail available to pull.
 - Frozen adapters remain irrelevant to local acceptance and readiness.
 
 **Success:** The human decision or coordination message is durable, scoped, attributable,
@@ -394,10 +396,12 @@ thread/reply/forward, explicit broadcast, cursor continuity, and cross-Workspace
 Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
 reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
 refusal, and accepted/read state. E3 also covers fixed body-free notification claims,
-mode restrictions, concurrent claim/settle, detach/read fallback, and binding proof.
-SMTP, external harness wakeup, and optional adapter work are frozen rather than active
-evidence gaps. Abrupt process exit and the residual in-process governance boundary remain
-core concerns.
+mode restrictions, concurrent claim/settle, detach/read fallback, binding proof,
+consented Copilot CLI and Claude Code stop-hook wiring, fixed-output wakeups, pull-only
+fallback for Codex/OpenCode, bounded reclaim, and terminal uncertainty. SMTP and external
+notification adapters are frozen rather than active evidence gaps. Automatic native
+identity lifecycle, abrupt process exit, and the residual in-process governance boundary
+remain core concerns.
 
 Operations E3 additionally distinguishes malformed registrations/live attachments,
 aged unread delivery, notification fallback/failure, and SMTP backlog/failure without

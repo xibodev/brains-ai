@@ -274,12 +274,17 @@ idempotent operation IDs, and cursor continuity now use migration 150 rows. Agen
 operations require current attachment plus binding; operator-inbox reads require a
 browser/local human channel. A proof-bound, body-free local notification take/settle
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
-preserving pull fallback. SMTP rows and adapters are frozen compatibility inventory.
+preserving pull fallback. Explicitly consented wiring installs Brains-owned stop hooks
+for Copilot CLI and Claude Code, whose turn boundaries emit only the fixed nudge. Codex
+and OpenCode remain truthfully pull-only because supported wiring has no proven
+continuation boundary for them. Abandoned claims have a bounded lease and three-attempt
+uncertainty limit; local mail remains authoritative throughout. SMTP rows and adapters
+are frozen compatibility inventory.
 Isolated UAT covers explicit real native-ID extraction, offline delivery, successor
 recovery, and threaded replies for OpenCode/Codex and OpenCode/Claude. The adapter
 identity contract covers Copilot CLI, Claude Code, Codex, and OpenCode without guessing:
 it preserves the raw adapter label and reports native identity as resolved, unavailable,
-or ambiguous. Concrete hook/plugin installation, Copilot container credentials,
+or ambiguous. Native-ID lifecycle automation, Copilot container credentials,
 real-provider review, and broad per-tool authorization remain open. The
 Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
 explicit read, participant-filtered threads, operator compose/reply/forward, delivery
@@ -304,8 +309,8 @@ Notification attempt state is active through migration 151 and the CLI/MCP adapt
 protocol; the fixed nudge carries no mail metadata or content, and `wire` truthfully
 reports pull until it installs a stronger adapter. Migration 152 preserves constrained
 SMTP consent/outbox rows for compatibility without advertising external delivery.
-Concrete local harness wakeup and host-restart acceptance remain core work;
-real-provider SMTP is frozen.
+Host-restart/native lifecycle acceptance remains core work; real-provider SMTP is
+frozen.
 
 ### B3 - Workspace knowledge and repository lookup
 

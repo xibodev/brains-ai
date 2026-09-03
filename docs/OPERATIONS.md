@@ -63,7 +63,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | Family | Supported purpose |
 |---|---|
 | `setup`, `serve-all`, `serve`, `mcp`, `up` | Initialize or run the supported gateway/MCP stack. |
-| `wire`, `unwire` | Add, inspect, or remove only the Brains-owned MCP entry for a supported harness. |
+| `wire`, `unwire` | Add, inspect, or remove the Brains-owned MCP entry and explicitly consented supported mailbox wakeup hook. |
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
 | Session/state/task/claim/handoff/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
@@ -178,6 +178,18 @@ harness's native MCP schema. Wiring must:
 - report conflicts rather than overwrite them;
 - make `unwire` remove only the Brains-owned entry;
 - select a transport the harness supports and readiness can probe.
+
+Mailbox wakeup hooks are separate, explicit consent:
+
+```text
+brains-ai wire --mailbox-wakeups
+```
+
+This installs Brains-owned stop hooks for Copilot CLI and Claude Code only. Their
+documented turn boundary can request one more turn with a constant, body-free prompt.
+Codex notification commands cannot continue a completed turn, and the supported
+OpenCode version/hook lifecycle is not pinned, so both remain truthful pull-only
+adapters. A hook conflict or MCP wiring failure leaves that adapter in pull mode.
 
 Probe without changing configuration:
 
@@ -351,20 +363,23 @@ record per-recipient attribution. Successful send means local SQLite acceptance 
 it does not claim agent wakeup, live harness delivery, or SMTP copy.
 
 Migration `151_mail_notification_state` constrains attachment modes and the
-`queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. A
-harness integration that it has actually installed may explicitly register `immediate`
-for Claude Code/OpenCode or `turn_boundary` for Codex; Copilot CLI accepts only pull.
+`queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. An
+installed Copilot CLI or Claude Code stop hook may explicitly register
+`turn_boundary`; Codex and OpenCode remain pull-only through supported wiring.
 For a stronger mode, `mailbox notification-take` claims one attempt and returns only the
 fixed nudge `Brains mailbox: new mail is waiting. Pull your durable inbox.` plus bounded
 attempt metadata. It never returns subject, body, sender, recipient, or delivery
 identity. The adapter records what it observed with `notification-settle`; failure,
 detach, mode change, timeout, and prior inbox read leave local delivery intact.
 
-Current `wire` output reports `mailbox_notification_mode: pull` for all harnesses. The
-wiring command installs MCP/rules only, not a notification hook or plugin, so stronger
-modes must not be selected merely because a harness platform could support one. There is
-no Brains follower daemon or model-input injection in this slice. Use proof-bound
-`mailbox inbox` as the authoritative recovery path.
+Default `wire` output reports `mailbox_notification_mode: pull` for all harnesses.
+`--mailbox-wakeups` installs only the supported consented hooks and reports
+`turn_boundary` only after their managed configuration is present. A claim abandoned
+after output is reclaimed after its bounded lease; three unconfirmed attempts end in a
+stable `delivery_uncertain` state and pull fallback. The hook never receives or emits
+message content, addresses, credentials, binding paths, or notification identifiers.
+There is no Brains follower daemon or model-input injection. Use proof-bound `mailbox
+inbox` as the authoritative recovery path.
 
 The Coordination browser mailbox desk supports authorized human reads and operator
 compose/reply/forward; agent mailboxes remain read-only because agent send authority

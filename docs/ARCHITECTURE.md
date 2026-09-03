@@ -173,9 +173,12 @@ default and authoritative recovery path. An explicitly declared, harness-compati
 attachment may create one idempotent attempt per delivery/incarnation. CLI/MCP adapters
 atomically claim it, receive only a constant body-free nudge, and settle the observed
 result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
-local delivery. Brains does not retain a generic live model-input channel, and current
-`wire` installs no notification hook/plugin, so this protocol is not evidence that an
-external running model was awakened. Concrete harness integration remains a later slice.
+local delivery. With explicit consent, `wire --mailbox-wakeups` installs managed stop
+hooks for Copilot CLI and Claude Code. At their turn boundary, an existing proof-bound
+attachment may emit the constant nudge and request one continuation; abandoned claims
+are lease-reclaimed and become uncertain after three attempts. Codex and OpenCode remain
+pull-only because supported wiring has no proven continuation hook for them. Brains does
+not retain a generic live model-input channel.
 
 Migration 152 activates the reserved per-operator SMTP setting and outbox rows. The
 human-bound mailbox owner stores a destination as AES-GCM ciphertext behind a versioned
