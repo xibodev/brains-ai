@@ -24,12 +24,12 @@ test('J9.1 supported local configuration is truthful and contained', async ({ pa
   consoleGuard.assertClean();
 });
 
-test('J9.2 supported write reports a live-reload outcome', async ({ page, consoleGuard }) => {
+test('J9.2 supported write reports a restart-required outcome', async ({ page, consoleGuard }) => {
   await page.goto('/app/operations/config/local');
   const rateLimit = page.getByLabel('service.rate_limit_per_minute');
   const original = Number(await rateLimit.inputValue());
   await rateLimit.fill(String(original === 100000 ? original - 1 : original + 1));
   await page.getByRole('button', { name: 'Save supported changes' }).click();
-  await expect(page.getByText('reloaded', { exact: true })).toBeVisible();
+  await expect(page.getByText('restart required', { exact: true })).toBeVisible();
   consoleGuard.assertClean();
 });

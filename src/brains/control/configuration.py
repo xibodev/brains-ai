@@ -31,7 +31,10 @@ class ConfigurationConflict(ConfigurationError):
 
 _THREAD_LOCK = threading.Lock()
 _EDITABLE: dict[str, tuple[str, str]] = {
-    "service.rate_limit_per_minute": ("rate_limit_per_minute", "live_reload"),
+    # The gateway may have multiple workers and the MCP service is a separate
+    # process.  Persisted writes therefore require a supervised-stack restart;
+    # mutating only the handling process would report false convergence.
+    "service.rate_limit_per_minute": ("rate_limit_per_minute", "restart_required"),
     "sqlite.busy_timeout_ms": ("sqlite_busy_timeout_ms", "restart_required"),
     "sqlite.enforce_foreign_keys": ("sqlite_enforce_foreign_keys", "restart_required"),
 }
@@ -95,7 +98,9 @@ def _file_lock(path: Path) -> Iterator[None]:
             handle.seek(0)
             with contextlib.suppress(OSError):
                 msvcrt.locking(  # type: ignore[attr-defined]
-                    handle.fileno(), msvcrt.LK_UNLCK, 1  # type: ignore[attr-defined]
+                    handle.fileno(),
+                    msvcrt.LK_UNLCK,
+                    1,  # type: ignore[attr-defined]
                 )
         else:
             import fcntl
@@ -153,12 +158,18 @@ def _source(payload: Mapping[str, Any], internal_key: str) -> str:
 def configuration_summary() -> dict[str, Any]:
     """Return only supported, bounded, non-secret effective configuration."""
 
-    from brains.config import settings
+    from brains.config import load_settings
     from brains.service.common import read_service_config
     from brains.wire import status as wire_status
 
     path = _overlay_path()
-    payload, raw = _read_overlay(path)
+    # The revision and effective editable values must describe one disk
+    # snapshot.  Loading under the same cross-process lock used by writes
+    # prevents a new revision from being paired with the handling process's
+    # stale module singleton.
+    with _THREAD_LOCK, _file_lock(path):
+        payload, raw = _read_overlay(path)
+        effective = load_settings()
     service = read_service_config()
     host = str(service["gateway_host"])
     binding = "loopback" if host in {"127.0.0.1", "::1", "localhost"} else "configured"
@@ -190,7 +201,7 @@ def configuration_summary() -> dict[str, Any]:
         {
             "key": "service.authentication",
             "category": "service",
-            "value": "disabled" if settings.allow_unauthenticated_api else "required",
+            "value": "disabled" if effective.allow_unauthenticated_api else "required",
             "editable": False,
             "apply_mode": "read_only",
             "source": "effective",
@@ -214,9 +225,9 @@ def configuration_summary() -> dict[str, Any]:
         {
             "key": "service.rate_limit_per_minute",
             "category": "service",
-            "value": settings.rate_limit_per_minute,
+            "value": effective.rate_limit_per_minute,
             "editable": True,
-            "apply_mode": "live_reload",
+            "apply_mode": "restart_required",
             "source": _source(payload, "rate_limit_per_minute"),
         },
         {
@@ -254,7 +265,7 @@ def configuration_summary() -> dict[str, Any]:
         {
             "key": "sqlite.busy_timeout_ms",
             "category": "sqlite",
-            "value": settings.sqlite_busy_timeout_ms,
+            "value": effective.sqlite_busy_timeout_ms,
             "editable": True,
             "apply_mode": "restart_required",
             "source": _source(payload, "sqlite_busy_timeout_ms"),
@@ -262,7 +273,7 @@ def configuration_summary() -> dict[str, Any]:
         {
             "key": "sqlite.enforce_foreign_keys",
             "category": "sqlite",
-            "value": settings.sqlite_enforce_foreign_keys,
+            "value": effective.sqlite_enforce_foreign_keys,
             "editable": True,
             "apply_mode": "restart_required",
             "source": _source(payload, "sqlite_enforce_foreign_keys"),
@@ -282,7 +293,7 @@ def apply_configuration(
     """Validate, audit, atomically apply, and recover one supported patch."""
 
     from brains.audit import record_required
-    from brains.config import Settings, reload_settings, settings
+    from brains.config import Settings, settings
     from brains.storage.migrations import init_db
 
     updates, modes = _validated_updates(changes)
@@ -293,6 +304,11 @@ def apply_configuration(
     with _THREAD_LOCK, _file_lock(path):
         payload, original = _read_overlay(path)
         if _revision(original) != expected_revision:
+            record_required(
+                actor=actor,
+                action="config.core_update.conflict",
+                payload={"fields": sorted(changes), "apply_modes": sorted(modes)},
+            )
             raise ConfigurationConflict("configuration changed; reload before retrying")
         candidate = dict(payload)
         candidate["schema_version"] = RUNTIME_OVERLAY_SCHEMA_VERSION
@@ -311,7 +327,6 @@ def apply_configuration(
         try:
             _atomic_replace(path, encoded)
             replaced = True
-            reload_settings()
             result_revision = _revision(encoded)
             outcome_id = record_required(
                 actor=actor,
@@ -327,7 +342,6 @@ def apply_configuration(
             if replaced:
                 try:
                     _atomic_replace(path, original)
-                    reload_settings()
                 except Exception:  # noqa: BLE001 - bounded result below
                     rollback_ok = False
             with contextlib.suppress(Exception):
@@ -347,13 +361,13 @@ def apply_configuration(
                 else "configuration apply failed and automatic recovery did not complete"
             )
             raise ConfigurationError(message) from exc
-    mode = "restart_required" if "restart_required" in modes else "live_reload"
+    mode = "restart_required"
     return {
         "ok": True,
         "revision": result_revision,
         "apply_mode": mode,
-        "reload_applied": True,
-        "restart_required": mode == "restart_required",
+        "reload_applied": False,
+        "restart_required": True,
         "audit_id": outcome_id,
         "changed_fields": sorted(changes),
     }

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import multiprocessing
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -111,30 +113,59 @@ def test_summary_is_positive_redacted_core_manifest(
     ]
 
 
-def test_live_and_restart_changes_are_atomic_reloadable_and_attributable(
+def _race_configuration_write(
+    revision: str,
+    value: int,
+    barrier: Any,
+    outcomes: Any,
+) -> None:
+    barrier.wait()
+    try:
+        result = apply_configuration(
+            {"service.rate_limit_per_minute": value},
+            expected_revision=revision,
+            actor=f"operator:race-{value}",
+        )
+    except ConfigurationConflict:
+        outcomes.put(("conflict", value))
+    else:
+        outcomes.put(("applied", value, result["revision"]))
+
+
+def test_supported_changes_are_atomic_restart_required_and_attributable(
     isolated_overlay: Path,
 ) -> None:
     before = configuration_summary()
-    live = apply_configuration(
-        {"service.rate_limit_per_minute": 29},
+    previous_rate = settings.rate_limit_per_minute
+    new_rate = 29 if previous_rate != 29 else 30
+    first = apply_configuration(
+        {"service.rate_limit_per_minute": new_rate},
         expected_revision=before["revision"],
         actor="operator:config-test",
     )
-    assert live["apply_mode"] == "live_reload"
-    assert live["restart_required"] is False
-    assert settings.rate_limit_per_minute == 29
+    assert first["apply_mode"] == "restart_required"
+    assert first["reload_applied"] is False
+    assert first["restart_required"] is True
+    assert settings.rate_limit_per_minute == previous_rate
+    summary = configuration_summary()
+    assert (
+        next(
+            field["value"]
+            for field in summary["fields"]
+            if field["key"] == "service.rate_limit_per_minute"
+        )
+        == new_rate
+    )
 
     restarted = apply_configuration(
         {"sqlite.busy_timeout_ms": 4321, "sqlite.enforce_foreign_keys": True},
-        expected_revision=live["revision"],
+        expected_revision=first["revision"],
         actor="operator:config-test",
     )
     assert restarted["apply_mode"] == "restart_required"
     assert restarted["restart_required"] is True
-    assert settings.sqlite_busy_timeout_ms == 4321
-    assert settings.sqlite_enforce_foreign_keys is True
     persisted = yaml.safe_load(isolated_overlay.read_text(encoding="utf-8"))
-    assert persisted["rate_limit_per_minute"] == 29
+    assert persisted["rate_limit_per_minute"] == new_rate
     assert persisted["sqlite_busy_timeout_ms"] == 4321
     audit = list_entries(action_prefix="config.core_update")
     assert any(row["actor"] == "operator:config-test" for row in audit)
@@ -179,10 +210,51 @@ def test_stale_revision_refuses_without_overwrite(isolated_overlay: Path) -> Non
             expected_revision=current["revision"],
             actor="operator:second",
         )
-    assert settings.rate_limit_per_minute == 4
+    persisted = yaml.safe_load(isolated_overlay.read_text(encoding="utf-8"))
+    assert persisted["rate_limit_per_minute"] == 4
+    conflicts = list_entries(action_prefix="config.core_update.conflict")
+    assert conflicts and conflicts[0]["actor"] == "operator:second"
 
 
-def test_failed_reload_restores_previous_file_and_effective_state(
+def test_simultaneous_processes_have_one_cas_winner_and_audited_outcomes(
+    isolated_overlay: Path,
+) -> None:
+    init_db()
+    revision = configuration_summary()["revision"]
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(3)
+    outcomes = context.Queue()
+    workers = [
+        context.Process(
+            target=_race_configuration_write,
+            args=(revision, value, barrier, outcomes),
+        )
+        for value in (41, 42)
+    ]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join(timeout=20)
+        assert worker.exitcode == 0
+
+    results = [outcomes.get(timeout=2) for _ in workers]
+    assert sorted(result[0] for result in results) == ["applied", "conflict"]
+    winner = next(result for result in results if result[0] == "applied")
+    payload = yaml.safe_load(isolated_overlay.read_text(encoding="utf-8"))
+    assert payload["rate_limit_per_minute"] == winner[1]
+    assert configuration_summary()["revision"] == winner[2]
+    audit = list_entries(action_prefix="config.core_update")
+    loser = next(result for result in results if result[0] == "conflict")
+    outcomes_by_actor = {(row["actor"], row["action"]) for row in audit}
+    assert (f"operator:race-{winner[1]}", "config.core_update") in outcomes_by_actor
+    assert (
+        f"operator:race-{loser[1]}",
+        "config.core_update.conflict",
+    ) in outcomes_by_actor
+
+
+def test_failed_apply_restores_previous_file_and_effective_state(
     isolated_overlay: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     apply_configuration(
@@ -191,17 +263,18 @@ def test_failed_reload_restores_previous_file_and_effective_state(
         actor="operator:baseline",
     )
     original = isolated_overlay.read_bytes()
-    original_reload = reload_settings
     calls = 0
 
-    def fail_once():
+    from brains.audit import record_required as original_record
+
+    def fail_success_audit(*, actor: str, action: str, payload: dict[str, Any]) -> int:
         nonlocal calls
         calls += 1
-        if calls == 1:
+        if calls == 2:
             raise RuntimeError("synthetic apply failure")
-        return original_reload()
+        return original_record(actor=actor, action=action, payload=payload)
 
-    monkeypatch.setattr("brains.config.reload_settings", fail_once)
+    monkeypatch.setattr("brains.audit.record_required", fail_success_audit)
     with pytest.raises(ConfigurationError, match="restored"):
         apply_configuration(
             {"service.rate_limit_per_minute": 8},
@@ -209,7 +282,15 @@ def test_failed_reload_restores_previous_file_and_effective_state(
             actor="operator:rollback",
         )
     assert isolated_overlay.read_bytes() == original
-    assert settings.rate_limit_per_minute == 7
+    effective = configuration_summary()
+    assert (
+        next(
+            field["value"]
+            for field in effective["fields"]
+            if field["key"] == "service.rate_limit_per_minute"
+        )
+        == 7
+    )
     failures = list_entries(action_prefix="config.core_update.failed")
     assert failures and failures[0]["payload"]["rollback"] == "restored"
 

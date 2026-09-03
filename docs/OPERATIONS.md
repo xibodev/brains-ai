@@ -116,12 +116,13 @@ The modern Config screen and `GET /v1/operator/configuration` expose only a posi
 redacted manifest of local service, Streamable HTTP MCP, SQLite, and supported harness
 posture. `PUT /v1/operator/configuration` accepts only the advertised non-secret fields,
 requires bootstrap-admin authentication plus the revision returned by GET, and records
-the resolved operator in the audit trail. Rate-limit changes reload in the handling
-process. SQLite busy-timeout and foreign-key changes are persisted atomically and return
-`restart_required`; they take effect for newly opened SQLite connections after service
-restart. A validation or apply failure restores the prior runtime overlay. Frozen and
+the resolved operator in the audit trail. Every write returns `restart_required` because
+the gateway may have multiple workers and MCP is a separate process; changing only the
+handling process would not establish stack convergence. Values take effect after a
+supervised-stack restart. A validation or apply failure restores the prior runtime overlay. Frozen and
 withdrawn provider, email, bridge, gateway-preamble, alternate-storage, and telemetry
-fields are neither returned nor accepted by this surface.
+fields are neither returned nor accepted by this surface. The legacy `/admin/config`
+writer remains deletion inventory and keeps configuration containment incomplete.
 
 Supported secret rules:
 
