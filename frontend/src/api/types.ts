@@ -800,12 +800,13 @@ export interface WorkspaceLookupResult {
 }
 
 export interface WorkspaceLookupEnvelope {
-  status: "ok" | "empty" | "unavailable";
+  status: "ok" | "empty" | "limited" | "unavailable";
   reason: string;
   query: string;
   results: WorkspaceLookupResult[];
   scanned_files: number;
   truncated: boolean;
+  incomplete_reasons: string[];
 }
 
 export interface OperatorCoordination {

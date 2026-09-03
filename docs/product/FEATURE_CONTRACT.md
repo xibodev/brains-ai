@@ -316,16 +316,19 @@ matches without treating generated context as authority.
 Semantic indexing/search, embeddings, graph, and external freshness are withdrawn.
 
 - AC-B3-01: supported local lookup is bounded, ignore-aware, deterministic, and read-only.
-- AC-B3-02: lookup distinguishes matches, no match, and an unavailable Workspace root
-  without fabricating results or disclosing absolute result paths.
+- AC-B3-02: lookup distinguishes matches, a complete no-match, a limited/incomplete
+  scan, and an unavailable Workspace root without fabricating results or disclosing
+  absolute result paths.
 - AC-B3-03: graph queries identify language/indexing limits.
 - AC-B3-04: external freshness checks apply allowlists and SSRF protection.
 
 AC-B3-03 and AC-B3-04 remain target/containment criteria for withdrawn code. The
 supported lookup scans a deterministic bounded set of eligible source files, skips
 links and generated/private state, returns root-relative line-numbered snippets, and
-uses one `ok|empty|unavailable` reason envelope across CLI, MCP, and the authenticated
-Workspace browser. It never registers, indexes, embeds, imports, or writes the source.
+uses one `ok|empty|limited|unavailable` reason envelope across CLI, MCP, and the
+authenticated Workspace browser. Caps and traversal/read failures produce `limited`
+with explicit incomplete reasons, never a complete no-match. It never registers,
+indexes, embeds, imports, or writes the source.
 
 ### B4 - Human governance and audit
 

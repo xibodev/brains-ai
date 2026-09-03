@@ -253,8 +253,8 @@ def search_repo_tool(
     """Bounded substring/symbol lookup with inline line-numbered snippets.
 
     This is read-only and works on a fresh repository without preparation.
-    ``status`` distinguishes matches, no match, and an
-    unavailable workspace root.
+    ``status`` distinguishes complete matches, no match, an incomplete scan,
+    and an unavailable workspace root.
     """
     needle = query or q
     target_path = path or repo_path

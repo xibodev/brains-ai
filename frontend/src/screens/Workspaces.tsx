@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { OperatorWorkspaceDetail, WorkspaceLookupEnvelope } from "../api/types";
@@ -11,6 +11,7 @@ import {
   OperatorStatus,
   countByStatus,
 } from "../components/OperatorPrimitives";
+import { isCurrent } from "../components/sessionScope";
 import { useAsync } from "../store/useAsync";
 
 type WorkspaceTab = "overview" | "work" | "communication" | "knowledge" | "activity" | "access";
@@ -61,7 +62,7 @@ export function Workspaces() {
 
           <section className="operator-control-room">
             <OperatorState loading={detail.loading} error={detail.error} />
-            {workspace && (
+            {workspace && workspace.workspace.slug === selectedSlug && (
               <>
                 <section className="operator-workspace-banner">
                   <div className="operator-workspace-banner-top">
@@ -100,7 +101,7 @@ function WorkspaceTabContent({ tab, detail }: { tab: WorkspaceTab; detail: Opera
     return <div className="operator-room-grid"><OperatorCard kicker="Continuity" title="Handoffs"><div className="operator-work-list">{detail.handoffs.map((row) => <div className="operator-work-item" key={String(row.handoff_id || row.id)}><OperatorStatus tone={row.status === "active" ? "ready" : "neutral"}>{row.status || "unknown"}</OperatorStatus><strong>{row.title || "Untitled handoff"}</strong><small>{relativeTime(row.set_at || row.created_at)}</small></div>)}{!detail.handoffs.length && <span className="operator-muted">No handoffs recorded.</span>}</div></OperatorCard><OperatorCard kicker="Presence" title="Live agents"><div className="operator-agent-list">{detail.live_agents.map((agent) => <div className="operator-agent-row" key={agent.session_id}><span><i>{(agent.tool || "A").slice(0, 1).toUpperCase()}</i><b>{agent.tool || "agent"}<small>{agent.session_id.slice(0, 12)}</small></b></span><span className="operator-agent-actions"><code>{relativeTime(agent.last_activity_at)}</code>{agent.mailbox_deep_link && <button className="operator-button quiet" onClick={() => navigate(agent.mailbox_deep_link!.replace(/^\/app/, ""))}>Open mailbox</button>}</span></div>)}{!detail.live_agents.length && <span className="operator-muted">No live agents.</span>}</div></OperatorCard></div>;
   }
   if (tab === "knowledge") {
-    return <div className="operator-room-grid"><LookupPanel slug={detail.workspace.slug} /><OperatorCard kicker="Knowledge ledger" title={`${detail.knowledge.length} entries`}><div className="operator-work-list">{detail.knowledge.map((row) => <div className="operator-work-item" key={row.code}><div><code>{row.code}</code><OperatorStatus tone={row.severity === "critical" ? "danger" : row.type === "blocker" ? "warning" : "neutral"}>{row.type}</OperatorStatus></div><strong>{row.title}</strong><small>{row.scope} / {row.status}</small></div>)}</div></OperatorCard><OperatorCard kicker="Advisory signals" title="What agents should know"><OperatorMiniList rows={detail.signals.map((signal) => ({ label: signal.type.replaceAll("_", " "), value: signal.count }))} /></OperatorCard></div>;
+    return <div className="operator-room-grid"><LookupPanel key={detail.workspace.slug} slug={detail.workspace.slug} /><OperatorCard kicker="Knowledge ledger" title={`${detail.knowledge.length} entries`}><div className="operator-work-list">{detail.knowledge.map((row) => <div className="operator-work-item" key={row.code}><div><code>{row.code}</code><OperatorStatus tone={row.severity === "critical" ? "danger" : row.type === "blocker" ? "warning" : "neutral"}>{row.type}</OperatorStatus></div><strong>{row.title}</strong><small>{row.scope} / {row.status}</small></div>)}</div></OperatorCard><OperatorCard kicker="Advisory signals" title="What agents should know"><OperatorMiniList rows={detail.signals.map((signal) => ({ label: signal.type.replaceAll("_", " "), value: signal.count }))} /></OperatorCard></div>;
   }
   if (tab === "activity") {
     return <OperatorCard kicker="Durable activity" title="Workspace timeline"><div className="operator-event-list">{detail.events.map((event) => <div className="operator-event-row" key={event.id}><time>{relativeTime(event.created_at)}</time><i>+</i><div><strong>{event.kind.replaceAll("_", " ")}</strong><p>{event.message}</p></div><code>{event.session_id?.slice(0, 8) || "system"}</code></div>)}</div></OperatorCard>;
@@ -116,18 +117,47 @@ function LookupPanel({ slug }: { slug: string }) {
   const [lookup, setLookup] = useState<WorkspaceLookupEnvelope>();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const currentWorkspace = useRef<string | null>(slug);
+  const request = useRef<AbortController | null>(null);
+  currentWorkspace.current = slug;
+
+  useEffect(() => {
+    request.current?.abort();
+    setQuery("");
+    setLookup(undefined);
+    setError(null);
+    setLoading(false);
+    return () => request.current?.abort();
+  }, [slug]);
 
   const run = async () => {
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
     setLookup(undefined);
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const requestedWorkspace = slug;
     try {
-      setLookup(await api.operatorWorkspaceLookup(slug, query.trim()));
+      const result = await api.operatorWorkspaceLookup(
+        requestedWorkspace,
+        query.trim(),
+        10,
+        controller.signal,
+      );
+      if (!controller.signal.aborted && isCurrent(currentWorkspace, requestedWorkspace)) {
+        setLookup(result);
+      }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Lookup failed");
+      if (!controller.signal.aborted && isCurrent(currentWorkspace, requestedWorkspace)) {
+        setError(reason instanceof Error ? reason.message : "Lookup failed");
+      }
     } finally {
-      setLoading(false);
+      if (request.current === controller && isCurrent(currentWorkspace, requestedWorkspace)) {
+        request.current = null;
+        setLoading(false);
+      }
     }
   };
 
@@ -140,6 +170,7 @@ function LookupPanel({ slug }: { slug: string }) {
     {error && <p role="alert">{error}</p>}
     {lookup?.status === "unavailable" && <p role="status">Workspace source is unavailable ({lookup.reason.replaceAll("_", " ")}).</p>}
     {lookup?.status === "empty" && <p role="status">No source matches.</p>}
-    {lookup?.status === "ok" && <div className="operator-work-list">{lookup.results.map((row) => <div className="operator-work-item" key={`${row.path}:${row.line}`}><div><code>{row.path}:{row.line}</code><OperatorStatus>{row.match}</OperatorStatus></div>{row.symbol && <strong>{row.symbol}</strong>}<pre>{row.snippet}</pre></div>)}</div>}
+    {lookup?.status === "limited" && <p role="status">Lookup is incomplete ({lookup.incomplete_reasons.map((reason) => reason.replaceAll("_", " ")).join(", ")}). Results may be partial.</p>}
+    {(lookup?.status === "ok" || lookup?.status === "limited") && <div className="operator-work-list">{lookup.results.map((row) => <div className="operator-work-item" key={`${row.path}:${row.line}`}><div><code>{row.path}:{row.line}</code><OperatorStatus>{row.match}</OperatorStatus></div>{row.symbol && <strong>{row.symbol}</strong>}<pre>{row.snippet}</pre></div>)}</div>}
   </OperatorCard>;
 }

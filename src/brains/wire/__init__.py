@@ -72,6 +72,7 @@ tokens.
 Use `brains_knowledge_search` for recorded knowledge or `brains_search_repo` for
 bounded substring/symbol lookup with inline source snippets. Check the returned
 status: `empty` means no match and `unavailable` means the Workspace cannot be read.
+`limited` means the scan or result set was incomplete and any matches are partial.
 
 **Non-trivial, multi-step, or COLLABORATIVE work** (editing a shared repo, work others
 may touch, a multi-session effort): coordinate, in order —

@@ -315,8 +315,10 @@ withdrawn.
    atomically register/reattach its durable mailbox with native-ID and binding proof.
 2. Inspect or claim durable work.
 3. Retrieve recorded knowledge or run bounded read-only source lookup. Source lookup
-   reports matches, no match, and unavailable Workspace roots as distinct states and
-   returns only relative paths with line-numbered snippets.
+   reports complete matches, complete no-match, incomplete/partial scans, and
+   unavailable Workspace roots as distinct states and returns only relative paths with
+   line-numbered snippets. A Workspace switch cancels and rejects the prior scope's
+   late response.
 4. Record checkpoints, handoffs, messages, and scoped events.
 5. Renew presence while the harness is active; mailbox-bound Sessions prove their
    native ID and binding rather than treating `ses_*` as a credential.

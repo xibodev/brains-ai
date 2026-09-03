@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Literal, TypedDict
 
-LookupStatus = Literal["ok", "empty", "unavailable"]
+LookupStatus = Literal["ok", "empty", "limited", "unavailable"]
 
 MAX_RESULTS = 50
 MAX_FILES = 2_000
@@ -86,6 +86,7 @@ class LookupEnvelope(TypedDict):
     results: list[LookupResult]
     scanned_files: int
     truncated: bool
+    incomplete_reasons: list[str]
 
 
 def _envelope(
@@ -96,6 +97,7 @@ def _envelope(
     results: list[LookupResult] | None = None,
     scanned_files: int = 0,
     truncated: bool = False,
+    incomplete_reasons: list[str] | None = None,
 ) -> LookupEnvelope:
     return {
         "status": status,
@@ -104,6 +106,7 @@ def _envelope(
         "results": results or [],
         "scanned_files": scanned_files,
         "truncated": truncated,
+        "incomplete_reasons": incomplete_reasons or [],
     }
 
 
@@ -152,13 +155,17 @@ def lookup_workspace(root: str | os.PathLike[str], query: str, limit: int = 10) 
     scanned_bytes = 0
     visited_files = 0
     visited_directories = 0
-    capped_files = False
+    incomplete: set[str] = set()
+
+    def traversal_error(_error: OSError) -> None:
+        incomplete.add("traversal_unreadable")
+
     try:
-        walker = os.walk(resolved, topdown=True, followlinks=False)
+        walker = os.walk(resolved, topdown=True, onerror=traversal_error, followlinks=False)
         for dirpath, dirnames, filenames in walker:
             visited_directories += 1
             if visited_directories > MAX_DIRECTORIES:
-                capped_files = True
+                incomplete.add("directory_limit_reached")
                 break
             dirnames[:] = sorted(
                 name
@@ -167,7 +174,7 @@ def lookup_workspace(root: str | os.PathLike[str], query: str, limit: int = 10) 
             )
             for filename in sorted(filenames):
                 if visited_files >= MAX_FILES:
-                    capped_files = True
+                    incomplete.add("file_limit_reached")
                     break
                 visited_files += 1
                 path = Path(dirpath) / filename
@@ -176,24 +183,32 @@ def lookup_workspace(root: str | os.PathLike[str], query: str, limit: int = 10) 
                 try:
                     size = path.stat().st_size
                     if size > MAX_FILE_BYTES:
+                        incomplete.add("file_size_limit_reached")
                         continue
                     if scanned_bytes + size > MAX_TOTAL_BYTES:
-                        capped_files = True
+                        incomplete.add("byte_limit_reached")
                         break
                     with path.open("rb") as handle:
                         payload = handle.read(MAX_FILE_BYTES + 1)
                 except OSError:
+                    incomplete.add("file_unreadable")
                     continue
                 if len(payload) > MAX_FILE_BYTES:
+                    incomplete.add("file_size_limit_reached")
                     continue
                 if scanned_bytes + len(payload) > MAX_TOTAL_BYTES:
-                    capped_files = True
+                    incomplete.add("byte_limit_reached")
                     break
                 scanned += 1
                 scanned_bytes += len(payload)
                 if b"\0" in payload[:2048]:
+                    incomplete.add("file_not_text")
                     continue
-                text = payload.decode("utf-8", errors="replace")
+                try:
+                    text = payload.decode("utf-8")
+                except UnicodeDecodeError:
+                    incomplete.add("file_not_text")
+                    continue
                 lines = text.splitlines()
                 rel = path.relative_to(resolved).as_posix()
                 for index, line_text in enumerate(lines):
@@ -223,14 +238,27 @@ def lookup_workspace(root: str | os.PathLike[str], query: str, limit: int = 10) 
                         hits.sort(key=lambda row: (row[0], row[1], row[2]))
                         hits.pop()
                         extra_hit = True
-            if capped_files:
+            if {"directory_limit_reached", "file_limit_reached", "byte_limit_reached"} & incomplete:
                 break
     except OSError:
-        return _envelope("unavailable", "root_unreadable", needle, scanned_files=scanned)
+        incomplete.add("traversal_unreadable")
 
     hits.sort(key=lambda row: (row[0], row[1], row[2]))
     results = [row[3] for row in hits]
-    truncated = capped_files or extra_hit
+    if extra_hit:
+        incomplete.add("result_limit_reached")
+    reasons = sorted(incomplete)
+    truncated = bool(reasons)
+    if reasons:
+        return _envelope(
+            "limited",
+            reasons[0] if len(reasons) == 1 else "scan_incomplete",
+            needle,
+            results=results,
+            scanned_files=scanned,
+            truncated=True,
+            incomplete_reasons=reasons,
+        )
     if not results:
         return _envelope("empty", "no_matches", needle, scanned_files=scanned, truncated=truncated)
     return _envelope(
