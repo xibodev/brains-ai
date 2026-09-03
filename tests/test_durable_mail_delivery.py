@@ -278,7 +278,7 @@ def test_pull_mode_and_detached_mail_never_fabricate_a_notification(tmp_path) ->
     workspace = tmp_path / "pull-fallback"
     sender = _agent(workspace)
     pull_recipient = _agent(workspace, tool="codex")
-    detached = _notified_agent(workspace, tool="claude", mode="immediate")
+    detached = _notified_agent(workspace, tool="claude", mode="turn_boundary")
     end_session(detached["session"]["session_id"], "offline")
 
     sent = send_mailbox_message(

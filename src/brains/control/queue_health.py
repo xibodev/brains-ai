@@ -1,4 +1,4 @@
-"""Coordination queue health + continuity repair — BL-P1-12.
+"""Coordination queue health and continuity repair for the B8 contract.
 
 Approvals, handoffs, mailbox messages, help requests, workspace claims, and
 Session commands each persist with their own status column and their own
@@ -78,7 +78,7 @@ class QueueFamily:
     expiry_policy: str
 
 
-#: The queue-health contract BL-P1-12 asks for: every family, its owner, its
+#: The B8 queue-health contract requires every family, its owner, its
 #: scope, its lifecycle transitions, and its expiry policy - or an explicit
 #: statement that the policy is indefinite by design.
 FAMILIES: tuple[QueueFamily, ...] = (

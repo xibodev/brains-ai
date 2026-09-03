@@ -16,6 +16,7 @@ GLOBAL_SETUP = ROOT / "tests" / "e2e" / "fixtures" / "global-setup.ts"
 DOCKER_E2E = ROOT / "scripts" / "run_docker_e2e.ps1"
 DOCKER_CLI_UAT = ROOT / "scripts" / "run_docker_cli_uat.ps1"
 DOCKER_CLI_UAT_FILE = ROOT / "docker" / "Dockerfile.cli-uat"
+CLAUDE_WAKEUP_UAT = ROOT / "scripts" / "run_docker_claude_wakeup_probe.ps1"
 REAL_CLI_ACTOR = ROOT / "tests" / "uat" / "real_cli_actor.py"
 DOCKER_QUALITY = ROOT / "scripts" / "run_docker_quality.ps1"
 DOCKER_QUALITY_FILE = ROOT / "docker" / "Dockerfile.quality"
@@ -216,6 +217,24 @@ def test_real_cli_uat_uses_owned_isolation_and_real_resume_contracts() -> None:
     assert '"BRAINS_DB_URL": os.environ["BRAINS_DB_URL"]' in actor
     assert "shutil.copyfile(source, target)" in actor
     assert '_copy_secret(primary, HOME / ".copilot/config.json")' in actor
+
+
+def test_claude_wakeup_probe_is_pinned_checked_and_isolated() -> None:
+    script = _text(CLAUDE_WAKEUP_UAT)
+    dockerfile = _text(DOCKER_CLI_UAT_FILE)
+    workflow = _text(ROOT / ".github" / "workflows" / "ci.yml")
+
+    assert "ARG CLAUDE_VERSION=2.1.259" in dockerfile
+    assert "COPY tests/uat/claude_wakeup_probe.py" in dockerfile
+    assert "SOURCE_COMMIT" in dockerfile
+    assert "status --porcelain=v1 --untracked-files=all" in script
+    assert "SOURCE_COMMIT=$commit" in script
+    assert "--network none" in script
+    assert "--cap-drop ALL" in script
+    assert "no-new-privileges:true" in script
+    assert "--mount" not in script and "--volume" not in script
+    assert "-p " not in script and "--publish" not in script
+    assert "run_docker_claude_wakeup_probe.ps1" in workflow
 
 
 def test_docker_context_excludes_private_host_state_and_linux_script_keeps_lf() -> None:

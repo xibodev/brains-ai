@@ -25,6 +25,7 @@ entry is never clobbered.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import hmac
 import json
@@ -33,13 +34,22 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
 from brains.config import _canonical_default_db_url, brains_state_dir
+from brains.control.durable_mailbox import (
+    protect_owner_only_bytes,
+    secure_owner_only_directory,
+    secure_owner_only_file,
+    unprotect_owner_only_bytes,
+)
 from brains.mcp.transport import (
     MCP_CLIENT_BEARER_ENV,
     MCP_MODE_SSE,
@@ -279,7 +289,7 @@ class ToolAdapter:
     json_servers_key: str = "mcpServers"
     supports_sse: bool = True
     sse_experimental: bool = False
-    mailbox_notification_mode: str = "pull"
+    wakeup_mode: str | None = None
 
     def mcp_path(self, home: Path) -> Path:
         return self._mcp_path(home)
@@ -300,6 +310,10 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".copilot" / "copilot-instructions.md",
         _detect=lambda h: (h / ".copilot").is_dir(),
         _json_entry=_copilot_entry,
+        # The hook schema is retained for compatibility tests, but wiring stays
+        # pull-only until a pinned real Copilot binary proves discovery and
+        # continuation from the generated file.
+        wakeup_mode=None,
     ),
     "claude-code": ToolAdapter(
         name="claude-code",
@@ -309,6 +323,7 @@ ADAPTERS: dict[str, ToolAdapter] = {
         _instr_path=lambda h: h / ".claude" / "CLAUDE.md",
         _detect=lambda h: (h / ".claude").is_dir() or (h / ".claude.json").exists(),
         _json_entry=_claude_entry,
+        wakeup_mode="turn_boundary",
     ),
     "codex": ToolAdapter(
         name="codex",
@@ -345,11 +360,8 @@ def _timestamp() -> str:
 
 
 def _harden(path: Path) -> None:
-    """Best-effort tighten a secret-bearing file to owner-only (POSIX)."""
-    if os.name == "nt":
-        return
-    with contextlib.suppress(OSError):
-        path.chmod(0o600)
+    """Tighten a secret-bearing file to the verified owner-only boundary."""
+    secure_owner_only_file(path)
 
 
 def _backup(path: Path, *, secure: bool = False) -> str | None:
@@ -368,6 +380,278 @@ def _write(path: Path, text: str, *, secure: bool = False) -> None:
     path.write_text(text, encoding="utf-8")
     if secure:
         _harden(path)
+
+
+def _snapshot(path: Path) -> bytes | None:
+    return path.read_bytes() if path.exists() else None
+
+
+def _digest(content: bytes | None) -> str | None:
+    return hashlib.sha256(content).hexdigest() if content is not None else None
+
+
+def _atomic_bytes(path: Path, content: bytes, *, secure: bool = False) -> None:
+    """Replace *path* atomically with bytes staged in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if secure:
+            _harden(tmp)
+        os.replace(tmp, path)
+        if secure:
+            _harden(path)
+    finally:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+
+
+def _exchange_files(target: Path, replacement: Path) -> None:
+    """Atomically exchange two files, preserving the displaced target bytes."""
+    if os.name == "nt":
+        staged = replacement.with_name(f".{replacement.name}.replacement")
+        staged.unlink(missing_ok=True)
+        os.link(replacement, staged)
+        replacement.unlink()
+        replace_file = ctypes.windll.kernel32.ReplaceFileW  # type: ignore[attr-defined]
+        if not replace_file(str(target), str(staged), str(replacement), 0, None, None):
+            staged.unlink(missing_ok=True)
+            raise OSError(
+                ctypes.get_last_error(),  # type: ignore[attr-defined]
+                "atomic settings exchange unavailable",
+            )
+        return
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is None:
+            raise OSError("atomic settings exchange unavailable")
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        # RENAME_SWAP is a same-volume atomic exchange on supported macOS.
+        if renamex_np(os.fsencode(target), os.fsencode(replacement), 0x00000002) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, "atomic settings exchange unavailable")
+        return
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError("atomic settings exchange unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(-100, os.fsencode(target), -100, os.fsencode(replacement), 2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, "atomic settings exchange unavailable")
+
+
+def _atomic_create(path: Path, content: bytes, *, secure: bool) -> bool:
+    """Create a complete file without replacing a concurrent winner."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    tmp = Path(raw_tmp)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if secure:
+            _harden(tmp)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            return False
+        if secure:
+            _harden(path)
+        return True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+_TRANSACTION_PHASE_HOOK: Callable[[str], None] | None = None
+
+
+def _transaction_phase(name: str) -> None:
+    if _TRANSACTION_PHASE_HOOK is not None:
+        _TRANSACTION_PHASE_HOOK(name)
+
+
+def _transactional_replace(
+    path: Path,
+    expected: bytes | None,
+    desired: bytes | None,
+    journal_path: Path,
+    capture_path: Path,
+    *,
+    operation: str,
+) -> tuple[bool, bytes | None]:
+    """Replace while atomically retaining whatever bytes were displaced.
+
+    A non-cooperating writer can win before or after the exchange, but its displaced
+    bytes are retained and restored when safe. Ambiguous races remain journaled and
+    fail closed for explicit recovery instead of discarding either version.
+    """
+    expected_hash = _digest(expected)
+    desired_hash = _digest(desired)
+    journal = {
+        "version": 1,
+        "operation": operation,
+        "target": "settings.json",
+        "expected_sha256": expected_hash,
+        "desired_sha256": desired_hash,
+    }
+
+    if journal_path.exists():
+        existing, invalid = _read_json(journal_path)
+        if invalid or existing != journal:
+            return False, None
+        current = _snapshot(path)
+        captured = _snapshot(capture_path)
+        if _digest(current) == desired_hash and _digest(captured) == expected_hash:
+            return True, captured
+        if _digest(current) == expected_hash and captured is None:
+            journal_path.unlink(missing_ok=True)
+        else:
+            return False, None
+
+    _atomic_bytes(
+        journal_path,
+        (json.dumps(journal, indent=2) + "\n").encode(),
+        secure=True,
+    )
+    _transaction_phase("prepared")
+    displaced: bytes | None = None
+    if expected is None:
+        if desired is None:
+            journal_path.unlink(missing_ok=True)
+            return True, None
+        if not _atomic_create(path, desired, secure=True):
+            journal_path.unlink(missing_ok=True)
+            return False, None
+    elif desired is None:
+        capture_path.unlink(missing_ok=True)
+        try:
+            os.replace(path, capture_path)
+        except FileNotFoundError:
+            journal_path.unlink(missing_ok=True)
+            return False, None
+        _harden(capture_path)
+        displaced = _snapshot(capture_path)
+    else:
+        capture_path.unlink(missing_ok=True)
+        _atomic_bytes(capture_path, desired, secure=True)
+        try:
+            _exchange_files(path, capture_path)
+        except OSError:
+            capture_path.unlink(missing_ok=True)
+            journal_path.unlink(missing_ok=True)
+            return False, None
+        _harden(path)
+        _harden(capture_path)
+        displaced = _snapshot(capture_path)
+    _transaction_phase("swapped")
+
+    current = _snapshot(path)
+    if _digest(current) != desired_hash or _digest(displaced) != expected_hash:
+        # Restore the exact displaced bytes only while our desired bytes still own
+        # the target. Otherwise preserve both the latest target and capture for an
+        # explicit retry/recovery instead of overwriting another external winner.
+        if _digest(current) == desired_hash and capture_path.exists():
+            if desired is None:
+                if _atomic_create(path, capture_path.read_bytes(), secure=True):
+                    capture_path.unlink(missing_ok=True)
+            else:
+                _exchange_files(path, capture_path)
+                capture_path.unlink(missing_ok=True)
+            journal_path.unlink(missing_ok=True)
+        return False, None
+    _transaction_phase("validated")
+    return True, displaced
+
+
+def _finish_transaction(journal_path: Path, capture_path: Path) -> None:
+    capture_path.unlink(missing_ok=True)
+    journal_path.unlink(missing_ok=True)
+
+
+def _write_prior_backup(path: Path, content: bytes) -> str:
+    protection, protected = protect_owner_only_bytes(content)
+    _atomic_bytes(path, protected, secure=True)
+    return protection
+
+
+def _read_prior_backup(path: Path, protection: str) -> bytes:
+    protected = _snapshot(path)
+    if protected is None:
+        raise OSError("settings recovery backup is unavailable")
+    return unprotect_owner_only_bytes(protection, protected)
+
+
+def _process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return ctypes.get_last_error() == 5  # type: ignore[attr-defined]
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+@contextmanager
+def _path_lock(path: Path, *, timeout: float = 2.0):
+    """Fail-closed cross-process lock for one shared harness settings file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    secure_owner_only_directory(path.parent)
+    deadline = time.monotonic() + timeout
+    fd: int | None = None
+    while fd is None:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, f"{os.getpid()}\n".encode())
+                os.fsync(fd)
+                _harden(path)
+            except BaseException:
+                os.close(fd)
+                fd = None
+                path.unlink(missing_ok=True)
+                raise
+        except FileExistsError:
+            try:
+                owner = int(path.read_text(encoding="ascii").strip())
+                if not _process_alive(owner):
+                    path.unlink(missing_ok=True)
+                    continue
+            except (OSError, UnicodeError, ValueError):
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError("settings-busy") from None
+            time.sleep(0.025)
+    try:
+        yield
+    finally:
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            path.unlink()
+        with contextlib.suppress(OSError):
+            path.parent.rmdir()
 
 
 def _replace_sentinel_block(text: str, start: str, end: str, block: str) -> str:
@@ -391,6 +675,357 @@ def _strip_sentinel_block(text: str, start: str, end: str) -> str:
         re.DOTALL,
     )
     return pattern.sub("\n", text).lstrip("\n")
+
+
+_COPILOT_WAKEUP_COMMAND = "brains-ai mailbox harness-wakeup --adapter copilot-cli"
+_CLAUDE_WAKEUP_COMMAND = "brains-ai mailbox harness-wakeup --adapter claude-code"
+
+
+def _copilot_wakeup_path(home: Path) -> Path:
+    return home / ".copilot" / "hooks" / "brains.json"
+
+
+def _claude_wakeup_path(home: Path) -> Path:
+    return home / ".claude" / "settings.json"
+
+
+def _claude_wakeup_state_paths(home: Path) -> tuple[Path, Path, Path]:
+    state = home / ".claude" / ".brains-wakeup"
+    return state / "settings.lock", state / "manifest.json", state / "prior-settings.bin"
+
+
+def _claude_wakeup_transaction_paths(home: Path) -> tuple[Path, Path]:
+    state = home / ".claude" / ".brains-wakeup"
+    return state / "transaction.json", state / "displaced-settings.bin"
+
+
+def _read_wakeup_manifest(path: Path) -> dict[str, Any] | None:
+    data, invalid = _read_json(path)
+    required = {
+        "version",
+        "target",
+        "prior_exists",
+        "prior_sha256",
+        "prior_protection",
+        "installed_sha256",
+    }
+    if invalid or set(data) != required or data.get("version") != 2:
+        return None
+    if data.get("target") != "settings.json" or not isinstance(data.get("prior_exists"), bool):
+        return None
+    if not isinstance(data.get("installed_sha256"), str):
+        return None
+    prior_sha = data.get("prior_sha256")
+    if prior_sha is not None and not isinstance(prior_sha, str):
+        return None
+    if data.get("prior_protection") not in {"none", "posix-owner", "windows-dpapi"}:
+        return None
+    return data
+
+
+def _copilot_wakeup_document() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "hooks": {
+            "agentStop": [
+                {
+                    "type": "command",
+                    "bash": _COPILOT_WAKEUP_COMMAND,
+                    "powershell": _COPILOT_WAKEUP_COMMAND,
+                    "timeoutSec": 10,
+                }
+            ]
+        },
+    }
+
+
+def _claude_wakeup_entry() -> dict[str, Any]:
+    return {
+        "matcher": "",
+        "hooks": [
+            {
+                "type": "command",
+                "command": _CLAUDE_WAKEUP_COMMAND,
+                "timeout": 10,
+            }
+        ],
+    }
+
+
+def _wakeup_status(adapter: ToolAdapter, home: Path) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"installed": False, "mode": "pull", "reason": "adapter-unavailable"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        data, parse_error = _read_json(path)
+        installed = not parse_error and data == _copilot_wakeup_document()
+        reason = (
+            "installed"
+            if installed
+            else "managed-path-conflict"
+            if path.exists()
+            else "consent-required"
+        )
+    else:
+        path = _claude_wakeup_path(home)
+        _lock, manifest_path, _backup_path = _claude_wakeup_state_paths(home)
+        data, parse_error = _read_json(path)
+        hooks = data.get("hooks") if not parse_error else None
+        entries = hooks.get("Stop") if isinstance(hooks, dict) else None
+        manifest = _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+        installed = (
+            isinstance(entries, list)
+            and _claude_wakeup_entry() in entries
+            and manifest is not None
+            and manifest["installed_sha256"] == _digest(_snapshot(path))
+        )
+        if installed:
+            reason = "installed"
+        elif parse_error:
+            reason = "settings-invalid"
+        elif hooks is not None and not isinstance(hooks, dict):
+            reason = "hooks-invalid"
+        elif entries is not None and not isinstance(entries, list):
+            reason = "stop-hooks-invalid"
+        elif isinstance(entries, list) and _claude_wakeup_entry() in entries:
+            reason = "ownership-missing"
+        else:
+            reason = "consent-required"
+    return {
+        "installed": installed,
+        "mode": adapter.wakeup_mode if installed else "pull",
+        "reason": reason,
+    }
+
+
+def _wire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"action": "unavailable", "mode": "pull", "reason": "adapter-unavailable"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        expected = _copilot_wakeup_document()
+        current, parse_error = _read_json(path)
+        if path.exists() and (parse_error or current != expected):
+            return {"action": "conflict", "mode": "pull", "reason": "managed-path-conflict"}
+        action = "unchanged" if current == expected else "create"
+        if dry_run and action == "create":
+            return {"action": action, "mode": "pull", "planned_mode": adapter.wakeup_mode}
+        if action == "create":
+            _write(path, json.dumps(expected, indent=2) + "\n")
+        return {"action": action, "mode": adapter.wakeup_mode}
+
+    path = _claude_wakeup_path(home)
+    lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+    journal_path, capture_path = _claude_wakeup_transaction_paths(home)
+
+    def prepare() -> tuple[dict[str, Any] | None, bytes | None, str | None]:
+        before = _snapshot(path)
+        data, parse_error = _read_json(path)
+        if parse_error:
+            return None, before, "settings-invalid"
+        hooks = data.setdefault("hooks", {})
+        if not isinstance(hooks, dict):
+            return None, before, "hooks-invalid"
+        entries = hooks.setdefault("Stop", [])
+        if not isinstance(entries, list):
+            return None, before, "stop-hooks-invalid"
+        entries.append(_claude_wakeup_entry())
+        return data, before, None
+
+    if dry_run:
+        data, before, error = prepare()
+        if error:
+            return {"action": "conflict", "mode": "pull", "reason": error}
+        return {
+            "action": "update" if before is not None else "create",
+            "mode": "pull",
+            "planned_mode": adapter.wakeup_mode,
+        }
+    try:
+        with _path_lock(lock_path):
+            current_bytes = _snapshot(path)
+            existing_manifest = (
+                _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+            )
+            if existing_manifest is not None:
+                if existing_manifest["installed_sha256"] == _digest(current_bytes):
+                    if journal_path.exists():
+                        journal, invalid = _read_json(journal_path)
+                        captured = _snapshot(capture_path)
+                        if (
+                            invalid
+                            or journal.get("operation") != "install"
+                            or journal.get("desired_sha256") != _digest(current_bytes)
+                            or journal.get("expected_sha256") != _digest(captured)
+                        ):
+                            return {
+                                "action": "conflict",
+                                "mode": "pull",
+                                "reason": "recovery-required",
+                            }
+                        _finish_transaction(journal_path, capture_path)
+                    return {"action": "unchanged", "mode": adapter.wakeup_mode}
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            if journal_path.exists():
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if invalid or journal.get("operation") != "install":
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+                if _digest(current_bytes) == journal.get("expected_sha256") and captured is None:
+                    journal_path.unlink(missing_ok=True)
+                elif _digest(current_bytes) == journal.get("desired_sha256") and _digest(
+                    captured
+                ) == journal.get("expected_sha256"):
+                    if current_bytes is not None:
+                        _harden(path)
+                    protection = "none"
+                    if captured is not None:
+                        protection = _write_prior_backup(backup_path, captured)
+                    manifest = {
+                        "version": 2,
+                        "target": "settings.json",
+                        "prior_exists": captured is not None,
+                        "prior_sha256": _digest(captured),
+                        "prior_protection": protection,
+                        "installed_sha256": _digest(current_bytes),
+                    }
+                    _atomic_bytes(
+                        manifest_path,
+                        (json.dumps(manifest, indent=2) + "\n").encode(),
+                        secure=True,
+                    )
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "recovered", "mode": adapter.wakeup_mode}
+                else:
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+            current_data, before, error = prepare()
+            if error:
+                return {"action": "conflict", "mode": "pull", "reason": error}
+            assert current_data is not None
+            entries = cast("dict[str, Any]", current_data["hooks"])["Stop"]
+            if entries.count(_claude_wakeup_entry()) > 1:
+                return {"action": "conflict", "mode": "pull", "reason": "ownership-missing"}
+            installed = (json.dumps(current_data, indent=2) + "\n").encode()
+            replaced, displaced = _transactional_replace(
+                path,
+                before,
+                installed,
+                journal_path,
+                capture_path,
+                operation="install",
+            )
+            if not replaced:
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            protection = "none"
+            if displaced is not None:
+                protection = _write_prior_backup(backup_path, displaced)
+            manifest = {
+                "version": 2,
+                "target": "settings.json",
+                "prior_exists": displaced is not None,
+                "prior_sha256": _digest(displaced),
+                "prior_protection": protection,
+                "installed_sha256": _digest(installed),
+            }
+            _atomic_bytes(
+                manifest_path,
+                (json.dumps(manifest, indent=2) + "\n").encode(),
+                secure=True,
+            )
+            _transaction_phase("metadata")
+            _finish_transaction(journal_path, capture_path)
+            return {
+                "action": "update" if before is not None else "create",
+                "mode": adapter.wakeup_mode,
+            }
+    except TimeoutError:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-busy"}
+
+
+def _unwire_wakeup(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, Any]:
+    if adapter.wakeup_mode is None:
+        return {"action": "absent", "mode": "pull"}
+    if adapter.name == "copilot-cli":
+        path = _copilot_wakeup_path(home)
+        data, parse_error = _read_json(path)
+        if not path.exists():
+            return {"action": "absent", "mode": "pull"}
+        if parse_error or data != _copilot_wakeup_document():
+            return {"action": "conflict", "mode": "pull", "reason": "managed-path-conflict"}
+        if not dry_run:
+            path.unlink()
+        return {"action": "remove", "mode": "pull"}
+
+    path = _claude_wakeup_path(home)
+    lock_path, manifest_path, backup_path = _claude_wakeup_state_paths(home)
+    journal_path, capture_path = _claude_wakeup_transaction_paths(home)
+    manifest = _read_wakeup_manifest(manifest_path) if manifest_path.exists() else None
+    if manifest is None and not journal_path.exists():
+        return {"action": "absent", "mode": "pull"}
+    if dry_run:
+        return {"action": "remove", "mode": "pull"}
+    try:
+        with _path_lock(lock_path):
+            manifest = _read_wakeup_manifest(manifest_path)
+            current = _snapshot(path)
+            if manifest is None:
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if (
+                    not invalid
+                    and journal.get("operation") == "remove"
+                    and journal.get("desired_sha256") == _digest(current)
+                    and journal.get("expected_sha256") == _digest(captured)
+                ):
+                    backup_path.unlink(missing_ok=True)
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "remove", "mode": "pull"}
+                return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+            prior: bytes | None = None
+            if manifest["prior_exists"]:
+                try:
+                    prior = _read_prior_backup(backup_path, manifest["prior_protection"])
+                except OSError:
+                    return {"action": "conflict", "mode": "pull", "reason": "backup-invalid"}
+                if manifest["prior_sha256"] != _digest(prior):
+                    return {"action": "conflict", "mode": "pull", "reason": "backup-invalid"}
+            if journal_path.exists():
+                journal, invalid = _read_json(journal_path)
+                captured = _snapshot(capture_path)
+                if invalid or journal.get("operation") != "remove":
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+                if _digest(current) == journal.get("desired_sha256") and _digest(
+                    captured
+                ) == journal.get("expected_sha256"):
+                    backup_path.unlink(missing_ok=True)
+                    manifest_path.unlink(missing_ok=True)
+                    _finish_transaction(journal_path, capture_path)
+                    return {"action": "remove", "mode": "pull"}
+                if _digest(current) == journal.get("expected_sha256") and captured is None:
+                    journal_path.unlink(missing_ok=True)
+                else:
+                    return {"action": "conflict", "mode": "pull", "reason": "recovery-required"}
+            if manifest["installed_sha256"] != _digest(current):
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            replaced, _displaced = _transactional_replace(
+                path,
+                current,
+                prior,
+                journal_path,
+                capture_path,
+                operation="remove",
+            )
+            if not replaced:
+                return {"action": "conflict", "mode": "pull", "reason": "settings-changed"}
+            with contextlib.suppress(OSError):
+                manifest_path.unlink()
+            _transaction_phase("metadata")
+            with contextlib.suppress(OSError):
+                backup_path.unlink()
+            _finish_transaction(journal_path, capture_path)
+            return {"action": "remove", "mode": "pull"}
+    except TimeoutError:
+        return {"action": "conflict", "mode": "pull", "reason": "settings-busy"}
 
 
 # --- JSON mcp wiring (Copilot, Claude) -----------------------------------
@@ -704,6 +1339,7 @@ def wire(
     *,
     tools: list[str] | None = None,
     rules: bool = True,
+    mailbox_wakeups: bool = False,
     force: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
@@ -758,7 +1394,12 @@ def wire(
                     "bearer_token_env_available": False,
                     "detail": remediation,
                 },
-                "mailbox_notification_mode": codex.mailbox_notification_mode,
+                "mailbox_notification_mode": "pull",
+                "mailbox_wakeup": {
+                    "action": "skipped",
+                    "mode": "pull",
+                    "reason": "mcp-wiring-failed",
+                },
             }
         )
         return report
@@ -780,7 +1421,12 @@ def wire(
                         "`brains-ai init` or `brains-ai setup` before remote wiring"
                     ),
                 },
-                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "mailbox_notification_mode": "pull",
+                "mailbox_wakeup": {
+                    "action": "skipped",
+                    "mode": "pull",
+                    "reason": "mcp-wiring-failed",
+                },
             }
         )
         return report
@@ -796,7 +1442,7 @@ def wire(
                         "display": adapter.display,
                         "detected": detected,
                         "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
-                        "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                        "mailbox_notification_mode": "pull",
                         "lifecycle_plugin": {
                             "path": str(_opencode_plugin_path(home)),
                             "action": "error",
@@ -815,7 +1461,7 @@ def wire(
                     "display": adapter.display,
                     "detected": detected,
                     "mcp": {"path": str(adapter.mcp_path(home)), "action": "skipped"},
-                    "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                    "mailbox_notification_mode": "pull",
                     "lifecycle_plugin": plugin_preflight,
                 }
             )
@@ -831,8 +1477,15 @@ def wire(
             "display": adapter.display,
             "detected": detected,
             "mcp": mcp,
-            "mailbox_notification_mode": adapter.mailbox_notification_mode,
         }
+        if not mailbox_wakeups:
+            wakeup = {"action": "skipped", "mode": "pull", "reason": "consent-required"}
+        elif mcp.get("action") in {"error", "conflict"}:
+            wakeup = {"action": "skipped", "mode": "pull", "reason": "mcp-wiring-failed"}
+        else:
+            wakeup = _wire_wakeup(adapter, home, dry_run)
+        entry["mailbox_wakeup"] = wakeup
+        entry["mailbox_notification_mode"] = wakeup["mode"]
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
         if adapter.name == "opencode":
@@ -843,6 +1496,7 @@ def wire(
     report["ok"] = all(
         entry["mcp"].get("action") not in {"error", "conflict"}
         and entry.get("lifecycle_plugin", {}).get("action") not in {"error", "conflict"}
+        and entry["mailbox_wakeup"].get("action") not in {"error", "conflict"}
         for entry in report["tools"]
     )
     return report
@@ -863,7 +1517,11 @@ def unwire(
             mcp = _unwire_json(adapter, home, dry_run)
         else:
             mcp = _unwire_toml(adapter, home, dry_run)
-        entry: dict[str, Any] = {"tool": adapter.name, "mcp": mcp}
+        entry: dict[str, Any] = {
+            "tool": adapter.name,
+            "mcp": mcp,
+            "mailbox_wakeup": _unwire_wakeup(adapter, home, dry_run),
+        }
         if rules:
             entry["rule"] = _unwire_rule(adapter, home, dry_run)
         if adapter.name == "opencode":
@@ -928,6 +1586,7 @@ def status(home: Path) -> dict[str, Any]:
                 lifecycle_plugin = "absent"
             except OSError:
                 lifecycle_plugin = "unavailable"
+        wakeup = _wakeup_status(adapter, home)
         out.append(
             {
                 "tool": adapter.name,
@@ -943,7 +1602,8 @@ def status(home: Path) -> dict[str, Any]:
                 ),
                 "instr_path": str(instr_path),
                 "rule_wired": bool(wired_rule),
-                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "mailbox_notification_mode": wakeup["mode"],
+                "mailbox_wakeup": wakeup,
                 "lifecycle_plugin": lifecycle_plugin,
             }
         )
