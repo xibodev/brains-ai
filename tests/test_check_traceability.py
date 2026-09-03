@@ -159,8 +159,8 @@ def test_redirect_to_an_undeclared_route_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route index element={<Navigate to="/command-center" replace />} />',
-        '<Route index element={<Navigate to="/dashboard" replace />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
+        '<Route path="/command-center" element={<Navigate to="/dashboard" replace />} />',
     )
     _assert_reports(_errors(root), "redirects to /app/dashboard, which is not declared")
 

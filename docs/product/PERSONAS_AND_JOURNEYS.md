@@ -509,15 +509,26 @@ path.
 - Realtime loss: visible banner plus durable backfill. Reconnect resumes from the client's cursor; a gap the server cannot cover is signalled as a reset so the console re-reads over REST, and a revoked credential or lost membership stops the stream with a stated reason rather than reconnecting in a loop. A re-authorization the server could not run stops the stream too, under a distinct reason, so the console reconnects into a fresh check instead of treating a store outage as a revocation.
 - API mismatch: visible error and blocked action, never silent success.
 - Unauthorized entity: 403 without information disclosure.
-- Unknown route/entity: clear not-found or safe redirect.
+- Unknown route/entity: remain on the requested URL and show a non-disclosing not-found
+  state; never silently redirect into an unrelated or withdrawn view.
 - Process degradation: distinguish liveness from readiness and identify affected capability.
 
 **Success:** Every journey remains understandable, authorized, recoverable, accessible, and free of hidden console/network failures.
 
 **Acceptance IDs:** AC-F0-01 through AC-F0-05, AC-F3-01, AC-F3-07, AC-F9-03, AC-B8-01 through AC-B8-04, AC-B9-01 through AC-B9-03.
 
-**Evidence gaps:** The J11 browser sweep is a blocking CI gate, but accessibility and
-route-contract coverage are incomplete. Realtime authorization, cursor replay, gap
+**Evidence gaps:** None for the current browser scope. The J11 browser matrix contains
+exclusive loading, empty, error, and authorization/privacy states for Workspace list
+and detail, configuration, governance, operations, capability actions, mailbox access,
+messages, thread, composer Workspace and address-book sources, and source lookup. It
+also covers scope-hidden deep links, route-specific nested content, connection
+degradation, APG tab/combobox/modal keyboard behavior, and desktop/mobile actionability
+through viewport and overflow-ancestor intersection, center-point occlusion, and trial
+click checks after normal keyboard scrolling. With gradient backgrounds removed from the
+supported shell, rendered contrast is computed at both required widths for all visible
+text and displayed form values on every supported route and required state, including
+each visible interactive control in its normal, focus, and hover states.
+Realtime authorization, cursor replay, gap
 signalling and revocation are asserted at the API and unit level
 (`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a
 browser disconnect/reconnect run. Multi-process realtime is frozen.

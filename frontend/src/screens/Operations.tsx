@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   OperatorCard,
   OperatorMiniList,
@@ -15,6 +15,7 @@ export function Operations() {
   const state = useAsync(() => api.operatorOperations(), []);
   const { toast } = useToast();
   const data = state.data;
+  const empty = Boolean(data && (!data.service || !data.readiness || !data.queue || !data.recovery));
 
   return (
     <div className="operator-page" data-testid="operations">
@@ -24,8 +25,8 @@ export function Operations() {
         lede="The service tree, tools, wiring, storage, recovery, access, and configuration, with typed safeguards for every host-level effect."
         actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigate("/act?category=operations")}>Operational action</button></>}
       />
-      <OperatorState loading={state.loading} error={state.error} />
-      {data && (
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="operations" emptyTitle="No operational state" emptyBody="Required service, readiness, queue, or recovery state is unavailable." />
+      {data && !empty && (
         <>
           <section className="operator-topology" aria-label="Brains topology">
             {[
@@ -58,7 +59,7 @@ export function Operations() {
                 { label: "Stale or expired", value: Object.values(data.queue.summary.families).reduce((total, row) => total + row.stale_or_expired, 0) },
                 { label: "Repair mode", value: "Dry-run first" },
               ]} />
-              <button className="operator-button" onClick={() => void api.repairQueueHealth(false).then(() => toast("Queue repair preview complete")).catch((error) => toast(formatApiError("Preview queue repair", error)))}>Preview repair</button>
+              <button className="operator-button" onClick={() => void api.repairQueueHealth(false).then(() => toast("Queue repair preview complete")).catch(() => toast("The queue repair preview could not be completed. Retry after checking authorization and local service status."))}>Preview repair</button>
             </OperatorCard>
 
             <OperatorCard kicker="Storage and recovery" title="Durability policy" action={<OperatorStatus tone={data.recovery.ready ? "ready" : "warning"}>{data.recovery.ready ? "ready" : "incomplete"}</OperatorStatus>} className="operator-operation-card">

@@ -119,6 +119,87 @@ def test_positive_manifest_rejects_rogue_package_and_documented_surface(mode: st
     assert any("documented_ids.backlog" in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("Operators can use the Labs dashboard.\n", "surface:labs"),
+        ("```console\nbrains-ai graph-query\n```\n", "cli:graph-query"),
+        ("[Open Labs](/labs)\n", "path:/labs"),
+        ("The `brains-ai run` command is available.\n", "cli:run"),
+        ("Navigate to `/v1/issues` to file work.\n", "path:/v1/issues"),
+    ],
+)
+def test_canonical_docs_reject_frozen_advertisements(source: str, expected: str) -> None:
+    findings = check_core_surface._canonical_doc_advertisements(
+        {"docs/product/PRODUCT_BRIEF.md": source}
+    )
+    assert any(finding.endswith(expected) for finding in findings)
+
+
+def test_canonical_docs_allow_explicit_boundary_prose() -> None:
+    source = "\n".join(
+        [
+            "Historical `/labs` and the dashboard were deleted.",
+            "Semantic search is frozen and not supported.",
+            "The graph query capability is frozen and not supported.",
+            "The retained GitHub delivery code is compatibility-only.",
+        ]
+    )
+    assert not check_core_surface._canonical_doc_advertisements(
+        {"docs/product/TRACEABILITY.md": source}
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "Historical compatibility only: `brains-ai graph-query` must not be used.\n",
+            "cli:graph-query",
+        ),
+        (
+            "Withdrawn compatibility link: [old Labs](/labs?from=history).\n",
+            "path:/labs",
+        ),
+        (
+            "Historical compatibility example:\n```console\nbrains-ai graph-query\n```\n",
+            "cli:graph-query",
+        ),
+    ],
+)
+def test_actionable_docs_syntax_is_never_exempted_by_boundary_prose(
+    source: str, expected: str
+) -> None:
+    findings = check_core_surface._canonical_doc_advertisements(
+        {"docs/product/TRACEABILITY.md": source}
+    )
+    assert any(finding.endswith(expected) for finding in findings)
+
+
+def test_noncanonical_docs_do_not_define_product_advertisements(tmp_path) -> None:
+    for relative in check_core_surface.CANONICAL_PRODUCT_DOCS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Canonical\n", encoding="utf-8")
+    history = tmp_path / "docs" / "history.md"
+    history.write_text("Use the Labs dashboard.\n", encoding="utf-8")
+
+    documented = check_core_surface._documented_ids(tmp_path)
+    assert documented["forbidden_advertisements"] == []
+
+
+def test_semantic_docs_rejection_survives_manifest_regeneration() -> None:
+    normal = copy.deepcopy(_manifest()["modes"]["normal"])
+    normal["documented_ids"]["forbidden_advertisements"] = [
+        "docs/product/PRODUCT_BRIEF.md:1:path:/labs"
+    ]
+
+    assert any(
+        "documentation advertises frozen surfaces" in error
+        for error in check_core_surface.violations(normal)
+    )
+
+
 def test_positive_manifest_rejects_changed_harness_rendering() -> None:
     expected = _manifest()
     actual = copy.deepcopy(expected)
@@ -438,6 +519,20 @@ def test_reachability_rejects_unknown_target_without_manifest_comparison() -> No
         "unknown SPA target reachable: /rogue" in error
         for error in check_core_surface.violations(normal)
     )
+
+
+def test_reachability_accepts_non_advertising_history_navigation() -> None:
+    normal = copy.deepcopy(_manifest()["modes"]["normal"])
+    normal["reachable_spa_navigation_sites"].append(
+        {
+            "file": "frontend/src/screens/NotFound.tsx",
+            "kind": "history",
+            "line": 1,
+            "target": "@history-delta",
+        }
+    )
+
+    assert not any("SPA target" in error for error in check_core_surface.violations(normal))
 
 
 def test_ast_reachability_fails_closed_on_unresolved_route_target(tmp_path) -> None:

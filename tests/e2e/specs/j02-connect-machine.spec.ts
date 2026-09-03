@@ -24,8 +24,8 @@ test('J2 withdrawn Runtime routes are not discoverable and fail closed', async (
   ]) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(page).toHaveURL(/\/app\/command-center$/);
-    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page).toHaveURL(route);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   }
 
   consoleGuard.assertClean();

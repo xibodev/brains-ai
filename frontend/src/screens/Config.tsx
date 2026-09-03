@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
+import { useNavigate, useParams } from "react-router-dom";
+import { api } from "../api/client";
 import type {
   QueueHealthReport,
   ReadinessReport,
@@ -15,6 +15,7 @@ import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../store/useAsync";
 import { ScreenHead } from "./ScreenHead";
+import { NotFound } from "./NotFound";
 
 const SECTIONS: RailItem[] = [
   { key: "local", label: "Local service", section: "Config" },
@@ -23,10 +24,10 @@ const SECTIONS: RailItem[] = [
 ];
 
 export function Config() {
-  const { section = "mcp" } = useParams();
+  const { section = "local" } = useParams();
   const navigate = useNavigate();
   if (!SECTIONS.some((item) => item.key === section)) {
-    return <Navigate to="/operations/config/mcp" replace />;
+    return <NotFound resource="Configuration section" />;
   }
   return (
     <div style={{ height: "100%" }}>
@@ -67,15 +68,15 @@ function LocalConfig() {
       setOutcome(result.apply_mode);
       toast(result.restart_required ? "Saved. Restart required to converge." : "Saved and reloaded.");
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Configuration update", error));
+    } catch {
+      toast("Configuration could not be updated. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <AsyncBoundary state={state} emptyTitle="Configuration unavailable" emptyBody="The supported configuration summary could not be loaded.">
+    <AsyncBoundary state={state} boundary="config-local" isEmpty={(data) => !data.fields.length && !data.harnesses.length} emptyTitle="Configuration unavailable" emptyBody="No supported configuration fields or harnesses are available.">
       {(data) => (
         <div>
           <div className="eyebrow"><span>Supported local configuration</span></div>
@@ -122,13 +123,13 @@ function ConfigurationField({ field, value, onChange }: { field: CoreConfigurati
 
 function McpConfig() {
   return (
-    <SoftCard>
+    <div data-async-state="success"><SoftCard>
       <div className="eyebrow"><span>MCP servers</span></div>
       <h2 style={{ margin: "8px 0 12px" }}>Agent connections</h2>
       <p className="meta">
         Use <code>brains-ai wire</code> to configure a supported harness. Client configuration changes take effect when that client reconnects.
       </p>
-    </SoftCard>
+    </SoftCard></div>
   );
 }
 
@@ -152,14 +153,14 @@ function Health() {
       const summary = result.actions.map((action) => `${action.code}=${apply ? (action.applied_rows ?? 0) : (action.would_affect_rows ?? 0)}`).join(", ");
       toast(apply ? `Repair applied: ${summary}` : `Dry-run: ${summary}`);
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Repair", error));
+    } catch {
+      toast("The repair could not be completed. Retry after checking authorization and local service status.");
     } finally {
       setRepairing(false);
     }
   };
   return (
-    <AsyncBoundary state={state} emptyTitle="No health data" emptyBody="Operational health is unavailable.">
+    <AsyncBoundary state={state} boundary="config-health" isEmpty={(data) => !Object.keys(data.readiness.components).length} emptyTitle="No health data" emptyBody="No dependency health data is available.">
       {(data) => (
         <div>
           <div className="eyebrow"><span>Operational health</span></div>

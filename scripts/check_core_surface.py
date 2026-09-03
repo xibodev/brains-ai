@@ -46,7 +46,7 @@ CORE_SPA_TARGET_PREFIXES = (
     "/workspaces",
 )
 CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
-SPA_AST_HELPER_SHA256 = "191f781d551fcd1eefbaed024e06ba871222fbe029342003782dd221f92136a2"
+SPA_AST_HELPER_SHA256 = "0ea1c5dd9ccfe700c41b8b78ea92e78838e901ccae52aa9d64ebbe181dd7c473"
 CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
@@ -67,6 +67,7 @@ CORE_FRONTEND_MODULES = frozenset(
         "components/TopBar.tsx",
         "components/format.ts",
         "components/sessionScope.ts",
+        "components/useDialogFocus.ts",
         "coreRoutes.ts",
         "main.tsx",
         "realtime/client.ts",
@@ -78,6 +79,7 @@ CORE_FRONTEND_MODULES = frozenset(
         "screens/Governance.tsx",
         "screens/Operations.tsx",
         "screens/OperatorCoordination.tsx",
+        "screens/NotFound.tsx",
         "screens/ScreenHead.tsx",
         "screens/Workspaces.tsx",
         "store/OperatorContext.tsx",
@@ -196,6 +198,109 @@ from brains.capabilities import (  # noqa: E402
     withdrawn_http_path,
 )
 
+CANONICAL_PRODUCT_DOCS = (
+    "docs/product/PRODUCT_BRIEF.md",
+    "docs/product/FEATURE_CONTRACT.md",
+    "docs/product/PERSONAS_AND_JOURNEYS.md",
+    "docs/product/USER_OUTCOME_SPEC.md",
+    "docs/product/TRACEABILITY.md",
+    "docs/product/BACKLOG.md",
+)
+WITHDRAWN_DOC_SURFACE_TERMS = frozenset(
+    {
+        "code graph",
+        "dashboard",
+        "embedding search",
+        "external bridge",
+        "github delivery",
+        "graph query",
+        "labs",
+        "model proxy",
+        "model routing",
+        "provider routing",
+        "public defect relay",
+        "recurring jobs",
+        "semantic search",
+        "slack bridge",
+        "smtp delivery",
+        "telegram bridge",
+        "webhook delivery",
+        "whatsapp bridge",
+    }
+)
+DOC_NEGATIVE_CONTEXT = re.compile(
+    r"\b(?:absence|absent|cannot|compatibility|deleted|deletion|deprecated|does not|"
+    r"do not|frozen|historical|legacy|never|no supported|not supported|prevents?|"
+    r"removed|retained only|unavailable|unsupported|withdrawn|without)\b",
+    re.IGNORECASE,
+)
+DOC_POSITIVE_CONTEXT = re.compile(
+    r"\b(?:advertised|available|call|configure|enable|invoke|launch|navigate|open|"
+    r"provides?|run|ships?|supported|use|visit)\b",
+    re.IGNORECASE,
+)
+DOC_PATH = re.compile(r"(?<![:/A-Za-z0-9])/[A-Za-z0-9_{}][A-Za-z0-9_{}./:-]*")
+
+
+def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
+    """Find actionable frozen-surface claims in canonical product documentation."""
+
+    findings: set[str] = set()
+    withdrawn_commands = WITHDRAWN_CLI_COMMANDS | WITHDRAWN_CLI_GROUPS
+    withdrawn_code_names = {
+        *WITHDRAWN_DOC_SURFACE_TERMS,
+        *(name.replace("-", " ") for name in withdrawn_commands),
+    }
+    for relative, source in sorted(canonical.items()):
+        in_fence = False
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not stripped or stripped.startswith("<!--"):
+                continue
+            negative = DOC_NEGATIVE_CONTEXT.search(stripped) is not None
+            positive = DOC_POSITIVE_CONTEXT.search(stripped) is not None
+            code_tokens = re.findall(r"`([^`\n]+)`", stripped)
+
+            for command in re.findall(r"\bbrains-ai\s+([a-z][a-z0-9-]*)", stripped):
+                inline_command = any(
+                    re.search(rf"\bbrains-ai\s+{re.escape(command)}\b", token)
+                    for token in code_tokens
+                )
+                if command in withdrawn_commands and (
+                    in_fence or inline_command or (positive and not negative)
+                ):
+                    findings.add(f"{relative}:{line_number}:cli:{command}")
+
+            links = set(re.findall(r"\]\((/[^)\s]+)", stripped))
+            paths = {raw_path.rstrip(":"): False for raw_path in DOC_PATH.findall(stripped)}
+            for link in links:
+                paths[link.split("?", 1)[0].split("#", 1)[0]] = True
+            for path, is_link in paths.items():
+                if not (in_fence or is_link or (positive and not negative)):
+                    continue
+                if path.startswith(("/dashboard", *WITHDRAWN_SPA_PREFIXES)) or withdrawn_http_path(
+                    path
+                ):
+                    findings.add(f"{relative}:{line_number}:path:{path}")
+
+            if negative:
+                continue
+            if in_fence or positive:
+                for token in code_tokens:
+                    normalized = token.strip().lower().replace("-", " ")
+                    if normalized in withdrawn_code_names:
+                        findings.add(f"{relative}:{line_number}:surface:{normalized}")
+
+            if positive:
+                lowered = stripped.lower().replace("-", " ")
+                for name in WITHDRAWN_DOC_SURFACE_TERMS:
+                    if re.search(rf"\b{re.escape(name)}\b", lowered):
+                        findings.add(f"{relative}:{line_number}:surface:{name}")
+    return sorted(findings)
+
 
 def _configuration_keys() -> tuple[list[str], list[str], list[str]]:
     """Read the positive public configuration contract without loading settings."""
@@ -259,18 +364,8 @@ def _environment_names() -> list[str]:
     return sorted(names)
 
 
-def _documented_ids() -> dict[str, object]:
-    canonical = {
-        path: (ROOT / path).read_text(encoding="utf-8")
-        for path in (
-            "docs/product/PRODUCT_BRIEF.md",
-            "docs/product/FEATURE_CONTRACT.md",
-            "docs/product/PERSONAS_AND_JOURNEYS.md",
-            "docs/product/USER_OUTCOME_SPEC.md",
-            "docs/product/TRACEABILITY.md",
-            "docs/product/BACKLOG.md",
-        )
-    }
+def _documented_ids(root: Path = ROOT) -> dict[str, object]:
+    canonical = {path: (root / path).read_text(encoding="utf-8") for path in CANONICAL_PRODUCT_DOCS}
     feature = canonical["docs/product/FEATURE_CONTRACT.md"]
     journeys = canonical["docs/product/PERSONAS_AND_JOURNEYS.md"]
     backlog = canonical["docs/product/BACKLOG.md"]
@@ -287,6 +382,7 @@ def _documented_ids() -> dict[str, object]:
             path: sorted(set(stable_id.findall(source)))
             for path, source in sorted(canonical.items())
         },
+        "forbidden_advertisements": _canonical_doc_advertisements(canonical),
     }
 
 
@@ -768,8 +864,18 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     wire = snapshot["wire"]
     wire_adapters = wire.get("adapters", {}) if isinstance(wire, dict) else {}
     wire_rule_hash = wire.get("rule_sha256") if isinstance(wire, dict) else None
+    documented = snapshot.get("documented_ids")
+    documented_advertisements = (
+        documented.get("forbidden_advertisements") if isinstance(documented, dict) else None
+    )
     if overlap := commands & WITHDRAWN_CLI_COMMANDS:
         errors.append(f"withdrawn CLI commands advertised: {sorted(overlap)}")
+    if not isinstance(documented_advertisements, list):
+        errors.append("canonical documentation advertisement inventory is malformed")
+    elif documented_advertisements:
+        errors.append(
+            f"canonical documentation advertises frozen surfaces: {documented_advertisements}"
+        )
     if overlap := groups & WITHDRAWN_CLI_GROUPS:
         errors.append(f"withdrawn CLI groups advertised: {sorted(overlap)}")
     blocked_segments = WITHDRAWN_CLI_COMMANDS | WITHDRAWN_CLI_GROUPS
@@ -867,7 +973,7 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     for site in reachable_navigation:
         target = str(site.get("target", ""))
         route = target.split("?", 1)[0].split("#", 1)[0]
-        if route in {"*", "@core-route-guard"}:
+        if route in {"*", "@core-route-guard", "@history-delta"}:
             continue
         if route.startswith(WITHDRAWN_SPA_PREFIXES):
             errors.append(f"frozen SPA target reachable: {route}")

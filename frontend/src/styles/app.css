@@ -63,6 +63,24 @@ select {
   border-radius: 4px;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+button,
+[role="button"],
+a {
+  touch-action: manipulation;
+}
+
 ::placeholder {
   color: var(--text-faint);
 }
@@ -615,7 +633,6 @@ select {
   z-index: 51;
   padding: var(--s-5);
   overflow-y: auto;
-  overflow-x: hidden;
 }
 
 /* ============ RuntimeTile ============ */
@@ -937,7 +954,7 @@ select {
   --control-surface-blue: #e5ecff;
   --control-ink: #12211d;
   --control-ink-2: #33433e;
-  --control-muted: #6b7672;
+  --control-muted: #4f5e59;
   --control-line: #d6cec0;
   --control-nav: #10231e;
   --control-nav-2: #18342c;
@@ -947,7 +964,7 @@ select {
   --control-blue-soft: #dce6ff;
   --control-green: #187454;
   --control-green-soft: #dceee4;
-  --control-amber: #ad6818;
+  --control-amber: #784406;
   --control-amber-soft: #f7e6ca;
   --control-red: #a23f37;
   --control-red-soft: #f5ddd8;
@@ -956,9 +973,7 @@ select {
 }
 
 body {
-  background:
-    radial-gradient(circle at 78% 5%, rgba(255, 255, 255, 0.7), transparent 25rem),
-    var(--control-paper);
+  background: var(--control-paper);
 }
 
 .control-shell {
@@ -977,9 +992,7 @@ body {
   flex-direction: column;
   padding: 25px 18px 18px;
   color: var(--control-nav-text);
-  background:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.025), transparent 40%),
-    var(--control-nav);
+  background: var(--control-nav);
   overflow-y: auto;
   z-index: 30;
 }
@@ -1347,6 +1360,11 @@ body {
   background: var(--control-blue);
 }
 
+.operator-button.primary:hover:not(:disabled) {
+  color: #fff;
+  background: #1f47a8;
+}
+
 .operator-button.danger {
   border-color: #d49a93;
   color: var(--control-red);
@@ -1364,6 +1382,11 @@ body {
   border-color: rgba(255, 255, 255, 0.17);
   color: #fff;
   background: rgba(255, 255, 255, 0.06);
+}
+
+.operator-button.inverse:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .operator-button:disabled {
@@ -2069,9 +2092,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  background:
-    linear-gradient(120deg, rgba(220, 230, 255, 0.82), transparent 52%),
-    var(--control-surface);
+  background: var(--control-surface-blue);
 }
 
 .operator-mailroom-head h2 {
@@ -2341,9 +2362,7 @@ body {
 
 .operator-mail-detail {
   min-width: 0;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.38)),
-    var(--control-paper);
+  background: var(--control-surface);
 }
 
 .operator-mail-thread > header,
@@ -3272,6 +3291,11 @@ body {
 }
 
 @media (max-width: 650px) {
+  html,
+  body {
+    scroll-padding-bottom: 80px;
+  }
+
   body {
     font-size: 13px;
   }
@@ -3309,7 +3333,67 @@ body {
   }
 
   .control-main {
-    padding: 24px 15px 42px;
+    padding: 24px 15px 120px;
+  }
+
+  .control-main :is(a, button, input, select, textarea) {
+    scroll-margin-block: 72px;
+  }
+
+  .operator-page,
+  .operator-card,
+  .operator-card-body,
+  .operator-control-room,
+  .operator-action-sheet {
+    min-width: 0;
+  }
+
+  .operator-action-row {
+    flex-wrap: wrap;
+  }
+
+  .operator-action-row > button,
+  .operator-workspace-actionbar > button,
+  .operator-tabs > button {
+    min-height: 44px;
+  }
+
+  .operator-tabs {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .operator-mail-tabs {
+    flex-wrap: wrap;
+  }
+
+  .masterdetail,
+  .masterdetail.rail-left {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .md-rail {
+    padding-right: 0;
+    padding-bottom: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .md-rail .rail-item {
+    min-height: 44px;
+  }
+
+  .md-detail {
+    min-width: 0;
+    padding-top: 16px;
+    padding-left: 0;
+  }
+
+  .palette {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 32px);
+    overflow: auto;
   }
 
   .operator-page-head {
@@ -3501,7 +3585,7 @@ body {
   .control-mobile-nav {
     position: fixed;
     left: 0;
-    right: 0;
+    right: calc(100% / 6);
     bottom: 0;
     z-index: 40;
     height: 64px;
@@ -3536,13 +3620,14 @@ body {
 
   .control-mobile-act {
     position: fixed;
-    right: 16px;
-    bottom: 78px;
+    right: 0;
+    bottom: 0;
     z-index: 42;
-    min-width: 74px;
-    min-height: 40px;
+    width: calc(100% / 6);
+    min-width: 0;
+    min-height: 64px;
     border: 0;
-    border-radius: 99px;
+    border-radius: 0;
     display: flex;
     align-items: center;
     justify-content: center;

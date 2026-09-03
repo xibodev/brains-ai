@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { coreRoute } from "../coreRoutes";
-import { api, formatApiError } from "../api/client";
+import { api } from "../api/client";
 import type { OperatorCapability, OperatorTransport, OperatorWorkspace } from "../api/types";
 import {
   OperatorCard,
@@ -22,7 +22,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 export function Act() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const { catalog, loading, error } = useOperator();
+  const { catalog, loading, error, errorKind } = useOperator();
   const workspaces = useAsync(() => api.operatorWorkspaces(), []);
   const categories = Array.from(new Set((catalog?.data ?? []).map((row) => row.category)));
   const category = params.get("category") || catalog?.data.find((row) => row.key === params.get("capability"))?.category || categories[0];
@@ -44,8 +44,9 @@ export function Act() {
         title="Act"
         lede="Choose a control operation, target its scope, preview its durable effect, and execute through a typed HTTP contract. This is not a terminal."
       />
-      <OperatorState loading={loading || workspaces.loading} error={error || workspaces.error} />
-      {catalog && workspaces.data && (
+      <OperatorState loading={loading} error={error} kind={errorKind} empty={Boolean(catalog && catalog.data.length === 0)} boundary="act-catalog" emptyTitle="No supported actions" emptyBody="This installation advertises no browser actions for the current operator." />
+      <OperatorState loading={workspaces.loading} error={workspaces.error} kind={workspaces.errorKind} empty={Boolean(workspaces.data && workspaces.data.length === 0)} boundary="act-workspaces" emptyTitle="No action workspaces" emptyBody="No visible Workspace is available for scoped browser actions." />
+      {catalog && catalog.data.length > 0 && workspaces.data && (
         <>
           <section className="operator-parity-banner">
             <strong>Browser parity is explicit</strong>
@@ -133,8 +134,8 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
       else throw new Error("Open the contextual screen to complete this action safely.");
       toast(`${capability.label} recorded`);
       setTitle(""); setBody(""); setSessionId("");
-    } catch (error) {
-      toast(formatApiError(capability.label, error));
+    } catch {
+      toast("The action could not be completed. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
@@ -145,7 +146,7 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
   const needsTitle = !["handoff.pick", "handoff.clear", "workspace.release", "audit.verify", "queue.repair.preview"].includes(capability.key);
   const needsSession = ["task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release"].includes(capability.key);
   const needsWorkspace = ["task.create", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add"].includes(capability.key);
-  const valid = runnable && (!needsTitle || title.trim()) && (!needsSession || sessionId.trim());
+  const valid = runnable && (!needsWorkspace || Boolean(workspace)) && (!needsTitle || title.trim()) && (!needsSession || sessionId.trim());
   const titleLabel = capability.key === "workspace.claim" ? "Scope" : ["task.claim", "task.complete", "task.release"].includes(capability.key) ? "Task code" : capability.key === "knowledge.resolve" ? "Knowledge code" : capability.key === "pattern.decide" ? "Pattern name" : capability.key === "decision.resolve" ? "Decision code" : capability.key === "tool.verify" ? "Tool name" : capability.key === "message.send" || capability.key === "topic.post" ? "Subject" : "Title";
 
   return (

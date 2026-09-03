@@ -149,6 +149,14 @@ function record(sourceFile, node, kind, expression, coreRouteAliases) {
   for (const target of values) sites.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind, line, target });
 }
 
+function isHistoryDelta(node) {
+  node = unwrap(node);
+  if (ts.isNumericLiteral(node)) return true;
+  return ts.isPrefixUnaryExpression(node) &&
+    [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator) &&
+    ts.isNumericLiteral(node.operand);
+}
+
 for (const [file, sourceFile] of files) {
   if (!file.endsWith(".ts") && !file.endsWith(".tsx")) continue;
   const routerAliases = new Map([["Route", "Route"], ["Navigate", "Navigate"], ["Link", "Link"], ["NavLink", "NavLink"]]);
@@ -259,7 +267,12 @@ for (const [file, sourceFile] of files) {
       ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
       navigateFunctions.has(node.expression.text) && node.arguments.length
     ) {
-      record(sourceFile, node, "navigate", node.arguments[0], coreRouteAliases);
+      if (isHistoryDelta(node.arguments[0])) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        sites.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "history", line, target: "@history-delta" });
+      } else {
+        record(sourceFile, node, "navigate", node.arguments[0], coreRouteAliases);
+      }
     } else if (
       ts.isCallExpression(node) && namespacedRouterMember(node.expression) === "redirect" &&
       node.arguments.length

@@ -279,8 +279,8 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-EHAZHZ1p.js",
-      "src/brains/web/spa/assets/index-tHk7Z0AH.css",
+      "src/brains/web/spa/assets/index-BShml-R2.js",
+      "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
       "src/brains/wire/__init__.py",
@@ -668,8 +668,8 @@
       "brains/storage/sql_migrations/__init__.py",
       "brains/web/__init__.py",
       "brains/web/spa.py",
-      "brains/web/spa/assets/index-EHAZHZ1p.js",
-      "brains/web/spa/assets/index-tHk7Z0AH.css",
+      "brains/web/spa/assets/index-BShml-R2.js",
+      "brains/web/spa/assets/index-SXYrWt-w.css",
       "brains/web/spa/index.html",
       "brains/web/templates/admin/login.html",
       "brains/wire/__init__.py",
@@ -689,11 +689,7 @@
         "BRAINS_MCP_TOOLS",
         "BRAINS_UI_LABS"
       ],
-      "browser_redirects": [
-        "/command-center",
-        "/governance",
-        "/operations/config/local"
-      ],
+      "browser_redirects": [],
       "browser_routes": [
         "*",
         "/act",
@@ -24417,8 +24413,7 @@
         "backlog": [
           "BL-P0-06",
           "BL-P1-12",
-          "BL-P1-14",
-          "BL-P3-01"
+          "BL-P1-14"
         ],
         "boundaries": [
           "B1",
@@ -24440,7 +24435,6 @@
             "BL-P0-06",
             "BL-P1-12",
             "BL-P1-14",
-            "BL-P3-01",
             "F0",
             "F3",
             "F7",
@@ -24450,8 +24444,7 @@
             "J8",
             "J9",
             "P0",
-            "P1",
-            "P3"
+            "P1"
           ],
           "docs/product/FEATURE_CONTRACT.md": [
             "AC-B1-01",
@@ -24767,7 +24760,6 @@
             "BL-P0-06",
             "BL-P1-12",
             "BL-P1-14",
-            "BL-P3-01",
             "F0",
             "F1",
             "F10",
@@ -24812,6 +24804,7 @@
           "F8",
           "F9"
         ],
+        "forbidden_advertisements": [],
         "journeys": []
       },
       "environment_names": [
@@ -24934,6 +24927,7 @@
           "screens/CommandCenter.tsx",
           "screens/Config.tsx",
           "screens/Governance.tsx",
+          "screens/NotFound.tsx",
           "screens/Operations.tsx",
           "screens/OperatorCoordination.tsx",
           "screens/Workspaces.tsx",
@@ -24950,6 +24944,7 @@
           "realtime/useRealtime.ts"
         ],
         "components/CommandPalette.tsx": [
+          "components/useDialogFocus.ts",
           "coreRoutes.ts",
           "store/OperatorContext.tsx"
         ],
@@ -24960,7 +24955,8 @@
           "api/types.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
-          "components/format.ts"
+          "components/format.ts",
+          "store/useAsync.ts"
         ],
         "components/MasterDetail.tsx": [],
         "components/OperatorPrimitives.tsx": [],
@@ -24976,6 +24972,7 @@
         ],
         "components/format.ts": [],
         "components/sessionScope.ts": [],
+        "components/useDialogFocus.ts": [],
         "coreRoutes.ts": [],
         "main.tsx": [
           "App.tsx",
@@ -25013,6 +25010,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
+          "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
         ],
@@ -25023,6 +25021,9 @@
           "components/Toast.tsx",
           "components/format.ts",
           "store/useAsync.ts"
+        ],
+        "screens/NotFound.tsx": [
+          "components/OperatorPrimitives.tsx"
         ],
         "screens/Operations.tsx": [
           "api/client.ts",
@@ -25076,6 +25077,7 @@
         "components/TopBar.tsx",
         "components/format.ts",
         "components/sessionScope.ts",
+        "components/useDialogFocus.ts",
         "coreRoutes.ts",
         "main.tsx",
         "realtime/client.ts",
@@ -25085,6 +25087,7 @@
         "screens/CommandCenter.tsx",
         "screens/Config.tsx",
         "screens/Governance.tsx",
+        "screens/NotFound.tsx",
         "screens/Operations.tsx",
         "screens/OperatorCoordination.tsx",
         "screens/ScreenHead.tsx",
@@ -25095,23 +25098,23 @@
         "styles/tokens.css"
       ],
       "frontend_source_sha256": {
-        "frontend/src/App.tsx": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
+        "frontend/src/App.tsx": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "frontend/src/api/client.ts": "3fd51f572f7aa7c3d3115d8a8e3e6c7a000928cd532d0dbbe310fdeb9412f350",
         "frontend/src/api/types.ts": "3195d13c6d7bdfcb0fe5035f41a4f360c05615c3396e88c652178731ca5f6340",
-        "frontend/src/components/AppShell.tsx": "51e51a871ae6ae49cb4f398d91fcf8c610e07d09eab824c45562933d19d09f6d",
+        "frontend/src/components/AppShell.tsx": "8c94374b28d60ec640f6e29ca074c358213fcf9b1e5d54b59e60934d84f23a33",
         "frontend/src/components/ApprovalToast.tsx": "4d3805b42a1071e3cadcbe01429efc87b8526e26a3b826c526837b4f42b1860b",
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "44cfd91e3ba0ad77713f03c38337f96ea28a4d2176cf037929830b52b293b4c6",
+        "frontend/src/components/CommandPalette.tsx": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
-        "frontend/src/components/Drawer.tsx": "711f022b3fd503aba17fe6cae6a345b8e0f65ab7f7090c9dd893d26659d2ca36",
-        "frontend/src/components/EmptyState.tsx": "4be36e897949546381de77dd93268b71f9cf50b5ea6e26da5c708fca2113fd92",
+        "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
+        "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
         "frontend/src/components/EyebrowLabel.tsx": "1625fbe83f0394cf47f92ca0f0f83e2209fed49b1fe79c65714a2db2a3401d7a",
         "frontend/src/components/Field.tsx": "3486b5498b89911a7972bac8a00ccd23a58cb53e4e8c844bf641ade159857018",
-        "frontend/src/components/MailboxWorkspace.tsx": "ddd50d3b11d4c7bb4839c4382aac5fd9b24942fed74833a8ad60cc80e80e6b66",
+        "frontend/src/components/MailboxWorkspace.tsx": "2427908da0ea127ce38bcd52000224a7af5061b69de5fcd7c22dfbbfa488a1b1",
         "frontend/src/components/MasterDetail.tsx": "52bdfa3aa6035f053cbcd673e6ce6e1de62c534acc09ec62b0083b0b502ca20c",
-        "frontend/src/components/OperatorPrimitives.tsx": "368eab47a5788108938fef29e1186651403f7ef84c4b8199ab4ca1dc777e0577",
+        "frontend/src/components/OperatorPrimitives.tsx": "f0358960cdad51c26e58583abf279a7aec31053b43b6096d67dcc68eb2033438",
         "frontend/src/components/OrgSwitcher.tsx": "79bc69b317edb70e3da2b76f3d0d3ccf2fa15ef4902e5467bfabdc1a34cea389",
         "frontend/src/components/PersonaCard.tsx": "5861ffbdbb88e9fe950dae1c0e50cd767a3991b76850ba0e973dc6fe4fc1aeff",
         "frontend/src/components/RuntimeTile.tsx": "afda8edb44208fa73964ca4bfedd6847d55a26185c9aa8009962ff17102a09b9",
@@ -25126,24 +25129,26 @@
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
+        "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
         "frontend/src/coreRoutes.ts": "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
         "frontend/src/realtime/client.ts": "c4748c63f308f18b0e932694ac57a081e4c994339e9b9c18d5acc861e5ae746f",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
         "frontend/src/realtime/protocol.ts": "6925d7e1ae1f63abf0ab2af15c4d5bf816ada921448afa3eea5d3a988230bc86",
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
-        "frontend/src/screens/Act.tsx": "1b0160993caffbdb9169218aa14190a8d70b6559760054e258fb7a02c385f92d",
+        "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "c7b3a477d712aee40c6dc1e7824fb1bc0632e4c1d05021b69f602ee99f285ff4",
-        "frontend/src/screens/Config.tsx": "2bf253841ef156f11bd2c00bd101b507565b38388395069bf491352a32264f88",
-        "frontend/src/screens/Governance.tsx": "7b1ee76f0b9aacdf80b4424c7848bd302c328a0bba5cbd30a2a8f817e9f0ad3d",
+        "frontend/src/screens/CommandCenter.tsx": "821e2a05887264987dc94cab84c865be49f5d016bd716a0d7cabcf8418127653",
+        "frontend/src/screens/Config.tsx": "61dac337a08b3823a62db61a012b382cea10f87664b8d306edb2bba87ee49d20",
+        "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
         "frontend/src/screens/Labs.tsx": "376093d6d8056d31be3d8ded29fed1ddce303324de91a3442f2fc27a70f0c0f1",
         "frontend/src/screens/LegacyLabsRedirect.tsx": "a7ff6bd81aca3e2ba7cfb0e174f027dc7d8d49e0b55f58d9633583f5f0d447bc",
+        "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
-        "frontend/src/screens/Operations.tsx": "8935ad30ee45324902214548bb98b4612445a73f195723c1a280d9efa60d13c7",
-        "frontend/src/screens/OperatorCoordination.tsx": "92c5a40411daf5d6c4c6905c67cd503f9611fc1d8ff6c31bb977d61d86aa38cf",
+        "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
+        "frontend/src/screens/OperatorCoordination.tsx": "b3d03ac689e430099cb76554ff104f2bb8cc8c6c086d75052ad89087a4f67737",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -25151,11 +25156,11 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "3e06183b7d98475065826b25b544b3acd8433fb64a71767cb640179c90e8b185",
+        "frontend/src/screens/Workspaces.tsx": "228a9f1f181475d88b35f830b52484cf171e3886951416aefd35520a9ce71b2e",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
-        "frontend/src/store/OperatorContext.tsx": "6918123269bd72ef75c630c1137b344311a6eef8649a5b3bddb8c9e76f343197",
+        "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
-        "frontend/src/store/useAsync.ts": "1ca08a8b297b3a0a9b88971e6240ee8c76d3f79d5ea6e408ef2abe51826d6847",
+        "frontend/src/store/useAsync.ts": "182c2353b878734b48eb99b99312ede924112fec03f3d6d9efe0c1af5da95642",
         "frontend/src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5"
       },
       "http_operations": [
@@ -25850,146 +25855,116 @@
       "reachable_spa_navigation_sites": [
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 22,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
-          "kind": "route",
-          "line": 23,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 24,
-          "target": "/workspaces"
+          "target": "/command-center"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 25,
-          "target": "/workspaces/:slug"
+          "target": "/workspaces"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 26,
-          "target": "/coordination"
+          "target": "/workspaces/:slug"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 27,
-          "target": "/governance"
+          "target": "/coordination"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 28,
-          "target": "/operations"
-        },
-        {
-          "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 29,
-          "target": "/operations/config/local"
+          "target": "/governance"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 29,
-          "target": "/operations/config"
+          "target": "/operations"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 30,
-          "target": "/operations/config/:section"
+          "target": "/operations/config"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 31,
+          "target": "/operations/config/:section"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 32,
           "target": "/act"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 33,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 33,
+          "line": 34,
           "target": "/inbox"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 34,
-          "target": "/operations/config/local"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 34,
+          "line": 35,
           "target": "/config"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 35,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 35,
+          "line": 36,
           "target": "*"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 13,
+          "line": 14,
           "target": "/command-center"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 14,
+          "line": 15,
           "target": "/workspaces"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 15,
+          "line": 16,
           "target": "/coordination"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 16,
+          "line": 17,
           "target": "/governance"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 17,
+          "line": 18,
           "target": "/operations"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 46,
+          "line": 47,
           "target": "/act?capability=${dynamic}"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 58,
+          "line": 59,
           "target": "@core-route-guard"
         },
         {
@@ -26049,7 +26024,7 @@
         {
           "file": "frontend/src/screens/Act.tsx",
           "kind": "navigate",
-          "line": 169,
+          "line": 170,
           "target": "@core-route-guard"
         },
         {
@@ -26084,56 +26059,62 @@
         },
         {
           "file": "frontend/src/screens/Config.tsx",
-          "kind": "navigation",
-          "line": 29,
-          "target": "/operations/config/mcp"
+          "kind": "navigate",
+          "line": 35,
+          "target": "/operations/config/${dynamic}"
         },
         {
-          "file": "frontend/src/screens/Config.tsx",
+          "file": "frontend/src/screens/NotFound.tsx",
+          "kind": "history",
+          "line": 15,
+          "target": "@history-delta"
+        },
+        {
+          "file": "frontend/src/screens/NotFound.tsx",
           "kind": "navigate",
-          "line": 34,
-          "target": "/operations/config/${dynamic}"
+          "line": 16,
+          "target": "/command-center"
         },
         {
           "file": "frontend/src/screens/Operations.tsx",
           "kind": "navigate",
-          "line": 25,
+          "line": 26,
           "target": "/act?category=operations"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 26,
+          "line": 27,
           "target": "/act?capability=${dynamic}"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 57,
+          "line": 58,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 79,
+          "line": 80,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 35,
+          "line": 44,
           "target": "/act?${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 55,
+          "line": 64,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 102,
+          "line": 153,
           "target": "@core-route-guard"
         }
       ],
@@ -26152,10 +26133,10 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "191f781d551fcd1eefbaed024e06ba871222fbe029342003782dd221f92136a2",
+      "spa_ast_helper_sha256": "0ea1c5dd9ccfe700c41b8b78ea92e78838e901ccae52aa9d64ebbe181dd7c473",
       "spa_contract_sha256": {
-        "app": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
-        "palette": "44cfd91e3ba0ad77713f03c38337f96ea28a4d2176cf037929830b52b293b4c6",
+        "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
+        "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
         "sidebar": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e"
       },
       "wire": {
@@ -26287,11 +26268,7 @@
         "BRAINS_MCP_TOOLS",
         "BRAINS_UI_LABS"
       ],
-      "browser_redirects": [
-        "/command-center",
-        "/governance",
-        "/operations/config/local"
-      ],
+      "browser_redirects": [],
       "browser_routes": [
         "*",
         "/act",
@@ -50015,8 +49992,7 @@
         "backlog": [
           "BL-P0-06",
           "BL-P1-12",
-          "BL-P1-14",
-          "BL-P3-01"
+          "BL-P1-14"
         ],
         "boundaries": [
           "B1",
@@ -50038,7 +50014,6 @@
             "BL-P0-06",
             "BL-P1-12",
             "BL-P1-14",
-            "BL-P3-01",
             "F0",
             "F3",
             "F7",
@@ -50048,8 +50023,7 @@
             "J8",
             "J9",
             "P0",
-            "P1",
-            "P3"
+            "P1"
           ],
           "docs/product/FEATURE_CONTRACT.md": [
             "AC-B1-01",
@@ -50365,7 +50339,6 @@
             "BL-P0-06",
             "BL-P1-12",
             "BL-P1-14",
-            "BL-P3-01",
             "F0",
             "F1",
             "F10",
@@ -50410,6 +50383,7 @@
           "F8",
           "F9"
         ],
+        "forbidden_advertisements": [],
         "journeys": []
       },
       "environment_names": [
@@ -50532,6 +50506,7 @@
           "screens/CommandCenter.tsx",
           "screens/Config.tsx",
           "screens/Governance.tsx",
+          "screens/NotFound.tsx",
           "screens/Operations.tsx",
           "screens/OperatorCoordination.tsx",
           "screens/Workspaces.tsx",
@@ -50548,6 +50523,7 @@
           "realtime/useRealtime.ts"
         ],
         "components/CommandPalette.tsx": [
+          "components/useDialogFocus.ts",
           "coreRoutes.ts",
           "store/OperatorContext.tsx"
         ],
@@ -50558,7 +50534,8 @@
           "api/types.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
-          "components/format.ts"
+          "components/format.ts",
+          "store/useAsync.ts"
         ],
         "components/MasterDetail.tsx": [],
         "components/OperatorPrimitives.tsx": [],
@@ -50574,6 +50551,7 @@
         ],
         "components/format.ts": [],
         "components/sessionScope.ts": [],
+        "components/useDialogFocus.ts": [],
         "coreRoutes.ts": [],
         "main.tsx": [
           "App.tsx",
@@ -50611,6 +50589,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
+          "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
         ],
@@ -50621,6 +50600,9 @@
           "components/Toast.tsx",
           "components/format.ts",
           "store/useAsync.ts"
+        ],
+        "screens/NotFound.tsx": [
+          "components/OperatorPrimitives.tsx"
         ],
         "screens/Operations.tsx": [
           "api/client.ts",
@@ -50674,6 +50656,7 @@
         "components/TopBar.tsx",
         "components/format.ts",
         "components/sessionScope.ts",
+        "components/useDialogFocus.ts",
         "coreRoutes.ts",
         "main.tsx",
         "realtime/client.ts",
@@ -50683,6 +50666,7 @@
         "screens/CommandCenter.tsx",
         "screens/Config.tsx",
         "screens/Governance.tsx",
+        "screens/NotFound.tsx",
         "screens/Operations.tsx",
         "screens/OperatorCoordination.tsx",
         "screens/ScreenHead.tsx",
@@ -50693,23 +50677,23 @@
         "styles/tokens.css"
       ],
       "frontend_source_sha256": {
-        "frontend/src/App.tsx": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
+        "frontend/src/App.tsx": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "frontend/src/api/client.ts": "3fd51f572f7aa7c3d3115d8a8e3e6c7a000928cd532d0dbbe310fdeb9412f350",
         "frontend/src/api/types.ts": "3195d13c6d7bdfcb0fe5035f41a4f360c05615c3396e88c652178731ca5f6340",
-        "frontend/src/components/AppShell.tsx": "51e51a871ae6ae49cb4f398d91fcf8c610e07d09eab824c45562933d19d09f6d",
+        "frontend/src/components/AppShell.tsx": "8c94374b28d60ec640f6e29ca074c358213fcf9b1e5d54b59e60934d84f23a33",
         "frontend/src/components/ApprovalToast.tsx": "4d3805b42a1071e3cadcbe01429efc87b8526e26a3b826c526837b4f42b1860b",
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "44cfd91e3ba0ad77713f03c38337f96ea28a4d2176cf037929830b52b293b4c6",
+        "frontend/src/components/CommandPalette.tsx": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
-        "frontend/src/components/Drawer.tsx": "711f022b3fd503aba17fe6cae6a345b8e0f65ab7f7090c9dd893d26659d2ca36",
-        "frontend/src/components/EmptyState.tsx": "4be36e897949546381de77dd93268b71f9cf50b5ea6e26da5c708fca2113fd92",
+        "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
+        "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
         "frontend/src/components/EyebrowLabel.tsx": "1625fbe83f0394cf47f92ca0f0f83e2209fed49b1fe79c65714a2db2a3401d7a",
         "frontend/src/components/Field.tsx": "3486b5498b89911a7972bac8a00ccd23a58cb53e4e8c844bf641ade159857018",
-        "frontend/src/components/MailboxWorkspace.tsx": "ddd50d3b11d4c7bb4839c4382aac5fd9b24942fed74833a8ad60cc80e80e6b66",
+        "frontend/src/components/MailboxWorkspace.tsx": "2427908da0ea127ce38bcd52000224a7af5061b69de5fcd7c22dfbbfa488a1b1",
         "frontend/src/components/MasterDetail.tsx": "52bdfa3aa6035f053cbcd673e6ce6e1de62c534acc09ec62b0083b0b502ca20c",
-        "frontend/src/components/OperatorPrimitives.tsx": "368eab47a5788108938fef29e1186651403f7ef84c4b8199ab4ca1dc777e0577",
+        "frontend/src/components/OperatorPrimitives.tsx": "f0358960cdad51c26e58583abf279a7aec31053b43b6096d67dcc68eb2033438",
         "frontend/src/components/OrgSwitcher.tsx": "79bc69b317edb70e3da2b76f3d0d3ccf2fa15ef4902e5467bfabdc1a34cea389",
         "frontend/src/components/PersonaCard.tsx": "5861ffbdbb88e9fe950dae1c0e50cd767a3991b76850ba0e973dc6fe4fc1aeff",
         "frontend/src/components/RuntimeTile.tsx": "afda8edb44208fa73964ca4bfedd6847d55a26185c9aa8009962ff17102a09b9",
@@ -50724,24 +50708,26 @@
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
+        "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
         "frontend/src/coreRoutes.ts": "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
         "frontend/src/realtime/client.ts": "c4748c63f308f18b0e932694ac57a081e4c994339e9b9c18d5acc861e5ae746f",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
         "frontend/src/realtime/protocol.ts": "6925d7e1ae1f63abf0ab2af15c4d5bf816ada921448afa3eea5d3a988230bc86",
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
-        "frontend/src/screens/Act.tsx": "1b0160993caffbdb9169218aa14190a8d70b6559760054e258fb7a02c385f92d",
+        "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "c7b3a477d712aee40c6dc1e7824fb1bc0632e4c1d05021b69f602ee99f285ff4",
-        "frontend/src/screens/Config.tsx": "2bf253841ef156f11bd2c00bd101b507565b38388395069bf491352a32264f88",
-        "frontend/src/screens/Governance.tsx": "7b1ee76f0b9aacdf80b4424c7848bd302c328a0bba5cbd30a2a8f817e9f0ad3d",
+        "frontend/src/screens/CommandCenter.tsx": "821e2a05887264987dc94cab84c865be49f5d016bd716a0d7cabcf8418127653",
+        "frontend/src/screens/Config.tsx": "61dac337a08b3823a62db61a012b382cea10f87664b8d306edb2bba87ee49d20",
+        "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
         "frontend/src/screens/Labs.tsx": "376093d6d8056d31be3d8ded29fed1ddce303324de91a3442f2fc27a70f0c0f1",
         "frontend/src/screens/LegacyLabsRedirect.tsx": "a7ff6bd81aca3e2ba7cfb0e174f027dc7d8d49e0b55f58d9633583f5f0d447bc",
+        "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
-        "frontend/src/screens/Operations.tsx": "8935ad30ee45324902214548bb98b4612445a73f195723c1a280d9efa60d13c7",
-        "frontend/src/screens/OperatorCoordination.tsx": "92c5a40411daf5d6c4c6905c67cd503f9611fc1d8ff6c31bb977d61d86aa38cf",
+        "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
+        "frontend/src/screens/OperatorCoordination.tsx": "b3d03ac689e430099cb76554ff104f2bb8cc8c6c086d75052ad89087a4f67737",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -50749,11 +50735,11 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "3e06183b7d98475065826b25b544b3acd8433fb64a71767cb640179c90e8b185",
+        "frontend/src/screens/Workspaces.tsx": "228a9f1f181475d88b35f830b52484cf171e3886951416aefd35520a9ce71b2e",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
-        "frontend/src/store/OperatorContext.tsx": "6918123269bd72ef75c630c1137b344311a6eef8649a5b3bddb8c9e76f343197",
+        "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
-        "frontend/src/store/useAsync.ts": "1ca08a8b297b3a0a9b88971e6240ee8c76d3f79d5ea6e408ef2abe51826d6847",
+        "frontend/src/store/useAsync.ts": "182c2353b878734b48eb99b99312ede924112fec03f3d6d9efe0c1af5da95642",
         "frontend/src/vite-env.d.ts": "65996936fbb042915f7b74a200fcdde7e410f32a669b1ab9597cfaa4b0faddb5"
       },
       "http_operations": [
@@ -51448,146 +51434,116 @@
       "reachable_spa_navigation_sites": [
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 22,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
-          "kind": "route",
-          "line": 23,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 24,
-          "target": "/workspaces"
+          "target": "/command-center"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 25,
-          "target": "/workspaces/:slug"
+          "target": "/workspaces"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 26,
-          "target": "/coordination"
+          "target": "/workspaces/:slug"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 27,
-          "target": "/governance"
+          "target": "/coordination"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 28,
-          "target": "/operations"
-        },
-        {
-          "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 29,
-          "target": "/operations/config/local"
+          "target": "/governance"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 29,
-          "target": "/operations/config"
+          "target": "/operations"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 30,
-          "target": "/operations/config/:section"
+          "target": "/operations/config"
         },
         {
           "file": "frontend/src/App.tsx",
           "kind": "route",
           "line": 31,
+          "target": "/operations/config/:section"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 32,
           "target": "/act"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 33,
-          "target": "/governance"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 33,
+          "line": 34,
           "target": "/inbox"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 34,
-          "target": "/operations/config/local"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 34,
+          "line": 35,
           "target": "/config"
         },
         {
           "file": "frontend/src/App.tsx",
-          "kind": "navigation",
-          "line": 35,
-          "target": "/command-center"
-        },
-        {
-          "file": "frontend/src/App.tsx",
           "kind": "route",
-          "line": 35,
+          "line": 36,
           "target": "*"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 13,
+          "line": 14,
           "target": "/command-center"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 14,
+          "line": 15,
           "target": "/workspaces"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 15,
+          "line": 16,
           "target": "/coordination"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 16,
+          "line": 17,
           "target": "/governance"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 17,
+          "line": 18,
           "target": "/operations"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "declarative-target",
-          "line": 46,
+          "line": 47,
           "target": "/act?capability=${dynamic}"
         },
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 58,
+          "line": 59,
           "target": "@core-route-guard"
         },
         {
@@ -51647,7 +51603,7 @@
         {
           "file": "frontend/src/screens/Act.tsx",
           "kind": "navigate",
-          "line": 169,
+          "line": 170,
           "target": "@core-route-guard"
         },
         {
@@ -51682,56 +51638,62 @@
         },
         {
           "file": "frontend/src/screens/Config.tsx",
-          "kind": "navigation",
-          "line": 29,
-          "target": "/operations/config/mcp"
+          "kind": "navigate",
+          "line": 35,
+          "target": "/operations/config/${dynamic}"
         },
         {
-          "file": "frontend/src/screens/Config.tsx",
+          "file": "frontend/src/screens/NotFound.tsx",
+          "kind": "history",
+          "line": 15,
+          "target": "@history-delta"
+        },
+        {
+          "file": "frontend/src/screens/NotFound.tsx",
           "kind": "navigate",
-          "line": 34,
-          "target": "/operations/config/${dynamic}"
+          "line": 16,
+          "target": "/command-center"
         },
         {
           "file": "frontend/src/screens/Operations.tsx",
           "kind": "navigate",
-          "line": 25,
+          "line": 26,
           "target": "/act?category=operations"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 26,
+          "line": 27,
           "target": "/act?capability=${dynamic}"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 57,
+          "line": 58,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 79,
+          "line": 80,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 35,
+          "line": 44,
           "target": "/act?${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 55,
+          "line": 64,
           "target": "/workspaces/${dynamic}"
         },
         {
           "file": "frontend/src/screens/Workspaces.tsx",
           "kind": "navigate",
-          "line": 102,
+          "line": 153,
           "target": "@core-route-guard"
         }
       ],
@@ -51750,10 +51712,10 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "191f781d551fcd1eefbaed024e06ba871222fbe029342003782dd221f92136a2",
+      "spa_ast_helper_sha256": "0ea1c5dd9ccfe700c41b8b78ea92e78838e901ccae52aa9d64ebbe181dd7c473",
       "spa_contract_sha256": {
-        "app": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
-        "palette": "44cfd91e3ba0ad77713f03c38337f96ea28a4d2176cf037929830b52b293b4c6",
+        "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
+        "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
         "sidebar": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e"
       },
       "wire": {

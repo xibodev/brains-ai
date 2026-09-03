@@ -57,12 +57,13 @@ the shipped SPA route inventory.
 |---|---|---|
 | AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | Advertised at E1/E2; `/app` starts at Command Center. |
 | AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
-| AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised/partial; some screens still collapse failures into empty state. |
+| AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised at E1/E2; shared route boundaries label loading, empty, success, error, authorization, and not-found independently. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
-| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes are absent. |
+| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised at E1/E2; unknown top-level, withdrawn, configuration-section, and Workspace URLs remain in place and render a non-disclosing not-found state. |
 
 **Failure behavior:** Authentication failure leads to sign-in or a structured error.
-Unknown/unauthorized entities never silently select another entity.
+Unknown/unauthorized entities never silently select another entity. Unknown and
+withdrawn browser URLs never redirect into a different supported view.
 
 ### F1 - Connect a machine and register Runtimes
 
@@ -238,7 +239,8 @@ generic webhooks, and scheduled/manual fire are non-activatable compatibility in
 **Promise:** Target contract for exact model intent and explicit policy routing.
 
 **Lifecycle:** withdrawn. Model proxy routes, aliases, provider adapters, router,
-LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility only.
+LiteLLM, catalog, usage routing, and the retired model-execution CLI are source
+compatibility only.
 
 - AC-B1-01: explicit model IDs resolve faithfully or return model-not-found.
 - AC-B1-02: only explicit policy-routing requests may invoke classification.

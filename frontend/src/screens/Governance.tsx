@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, formatApiError } from "../api/client";
+import { api } from "../api/client";
 import type { OperatorDecision } from "../api/types";
 import { relativeTime } from "../components/format";
 import {
@@ -19,6 +19,7 @@ export function Governance() {
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const selected = state.data?.decisions.find((row) => row.code === selectedCode) ?? state.data?.decisions[0];
+  const empty = Boolean(state.data && !state.data.decisions.length && !state.data.actions.length && !state.data.audit.length);
 
   const resolve = async (decision: OperatorDecision, chosen: string, status = "resolved") => {
     setSaving(true);
@@ -27,8 +28,8 @@ export function Governance() {
       toast(`${decision.code} ${status}`);
       setNote("");
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Resolve decision", error));
+    } catch {
+      toast("The decision could not be resolved. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
@@ -42,8 +43,8 @@ export function Governance() {
       toast(`${decision.code} answered`);
       setNote("");
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Answer ask", error));
+    } catch {
+      toast("The ask could not be answered. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
@@ -54,8 +55,8 @@ export function Governance() {
       const result = await api.operatorAuditVerify();
       toast(result.ok === false ? "Audit verification reported a divergence" : "Audit chain verified");
       state.refetch();
-    } catch (error) {
-      toast(formatApiError("Verify audit chain", error));
+    } catch {
+      toast("The audit chain could not be verified. Retry after checking authorization and local service status.");
     }
   };
 
@@ -67,8 +68,8 @@ export function Governance() {
         lede="Resolve what is waiting, follow every outward action through its decision spine, and verify the signed record."
         actions={<button className="operator-button" onClick={() => void verify()}>Verify audit chain</button>}
       />
-      <OperatorState loading={state.loading} error={state.error} />
-      {state.data && (
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="governance" emptyTitle="No governance state" emptyBody="No decisions, governed actions, or audit entries are currently visible." />
+      {state.data && !empty && (
         <div className="operator-governance-layout">
           <OperatorCard kicker="Decision queue" title={`${state.data.decisions.length} open`}>
             <div className="operator-decision-queue">
