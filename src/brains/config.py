@@ -400,7 +400,7 @@ class Settings(BaseSettings):
     )
     provider_policies: dict[str, ProviderPolicyConfig] = Field(default_factory=dict)
 
-    # --- Managed recovery policy (BL-P1-09) ---
+    # --- Managed recovery policy ---
     #
     # Declares WHAT the operator has committed to for backup/restore, so
     # readiness (B8) and the recovery-policy surfaces can report completeness
@@ -424,9 +424,11 @@ class Settings(BaseSettings):
     backup_rto_minutes: int = Field(default=0, ge=0)  # 0 = unset
     backup_rpo_minutes: int = Field(default=0, ge=0)  # 0 = unset
     backup_restore_drill_required: bool = Field(default=True)
-    # Operator-recorded evidence of the most recent isolated restore drill
-    # (ISO-8601 date/time the operator attests to; brains does not run drills
-    # itself and never fabricates this value).
+    # Local manifest archive selected for recovery. The path itself is never
+    # returned by readiness; only its bounded verification result is exposed.
+    backup_candidate_path: str = Field(default="")
+    # Legacy operator declaration retained for configuration compatibility.
+    # Readiness trusts only the audit record produced by ``recovery-drill``.
     backup_last_restore_drill_at: str = Field(default="")
 
 

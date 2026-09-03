@@ -25,12 +25,6 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Browser and API tests prove frozen and withdrawn settings are neither displayed nor writable through any route and supported changes are redacted, attributable, restart-aware, concurrency-safe, and recoverable.
 - **Maps to:** F7, B6, B8; J9, J11.
 
-### BL-P1-09 - Validate local readiness and recovery
-
-- **Action:** Make readiness distinguish gateway/MCP protocol state, SQLite integrity, queue/mailbox progress, and declared backup, restore, and rollback capability in the supported local topology.
-- **Done when:** Local failure drills identify the affected dependency without secrets and the documented probe restores a compatible candidate and re-establishes truthful readiness.
-- **Maps to:** B5, B6, B8; J1, J7, J11.
-
 ### BL-P1-10 - Implement core-surface advertisement checks
 
 - **Action:** Generate CLI, MCP, alias, wire, route, navigation, configuration, extra, and documentation inventories that enforce the core/frozen boundary.

@@ -215,6 +215,28 @@ def _exception_status_code(exc: BaseException) -> int | None:
     return None
 
 
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Recognize transport failures even when an SDK wraps them in a group."""
+    import httpx
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)):
+            return True
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple | list):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return False
+
+
 async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float) -> dict[str, Any]:
     """Initialize MCP and list tools, returning only bounded non-secret facts."""
 
@@ -253,6 +275,9 @@ async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float)
         if status_code in {401, 403}:
             failed_stage = "authentication"
             reason = "credential-rejected"
+        elif _is_connection_failure(exc):
+            failed_stage = "connect"
+            reason = "connection-failed"
         elif status_code is not None:
             failed_stage = "protocol"
             reason = "http-protocol-rejected"
@@ -486,7 +511,7 @@ def read_pidfile(path: Path | None = None) -> int | None:
     Legacy int-only accessor, kept for existing callers (the Windows/macOS
     ``stop()`` tree-kill paths). Prefer :func:`read_pidfile_record` +
     :func:`verify_pid` for anything that reports or acts on *whether the
-    service is actually running* — a bare PID number proves nothing (BL-P1-09).
+    service is actually running* — a bare PID number proves nothing.
     """
     record = read_pidfile_record(path)
     if record is None:
@@ -496,7 +521,7 @@ def read_pidfile(path: Path | None = None) -> int | None:
 
 
 # --------------------------------------------------------------------------- #
-# PID identity — BL-P1-09
+# PID identity
 #
 # A PID file historically held nothing but a bare integer: no proof the
 # number still names *our* process rather than an unrelated one the OS
@@ -711,7 +736,7 @@ def read_pidfile_record(path: Path | None = None) -> dict[str, Any] | None:
     """Read a PID-identity file, tolerating the legacy plain-integer format.
 
     Returns ``None`` when the file is absent or unreadable. A legacy file
-    (a bare integer, written by a build predating BL-P1-09) is returned as
+    (a bare integer, written before structured identity records) is returned as
     ``{"format": "legacy", "pid": <int>, "exe": None, ...}`` so callers can
     still recover the PID, while :func:`verify_pid` treats it as
     unverifiable rather than confidently running.

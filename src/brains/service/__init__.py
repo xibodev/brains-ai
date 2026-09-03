@@ -129,7 +129,7 @@ def status() -> dict:
     ``report["service_pid"]`` is the :func:`brains.service.common.verify_pid`
     result for the supervisor pidfile — the OS-native install/enabled state
     above answers "is the service registered", this answers "does the PID
-    it last recorded still name a live, matching process" (BL-P1-09). A
+    it last recorded still name a live, matching process". A
     stale/reused PID is reported, never silently treated as proof the
     service is running.
     """

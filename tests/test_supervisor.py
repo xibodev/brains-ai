@@ -249,7 +249,7 @@ def test_pidfile_written_and_cleared(tmp_path, monkeypatch) -> None:
 
 def test_pidfile_verifies_as_running_for_this_process(tmp_path, monkeypatch) -> None:
     """The pidfile the supervisor just wrote for itself must verify as at
-    least running — never "stale" — right after it is written (BL-P1-09)."""
+    least running — never "stale" — right after it is written."""
     from brains.service.common import read_pidfile_record, verify_pid
 
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))

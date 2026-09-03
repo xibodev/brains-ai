@@ -34,6 +34,9 @@ export function Operations() {
                 `${Number(Boolean(data.service.listeners?.gateway)) + Number(Boolean(data.service.listeners?.mcp))} / 2 listeners`,
               ],
               ["Storage", data.readiness.components.storage.state],
+              ["SQLite integrity", data.readiness.components.sqlite_integrity.state],
+              ["HTTP gateway", data.readiness.components.gateway_protocol.state],
+              ["MCP protocol", data.readiness.components.mcp_protocol.state],
               ["Queues", data.readiness.components.queue.state],
               ["Durable mail", data.readiness.components.durable_mail.state],
               ["Recovery", data.recovery.ready ? "ready" : "incomplete"],
@@ -43,7 +46,7 @@ export function Operations() {
           <div className="operator-operations-grid">
             <OperatorCard kicker="Protected readiness" title="Dependencies" action={<OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{Object.values(data.readiness.components).filter((row) => row.state === "ready").length} / {Object.keys(data.readiness.components).length}</div>
-              <p>Bounded storage, queue, durable-mail, and recovery-policy checks.</p>
+              <p>Bounded SQLite, core HTTP gateway, authenticated MCP, queue, durable-mail, and verified recovery checks.</p>
               <OperatorMiniList rows={Object.entries(data.readiness.components).map(([name, row]) => ({ label: name.replaceAll("_", " "), value: <OperatorStatus tone={row.state === "ready" ? "ready" : "warning"}>{row.state}</OperatorStatus> }))} />
             </OperatorCard>
 
@@ -63,7 +66,8 @@ export function Operations() {
               <p>Backup and restore stay disabled in the browser until typed preview and confirmation routes exist.</p>
               <OperatorMiniList rows={[
                 { label: "Retention", value: data.recovery.policy.retention_days == null ? "Not set" : `${data.recovery.policy.retention_days} days` },
-                { label: "Restore drill", value: data.recovery.policy.last_restore_drill_at ? "recorded" : "Not recorded" },
+                { label: "Restore candidate", value: data.recovery.candidate.ready ? "Verified" : "Not verified" },
+                { label: "Restore drill", value: data.recovery.last_drill.verified ? "Verified" : "Not verified" },
                 { label: "Schema compatibility", value: data.recovery.compatibility.migration_healthy ? "Healthy" : "Degraded" },
               ]} />
               <button className="operator-button" disabled>Backup adapter required</button>

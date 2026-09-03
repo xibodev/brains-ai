@@ -4027,9 +4027,8 @@ def backup_cli(
 ):
     """Create a backup archive of the current brains DB.
 
-    Dispatches on ``subsystems.storage.backend``: SQLite uses the
-    stdlib online backup API (safe even while writers are active);
-    Postgres shells out to ``pg_dump`` (must be on PATH). Records
+    SQLite uses the stdlib online backup API (safe even while writers are
+    active). Alternate runtime backends fail closed. Records
     ``admin.backup_created.attempted`` before it runs and
     ``admin.backup_created`` once the archive exists; refuses to run at all
     if the attempt cannot be recorded.
@@ -4074,8 +4073,8 @@ def restore_cli(
 ):
     """Restore a brains DB from a backup archive.
 
-    Destructive: overwrites the on-disk SQLite file (or replays the
-    SQL dump into the Postgres DB). Run ``brains-ai backup`` first.
+    Destructive: overwrites the on-disk SQLite file. Run ``brains-ai backup``
+    first. Alternate runtime backends fail closed.
     Records ``admin.restore_run.attempted`` before it touches anything -
     a restore whose attempt cannot be recorded does not run - and
     ``admin.restore_run`` once the restore returned.
@@ -4496,7 +4495,7 @@ def daemon_stop_cli(force: bool = typer.Option(False, "--force")):
     """Signal a running foreground daemon to stop (drain or kill per --force).
 
     Refuses to signal a PID the pidfile names when it no longer verifiably
-    identifies the daemon process that wrote it (BL-P1-09) — a reused PID
+    identifies the daemon process that wrote it — a reused PID
     would otherwise send the signal to an unrelated process. The stale
     pidfile is removed instead so a future ``daemon stop`` doesn't repeat
     the same mistake.
@@ -4632,7 +4631,7 @@ def daemon_start_cli(
 
 
 # --------------------------------------------------------------------------- #
-# readiness / queue-health / recovery-policy — B8, BL-P1-09, BL-P1-12
+# readiness / queue-health / recovery-policy — B8
 #
 # CLI mirrors of GET /v1/admin/readiness, GET/POST /v1/admin/queue-health(/repair)
 # and GET /v1/admin/recovery-policy — the same control-layer functions the API
@@ -4646,7 +4645,7 @@ def daemon_start_cli(
 
 @app.command("readiness")
 def readiness_cli() -> None:
-    """Report storage, queue, durable-mail, and recovery readiness (B8).
+    """Report SQLite, MCP, queue, durable-mail, and recovery readiness (B8).
 
     Distinct from ``brains-ai health`` style liveness checks — this reports
     one overall ready/degraded verdict plus bounded, redacted per-component
@@ -4704,7 +4703,7 @@ def queue_health_repair_cli(
 
 @app.command("recovery-policy")
 def recovery_policy_cli() -> None:
-    """Report the declared recovery policy (BL-P1-09): scope, schedule,
+    """Report declared recovery policy and verified recovery posture: scope, schedule,
     retention, encryption expectation/owner, RTO/RPO, offsite owner/location,
     and restore-drill requirement — redacted, with completeness and a
     migration/backup compatibility precheck. Never claims backups are
@@ -4712,6 +4711,62 @@ def recovery_policy_cli() -> None:
     from brains.control.recovery_policy import recovery_readiness
 
     _print_json(recovery_readiness())
+
+
+@app.command("recovery-drill")
+def recovery_drill_cli(
+    archive_path: str | None = typer.Argument(
+        None,
+        help="Manifest archive to verify; defaults to BRAINS_BACKUP_CANDIDATE_PATH.",
+    ),
+) -> None:
+    """Perform and audit an isolated restore verification without touching the live DB."""
+    from brains.audit import AuditWriteError, required_effect
+    from brains.config import settings
+    from brains.control.readiness import backup_candidate_status, perform_restore_drill
+
+    candidate = archive_path or settings.backup_candidate_path
+    try:
+        with required_effect(
+            actor="admin",
+            action="admin.recovery_drill",
+            payload={"candidate_supplied": bool(candidate)},
+        ) as effect:
+            report = backup_candidate_status(candidate)
+            if not report["ready"]:
+                raise RuntimeError(report["reason"])
+            drill = perform_restore_drill(candidate)
+            if not drill["ready"]:
+                raise RuntimeError(drill["reason"])
+            effect.record_outcome(
+                {
+                    "candidate_verified": True,
+                    "restore_verified": True,
+                    "rollback_verified": drill["rollback_verified"],
+                    "backend": report.get("backend"),
+                    "data_fingerprint": report.get("data_fingerprint"),
+                }
+            )
+    except AuditWriteError as exc:
+        typer.echo(f"recovery drill refused: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=3) from exc
+    except RuntimeError as exc:
+        typer.echo(f"recovery drill failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # pragma: no cover - bounded operational failure
+        typer.echo(f"recovery drill failed: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_json(
+        {
+            "ready": True,
+            "reason": drill["reason"],
+            "backend": report.get("backend"),
+            "data_fingerprint": report.get("data_fingerprint"),
+            "candidate_verified": True,
+            "restore_verified": True,
+            "rollback_verified": drill["rollback_verified"],
+        }
+    )
 
 
 # Apply the shipped capability boundary only after every decorator has run.

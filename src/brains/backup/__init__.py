@@ -4,22 +4,18 @@ This module is the implementation of the Phase 6 (README) /
 Phase 3 (roadmap) hardening bullet *"backup + restore tooling for
 the brain DB"*. The contract is intentionally pragmatic:
 
-* **SQLite backend (default)** — use the stdlib :mod:`sqlite3` online
+* **SQLite backend** — use the stdlib :mod:`sqlite3` online
   backup API. The connection stays open while the backup runs so
   concurrent writers do not corrupt the dump. The resulting file is
   bundled into a gzip+tar archive together with a JSON manifest.
-* **Postgres backend** — shell out to ``pg_dump`` if it is on PATH.
-  We do **not** bundle pg_dump itself (it ships with Postgres) so
-  the function raises :class:`BackupToolUnavailable` if it is
-  missing rather than silently producing a useless dump.
+Historical Postgres archive readers remain source compatibility only. Public backup
+and restore entry points fail closed for every non-SQLite runtime or target.
 
 Archive layout::
 
     <out>.tar.gz
     ├── manifest.json    # see _Manifest for the schema
     └── brains.sqlite    # raw SQLite copy
-        OR
-    └── brains.sql       # pg_dump --format=plain output
 
 The manifest captures the brains version, backend, schema versions,
 and a sha256 of the DB blob so the restore path can refuse to
@@ -35,9 +31,9 @@ Manifest compatibility
 direction only:
 
 * this build **reads** ``1`` and ``2``. A ``1`` archive written by an older
-  build inspects and restores normally here; its source-identity fields are
-  absent, so verification reports them as unverifiable instead of passing
-  them.
+  build remains inspectable; its source-identity fields are absent, so
+  verification and destructive restore fail closed instead of treating it as
+  a proven recovery candidate.
 * this build **writes** ``2``. A ``2`` archive therefore requires *this build
   or later* to inspect, verify, or restore: an older build reads
   ``manifest_version`` as ``1`` semantics and has no reader contract for it.
@@ -65,10 +61,9 @@ whole capture-verify-mutate-commit window, and every backup step run under that
 window re-proves the lock is genuinely held before and after it acts. See
 :meth:`SourceWriteLock.assert_held`.
 
-Restore is deliberately destructive — it overwrites the target DB
-file (SQLite) or runs ``psql -f`` to replay the dump (Postgres) —
-so it lives behind a separate CLI verb (``brains restore``) and an
-explicit ``--yes`` flag in the operator-facing surface.
+Restore is deliberately destructive — it overwrites the target SQLite DB file — so it
+lives behind a separate CLI verb (``brains restore``) and an explicit ``--yes`` flag
+in the operator-facing surface.
 
 Both verbs are recorded in two phases by their CLI/MCP callers via
 :func:`brains.audit.required_effect`: ``admin.backup_created.attempted`` /
@@ -237,9 +232,12 @@ class RestoreResult:
 
     archive_path: str
     backend: str
-    restored_to: str  # SQLite file path OR sanitized Postgres URL
+    restored_to: str  # SQLite file path
     data_size_bytes: int
     data_sha256: str
+    candidate_verified: bool = False
+    rollback_archive_path: str | None = None
+    post_restore_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -651,7 +649,12 @@ def _sqlite_source_state(path: Path, work_dir: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------- SQLite
 
 
-def _backup_sqlite(out_path: Path, *, source_lock: SourceWriteLock | None = None) -> BackupResult:
+def _backup_sqlite(
+    out_path: Path,
+    *,
+    source_lock: SourceWriteLock | None = None,
+    source_path: Path | None = None,
+) -> BackupResult:
     """Capture the SQLite source into a verified archive.
 
     When ``source_lock`` is given, the source is the locked database rather
@@ -660,9 +663,14 @@ def _backup_sqlite(out_path: Path, *, source_lock: SourceWriteLock | None = None
     is derived from it. That is what makes the archive's claim to be the
     source's exact state true rather than hopeful.
     """
+    if source_lock is not None and source_path is not None:
+        raise BackupError("source_lock and source_path are mutually exclusive")
     if source_lock is not None:
         source_lock.assert_held("before capturing the backup image")
         src_path = source_lock.path
+        db_url = f"sqlite:///{src_path}"
+    elif source_path is not None:
+        src_path = source_path
         db_url = f"sqlite:///{src_path}"
     else:
         db_url = _current_db_url()
@@ -758,10 +766,7 @@ def _restore_sqlite(archive_path: Path, *, target_url: str | None) -> RestoreRes
     with tarfile.open(archive_path, "r:gz") as tar:
         manifest = _read_manifest(tar)
         if manifest.backend != "sqlite":
-            raise ManifestMismatch(
-                f"Archive backend {manifest.backend!r} is not 'sqlite'. "
-                "Use --backend postgres or restore into a Postgres install."
-            )
+            raise ManifestMismatch(f"Archive backend {manifest.backend!r} is not 'sqlite'.")
         _assert_schema_compatible(manifest)
         try:
             data_member = tar.getmember(manifest.data_file)
@@ -934,6 +939,7 @@ def restore_backup(
     archive_path: str | Path,
     *,
     target_url: str | None = None,
+    rollback_path: str | Path | None = None,
 ) -> RestoreResult:
     """Restore a brains DB from an archive.
 
@@ -948,7 +954,54 @@ def restore_backup(
         raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
     if target_url is not None and not target_url.startswith("sqlite:"):
         raise UnsupportedBackend("Restore targets must use SQLite")
-    return _restore_sqlite(archive, target_url=target_url)
+    verification = verify_backup(archive)
+    if not verification.ok:
+        raise ManifestMismatch(
+            "restore candidate failed isolated verification; the target was not modified"
+        )
+
+    rollback_archive: str | None = None
+    destination = _resolve_sqlite_path(target_url or _current_db_url())
+    if destination.is_file():
+        if rollback_path is None:
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            rollback_path = (
+                destination.parent / "recovery" / f"{destination.name}.{stamp}.rollback.tar.gz"
+            )
+        resolved_rollback = Path(rollback_path).expanduser().resolve()
+        if resolved_rollback in {archive, destination.expanduser().resolve()}:
+            raise BackupError(
+                "rollback archive conflicts with recovery inputs; the target was not modified"
+            )
+        rollback = _backup_sqlite(Path(rollback_path), source_path=destination)
+        rollback_verification = verify_backup(
+            rollback.archive_path, expected_source_path=destination
+        )
+        if not rollback_verification.ok:
+            raise BackupError(
+                "pre-restore rollback point failed verification; the target was not modified"
+            )
+        rollback_archive = rollback.archive_path
+
+    restored = _restore_sqlite(archive, target_url=target_url)
+    post = _sqlite_snapshot(destination)
+    post_ok = tuple(post["integrity_check"]) == ("ok",) and int(post["foreign_key_violations"]) == 0
+    if not post_ok:
+        if rollback_archive is not None:
+            _restore_sqlite(Path(rollback_archive), target_url=target_url)
+        raise BackupError(
+            "restored database failed integrity verification; the rollback point was restored"
+        )
+    return RestoreResult(
+        archive_path=restored.archive_path,
+        backend=restored.backend,
+        restored_to=restored.restored_to,
+        data_size_bytes=restored.data_size_bytes,
+        data_sha256=restored.data_sha256,
+        candidate_verified=True,
+        rollback_archive_path=rollback_archive,
+        post_restore_verified=True,
+    )
 
 
 def inspect_archive(archive_path: str | Path) -> dict[str, Any]:
@@ -1093,6 +1146,8 @@ def verify_backup(
             )
 
         checks["foreign_key_violations"] = restored["foreign_key_violations"]
+        if int(restored["foreign_key_violations"]) != 0:
+            failures.append("foreign key verification failed")
         checks["restored_table_count"] = len(restored["table_row_counts"])
 
         if manifest.schema_fingerprint:

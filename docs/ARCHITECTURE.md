@@ -89,8 +89,9 @@ The supported processes have separate memory and one shared SQLite store.
   and protocol response. The supervisor independently probes each owned child's HTTP
   listener and restarts its process tree when the process survives listener loss.
 - `GET /health` proves only process liveness and bounded inventory. Protected readiness
-  is a separate contract and remains incomplete for child protocol health, scheduler
-  progress, registry freshness, and cross-process failure.
+  separately proves the retained HTTP control gateway's identity/auth boundary, SQLite
+  migration/integrity, authenticated MCP protocol, queue/mailbox progress, and verified
+  recovery posture. It never probes the withdrawn model/provider gateway.
 
 ## Component map
 
@@ -309,7 +310,10 @@ mounted or packaged as normal-install capabilities.
 SQLite backup uses the online backup API so committed WAL content is included. Manifest
 archives identify format, schema, payload hash, and source identity. Verification
 restores into isolation and checks manifest claims. Destructive restore requires an
-explicit operator action and refuses schema history the current build cannot express.
+explicit operator action, refuses incompatible candidates before target mutation,
+captures a verified rollback point, and verifies SQLite integrity after replacement. An
+isolated recovery drill then applies that rollback archive to a second disposable target
+and compares its logical schema and row state with the captured pre-replacement state.
 
 Integrity repair is dry-run by default. Apply mode requires a current verified backup,
 holds the write fence across diagnosis and mutation, performs only deterministic
@@ -317,7 +321,8 @@ repairs unless deletion is explicitly authorized, and rolls back as a unit on fa
 
 Brains declares recovery schedule, retention, encryption ownership, offsite ownership,
 RTO, RPO, and restore-drill expectation, but it does not run a backup scheduler. A
-complete declaration is not evidence that a drill occurred.
+complete declaration or manually entered drill date is not evidence that a drill
+occurred; only the audited disposable restore probe establishes that state.
 
 ## Deployment shapes
 
@@ -336,9 +341,6 @@ No deployment is established by this document.
 3. Cross-process realtime is durable on replay but not live fan-out.
 4. The action boundary is cooperative and in-process, not universal process/network
    confinement.
-5. Child listener/protocol readiness, scheduler progress, and registry/package/schema
-   convergence are incomplete.
-6. SQLite foreign-key enforcement is opt-in until existing stores are proven clean.
-7. Recovery mechanics exist, but exact-candidate backup/restore/rollback E4 is absent.
-8. Legacy and withdrawn source that remains for data compatibility still requires
+5. SQLite foreign-key enforcement is opt-in until existing stores are proven clean.
+6. Legacy and withdrawn source that remains for data compatibility still requires
    separately reviewed deletion where compatibility no longer needs it.

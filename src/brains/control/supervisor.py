@@ -24,7 +24,7 @@ Features:
 * PID file at ``<state_dir>/sessions/service.pid`` for OS service managers -
   an additive JSON record (pid, executable, command line, start time where
   portable) rather than a bare integer, so ``brains.service.common.verify_pid``
-  can tell a live match from a reused PID (BL-P1-09).
+  can tell a live match from a reused PID.
 
 Run:
 

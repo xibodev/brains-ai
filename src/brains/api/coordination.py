@@ -802,9 +802,11 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
     Distinct from ``GET /health``, which stays open and liveness-only: this
     is a protected, redacted readiness contract reporting one overall
     ``ready``/``degraded`` verdict plus bounded per-component state for
-    storage/migration access, coordination-queue health, durable mailbox
-    delivery/wakeup/SMTP state, and recovery-policy readiness. No component
-    ever returns a secret or a raw exception message - only its type name.
+    SQLite migration/integrity, retained HTTP control-gateway identity/auth,
+    authenticated MCP protocol, coordination-queue
+    health, durable mailbox state, and verified recovery posture. No component
+    ever returns a secret or a raw exception message - only a stable reason
+    code or exception type name.
 
     Withdrawn Runtime and live provider state are deliberately NOT part of this contract: a
     simulated/unconfigured model provider is withdrawn routing state, not an
@@ -865,12 +867,12 @@ def queue_health_repair(
 
 @router.get("/admin/recovery-policy")
 def recovery_policy_status(principal: Principal = Depends(require_operator_principal)) -> dict:
-    """Bootstrap-admin recovery-policy surface (BL-P1-09): the declared
+    """Bootstrap-admin recovery-policy surface: the declared
     backup scope/schedule/retention/encryption/ownership/RTO/RPO/offsite/
-    drill policy, redacted, plus its completeness and the migration/backup
-    compatibility precheck. Never claims backups are "managed" unless every
-    mandatory field is configured; never fabricates a schedule or a drill
-    date this install did not declare."""
+    drill policy, redacted, plus its completeness, migration/backup
+    compatibility, verified candidate, and audited drill state. Never claims
+    backups are "managed" unless every mandatory field is configured; an
+    operator-entered date is declaration metadata, not drill evidence."""
     if not principal.is_bootstrap_admin:
         raise policy.forbidden("recovery policy is available to the bootstrap admin only")
     from brains.control.recovery_policy import recovery_readiness
