@@ -973,9 +973,7 @@ a {
 }
 
 body {
-  background:
-    radial-gradient(circle at 78% 5%, rgba(255, 255, 255, 0.7), transparent 25rem),
-    var(--control-paper);
+  background: var(--control-paper);
 }
 
 .control-shell {
@@ -994,9 +992,7 @@ body {
   flex-direction: column;
   padding: 25px 18px 18px;
   color: var(--control-nav-text);
-  background:
-    linear-gradient(165deg, rgba(255, 255, 255, 0.025), transparent 40%),
-    var(--control-nav);
+  background: var(--control-nav);
   overflow-y: auto;
   z-index: 30;
 }
@@ -2096,9 +2092,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  background:
-    linear-gradient(120deg, rgba(220, 230, 255, 0.82), transparent 52%),
-    var(--control-surface);
+  background: var(--control-surface-blue);
 }
 
 .operator-mailroom-head h2 {
@@ -2368,9 +2362,7 @@ body {
 
 .operator-mail-detail {
   min-width: 0;
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.38)),
-    var(--control-paper);
+  background: var(--control-surface);
 }
 
 .operator-mail-thread > header,

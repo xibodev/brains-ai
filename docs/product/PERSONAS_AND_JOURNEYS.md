@@ -524,9 +524,10 @@ messages, thread, composer Workspace and address-book sources, and source lookup
 also covers scope-hidden deep links, route-specific nested content, connection
 degradation, APG tab/combobox/modal keyboard behavior, and desktop/mobile actionability
 through viewport and overflow-ancestor intersection, center-point occlusion, and trial
-click checks without scripted scrolling. Rendered contrast is computed for all visible
-text on every supported route and required state, including each visible interactive
-control in its normal, focus, and hover states.
+click checks after normal keyboard scrolling. With gradient backgrounds removed from the
+supported shell, rendered contrast is computed at both required widths for all visible
+text and displayed form values on every supported route and required state, including
+each visible interactive control in its normal, focus, and hover states.
 Realtime authorization, cursor replay, gap
 signalling and revocation are asserted at the API and unit level
 (`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a

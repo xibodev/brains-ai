@@ -2,6 +2,8 @@ import { test, expect, signIn } from '../fixtures/console.js';
 import type { Page } from '@playwright/test';
 import { seedMailboxJourney } from '../fixtures/seed.js';
 
+test.setTimeout(180_000);
+
 test.beforeAll(() => {
   seedMailboxJourney();
 });
@@ -18,29 +20,32 @@ async function exerciseBoundary(
     unauthorizedState?: 'unauthorized' | 'not_found';
   },
 ) {
-  for (const outcome of ['empty', 'error', 'unauthorized'] as BoundaryOutcome[]) {
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route(options.endpoint, async (route) => {
-      await held;
-      const status = outcome === 'empty' ? 200 : outcome === 'unauthorized' ? 403 : 503;
-      await route.fulfill({
-        status,
-        contentType: 'application/json',
-        body: JSON.stringify(outcome === 'empty' ? options.emptyBody : { detail: 'SENSITIVE-BACKEND-DETAIL' }),
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    for (const outcome of ['empty', 'error', 'unauthorized'] as BoundaryOutcome[]) {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      await page.route(options.endpoint, async (route) => {
+        await held;
+        const status = outcome === 'empty' ? 200 : outcome === 'unauthorized' ? 403 : 503;
+        await route.fulfill({
+          status,
+          contentType: 'application/json',
+          body: JSON.stringify(outcome === 'empty' ? options.emptyBody : { detail: 'SENSITIVE-BACKEND-DETAIL' }),
+        });
       });
-    });
-    await options.open();
-    const boundary = page.locator(`[data-boundary="${options.boundary}"]`);
-    await expect(boundary).toHaveAttribute('data-async-state', 'loading');
-    expect(await renderedContrastViolations(page), `${options.boundary} loading contrast`).toEqual([]);
-    release();
-    const expected = outcome === 'unauthorized' ? (options.unauthorizedState ?? 'unauthorized') : outcome;
-    await expect(boundary).toHaveAttribute('data-async-state', expected);
-    expect(await renderedContrastViolations(page), `${options.boundary} ${expected} contrast`).toEqual([]);
-    await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
-    await page.unroute(options.endpoint);
-    await page.goto('/app/command-center');
+      await options.open();
+      const boundary = page.locator(`[data-boundary="${options.boundary}"]`);
+      await expect(boundary).toHaveAttribute('data-async-state', 'loading');
+      await assertRenderedContrast(page, `${options.boundary} loading at ${viewport.width}px`);
+      release();
+      const expected = outcome === 'unauthorized' ? (options.unauthorizedState ?? 'unauthorized') : outcome;
+      await expect(boundary).toHaveAttribute('data-async-state', expected);
+      await assertRenderedContrast(page, `${options.boundary} ${expected} at ${viewport.width}px`);
+      await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
+      await page.unroute(options.endpoint);
+      await page.goto('/app/command-center');
+    }
   }
 }
 
@@ -89,7 +94,8 @@ async function renderedContrastViolations(page: Page): Promise<string[]> {
         && !['checkbox', 'radio', 'range', 'color', 'file', 'image', 'button', 'submit', 'reset', 'hidden'].includes(element.type)
         && Boolean(element.value || element.placeholder);
       const hasFormText = hasTextualInputValue
-        || (element instanceof HTMLTextAreaElement && Boolean(element.value || element.placeholder));
+        || (element instanceof HTMLTextAreaElement && Boolean(element.value || element.placeholder))
+        || (element instanceof HTMLSelectElement && Boolean(element.selectedOptions[0]?.textContent?.trim()));
       return (hasDirectText || hasFormText) && !element.closest(':disabled') && rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     });
     return candidates.flatMap((element, index) => {
@@ -114,11 +120,50 @@ async function renderedContrastViolations(page: Page): Promise<string[]> {
   });
 }
 
-async function assertResponsiveControls(page: Page, route: string, viewport: { width: number; height: number }) {
-  const controls = page.locator('a:visible, button:visible:not(:disabled), input:visible:not(:disabled), select:visible:not(:disabled), textarea:visible:not(:disabled)');
+const CONTROL_SELECTOR = 'a[href]:visible, button:visible:not(:disabled), input:visible:not(:disabled):not([type="hidden"]), select:visible:not(:disabled), textarea:visible:not(:disabled)';
+const TAB_STOP_SELECTOR = 'a[href]:visible:not([tabindex="-1"]), button:visible:not(:disabled):not([tabindex="-1"]), input:visible:not(:disabled):not([type="hidden"]):not([tabindex="-1"]), select:visible:not(:disabled):not([tabindex="-1"]), textarea:visible:not(:disabled):not([tabindex="-1"])';
+const AUDIT_VIEWPORTS = [{ width: 1366, height: 900 }, { width: 390, height: 844 }];
+
+async function assertRenderedContrast(page: Page, label: string) {
+  expect(await renderedContrastViolations(page), `${label} normal contrast`).toEqual([]);
+  const controls = page.locator(CONTROL_SELECTOR);
   for (let index = 0; index < await controls.count(); index += 1) {
     const control = controls.nth(index);
     await control.focus();
+    expect(await renderedContrastViolations(page), `${label} control ${index} focus contrast`).toEqual([]);
+    await control.hover();
+    expect(await renderedContrastViolations(page), `${label} control ${index} hover contrast`).toEqual([]);
+  }
+}
+
+async function assertResponsiveControls(page: Page, route: string, viewport: { width: number; height: number }) {
+  const allControls = page.locator(CONTROL_SELECTOR);
+  const initialFailures = await allControls.evaluateAll((elements) => elements.flatMap((element, controlIndex) => {
+    const node = element as HTMLElement;
+    const rect = node.getBoundingClientRect();
+    const issues: string[] = [];
+    const label = node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent?.trim().slice(0, 48) || node.tagName;
+    if (rect.width <= 0 || rect.height <= 0) issues.push(`control ${controlIndex} (${label}) has no rendered box`);
+    if (rect.left < -1 || rect.right > window.innerWidth + 1) issues.push(`control ${controlIndex} (${label}) is horizontally outside the original viewport`);
+    for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      if (!/(hidden|clip|auto|scroll)/.test(style.overflowX)) continue;
+      const boundary = ancestor.getBoundingClientRect();
+      if (rect.left < boundary.left - 1 || rect.right > boundary.right + 1) {
+        issues.push(`control ${controlIndex} (${label}) is horizontally clipped by overflow ancestor ${ancestor.className || ancestor.tagName}`);
+        break;
+      }
+    }
+    return issues;
+  }));
+  expect(initialFailures, `${route} original layout must not horizontally clip controls`).toEqual([]);
+
+  const controls = page.locator(TAB_STOP_SELECTOR);
+  await expect(page.locator('body')).toBeFocused();
+  for (let index = 0; index < await controls.count(); index += 1) {
+    const control = controls.nth(index);
+    await page.keyboard.press('Tab');
+    await expect(control, `${route} control ${index} must be reachable in keyboard order`).toBeFocused();
     const failures = await control.evaluate((element, controlIndex) => {
       const node = element as HTMLElement;
       const rect = node.getBoundingClientRect();
@@ -126,8 +171,8 @@ async function assertResponsiveControls(page: Page, route: string, viewport: { w
       const label = node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent?.trim().slice(0, 48) || node.tagName;
       if (node.matches(':disabled') || getComputedStyle(node).pointerEvents === 'none') issues.push(`control ${controlIndex} (${label}) is disabled`);
       if (rect.width <= 0 || rect.height <= 0) issues.push(`control ${controlIndex} (${label}) has no rendered box`);
-      if (rect.left < -1 || rect.right > window.innerWidth + 1 || rect.bottom <= 0 || rect.top >= window.innerHeight) {
-        issues.push(`control ${controlIndex} (${label}) does not intersect the viewport horizontally and vertically`);
+      if (rect.left < -1 || rect.right > window.innerWidth + 1 || rect.top < -1 || rect.bottom > window.innerHeight + 1) {
+        issues.push(`control ${controlIndex} (${label}) is not fully visible after keyboard navigation`);
       }
       for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
         const style = getComputedStyle(ancestor);
@@ -135,12 +180,6 @@ async function assertResponsiveControls(page: Page, route: string, viewport: { w
         const clipY = /(hidden|clip|auto|scroll)/.test(style.overflowY);
         if (!clipX && !clipY) continue;
         const boundary = ancestor.getBoundingClientRect();
-        const intersectsX = rect.right > boundary.left && rect.left < boundary.right;
-        const intersectsY = rect.bottom > boundary.top && rect.top < boundary.bottom;
-        if ((clipX && !intersectsX) || (clipY && !intersectsY)) {
-          issues.push(`control ${controlIndex} (${label}) does not intersect overflow ancestor ${ancestor.className || ancestor.tagName}`);
-          break;
-        }
         if ((clipX && (rect.left < boundary.left - 1 || rect.right > boundary.right + 1))
           || (clipY && (rect.top < boundary.top - 1 || rect.bottom > boundary.bottom + 1))) {
           issues.push(`control ${controlIndex} (${label}) is clipped by overflow ancestor ${ancestor.className || ancestor.tagName}`);
@@ -149,13 +188,11 @@ async function assertResponsiveControls(page: Page, route: string, viewport: { w
       }
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
-      if (centerX >= 0 && centerX < window.innerWidth && centerY >= 0 && centerY < window.innerHeight) {
-        const hit = document.elementFromPoint(centerX, centerY);
-        if (!hit || (hit !== node && !node.contains(hit))) issues.push(`control ${controlIndex} (${label}) is occluded at its center by ${(hit as HTMLElement | null)?.className || hit?.tagName || 'nothing'}`);
-      }
+      const hit = document.elementFromPoint(centerX, centerY);
+      if (!hit || (hit !== node && !node.contains(hit))) issues.push(`control ${controlIndex} (${label}) is occluded at its center by ${(hit as HTMLElement | null)?.className || hit?.tagName || 'nothing'}`);
       return issues;
     }, index);
-    expect(failures, `${route} control ${index} must be reachable without scripted scrolling`).toEqual([]);
+    expect(failures, `${route} control ${index} must be fully reachable by normal keyboard navigation`).toEqual([]);
     await control.click({ trial: true });
   }
 }
@@ -168,6 +205,7 @@ const CORE_ROUTES = [
   { path: '/app/coordination', heading: 'Coordination', content: 'Work moving across the brain' },
   { path: '/app/governance', heading: 'Governance', content: 'Recent effects' },
   { path: '/app/operations', heading: 'Operations', content: 'Dependencies' },
+  { path: '/app/operations/config', heading: 'Configure', content: 'Effective settings' },
   { path: '/app/operations/config/local', heading: 'Configure', content: 'Effective settings' },
   { path: '/app/operations/config/mcp', heading: 'Configure', content: 'Agent connections' },
   { path: '/app/operations/config/health', heading: 'Configure', content: 'Readiness, queues & recovery' },
@@ -208,34 +246,42 @@ for (const viewport of [
 }
 
 test('J11 unknown routes and configuration sections stay put and disclose no requested path', async ({ page }) => {
-  const privateLookingPath = '/app/private-looking/resource-123';
-  await page.goto(privateLookingPath);
-  await expect(page).toHaveURL(privateLookingPath);
-  await expect(page.getByTestId('not-found')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
-  await expect(page.getByText(privateLookingPath)).toHaveCount(0);
-  expect(await renderedContrastViolations(page), 'unknown route contrast').toEqual([]);
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    const privateLookingPath = '/app/private-looking/resource-123';
+    await page.goto(privateLookingPath);
+    await expect(page).toHaveURL(privateLookingPath);
+    await expect(page.getByTestId('not-found')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
+    await expect(page.getByText(privateLookingPath)).toHaveCount(0);
+    await assertRenderedContrast(page, `unknown route at ${viewport.width}px`);
 
-  await page.goto('/app/operations/config/not-a-section');
-  await expect(page).toHaveURL('/app/operations/config/not-a-section');
-  await expect(page.getByRole('heading', { name: 'Configuration section not found' })).toBeVisible();
+    await page.goto('/app/operations/config/not-a-section');
+    await expect(page).toHaveURL('/app/operations/config/not-a-section');
+    await expect(page.getByRole('heading', { name: 'Configuration section not found' })).toBeVisible();
+    await assertRenderedContrast(page, `configuration not-found at ${viewport.width}px`);
+  }
 });
 
 test('J11 unknown or scope-hidden Workspace deep links stay generic and never select a fallback', async ({ page }) => {
-  for (const [slug, status] of [['unknown-workspace', 404], ['scope-hidden-workspace', 403]] as const) {
-    await page.route(`**/v1/operator/workspaces/${slug}`, (route) => route.fulfill({
-      status,
-      contentType: 'application/json',
-      body: JSON.stringify({ detail: 'Workspace not found' }),
-    }));
-    await page.goto(`/app/workspaces/${slug}`);
-    await expect(page).toHaveURL(`/app/workspaces/${slug}`);
-    await expect(page.locator('[data-async-state="not_found"]')).toBeVisible();
-    await expect(page.getByText('The requested resource is unavailable or outside your visible scope.')).toBeVisible();
-    await expect(page.getByText(slug)).toHaveCount(0);
-    await expect(page.locator('.operator-workspace-choice.selected')).toHaveCount(0);
-    await expect(page.getByText('Workspace control room')).toHaveCount(0);
-    await page.unroute(`**/v1/operator/workspaces/${slug}`);
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    for (const [slug, status] of [['unknown-workspace', 404], ['scope-hidden-workspace', 403]] as const) {
+      await page.route(`**/v1/operator/workspaces/${slug}`, (route) => route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Workspace not found' }),
+      }));
+      await page.goto(`/app/workspaces/${slug}`);
+      await expect(page).toHaveURL(`/app/workspaces/${slug}`);
+      await expect(page.locator('[data-async-state="not_found"]')).toBeVisible();
+      await expect(page.getByText('The requested resource is unavailable or outside your visible scope.')).toBeVisible();
+      await expect(page.getByText(slug)).toHaveCount(0);
+      await expect(page.locator('.operator-workspace-choice.selected')).toHaveCount(0);
+      await expect(page.getByText('Workspace control room')).toHaveCount(0);
+      await assertRenderedContrast(page, `${slug} at ${viewport.width}px`);
+      await page.unroute(`**/v1/operator/workspaces/${slug}`);
+    }
   }
 });
 
@@ -384,62 +430,36 @@ test('J11 mail address book exposes every typed state without backend detail', a
 });
 
 test('J11 mailbox thread boundary exposes loading, empty, error, and unauthorized', async ({ page }) => {
-  for (const outcome of ['empty', 'error', 'unauthorized'] as BoundaryOutcome[]) {
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route('**/v1/operator/mailboxes/threads/**', async (route) => {
-      await held;
-      const status = outcome === 'empty' ? 200 : outcome === 'unauthorized' ? 403 : 503;
-      await route.fulfill({
-        status,
-        contentType: 'application/json',
-        body: JSON.stringify(outcome === 'empty' ? {
-          thread_id: 'synthetic', origin_workspace: 'e2e-workspace', started_by: 'synthetic',
-          subject: 'Synthetic thread', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
-          mailbox: 'synthetic', unread_count: 0, cursor: 0, messages: [],
-        } : { detail: 'SENSITIVE-BACKEND-DETAIL' }),
-      });
-    });
-    await page.goto('/app/coordination');
-    await page.locator('.operator-mail-conversations button').first().click();
-    const boundary = page.locator('[data-boundary="mail-thread"]');
-    await expect(boundary).toHaveAttribute('data-async-state', 'loading');
-    release();
-    await expect(boundary).toHaveAttribute('data-async-state', outcome);
-    expect(await renderedContrastViolations(page), `mail-thread ${outcome} contrast`).toEqual([]);
-    await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
-    await page.unroute('**/v1/operator/mailboxes/threads/**');
-  }
+  await exerciseBoundary(page, {
+    boundary: 'mail-thread',
+    endpoint: '**/v1/operator/mailboxes/threads/**',
+    emptyBody: {
+      thread_id: 'synthetic', origin_workspace: 'e2e-workspace', started_by: 'synthetic',
+      subject: 'Synthetic thread', created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+      mailbox: 'synthetic', unread_count: 0, cursor: 0, messages: [],
+    },
+    open: async () => {
+      await page.goto('/app/coordination');
+      await page.locator('.operator-mail-conversations button').first().click();
+    },
+  });
 });
 
 test('J11 source lookup boundary exposes loading, empty, error, and unauthorized', async ({ page }) => {
-  for (const outcome of ['empty', 'error', 'unauthorized'] as BoundaryOutcome[]) {
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => { release = resolve; });
-    await page.route('**/v1/operator/workspaces/e2e-workspace/lookup**', async (route) => {
-      await held;
-      const status = outcome === 'empty' ? 200 : outcome === 'unauthorized' ? 403 : 503;
-      await route.fulfill({
-        status,
-        contentType: 'application/json',
-        body: JSON.stringify(outcome === 'empty' ? {
-          status: 'empty', reason: 'no_matches', query: 'synthetic', results: [], scanned_files: 1,
-          truncated: false, incomplete_reasons: [],
-        } : { detail: 'SENSITIVE-BACKEND-DETAIL' }),
-      });
-    });
-    await page.goto('/app/workspaces/e2e-workspace');
-    await page.getByRole('tab', { name: 'knowledge' }).click();
-    await page.getByLabel('Source query').fill('synthetic');
-    await page.getByRole('button', { name: 'Lookup', exact: true }).click();
-    const boundary = page.locator('[data-boundary="lookup"]');
-    await expect(boundary).toHaveAttribute('data-async-state', 'loading');
-    release();
-    await expect(boundary).toHaveAttribute('data-async-state', outcome);
-    expect(await renderedContrastViolations(page), `lookup ${outcome} contrast`).toEqual([]);
-    await expect(page.getByText('SENSITIVE-BACKEND-DETAIL')).toHaveCount(0);
-    await page.unroute('**/v1/operator/workspaces/e2e-workspace/lookup**');
-  }
+  await exerciseBoundary(page, {
+    boundary: 'lookup',
+    endpoint: '**/v1/operator/workspaces/e2e-workspace/lookup**',
+    emptyBody: {
+      status: 'empty', reason: 'no_matches', query: 'synthetic', results: [], scanned_files: 1,
+      truncated: false, incomplete_reasons: [],
+    },
+    open: async () => {
+      await page.goto('/app/workspaces/e2e-workspace');
+      await page.getByRole('tab', { name: 'knowledge' }).click();
+      await page.getByLabel('Source query').fill('synthetic');
+      await page.getByRole('button', { name: 'Lookup', exact: true }).click();
+    },
+  });
 });
 
 test('J11 mailbox folder tabs use roving focus and associated panels', async ({ page }) => {
@@ -462,34 +482,43 @@ test('J11 mailbox folder tabs use roving focus and associated panels', async ({ 
 });
 
 test('J11 route state distinguishes loading, empty, service error, and unauthorized', async ({ page }) => {
-  let releaseOverview!: () => void;
-  const held = new Promise<void>((resolve) => { releaseOverview = resolve; });
-  await page.route('**/v1/operator/overview', async (route) => {
-    await held;
-    await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Temporarily unavailable' }) });
-  });
-  await page.goto('/app/command-center');
-  await expect(page.locator('[data-async-state="loading"]')).toBeVisible();
-  releaseOverview();
-  await expect(page.locator('[data-async-state="error"]')).toBeVisible();
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    let releaseOverview!: () => void;
+    const held = new Promise<void>((resolve) => { releaseOverview = resolve; });
+    await page.route('**/v1/operator/overview', async (route) => {
+      await held;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Temporarily unavailable' }) });
+    });
+    await page.goto('/app/command-center');
+    await expect(page.locator('[data-async-state="loading"]')).toBeVisible();
+    await assertRenderedContrast(page, `overview loading at ${viewport.width}px`);
+    releaseOverview();
+    await expect(page.locator('[data-async-state="error"]')).toBeVisible();
+    await assertRenderedContrast(page, `overview error at ${viewport.width}px`);
 
-  await page.unroute('**/v1/operator/overview');
-  await page.route('**/v1/operator/workspaces', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ data: [] }),
-  }));
-  await page.goto('/app/workspaces');
-  await expect(page.locator('[data-async-state="empty"]')).toBeVisible();
+    await page.unroute('**/v1/operator/overview');
+    await page.route('**/v1/operator/workspaces', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] }),
+    }));
+    await page.goto('/app/workspaces');
+    await expect(page.locator('[data-async-state="empty"]')).toBeVisible();
+    await assertRenderedContrast(page, `Workspace empty at ${viewport.width}px`);
+    await page.unroute('**/v1/operator/workspaces');
 
-  await page.route('**/v1/operator/overview', (route) => route.fulfill({
-    status: 403,
-    contentType: 'application/json',
-    body: JSON.stringify({ detail: 'Operator authorization required' }),
-  }));
-  await page.goto('/app/command-center');
-  await expect(page.locator('[data-async-state="unauthorized"]')).toBeVisible();
-  await expect(page.getByText('Authorization required')).toBeVisible();
+    await page.route('**/v1/operator/overview', (route) => route.fulfill({
+      status: 403,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'Operator authorization required' }),
+    }));
+    await page.goto('/app/command-center');
+    await expect(page.locator('[data-async-state="unauthorized"]')).toBeVisible();
+    await expect(page.getByText('Authorization required')).toBeVisible();
+    await assertRenderedContrast(page, `overview unauthorized at ${viewport.width}px`);
+    await page.unroute('**/v1/operator/overview');
+  }
 });
 
 test('J11 a failed refresh replaces stale success with exclusive loading and error states', async ({ page }) => {
@@ -551,19 +580,11 @@ test('J11 a capability-catalog authorization failure exposes no stale actions', 
 });
 
 test('J11 rendered text meets WCAG AA across every supported route and interactive state', async ({ page }) => {
-  for (const viewport of [{ width: 1366, height: 900 }, { width: 390, height: 844 }]) {
+  for (const viewport of AUDIT_VIEWPORTS) {
     await page.setViewportSize(viewport);
     for (const route of CORE_ROUTES) {
       await page.goto(route.path);
-      expect(await renderedContrastViolations(page), `${route.path} normal at ${viewport.width}px`).toEqual([]);
-      const interactive = page.locator('a:visible, button:visible:not(:disabled), input:visible:not(:disabled), select:visible:not(:disabled), textarea:visible:not(:disabled)');
-      for (let index = 0; index < await interactive.count(); index += 1) {
-        const control = interactive.nth(index);
-        await control.focus();
-        expect(await renderedContrastViolations(page), `${route.path} control ${index} focus at ${viewport.width}px`).toEqual([]);
-        await control.hover();
-        expect(await renderedContrastViolations(page), `${route.path} control ${index} hover at ${viewport.width}px`).toEqual([]);
-      }
+      await assertRenderedContrast(page, `${route.path} at ${viewport.width}px`);
     }
   }
 });
@@ -572,55 +593,72 @@ test('J11 realtime loss is a visible degraded state while durable HTTP remains a
   await page.routeWebSocket('**/v1/ws', (socket) => {
     socket.close({ code: 1012, reason: 'synthetic restart' });
   });
-  await page.goto('/app/command-center');
-  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
-  await expect(page.locator('[data-connection-state="degraded"]')).toContainText('Durable HTTP state remains available');
-  expect(await renderedContrastViolations(page), 'degraded realtime contrast').toEqual([]);
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    await page.goto('/app/command-center');
+    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page.locator('[data-connection-state="degraded"]')).toContainText('Durable HTTP state remains available');
+    await assertRenderedContrast(page, `degraded realtime at ${viewport.width}px`);
+  }
 });
 
 test('J11 command palette traps focus, closes with Escape, and restores its opener', async ({ page }) => {
-  await page.setViewportSize({ width: 1366, height: 900 });
-  await page.goto('/app/command-center');
-  const opener = page.getByRole('button', { name: /Search workspaces and actions/i });
-  await opener.click();
-  const dialog = page.getByRole('dialog', { name: 'Command palette' });
-  await expect(dialog).toBeVisible();
-  const combobox = dialog.getByRole('combobox', { name: 'Find a view or typed action' });
-  await expect(combobox).toBeFocused();
-  await expect(combobox).toHaveAttribute('aria-expanded', 'true');
-  await expect(combobox).toHaveAttribute('aria-controls', 'command-palette-results');
-  await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
-  expect(await renderedContrastViolations(page), 'command palette normal contrast').toEqual([]);
-  const paletteControls = dialog.locator('button:visible:not(:disabled), input:visible:not(:disabled)');
-  for (let index = 0; index < await paletteControls.count(); index += 1) {
-    await paletteControls.nth(index).focus();
-    expect(await renderedContrastViolations(page), `command palette control ${index} focus contrast`).toEqual([]);
-    await paletteControls.nth(index).hover();
-    expect(await renderedContrastViolations(page), `command palette control ${index} hover contrast`).toEqual([]);
-  }
-  await combobox.focus();
-  await page.mouse.move(0, 0);
-  await combobox.fill('zz-no-match');
-  await combobox.fill('');
-  await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
-  await page.keyboard.press('ArrowDown');
-  await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-1');
-  await expect(dialog.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
-  await expect(dialog.getByRole('option').nth(1)).toHaveAttribute('tabindex', '-1');
-  await page.keyboard.press('ArrowUp');
-  await page.keyboard.press('Tab');
-  await expect(combobox).toBeFocused();
-  await page.keyboard.press('Shift+Tab');
-  await expect(combobox).toBeFocused();
-  await combobox.fill('Workspaces');
-  await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
-  await page.keyboard.press('Enter');
-  await expect(page).toHaveURL('/app/workspaces');
+  for (const viewport of AUDIT_VIEWPORTS) {
+    await page.setViewportSize(viewport);
+    await page.goto('/app/command-center');
+    const desktopOpener = page.getByRole('button', { name: /Search workspaces and actions/i });
+    if (viewport.width <= 650) {
+      await page.locator('.control-mobile-nav').getByRole('link', { name: 'Command Center' }).focus();
+      await page.keyboard.press('Control+k');
+    } else {
+      await desktopOpener.click();
+    }
+    const dialog = page.getByRole('dialog', { name: 'Command palette' });
+    await expect(dialog).toBeVisible();
+    const combobox = dialog.getByRole('combobox', { name: 'Find a view or typed action' });
+    await expect(combobox).toBeFocused();
+    await expect(combobox).toHaveAttribute('aria-expanded', 'true');
+    await expect(combobox).toHaveAttribute('aria-controls', 'command-palette-results');
+    await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
+    expect(await renderedContrastViolations(page), `command palette normal contrast at ${viewport.width}px`).toEqual([]);
+    const paletteControls = dialog.locator('button:visible:not(:disabled), input:visible:not(:disabled)');
+    for (let index = 0; index < await paletteControls.count(); index += 1) {
+      await paletteControls.nth(index).focus();
+      expect(await renderedContrastViolations(page), `command palette control ${index} focus contrast at ${viewport.width}px`).toEqual([]);
+      await paletteControls.nth(index).hover();
+      expect(await renderedContrastViolations(page), `command palette control ${index} hover contrast at ${viewport.width}px`).toEqual([]);
+    }
+    await combobox.focus();
+    await page.mouse.move(0, 0);
+    await combobox.fill('zz-no-match');
+    await combobox.fill('');
+    await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
+    await page.keyboard.press('ArrowDown');
+    await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-1');
+    await expect(dialog.getByRole('option').nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect(dialog.getByRole('option').nth(1)).toHaveAttribute('tabindex', '-1');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('Tab');
+    await expect(combobox).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(combobox).toBeFocused();
+    await combobox.fill('Workspaces');
+    await expect(combobox).toHaveAttribute('aria-activedescendant', 'command-palette-option-0');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL('/app/workspaces');
 
-  const nextOpener = page.getByRole('button', { name: /Search workspaces and actions/i });
-  await nextOpener.click();
-  await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeHidden();
-  await expect(nextOpener).toBeFocused();
+    const nextOpener = viewport.width <= 650
+      ? page.locator('.control-mobile-nav').getByRole('link', { name: 'Workspaces' })
+      : page.getByRole('button', { name: /Search workspaces and actions/i });
+    if (viewport.width <= 650) {
+      await nextOpener.focus();
+      await page.keyboard.press('Control+k');
+    } else {
+      await nextOpener.click();
+    }
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Command palette' })).toBeHidden();
+    await expect(nextOpener).toBeFocused();
+  }
 });
