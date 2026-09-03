@@ -324,6 +324,11 @@ def test_recovery_acceptance_refuses_incompatible_then_restores_with_rollback(
     assert last_drill["data_fingerprint"] == candidate_status["data_fingerprint"]
     monkeypatch.setattr(
         readiness_module,
+        "gateway_protocol_readiness",
+        lambda: {"ready": True, "stage": "ready", "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        readiness_module,
         "mcp_protocol_readiness",
         lambda: {"ready": True, "stage": "tools/list", "reason": "ok"},
     )

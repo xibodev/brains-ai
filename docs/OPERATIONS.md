@@ -284,8 +284,10 @@ brains-ai readiness
 GET /v1/admin/readiness
 ```
 
-Readiness reports bounded SQLite migration and quick/full/FK integrity, authenticated
-MCP protocol, coordination queue, durable-mail, and verified recovery posture. Durable
+Readiness reports bounded SQLite migration and quick/full/FK integrity, the retained HTTP
+control gateway's liveness identity and protected-route auth boundary, authenticated MCP
+protocol, coordination queue, durable-mail, and verified recovery posture. The withdrawn
+model/provider gateway is not a readiness input. Durable
 mail separates invalid registration/live attachment and aged unread state. A detached
 mailbox with unread accepted mail is reported but is not degraded until the unread-age
 threshold is crossed. Runtime execution is withdrawn and does not affect normal-product
@@ -431,16 +433,18 @@ owner/location, RTO, RPO, and restore-drill expectation. Brains does not schedul
 backups itself. Set `BRAINS_BACKUP_CANDIDATE_PATH` in local runtime configuration to
 the candidate used by readiness. A complete declaration or operator-entered date is
 not evidence that a backup or drill occurred; only a successful `recovery-drill`, which
-restores into disposable SQLite state and appends its outcome to the audit chain, counts
+restores into disposable SQLite state, applies its captured rollback archive to a second
+disposable target, compares logical state, and appends its outcome to the audit chain, counts
 for the matching candidate fingerprint.
 The readiness result identifies a verified candidate by its data fingerprint, never its
 local path.
 
-`brains-ai readiness` reports SQLite migration and quick/full/FK checks, an authenticated
-MCP initialize plus tools/list handshake, queue and durable-mail progress, and verified
-recovery posture independently. Stable reason codes identify the failed component
-without returning database paths, credentials, or raw exception messages. Model-gateway
-provider routing, Postgres, SMTP, and other frozen dependencies are not readiness inputs.
+`brains-ai readiness` reports SQLite migration and quick/full/FK checks, a real retained
+HTTP control-gateway identity/auth-boundary probe, an authenticated MCP initialize plus
+tools/list handshake, queue and durable-mail progress, and verified recovery posture
+independently. Stable reason codes identify the failed component without returning database
+paths, credentials, or raw exception messages. Model-gateway provider routing, Postgres,
+SMTP, and other frozen dependencies are not readiness inputs.
 
 ## Governance and audit
 

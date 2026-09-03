@@ -99,6 +99,27 @@ def test_mcp_readiness_uses_only_authenticated_mcp_protocol(monkeypatch):
     assert calls == [("127.0.0.1", 43210, 1.0)]
 
 
+def test_mcp_readiness_reports_real_unavailable_endpoint(monkeypatch):
+    import socket
+
+    import brains.service.common as common
+
+    with socket.socket() as reserved:
+        # Keep the port bound but deliberately not listening so no concurrent
+        # process can claim it between allocation and the real client probe.
+        reserved.bind(("127.0.0.1", 0))
+        port = reserved.getsockname()[1]
+        monkeypatch.setattr(
+            common,
+            "read_service_config",
+            lambda: {"gateway_host": "127.0.0.1", "gateway_port": 1, "mcp_port": port},
+        )
+        report = readiness_module.mcp_protocol_readiness()
+    assert report["ready"] is False
+    assert report["stage"] == "connect"
+    assert report["reason"] == "connection-failed"
+
+
 def test_last_drill_ignores_attempts_and_failures(monkeypatch):
     import brains.audit as audit
 
@@ -188,6 +209,11 @@ def all_dependencies_ready(monkeypatch):
     )
     monkeypatch.setattr(
         readiness_module,
+        "gateway_protocol_readiness",
+        lambda: {"ready": True, "stage": "ready", "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        readiness_module,
         "mcp_protocol_readiness",
         lambda: {"ready": True, "stage": "tools/list", "reason": "ok"},
     )
@@ -207,6 +233,7 @@ def all_dependencies_ready(monkeypatch):
     return {
         "storage": (migrations, "migration_status"),
         "sqlite_integrity": (readiness_module, "sqlite_integrity_status"),
+        "gateway_protocol": (readiness_module, "gateway_protocol_readiness"),
         "mcp_protocol": (readiness_module, "mcp_protocol_readiness"),
         "queue": (queue, "summarize"),
         "durable_mail": (mailbox, "mailbox_health_report"),
@@ -216,7 +243,15 @@ def all_dependencies_ready(monkeypatch):
 
 @pytest.mark.parametrize(
     "failed_component",
-    ["storage", "sqlite_integrity", "mcp_protocol", "queue", "durable_mail", "recovery_policy"],
+    [
+        "storage",
+        "sqlite_integrity",
+        "gateway_protocol",
+        "mcp_protocol",
+        "queue",
+        "durable_mail",
+        "recovery_policy",
+    ],
 )
 def test_dependency_failures_are_independent_and_secret_free(
     failed_component, all_dependencies_ready, monkeypatch

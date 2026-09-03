@@ -558,7 +558,7 @@ export interface ConfigSummary {
 // --- operational health (B8) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
 // protected ready/degraded verdict for storage/migration, SQLite integrity,
-// authenticated MCP protocol, coordination queues, durable mailbox state, and recovery.
+// core HTTP gateway and authenticated MCP protocols, coordination queues, durable mailbox state, and recovery.
 
 export type HealthState = "ready" | "degraded";
 
@@ -572,6 +572,7 @@ export interface ReadinessReport {
   components: {
     storage: ReadinessComponent;
     sqlite_integrity: ReadinessComponent;
+    gateway_protocol: ReadinessComponent;
     mcp_protocol: ReadinessComponent;
     queue: ReadinessComponent;
     durable_mail: ReadinessComponent;

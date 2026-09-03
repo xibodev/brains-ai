@@ -215,6 +215,28 @@ def _exception_status_code(exc: BaseException) -> int | None:
     return None
 
 
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Recognize transport failures even when an SDK wraps them in a group."""
+    import httpx
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)):
+            return True
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple | list):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return False
+
+
 async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float) -> dict[str, Any]:
     """Initialize MCP and list tools, returning only bounded non-secret facts."""
 
@@ -253,6 +275,9 @@ async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float)
         if status_code in {401, 403}:
             failed_stage = "authentication"
             reason = "credential-rejected"
+        elif _is_connection_failure(exc):
+            failed_stage = "connect"
+            reason = "connection-failed"
         elif status_code is not None:
             failed_stage = "protocol"
             reason = "http-protocol-rejected"

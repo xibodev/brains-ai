@@ -103,6 +103,7 @@ def test_readiness_reports_overall_status_and_every_component(client, auth_heade
     assert set(body["components"]) == {
         "storage",
         "sqlite_integrity",
+        "gateway_protocol",
         "mcp_protocol",
         "queue",
         "durable_mail",

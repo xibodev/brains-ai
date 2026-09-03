@@ -35,6 +35,7 @@ export function Operations() {
               ],
               ["Storage", data.readiness.components.storage.state],
               ["SQLite integrity", data.readiness.components.sqlite_integrity.state],
+              ["HTTP gateway", data.readiness.components.gateway_protocol.state],
               ["MCP protocol", data.readiness.components.mcp_protocol.state],
               ["Queues", data.readiness.components.queue.state],
               ["Durable mail", data.readiness.components.durable_mail.state],
@@ -45,7 +46,7 @@ export function Operations() {
           <div className="operator-operations-grid">
             <OperatorCard kicker="Protected readiness" title="Dependencies" action={<OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{Object.values(data.readiness.components).filter((row) => row.state === "ready").length} / {Object.keys(data.readiness.components).length}</div>
-              <p>Bounded SQLite, authenticated MCP, queue, durable-mail, and verified recovery checks.</p>
+              <p>Bounded SQLite, core HTTP gateway, authenticated MCP, queue, durable-mail, and verified recovery checks.</p>
               <OperatorMiniList rows={Object.entries(data.readiness.components).map(([name, row]) => ({ label: name.replaceAll("_", " "), value: <OperatorStatus tone={row.state === "ready" ? "ready" : "warning"}>{row.state}</OperatorStatus> }))} />
             </OperatorCard>
 

@@ -89,8 +89,9 @@ The supported processes have separate memory and one shared SQLite store.
   and protocol response. The supervisor independently probes each owned child's HTTP
   listener and restarts its process tree when the process survives listener loss.
 - `GET /health` proves only process liveness and bounded inventory. Protected readiness
-  is a separate contract for SQLite migration/integrity, authenticated MCP protocol,
-  queue/mailbox progress, and verified recovery posture.
+  separately proves the retained HTTP control gateway's identity/auth boundary, SQLite
+  migration/integrity, authenticated MCP protocol, queue/mailbox progress, and verified
+  recovery posture. It never probes the withdrawn model/provider gateway.
 
 ## Component map
 
@@ -310,7 +311,9 @@ SQLite backup uses the online backup API so committed WAL content is included. M
 archives identify format, schema, payload hash, and source identity. Verification
 restores into isolation and checks manifest claims. Destructive restore requires an
 explicit operator action, refuses incompatible candidates before target mutation,
-captures a verified rollback point, and verifies SQLite integrity after replacement.
+captures a verified rollback point, and verifies SQLite integrity after replacement. An
+isolated recovery drill then applies that rollback archive to a second disposable target
+and compares its logical schema and row state with the captured pre-replacement state.
 
 Integrity repair is dry-run by default. Apply mode requires a current verified backup,
 holds the write fence across diagnosis and mutation, performs only deterministic

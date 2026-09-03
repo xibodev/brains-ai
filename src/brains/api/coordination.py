@@ -802,7 +802,8 @@ def readiness(principal: Principal = Depends(require_operator_principal)) -> dic
     Distinct from ``GET /health``, which stays open and liveness-only: this
     is a protected, redacted readiness contract reporting one overall
     ``ready``/``degraded`` verdict plus bounded per-component state for
-    SQLite migration/integrity, authenticated MCP protocol, coordination-queue
+    SQLite migration/integrity, retained HTTP control-gateway identity/auth,
+    authenticated MCP protocol, coordination-queue
     health, durable mailbox state, and verified recovery posture. No component
     ever returns a secret or a raw exception message - only a stable reason
     code or exception type name.

@@ -28,9 +28,22 @@ def readiness_report() -> dict[str, Any]:
         components["storage"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
 
     from brains.control.readiness import (
+        gateway_protocol_readiness,
         mcp_protocol_readiness,
         sqlite_integrity_status,
     )
+
+    try:
+        gateway_health = gateway_protocol_readiness()
+        components["gateway_protocol"] = {
+            "state": "ready" if gateway_health["ready"] else "degraded",
+            "detail": gateway_health,
+        }
+    except Exception as exc:  # pragma: no cover - readiness must remain bounded
+        components["gateway_protocol"] = {
+            "state": "degraded",
+            "detail": {"error": type(exc).__name__},
+        }
 
     try:
         sqlite_health = sqlite_integrity_status()

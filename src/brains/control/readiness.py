@@ -10,6 +10,71 @@ from typing import Any
 from brains.config import settings
 
 
+def _probe_host(host: str) -> str:
+    """Map service bind-all addresses to a reachable local probe address."""
+    return "127.0.0.1" if host in {"0.0.0.0", "::", "[::]"} else host
+
+
+def gateway_protocol_readiness() -> dict[str, Any]:
+    """Prove the shipped HTTP control gateway and its auth boundary."""
+    import httpx
+
+    from brains.config import RUNTIME_OVERLAY_SCHEMA_VERSION
+    from brains.service.common import read_service_config
+
+    try:
+        configured = read_service_config()
+        host = _probe_host(str(configured["gateway_host"]))
+        base_url = f"http://{host}:{int(configured['gateway_port'])}"
+        with httpx.Client(timeout=1.0, trust_env=False) as client:
+            health = client.get(f"{base_url}/health")
+            if health.status_code != 200:
+                return {
+                    "ready": False,
+                    "stage": "health",
+                    "reason": "health-endpoint-rejected",
+                    "status_code": health.status_code,
+                }
+            try:
+                payload = health.json()
+            except ValueError:
+                return {
+                    "ready": False,
+                    "stage": "health",
+                    "reason": "wrong-service",
+                }
+            if payload != {
+                "status": "ok",
+                "schema_version": RUNTIME_OVERLAY_SCHEMA_VERSION,
+            }:
+                return {
+                    "ready": False,
+                    "stage": "health",
+                    "reason": "wrong-service",
+                }
+            auth = client.get(f"{base_url}/v1/admin/readiness")
+            if auth.status_code not in {401, 403}:
+                return {
+                    "ready": False,
+                    "stage": "authentication",
+                    "reason": "authentication-boundary-failed",
+                    "status_code": auth.status_code,
+                }
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return {"ready": False, "stage": "connect", "reason": "endpoint-unavailable"}
+    except httpx.HTTPError:
+        return {"ready": False, "stage": "protocol", "reason": "protocol-failed"}
+    except Exception:
+        return {"ready": False, "stage": "probe", "reason": "probe-failed"}
+    return {
+        "ready": True,
+        "stage": "ready",
+        "reason": "health-and-auth-boundary-succeeded",
+        "health_status_code": health.status_code,
+        "auth_status_code": auth.status_code,
+    }
+
+
 def sqlite_integrity_status() -> dict[str, Any]:
     """Run real SQLite quick, full integrity, and foreign-key checks."""
     from brains.storage.integrity import (
@@ -136,17 +201,41 @@ def mcp_protocol_readiness() -> dict[str, Any]:
 
 
 def perform_restore_drill(candidate: str | Path) -> dict[str, Any]:
-    """Restore a candidate and prove rollback capture in disposable state."""
-    from brains.backup import restore_backup, verify_backup
+    """Restore a candidate, then apply and compare its rollback point."""
+    from brains.backup import _sqlite_snapshot, restore_backup, verify_backup
 
     with TemporaryDirectory(prefix="brains-restore-drill-") as directory:
         target = Path(directory) / "restored.sqlite"
         target_url = f"sqlite:///{target.as_posix()}"
         restore_backup(candidate, target_url=target_url)
+        # Give the pre-replacement state an unmistakable logical marker. The
+        # second restore must capture it in the rollback archive even though
+        # the selected candidate does not contain it.
+        with sqlite3.connect(target) as connection:
+            connection.execute("CREATE TABLE recovery_drill_marker (marker TEXT PRIMARY KEY)")
+            connection.execute(
+                "INSERT INTO recovery_drill_marker (marker) VALUES (?)",
+                ("rollback-state",),
+            )
+        before_replacement = _sqlite_snapshot(target)
         result = restore_backup(candidate, target_url=target_url)
-        rollback_verified = bool(
-            result.rollback_archive_path and verify_backup(result.rollback_archive_path).ok
-        )
+        rollback_target = Path(directory) / "rollback-restored.sqlite"
+        rollback_verified = False
+        if result.rollback_archive_path and verify_backup(result.rollback_archive_path).ok:
+            restore_backup(
+                result.rollback_archive_path,
+                target_url=f"sqlite:///{rollback_target.as_posix()}",
+            )
+            after_rollback = _sqlite_snapshot(rollback_target)
+            with sqlite3.connect(rollback_target) as connection:
+                marker = connection.execute("SELECT marker FROM recovery_drill_marker").fetchone()
+            rollback_verified = bool(
+                marker == ("rollback-state",)
+                and after_rollback["schema_fingerprint"] == before_replacement["schema_fingerprint"]
+                and after_rollback["table_row_counts"] == before_replacement["table_row_counts"]
+                and tuple(after_rollback["integrity_check"]) == ("ok",)
+                and after_rollback["foreign_key_violations"] == 0
+            )
         ready = result.candidate_verified and result.post_restore_verified and rollback_verified
         return {
             "ready": ready,
@@ -158,6 +247,7 @@ def perform_restore_drill(candidate: str | Path) -> dict[str, Any]:
 
 __all__ = [
     "backup_candidate_status",
+    "gateway_protocol_readiness",
     "last_restore_drill_status",
     "mcp_protocol_readiness",
     "perform_restore_drill",

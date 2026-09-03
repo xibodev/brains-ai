@@ -16,6 +16,7 @@ def test_readiness_cli_prints_status_and_components():
     assert set(payload["components"]) == {
         "storage",
         "sqlite_integrity",
+        "gateway_protocol",
         "mcp_protocol",
         "queue",
         "durable_mail",
