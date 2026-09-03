@@ -13,10 +13,10 @@ export function AppShell() {
       <div className="control-content">
         <TopBar connection={conn} />
         {conn === "closed" && (
-          <div className="control-connection">Realtime disconnected. Reconnecting.</div>
+          <div className="control-connection" role="status" aria-live="polite" data-connection-state="degraded">Realtime disconnected. Reconnecting. Durable HTTP state remains available.</div>
         )}
         {conn === "denied" && (
-          <div className="control-connection danger">
+          <div className="control-connection danger" role="alert" data-connection-state="unauthorized">
             Realtime access changed. Sign in again before relying on live state.
           </div>
         )}

@@ -19,7 +19,7 @@ export function EmptyState({
 }
 
 export function Loading({ what = "Loading…" }: { what?: string }) {
-  return <div className="loading">{what}</div>;
+  return <div className="loading" role="status">{what}</div>;
 }
 
 // Uniform wrapper that renders loading / error / empty / content states from a
@@ -33,20 +33,27 @@ export function AsyncBoundary<T>({
   isEmpty,
   children,
 }: {
-  state: { data: T | undefined; loading: boolean; error: string | null };
+  state: { data: T | undefined; loading: boolean; error: string | null; errorKind?: "unauthorized" | "not_found" | "error" | null };
   emptyTitle: string;
   emptyBody?: string;
   emptyAction?: ReactNode;
   isEmpty?: (data: T) => boolean;
   children: (data: T) => ReactNode;
 }) {
-  if (state.loading && state.data === undefined) return <Loading />;
+  if (state.loading && state.data === undefined) return <div data-async-state="loading"><Loading /></div>;
   if (state.error) {
+    const detail = state.errorKind === "unauthorized"
+      ? "Sign in with an authorized local operator before using this view."
+      : state.errorKind === "not_found"
+        ? "The requested resource is unavailable or outside your visible scope."
+        : state.error;
     return (
+      <div data-async-state={state.errorKind ?? "error"} role="alert">
       <EmptyState
-        title="Couldn't load this"
-        body={state.error}
+        title={state.errorKind === "unauthorized" ? "Authorization required" : state.errorKind === "not_found" ? "Requested resource not found" : "Couldn't load this"}
+        body={detail}
       />
+      </div>
     );
   }
   const data = state.data as T;
@@ -55,7 +62,7 @@ export function AsyncBoundary<T>({
     (Array.isArray(data) && data.length === 0) ||
     (isEmpty ? isEmpty(data) : false);
   if (empty) {
-    return <EmptyState title={emptyTitle} body={emptyBody} action={emptyAction} />;
+    return <div data-async-state="empty"><EmptyState title={emptyTitle} body={emptyBody} action={emptyAction} /></div>;
   }
-  return <>{children(data)}</>;
+  return <div data-async-state="success">{children(data)}</div>;
 }

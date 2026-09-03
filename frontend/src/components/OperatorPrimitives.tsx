@@ -67,41 +67,53 @@ export function OperatorStatus({
 export function OperatorState({
   loading,
   error,
+  kind,
   empty,
   emptyTitle = "Nothing here yet",
   emptyBody = "This view will fill as durable work is recorded.",
 }: {
   loading: boolean;
   error?: string | null;
+  kind?: "unauthorized" | "not_found" | "error" | null;
   empty?: boolean;
   emptyTitle?: string;
   emptyBody?: string;
 }) {
   if (loading) {
     return (
-      <div className="operator-state" role="status">
+      <div className="operator-state" role="status" data-async-state="loading">
         <span className="operator-loader" />
         <strong>Reading durable state</strong>
       </div>
     );
   }
   if (error) {
+    const title = kind === "unauthorized"
+      ? "Authorization required"
+      : kind === "not_found"
+        ? "Requested resource not found"
+        : "Could not load this control view";
+    const detail = kind === "unauthorized"
+      ? "Sign in with an authorized local operator before using this view."
+      : kind === "not_found"
+        ? "The requested resource is unavailable or outside your visible scope."
+        : error;
     return (
-      <div className="operator-state error" role="alert">
-        <strong>Could not load this control view</strong>
-        <span>{error}</span>
+      <div className="operator-state error" role="alert" data-async-state={kind ?? "error"}>
+        <strong>{title}</strong>
+        <span>{detail}</span>
       </div>
     );
   }
   if (empty) {
     return (
-      <div className="operator-state">
+      <div className="operator-state" data-async-state="empty">
         <strong>{emptyTitle}</strong>
         <span>{emptyBody}</span>
       </div>
     );
   }
-  return null;
+  return <span className="visually-hidden" role="status" data-async-state="success">Ready</span>;
 }
 
 export function OperatorMiniList({

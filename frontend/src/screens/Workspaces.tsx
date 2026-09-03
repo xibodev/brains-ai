@@ -42,7 +42,7 @@ export function Workspaces() {
         lede="Move from the whole brain into one repository without losing tasks, ownership, communication, continuity, or evidence."
         actions={<><button className="operator-button" disabled title="A typed workspace-import HTTP contract is not available">Import workspace</button><button className="operator-button primary" onClick={() => openAct("task.create")}>Workspace action</button></>}
       />
-      <OperatorState loading={list.loading} error={list.error} empty={Boolean(list.data && !list.data.length)} emptyTitle="No visible workspaces" emptyBody="Workspaces appear after an authorized session registers them." />
+      <OperatorState loading={list.loading} error={list.error} kind={list.errorKind} empty={Boolean(list.data && !list.data.length)} emptyTitle="No visible workspaces" emptyBody="Workspaces appear after an authorized session registers them." />
       {list.data && list.data.length > 0 && (
         <div className="operator-workspace-layout">
           <OperatorCard kicker="Visible portfolio" title={`${list.data.length} workspaces`} className="operator-workspace-list-card">
@@ -61,7 +61,7 @@ export function Workspaces() {
           </OperatorCard>
 
           <section className="operator-control-room">
-            <OperatorState loading={detail.loading} error={detail.error} />
+            <OperatorState loading={detail.loading} error={detail.error} kind={detail.errorKind} />
             {workspace && workspace.workspace.slug === selectedSlug && (
               <>
                 <section className="operator-workspace-banner">

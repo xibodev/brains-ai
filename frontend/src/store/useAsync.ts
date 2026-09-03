@@ -8,6 +8,7 @@ export interface AsyncState<T> {
   data: T | undefined;
   loading: boolean;
   error: string | null;
+  errorKind: "unauthorized" | "not_found" | "error" | null;
   refetch: () => void;
   setData: (updater: (prev: T | undefined) => T) => void;
 }
@@ -19,6 +20,7 @@ export function useAsync<T>(
   const [data, setData] = useState<T | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<AsyncState<T>["errorKind"]>(null);
   const [nonce, setNonce] = useState(0);
 
   // factory is intentionally excluded — callers pass an inline closure and
@@ -30,12 +32,19 @@ export function useAsync<T>(
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setErrorKind(null);
     run()
       .then((d) => {
         if (!cancelled) setData(d);
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          const status = typeof e === "object" && e !== null && "status" in e
+            ? Number((e as { status?: unknown }).status)
+            : undefined;
+          setErrorKind(status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : "error");
+          setError(e instanceof Error ? e.message : String(e));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -51,5 +60,5 @@ export function useAsync<T>(
     [],
   );
 
-  return { data, loading, error, refetch, setData: patch };
+  return { data, loading, error, errorKind, refetch, setData: patch };
 }

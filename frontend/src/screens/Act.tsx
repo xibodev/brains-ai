@@ -21,7 +21,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 export function Act() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
-  const { catalog, loading, error } = useOperator();
+  const { catalog, loading, error, errorKind } = useOperator();
   const workspaces = useAsync(() => api.operatorWorkspaces(), []);
   const categories = Array.from(new Set((catalog?.data ?? []).map((row) => row.category)));
   const category = params.get("category") || catalog?.data.find((row) => row.key === params.get("capability"))?.category || categories[0];
@@ -43,7 +43,7 @@ export function Act() {
         title="Act"
         lede="Choose a control operation, target its scope, preview its durable effect, and execute through a typed HTTP contract. This is not a terminal."
       />
-      <OperatorState loading={loading || workspaces.loading} error={error || workspaces.error} />
+      <OperatorState loading={loading || workspaces.loading} error={error || workspaces.error} kind={error ? errorKind : workspaces.errorKind} empty={Boolean(catalog && catalog.data.length === 0)} emptyTitle="No supported actions" emptyBody="This installation advertises no browser actions for the current operator." />
       {catalog && workspaces.data && (
         <>
           <section className="operator-parity-banner">

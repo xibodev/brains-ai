@@ -23,7 +23,7 @@ export function CommandCenter() {
         lede="What is moving in every visible workspace, who owns it, where continuity is at risk, and what needs a human next."
         meta={data ? <><strong>Live state current</strong><br />updated {relativeTime(data.generated_at)}</> : undefined}
       />
-      <OperatorState loading={state.loading} error={state.error} />
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} />
       {data && (
         <>
           <section className="operator-situation-strip" aria-label="Current situation">

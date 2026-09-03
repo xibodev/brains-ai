@@ -37,7 +37,7 @@ export function OperatorCoordination() {
           </>
         }
       />
-      <OperatorState loading={state.loading} error={state.error} />
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} />
       {data && (
         <>
           <MailboxWorkspace />

@@ -67,7 +67,7 @@ export function Governance() {
         lede="Resolve what is waiting, follow every outward action through its decision spine, and verify the signed record."
         actions={<button className="operator-button" onClick={() => void verify()}>Verify audit chain</button>}
       />
-      <OperatorState loading={state.loading} error={state.error} />
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} />
       {state.data && (
         <div className="operator-governance-layout">
           <OperatorCard kicker="Decision queue" title={`${state.data.decisions.length} open`}>

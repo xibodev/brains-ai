@@ -30,7 +30,7 @@ promise that the current candidate produced them successfully.
 
 | ID | User promise | Minimal path | Code contract | Expected evidence contract | Core backlog items | Acceptance anchors |
 |---|---|---|---|---|---|---|
-| F0 | A user can operate Brains from one coherent Workspace-first console. | Sign in -> inspect Command Center -> enter a Workspace -> choose a typed action or receive an explicit blocker. | `/app/command-center`, Workspaces, Coordination, Governance, Operations, Act; typed operator HTTP adapters over shared controls. | Attributable task/claim/handoff/message/knowledge/decision events and audit rows with Workspace scope. | BL-P3-01 | AC-F0-01..05; J1, J7, J11 |
+| F0 | A user can operate Brains from one coherent Workspace-first console. | Sign in -> inspect Command Center -> enter a Workspace -> choose a typed action or receive an explicit blocker. | `/app/command-center`, Workspaces, Coordination, Governance, Operations, Act; typed operator HTTP adapters over shared controls. | Attributable task/claim/handoff/message/knowledge/decision events and audit rows with Workspace scope. | — | AC-F0-01..05; J1, J7, J11 |
 | F1 | Withdrawn target: connect a machine and expose tools as Runtimes. | No supported user path; verify enrollment, Runtime, daemon, and activation surfaces are absent from discovery and fail closed. | Frozen Runtime/daemon routes, models, and tests are source-compatibility inventory only. | Advertisement inventory plus direct-call refusal and persisted-data compatibility evidence. | — | AC-F1-01..06; J2 |
 | F2 | Withdrawn target: define reusable execution Personas. | No supported user path; verify Persona, binding, managed Skill, and Spawn surfaces are undiscoverable and non-activatable. | Frozen Persona/Skill/spawn source and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | — | AC-F2-01..06; J3 |
 | F3 | A user can preserve durable coordination state, resolve human decisions, and resume work. | Open Workspace/Coordination/Governance -> inspect scoped Session context -> answer or decide -> checkpoint, hand off, resume, or end. | Workspace, Coordination, Governance; Session/event/decision APIs; local realtime delivery; CLI/MCP Session, decision, checkpoint, and resume families. | Coordination lifecycle transitions; persisted events; decision correlation; local reconnect backfill; unsupported execution control refused explicitly. | BL-P1-12, BL-P1-14 | AC-F3-01..07; J7, J8, J11 |
@@ -54,7 +54,7 @@ promise that the current candidate produced them successfully.
 | B6 | An operator can install, wire, start, inspect, and stop Brains consistently. | Install -> setup/wire -> start service -> inspect status/logs -> stop/unwire. | `brains-ai`, supported wire adapters, service renderers, and supervisor. | Exact executable/config/state identity; listener/protocol health; PID/log ownership; cleanup and rollback result. | BL-P0-06 | AC-B6-01..04; J1, J2, J9, J11 |
 | B7 | Frozen target: authenticated GitHub delivery and human-approved public defect relay. | No supported user path; verify ingress and relay surfaces are not advertised or activated. | Frozen GitHub and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-B7-01..04; J8, J9 |
 | B8 | An operator can distinguish liveness from supported-product readiness and diagnose failures. | Probe -> inspect service, storage, queue, durable-mail, wiring, and recovery posture -> recover -> recheck. | `/health`, readiness, supervisor, queue diagnosis, and recovery policy. | Dependency-specific readiness fields; count-only mailbox registration/attachment/unread/local-notification classes; process role, listener/protocol state, queue health, and recovery result. | BL-P0-06, BL-P1-10, BL-P1-12 | AC-B8-01..04; J7, J11 |
-| B9 | A user encounters one deliberate modern browser contract while deleted HTML stays absent. | Enter `/app` -> authenticate -> use a supported route or receive explicit not-found behavior. | `/app` plus its `/admin/login` and `/admin/logout` cookie endpoints. | Source, route, command, wheel/sdist inventory, consistent local-operator/Workspace decision, and zero deleted-surface activation. | BL-P3-01 | AC-B9-01..03; J9-J11 |
+| B9 | A user encounters one deliberate modern browser contract while deleted HTML stays absent. | Enter `/app` -> authenticate -> use a supported route or receive explicit not-found behavior. | `/app` plus its `/admin/login` and `/admin/logout` cookie endpoints. | Source, route, command, wheel/sdist inventory, consistent local-operator/Workspace decision, and zero deleted-surface activation. | — | AC-B9-01..03; J9-J11 |
 
 ## End-to-end outcome specifications
 
@@ -108,8 +108,7 @@ promise that the current candidate produced them successfully.
   configuration through one supervised gateway.
 - **Then:** reads and writes remain attributable and Workspace-scoped, while frozen
   multi-user, Org-management, GitHub, and cross-process capabilities stay unavailable.
-- **Evidence:** F0, F3, F7; B2, B6, B8, B9; J7-J11; BL-P0-06,
-  BL-P3-01.
+- **Evidence:** F0, F3, F7; B2, B6, B8, B9; J7-J11; BL-P0-06.
 
 ### O7 - Diagnose and recover the product
 

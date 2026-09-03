@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, formatApiError } from "../api/client";
 import type {
   QueueHealthReport,
@@ -15,6 +15,7 @@ import { StatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toast";
 import { useAsync } from "../store/useAsync";
 import { ScreenHead } from "./ScreenHead";
+import { NotFound } from "./NotFound";
 
 const SECTIONS: RailItem[] = [
   { key: "local", label: "Local service", section: "Config" },
@@ -23,10 +24,10 @@ const SECTIONS: RailItem[] = [
 ];
 
 export function Config() {
-  const { section = "mcp" } = useParams();
+  const { section = "local" } = useParams();
   const navigate = useNavigate();
   if (!SECTIONS.some((item) => item.key === section)) {
-    return <Navigate to="/operations/config/mcp" replace />;
+    return <NotFound resource="Configuration section" />;
   }
   return (
     <div style={{ height: "100%" }}>
@@ -122,13 +123,13 @@ function ConfigurationField({ field, value, onChange }: { field: CoreConfigurati
 
 function McpConfig() {
   return (
-    <SoftCard>
+    <div data-async-state="success"><SoftCard>
       <div className="eyebrow"><span>MCP servers</span></div>
       <h2 style={{ margin: "8px 0 12px" }}>Agent connections</h2>
       <p className="meta">
         Use <code>brains-ai wire</code> to configure a supported harness. Client configuration changes take effect when that client reconnects.
       </p>
-    </SoftCard>
+    </SoftCard></div>
   );
 }
 

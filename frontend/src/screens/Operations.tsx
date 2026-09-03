@@ -24,7 +24,7 @@ export function Operations() {
         lede="The service tree, tools, wiring, storage, recovery, access, and configuration, with typed safeguards for every host-level effect."
         actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigate("/act?category=operations")}>Operational action</button></>}
       />
-      <OperatorState loading={state.loading} error={state.error} />
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} />
       {data && (
         <>
           <section className="operator-topology" aria-label="Brains topology">

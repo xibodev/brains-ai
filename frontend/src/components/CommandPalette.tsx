@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useOperator } from "../store/OperatorContext";
+import { useDialogFocus } from "./useDialogFocus";
 
 interface Cmd {
   label: string;
@@ -22,6 +23,8 @@ export function CommandPalette() {
   const [active, setActive] = useState(0);
   const navigate = useNavigate();
   const { catalog } = useOperator();
+  const close = useCallback(() => setOpen(false), []);
+  const dialogRef = useDialogFocus<HTMLDivElement>(open, close);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -30,8 +33,6 @@ export function CommandPalette() {
         setOpen((o) => !o);
         setQuery("");
         setActive(0);
-      } else if (e.key === "Escape") {
-        setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -59,10 +60,11 @@ export function CommandPalette() {
   };
 
   return (
-    <div className="palette-scrim" onClick={() => setOpen(false)}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+    <div className="palette-scrim" onClick={close}>
+      <div ref={dialogRef} className="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <input
-          autoFocus
+          data-initial-focus
+          aria-label="Find a view or typed action"
           placeholder="Find a view or typed action"
           value={query}
           onChange={(e) => {
@@ -75,11 +77,13 @@ export function CommandPalette() {
             else if (e.key === "Enter" && results[active]) go(results[active].to);
           }}
         />
-        <div className="results">
+        <div className="results" role="listbox" aria-label="Available commands">
           {results.map((c, i) => (
             <button
               key={c.to}
               className={i === active ? "active" : ""}
+              role="option"
+              aria-selected={i === active}
               onMouseEnter={() => setActive(i)}
               onClick={() => go(c.to)}
             >
