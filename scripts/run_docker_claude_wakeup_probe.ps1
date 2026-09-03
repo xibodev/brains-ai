@@ -31,7 +31,7 @@ try {
     --security-opt no-new-privileges:true `
     --tmpfs "/tmp:rw,exec,nosuid,nodev,mode=1777" `
     --tmpfs "/home/node:rw,exec,nosuid,nodev,uid=1000,gid=1000,mode=0700" `
-    $image sh -lc 'probe_home=$(mktemp -d /tmp/claude-probe.XXXXXX); HOME="$probe_home" USERPROFILE="$probe_home" python /opt/uat/claude_wakeup_probe.py'
+    $image sh -c 'probe_home=$(mktemp -d /tmp/claude-probe.XXXXXX); HOME="$probe_home" USERPROFILE="$probe_home" /opt/brains-venv/bin/python /opt/uat/claude_wakeup_probe.py'
   if ($LASTEXITCODE -ne 0) { throw "Claude wakeup probe failed." }
 } finally {
   if ($createdContainer) {
