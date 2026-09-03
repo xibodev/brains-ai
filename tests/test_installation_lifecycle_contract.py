@@ -162,6 +162,8 @@ def test_clean_home_service_and_wire_lifecycle_is_reversible(
         python=sys.executable,
         db_url=f"sqlite:///{(state / 'brains.sqlite').as_posix()}",
     )
+    if tool == "opencode":
+        monkeypatch.setattr(wire, "_opencode_compatibility", lambda: (True, "compatible"))
     wired = wire.wire(home, context, tools=[tool], rules=False, force=True)
     assert wired["ok"] is True
     selected = next(row for row in wire.status(home)["tools"] if row["tool"] == tool)
@@ -186,6 +188,11 @@ def test_clean_home_service_and_wire_lifecycle_is_reversible(
 
     unwired = wire.unwire(home, tools=[tool], rules=False)
     assert unwired["tools"][0]["mcp"]["action"] == "remove"
+    if tool == "opencode":
+        plugin = home / ".config/opencode/plugins/brains-lifecycle.js"
+        assert unwired["tools"][0]["lifecycle_plugin"]["action"] == "remove"
+        assert not plugin.exists()
+        assert not plugin.with_suffix(".sha256").exists()
     _assert_unmanaged_config_survived(config_path, tool)
     removed = backend.uninstall()
     assert removed["ok"] is True
