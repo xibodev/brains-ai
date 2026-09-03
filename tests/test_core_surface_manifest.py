@@ -702,6 +702,117 @@ def test_ast_reachability_detects_namespace_router_and_window_location(
     assert any(site["target"] == "/labs" for site in sites)
 
 
+def _synthetic_spa_sites(tmp_path, app_source: str):
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(app_source, encoding="utf-8")
+    return check_core_surface._frontend_reachability(source)[2]
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'const navigate = useNavigate(); const go = navigate; go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); const { go } = { go: navigate }; go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); const [go] = [navigate]; go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); let go; go = navigate; go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); let go; [go] = [navigate]; go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); let go; ({ go } = { go: navigate }); go("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); const first = navigate; const second = first; second("/labs"); export const App = () => <div />;\n',
+        'const navigate = useNavigate(); const { navigate: go } = { navigate }; go("/labs"); export const App = () => <div />;\n',
+    ],
+)
+def test_ast_reachability_closes_navigate_callback_aliases(tmp_path, app_source: str) -> None:
+    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'window.open("/labs"); export const App = () => <div />;\n',
+        'window["open"]("/labs"); export const App = () => <div />;\n',
+        'open("/labs"); export const App = () => <div />;\n',
+        'const go = window.open; go("/labs"); export const App = () => <div />;\n',
+        'const { open: go } = window; go("/labs"); export const App = () => <div />;\n',
+        'let go; go = globalThis["open"]; go("/labs"); export const App = () => <div />;\n',
+        'const first = window.open; const second = first; second("/labs"); export const App = () => <div />;\n',
+    ],
+)
+def test_ast_reachability_covers_window_open_and_aliases(tmp_path, app_source: str) -> None:
+    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'document.location = "/labs"; export const App = () => <div />;\n',
+        'document["location"].href = "/labs"; export const App = () => <div />;\n',
+        'document.location["assign"]("/labs"); export const App = () => <div />;\n',
+        'window["location"] = "/labs"; export const App = () => <div />;\n',
+        'window["location"]["replace"]("/labs"); export const App = () => <div />;\n',
+        'const loc = window.location; loc.assign("/labs"); export const App = () => <div />;\n',
+        'const { assign: go } = window.location; go("/labs"); export const App = () => <div />;\n',
+        'const { location: loc } = window; loc["replace"]("/labs"); export const App = () => <div />;\n',
+        'let loc; loc = globalThis["location"]; loc.assign("/labs"); export const App = () => <div />;\n',
+        'let go; ({ replace: go } = document.location); go("/labs"); export const App = () => <div />;\n',
+        'const first = window.location.assign; const second = first; second("/labs"); export const App = () => <div />;\n',
+    ],
+)
+def test_ast_reachability_covers_location_dot_and_bracket_forms(tmp_path, app_source: str) -> None:
+    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'export const App = () => <form action="/labs" />;\n',
+        'export const App = () => <button formAction="/labs" />;\n',
+        'const form = document.createElement("form"); form.action = "/labs"; export const App = () => <div />;\n',
+        'const button = document.querySelector("button"); button["formAction"] = "/labs"; export const App = () => <div />;\n',
+        'document.forms[0]["action"] = "/labs"; export const App = () => <div />;\n',
+    ],
+)
+def test_ast_reachability_covers_form_navigation_activators(tmp_path, app_source: str) -> None:
+    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        "const navigate = useNavigate(); const go = navigate; go(target); export const App = () => <div />;\n",
+        "const go = window.open; go(target); export const App = () => <div />;\n",
+        'document["location"]["assign"](target); export const App = () => <div />;\n',
+        "const { assign: go } = window.location; go(target); export const App = () => <div />;\n",
+        'let loc; loc = globalThis["location"]; loc.replace(target); export const App = () => <div />;\n',
+        "export const App = () => <form action={target} />;\n",
+        'const form = document.createElement("form"); form["action"] = target; export const App = () => <div />;\n',
+    ],
+)
+def test_ast_reachability_fails_closed_for_every_dynamic_activator(
+    tmp_path, app_source: str
+) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
+
+
+def test_ast_reachability_ignores_non_navigation_members_and_custom_attributes(tmp_path) -> None:
+    sites = _synthetic_spa_sites(
+        tmp_path,
+        'const service = { open: (_target: string) => {} }; service.open("/labs"); '
+        "const model = { location: { assign: (_target: string) => {} } }; "
+        'model.location.assign("/labs"); const config = { action: "save", formAction: "submit" }; '
+        'config.action = "save"; config["formAction"] = "submit"; '
+        "const Widget = (_props: object) => <div />; export const App = () => "
+        '<Widget action="/labs" formAction="/labs" />;\n',
+    )
+    assert not any(site["target"] == "/labs" for site in sites)
+
+
 def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(tmp_path) -> None:
     source = tmp_path / "frontend/src"
     source.mkdir(parents=True)

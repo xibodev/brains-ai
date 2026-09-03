@@ -79,6 +79,7 @@ while (pending.length) {
 if (!files.has(path.join(sourceRoot, "App.tsx"))) throw new Error("frontend entry does not reach App.tsx");
 
 function unwrap(node) {
+  if (!node) return node;
   while (
     ts.isParenthesizedExpression(node) ||
     ts.isAsExpression(node) ||
@@ -187,10 +188,14 @@ for (const [file, sourceFile] of files) {
     }
   }
   const navigateFunctions = new Set(navigateAliases);
+  const openFunctions = new Set(["open"]);
   const locationAliases = new Set(["location"]);
+  const locationFunctions = new Set();
   const historyAliases = new Set(["history"]);
   const historyFunctions = new Set();
+  const formActivatorAliases = new Set();
   const memberName = (node) => {
+    if (!node) return null;
     if (ts.isPropertyAccessExpression(node)) return node.name.text;
     if (ts.isElementAccessExpression(node) && node.argumentExpression && ts.isStringLiteral(unwrap(node.argumentExpression))) {
       return unwrap(node.argumentExpression).text;
@@ -198,23 +203,140 @@ for (const [file, sourceFile] of files) {
     return null;
   };
   const memberOwner = (node) =>
-    ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) ? node.expression : null;
+    node && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) ? node.expression : null;
+  const isGlobalObject = (node) => {
+    node = unwrap(node);
+    return Boolean(node) && ts.isIdentifier(node) && ["window", "globalThis"].includes(node.text);
+  };
   const isLocationObject = (node) => {
     node = unwrap(node);
+    if (!node) return false;
     if (ts.isIdentifier(node)) return locationAliases.has(node.text);
-    return ts.isPropertyAccessExpression(node) &&
-      ts.isIdentifier(node.expression) && ["window", "globalThis"].includes(node.expression.text) &&
-      node.name.text === "location";
+    const owner = memberOwner(node);
+    return owner &&
+      ts.isIdentifier(unwrap(owner)) &&
+      ["window", "globalThis", "document"].includes(unwrap(owner).text) &&
+      memberName(node) === "location";
   };
   const isHistoryObject = (node) => {
     node = unwrap(node);
+    if (!node) return false;
     if (ts.isIdentifier(node)) return historyAliases.has(node.text);
     const owner = memberOwner(node);
     return owner && ts.isIdentifier(owner) && ["window", "globalThis"].includes(owner.text) && memberName(node) === "history";
   };
   const namespacedRouterMember = (node) =>
-    ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) &&
+    node && ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) &&
     routerNamespaces.has(node.expression.text) ? node.name.text : null;
+  const isNavigateFunction = (node) => {
+    node = unwrap(node);
+    if (!node) return false;
+    return (ts.isIdentifier(node) && navigateFunctions.has(node.text)) ||
+      namespacedRouterMember(node) === "redirect";
+  };
+  const isOpenFunction = (node) => {
+    node = unwrap(node);
+    if (!node) return false;
+    return (ts.isIdentifier(node) && openFunctions.has(node.text)) ||
+      (memberName(node) === "open" && isGlobalObject(memberOwner(node)));
+  };
+  const isLocationFunction = (node) => {
+    node = unwrap(node);
+    if (!node) return false;
+    return (ts.isIdentifier(node) && locationFunctions.has(node.text)) ||
+      (["assign", "replace"].includes(memberName(node)) && isLocationObject(memberOwner(node)));
+  };
+  const isDocumentMember = (node, name) => {
+    node = unwrap(node);
+    if (!node) return false;
+    const owner = memberOwner(node);
+    return memberName(node) === name && owner &&
+      ts.isIdentifier(unwrap(owner)) && unwrap(owner).text === "document";
+  };
+  const isFormActivatorObject = (node) => {
+    node = unwrap(node);
+    if (!node) return false;
+    if (ts.isIdentifier(node)) return formActivatorAliases.has(node.text);
+    if (ts.isCallExpression(node) && isDocumentMember(node.expression, "createElement")) {
+      const tag = node.arguments[0] && staticValues(node.arguments[0]);
+      return tag?.length === 1 && ["form", "button", "input"].includes(tag[0].toLowerCase());
+    }
+    if (ts.isCallExpression(node) && isDocumentMember(node.expression, "querySelector")) {
+      const selectors = node.arguments[0] && staticValues(node.arguments[0]);
+      if (selectors?.length !== 1) return false;
+      const selector = selectors[0].toLowerCase();
+      return ["form", "button", "input"].some((tag) =>
+        selector === tag || [".", "#", "[", ":"].some((suffix) => selector.startsWith(`${tag}${suffix}`)));
+    }
+    if (memberName(node) === "forms") return isDocumentMember(node, "forms");
+    const owner = memberOwner(node);
+    if (owner && isFormActivatorObject(owner)) return true;
+    return false;
+  };
+  const propertyName = (node) => {
+    if (ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)) return node.text;
+    if (ts.isComputedPropertyName(node) && ts.isStringLiteralLike(unwrap(node.expression))) {
+      return unwrap(node.expression).text;
+    }
+    return null;
+  };
+  const objectValue = (node, key) => {
+    node = unwrap(node);
+    if (!ts.isObjectLiteralExpression(node)) return null;
+    for (const property of node.properties) {
+      if (ts.isShorthandPropertyAssignment(property) && property.name.text === key) return property.name;
+      if (ts.isPropertyAssignment(property) && propertyName(property.name) === key) return property.initializer;
+    }
+    return null;
+  };
+  const addAlias = (target, expression, aliases, recognizes) => {
+    if (!ts.isIdentifier(target) || !expression || !recognizes(expression)) return;
+    aliases.add(target.text);
+  };
+  const propagateBinding = (binding, expression, aliases, recognizes) => {
+    expression = expression && unwrap(expression);
+    if (!expression) return;
+    if (ts.isIdentifier(binding)) {
+      addAlias(binding, expression, aliases, recognizes);
+      return;
+    }
+    if (ts.isObjectBindingPattern(binding)) {
+      for (const element of binding.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const key = element.propertyName?.getText(sourceFile) || element.name.text;
+        propagateBinding(element.name, objectValue(expression, key), aliases, recognizes);
+      }
+    } else if (ts.isArrayBindingPattern(binding) && ts.isArrayLiteralExpression(expression)) {
+      binding.elements.forEach((element, index) => {
+        if (ts.isBindingElement(element)) {
+          propagateBinding(element.name, expression.elements[index], aliases, recognizes);
+        }
+      });
+    }
+  };
+  const propagateAssignment = (target, expression, aliases, recognizes) => {
+    target = unwrap(target);
+    expression = unwrap(expression);
+    if (!target || !expression) return;
+    if (ts.isIdentifier(target)) {
+      addAlias(target, expression, aliases, recognizes);
+      return;
+    }
+    if (ts.isArrayLiteralExpression(target) && ts.isArrayLiteralExpression(expression)) {
+      target.elements.forEach((element, index) =>
+        propagateAssignment(element, expression.elements[index], aliases, recognizes));
+    } else if (ts.isObjectLiteralExpression(target)) {
+      for (const property of target.properties) {
+        if (ts.isShorthandPropertyAssignment(property)) {
+          propagateAssignment(property.name, objectValue(expression, property.name.text), aliases, recognizes);
+        } else if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.initializer)) {
+          const key = propertyName(property.name);
+          if (key === null) continue;
+          propagateAssignment(property.initializer, objectValue(expression, key), aliases, recognizes);
+        }
+      }
+    }
+  };
   function discover(node) {
     if (
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer &&
@@ -268,16 +390,87 @@ for (const [file, sourceFile] of files) {
         if (["pushState", "replaceState"].includes(method)) historyFunctions.add(element.name.text);
       }
     }
-    ts.forEachChild(node, discover);
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      propagateBinding(node.name, node.initializer, navigateFunctions, isNavigateFunction);
+      propagateBinding(node.name, node.initializer, openFunctions, isOpenFunction);
+      propagateBinding(node.name, node.initializer, locationAliases, isLocationObject);
+      propagateBinding(node.name, node.initializer, locationFunctions, isLocationFunction);
+      propagateBinding(node.name, node.initializer, formActivatorAliases, isFormActivatorObject);
+    }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && isGlobalObject(node.initializer)) {
+      for (const element of node.name.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const key = element.propertyName?.getText(sourceFile) || element.name.text;
+        if (key === "open") openFunctions.add(element.name.text);
+        if (key === "location") locationAliases.add(element.name.text);
+      }
+    }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && isLocationObject(node.initializer)) {
+      for (const element of node.name.elements) {
+        if (!ts.isIdentifier(element.name)) continue;
+        const key = element.propertyName?.getText(sourceFile) || element.name.text;
+        if (["assign", "replace"].includes(key)) locationFunctions.add(element.name.text);
+      }
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      propagateAssignment(node.left, node.right, navigateFunctions, isNavigateFunction);
+      propagateAssignment(node.left, node.right, openFunctions, isOpenFunction);
+      propagateAssignment(node.left, node.right, locationAliases, isLocationObject);
+      propagateAssignment(node.left, node.right, locationFunctions, isLocationFunction);
+      propagateAssignment(node.left, node.right, formActivatorAliases, isFormActivatorObject);
+      const target = unwrap(node.left);
+      if (ts.isObjectLiteralExpression(target) && isGlobalObject(node.right)) {
+        for (const property of target.properties) {
+          const key = ts.isShorthandPropertyAssignment(property)
+            ? property.name.text
+            : ts.isPropertyAssignment(property) ? propertyName(property.name) : null;
+          const alias = ts.isShorthandPropertyAssignment(property)
+            ? property.name
+            : ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
+          if (key === "open" && alias && ts.isIdentifier(alias)) openFunctions.add(alias.text);
+          if (key === "location" && alias && ts.isIdentifier(alias)) locationAliases.add(alias.text);
+        }
+      }
+      if (ts.isObjectLiteralExpression(target) && isLocationObject(node.right)) {
+        for (const property of target.properties) {
+          const key = ts.isShorthandPropertyAssignment(property)
+            ? property.name.text
+            : ts.isPropertyAssignment(property) ? propertyName(property.name) : null;
+          const alias = ts.isShorthandPropertyAssignment(property)
+            ? property.name
+            : ts.isPropertyAssignment(property) ? unwrap(property.initializer) : null;
+          if (["assign", "replace"].includes(key) && alias && ts.isIdentifier(alias)) {
+            locationFunctions.add(alias.text);
+          }
+        }
+      }
+    }
   }
-  discover(sourceFile);
+  const nodes = [];
+  function collect(node) {
+    nodes.push(node);
+    ts.forEachChild(node, collect);
+  }
+  collect(sourceFile);
+  let previousSize = -1;
+  while (previousSize !== navigateFunctions.size + openFunctions.size + locationAliases.size + locationFunctions.size + historyAliases.size + historyFunctions.size + formActivatorAliases.size) {
+    previousSize = navigateFunctions.size + openFunctions.size + locationAliases.size + locationFunctions.size + historyAliases.size + historyFunctions.size + formActivatorAliases.size;
+    for (const node of nodes) discover(node);
+  }
   function visit(node) {
     if (ts.isJsxOpeningLikeElement(node)) {
       const tag = jsxTag(node);
       const namespaceTag = namespacedRouterMember(node.tagName);
       const importedTag = routerAliases.get(tag) ||
         (namespaceTag && ["Route", "Navigate", "Link", "NavLink"].includes(namespaceTag) ? namespaceTag : null);
-      const attributeName = importedTag === "Route" ? "path" : importedTag ? "to" : jsxTag(node) === "a" ? "href" : null;
+      const intrinsicTag = ts.isIdentifier(node.tagName) && node.tagName.text === node.tagName.text.toLowerCase();
+      const formAttribute = intrinsicTag
+        ? node.attributes.properties.find(
+            (property) => ts.isJsxAttribute(property) &&
+              (property.name.text === "formAction" || (tag === "form" && property.name.text === "action")),
+          )
+        : null;
+      const attributeName = importedTag === "Route" ? "path" : importedTag ? "to" : tag === "a" ? "href" : null;
       if (attributeName) {
         const attribute = node.attributes.properties.find(
           (property) => ts.isJsxAttribute(property) && property.name.text === attributeName,
@@ -289,6 +482,19 @@ for (const [file, sourceFile] of files) {
               ? attribute.initializer.expression
               : null;
           if (expression) record(sourceFile, attribute, importedTag === "Route" ? "route" : "navigation", expression, coreRouteAliases);
+        }
+      } else if (formAttribute) {
+        const expression = formAttribute.initializer && (
+          ts.isStringLiteral(formAttribute.initializer)
+            ? formAttribute.initializer
+            : ts.isJsxExpression(formAttribute.initializer)
+              ? formAttribute.initializer.expression
+              : null
+        );
+        if (expression) record(sourceFile, formAttribute, "form-action", expression, coreRouteAliases);
+        else {
+          const line = sourceFile.getLineAndCharacterOfPosition(formAttribute.getStart(sourceFile)).line + 1;
+          unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "form-action", line });
         }
       } else if (
         (namespaceTag || routerImportedAliases.has(tag)) &&
@@ -315,11 +521,12 @@ for (const [file, sourceFile] of files) {
     ) {
       record(sourceFile, node, "navigate", node.arguments[0], coreRouteAliases);
     } else if (
-      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-      isLocationObject(node.expression.expression) &&
-      ["assign", "replace"].includes(node.expression.name.text) && node.arguments.length
+      ts.isCallExpression(node) &&
+      isLocationFunction(node.expression) && node.arguments.length
     ) {
       record(sourceFile, node, "location", node.arguments[0], coreRouteAliases);
+    } else if (ts.isCallExpression(node) && isOpenFunction(node.expression) && node.arguments.length) {
+      record(sourceFile, node, "window-open", node.arguments[0], coreRouteAliases);
     } else if (
       ts.isCallExpression(node) &&
       ((ts.isIdentifier(node.expression) && historyFunctions.has(node.expression.text)) ||
@@ -335,14 +542,28 @@ for (const [file, sourceFile] of files) {
     } else if (ts.isBinaryExpression(node)) {
       const assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
       const directLocation = isLocationObject(node.left);
-      const locationProperty = ts.isPropertyAccessExpression(node.left) &&
-        isLocationObject(node.left.expression) &&
-        ["href", "pathname", "search", "hash"].includes(node.left.name.text);
-      if (directLocation || locationProperty) {
+      const locationProperty = memberOwner(node.left) &&
+        isLocationObject(memberOwner(node.left)) &&
+        ["href", "pathname", "search", "hash"].includes(memberName(node.left));
+      const locationAliasAssignment = assignment &&
+        ts.isIdentifier(unwrap(node.left)) &&
+        unwrap(node.left).text !== "location" &&
+        isLocationObject(node.right);
+      if ((directLocation || locationProperty) && !locationAliasAssignment) {
         if (assignment) record(sourceFile, node, "location", node.right, coreRouteAliases);
         else {
           const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
           unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "location-write", line });
+        }
+      } else if (
+        memberOwner(node.left) &&
+        ["action", "formAction"].includes(memberName(node.left)) &&
+        isFormActivatorObject(memberOwner(node.left))
+      ) {
+        if (assignment) record(sourceFile, node, "form-action", node.right, coreRouteAliases);
+        else {
+          const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+          unresolved.push({ file: `frontend/src/${relative(sourceFile.fileName)}`, kind: "form-action-write", line });
         }
       }
     } else if (
