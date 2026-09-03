@@ -22,6 +22,67 @@ sys.path.insert(0, str(ROOT / "src"))
 
 HTTP_METHODS = {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"}
 
+FRONTEND_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".css")
+WITHDRAWN_SPA_PREFIXES = (
+    "/automation",
+    "/issues",
+    "/labs",
+    "/onboarding",
+    "/personas",
+    "/pods",
+    "/projects",
+    "/runtimes",
+    "/sessions",
+    "/settings",
+)
+CORE_SPA_TARGET_PREFIXES = (
+    "/act",
+    "/command-center",
+    "/config",
+    "/coordination",
+    "/governance",
+    "/inbox",
+    "/operations",
+    "/workspaces",
+)
+CORE_FRONTEND_MODULES = frozenset(
+    {
+        "App.tsx",
+        "api/client.ts",
+        "api/types.ts",
+        "components/AppShell.tsx",
+        "components/CommandPalette.tsx",
+        "components/EmptyState.tsx",
+        "components/EyebrowLabel.tsx",
+        "components/MailboxWorkspace.tsx",
+        "components/MasterDetail.tsx",
+        "components/OperatorPrimitives.tsx",
+        "components/Sidebar.tsx",
+        "components/SoftCard.tsx",
+        "components/StatusPill.tsx",
+        "components/Toast.tsx",
+        "components/TopBar.tsx",
+        "components/format.ts",
+        "components/sessionScope.ts",
+        "main.tsx",
+        "realtime/client.ts",
+        "realtime/protocol.ts",
+        "realtime/useRealtime.ts",
+        "screens/Act.tsx",
+        "screens/CommandCenter.tsx",
+        "screens/Config.tsx",
+        "screens/Governance.tsx",
+        "screens/Operations.tsx",
+        "screens/OperatorCoordination.tsx",
+        "screens/ScreenHead.tsx",
+        "screens/Workspaces.tsx",
+        "store/OperatorContext.tsx",
+        "store/useAsync.ts",
+        "styles/app.css",
+        "styles/tokens.css",
+    }
+)
+
 WITHDRAWN_FRONTEND_API_TOKENS = (
     "/admin/configuration/",
     "/autopilots",
@@ -203,8 +264,11 @@ def _wire_inventory() -> dict[str, object]:
     }
 
 
-def _spa_navigation_inventory() -> tuple[list[dict[str, object]], dict[str, str]]:
-    source_root = ROOT / "frontend/src"
+def _spa_navigation_inventory(
+    source_root: Path | None = None,
+) -> tuple[list[dict[str, object]], dict[str, str]]:
+    source_root = source_root or (ROOT / "frontend/src")
+    inventory_root = ROOT if source_root == ROOT / "frontend/src" else source_root.parents[1]
     patterns = (
         ("route", re.compile(r'<Route\b[^>]*\bpath\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
         ("redirect", re.compile(r'<Navigate\b[^>]*\bto\s*=\s*(?P<q>["\'])(?P<target>.*?)(?P=q)')),
@@ -223,7 +287,7 @@ def _spa_navigation_inventory() -> tuple[list[dict[str, object]], dict[str, str]
         if candidate.is_file() and candidate.suffix in {".ts", ".tsx"}
     ):
         source = path.read_text(encoding="utf-8")
-        relative = path.relative_to(ROOT).as_posix()
+        relative = path.relative_to(inventory_root).as_posix()
         hashes[relative] = hashlib.sha256(source.encode("utf-8")).hexdigest()
         for kind, pattern in patterns:
             for match in pattern.finditer(source):
@@ -243,6 +307,67 @@ def _spa_navigation_inventory() -> tuple[list[dict[str, object]], dict[str, str]
             str(item["kind"]),
         ),
     ), hashes
+
+
+def _resolve_frontend_import(source_root: Path, importer: Path, specifier: str) -> Path | None:
+    """Resolve a static relative frontend import without invoking a bundler."""
+
+    if not specifier.startswith("."):
+        return None
+    unresolved = importer.parent / specifier.split("?", 1)[0].split("#", 1)[0]
+    candidates = [unresolved]
+    if unresolved.suffix not in FRONTEND_EXTENSIONS:
+        candidates.extend(unresolved.with_suffix(suffix) for suffix in FRONTEND_EXTENSIONS)
+        candidates.extend(unresolved / f"index{suffix}" for suffix in FRONTEND_EXTENSIONS)
+    root = source_root.resolve()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_relative_to(root) and resolved.is_file():
+            return resolved
+    raise RuntimeError(f"relative frontend import could not be resolved: {specifier}")
+
+
+def _frontend_reachability(
+    source_root: Path | None = None,
+) -> tuple[list[str], dict[str, list[str]], list[dict[str, object]]]:
+    """Inventory the import graph and navigation reachable from the actual SPA entry."""
+
+    root = source_root or (ROOT / "frontend/src")
+    entry = root / "main.tsx"
+    if not entry.is_file():
+        raise RuntimeError("frontend entry main.tsx is unavailable")
+    import_pattern = re.compile(
+        r"(?:\b(?:import|export)\s+(?:type\s+)?(?:[^;\n]*?\s+from\s+)?|\bimport\s*\(\s*)"
+        r"(?P<q>[\"'])(?P<target>\.[^\"']+)(?P=q)"
+    )
+    pending = [entry.resolve()]
+    reachable: set[Path] = set()
+    graph: dict[str, list[str]] = {}
+    while pending:
+        path = pending.pop()
+        if path in reachable:
+            continue
+        reachable.add(path)
+        source = path.read_text(encoding="utf-8")
+        dependencies: list[Path] = []
+        for match in import_pattern.finditer(source):
+            dependency = _resolve_frontend_import(root, path, match.group("target"))
+            if dependency is not None:
+                dependencies.append(dependency)
+                if dependency not in reachable:
+                    pending.append(dependency)
+        relative = path.relative_to(root).as_posix()
+        graph[relative] = sorted(
+            dependency.relative_to(root).as_posix() for dependency in set(dependencies)
+        )
+    modules = sorted(path.relative_to(root).as_posix() for path in reachable)
+    if "App.tsx" not in modules:
+        raise RuntimeError("frontend entry does not reach App.tsx")
+    all_sites, _hashes = _spa_navigation_inventory(root)
+    prefix = "frontend/src/"
+    reachable_files = {f"{prefix}{module}" for module in modules}
+    sites = [site for site in all_sites if site["file"] in reachable_files]
+    return modules, dict(sorted(graph.items())), sites
 
 
 def inventory() -> dict[str, object]:
@@ -348,6 +473,16 @@ def inventory() -> dict[str, object]:
         set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source))
     )
     spa_navigation_sites, frontend_source_hashes = _spa_navigation_inventory()
+    (
+        frontend_reachable_modules,
+        frontend_import_graph,
+        reachable_spa_navigation_sites,
+    ) = _frontend_reachability()
+    frontend_dormant_modules = sorted(
+        source.removeprefix("frontend/src/")
+        for source in frontend_source_hashes
+        if source.removeprefix("frontend/src/") not in frontend_reachable_modules
+    )
     config_source = (ROOT / "frontend/src/screens/Config.tsx").read_text(encoding="utf-8")
     config_sections = sorted(re.findall(r'key:\s*"([^"]+)"', config_source))
     frontend_api_source = (ROOT / "frontend/src/api/client.ts").read_text(encoding="utf-8")
@@ -416,6 +551,10 @@ def inventory() -> dict[str, object]:
             "palette": hashlib.sha256(palette_source.encode("utf-8")).hexdigest(),
         },
         "spa_navigation_sites": spa_navigation_sites,
+        "reachable_spa_navigation_sites": reachable_spa_navigation_sites,
+        "frontend_reachable_modules": frontend_reachable_modules,
+        "frontend_dormant_modules": frontend_dormant_modules,
+        "frontend_import_graph": frontend_import_graph,
         "frontend_source_sha256": frontend_source_hashes,
         "config_sections": config_sections,
         "config_read_keys": read_keys,
@@ -495,6 +634,8 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     realtime_org_channels = set(snapshot["realtime_org_channels"])
     withdrawn_realtime_topics = list(snapshot["withdrawn_realtime_topics_accepted"])
     legacy_browser_source = list(snapshot["legacy_browser_source"])
+    reachable_modules = set(snapshot["frontend_reachable_modules"])
+    reachable_navigation = list(snapshot["reachable_spa_navigation_sites"])
     if overlap := commands & WITHDRAWN_CLI_COMMANDS:
         errors.append(f"withdrawn CLI commands advertised: {sorted(overlap)}")
     if overlap := groups & WITHDRAWN_CLI_GROUPS:
@@ -574,6 +715,20 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         errors.append(f"withdrawn realtime topics accepted: {withdrawn_realtime_topics}")
     if legacy_browser_source:
         errors.append(f"deleted legacy browser source remains: {legacy_browser_source}")
+    if missing_modules := CORE_FRONTEND_MODULES - reachable_modules:
+        errors.append(f"required core frontend modules unreachable: {sorted(missing_modules)}")
+    if extra_modules := reachable_modules - CORE_FRONTEND_MODULES:
+        errors.append(f"unknown or frozen frontend modules reachable: {sorted(extra_modules)}")
+    for site in reachable_navigation:
+        target = str(site.get("target", ""))
+        route = target.split("?", 1)[0].split("#", 1)[0]
+        if route == "*":
+            continue
+        if route.startswith(WITHDRAWN_SPA_PREFIXES):
+            errors.append(f"frozen SPA target reachable: {route}")
+            continue
+        if not any(route == prefix or route.startswith(f"{prefix}/") for prefix in CORE_SPA_TARGET_PREFIXES):
+            errors.append(f"unknown SPA target reachable: {route or '<empty>'}")
     for term in ("search_semantic", "graph_query", "graph_neighbors"):
         if term in wire_rule:
             errors.append(f"wire guidance advertises {term}")

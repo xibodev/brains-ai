@@ -7078,6 +7078,189 @@
       "extras": [
         "dev"
       ],
+      "frontend_dormant_modules": [
+        "components/ApprovalToast.tsx",
+        "components/AskCard.tsx",
+        "components/Board.tsx",
+        "components/ChatDock.tsx",
+        "components/ConnectMachineModal.tsx",
+        "components/Drawer.tsx",
+        "components/Field.tsx",
+        "components/OrgSwitcher.tsx",
+        "components/PersonaCard.tsx",
+        "components/RuntimeTile.tsx",
+        "components/SkillAttachmentPanel.tsx",
+        "components/Stepper.tsx",
+        "components/blockedReason.ts",
+        "components/sessionScope.test.ts",
+        "realtime/protocol.test.ts",
+        "screens/Automation.tsx",
+        "screens/Inbox.tsx",
+        "screens/Issues.tsx",
+        "screens/Labs.tsx",
+        "screens/LegacyLabsRedirect.tsx",
+        "screens/Onboarding.tsx",
+        "screens/Personas.tsx",
+        "screens/Pods.tsx",
+        "screens/Projects.tsx",
+        "screens/Runtimes.tsx",
+        "screens/Sessions.tsx",
+        "screens/Settings.tsx",
+        "store/DockContext.tsx",
+        "store/OrgContext.tsx",
+        "vite-env.d.ts"
+      ],
+      "frontend_import_graph": {
+        "App.tsx": [
+          "components/AppShell.tsx",
+          "components/Toast.tsx",
+          "screens/Act.tsx",
+          "screens/CommandCenter.tsx",
+          "screens/Config.tsx",
+          "screens/Governance.tsx",
+          "screens/Operations.tsx",
+          "screens/OperatorCoordination.tsx",
+          "screens/Workspaces.tsx",
+          "store/OperatorContext.tsx"
+        ],
+        "api/client.ts": [],
+        "api/types.ts": [],
+        "components/AppShell.tsx": [
+          "components/CommandPalette.tsx",
+          "components/Sidebar.tsx",
+          "components/TopBar.tsx",
+          "realtime/useRealtime.ts"
+        ],
+        "components/CommandPalette.tsx": [
+          "store/OperatorContext.tsx"
+        ],
+        "components/EmptyState.tsx": [],
+        "components/EyebrowLabel.tsx": [],
+        "components/MailboxWorkspace.tsx": [
+          "api/client.ts",
+          "components/OperatorPrimitives.tsx",
+          "components/Toast.tsx",
+          "components/format.ts"
+        ],
+        "components/MasterDetail.tsx": [],
+        "components/OperatorPrimitives.tsx": [],
+        "components/Sidebar.tsx": [],
+        "components/SoftCard.tsx": [],
+        "components/StatusPill.tsx": [],
+        "components/Toast.tsx": [],
+        "components/TopBar.tsx": [
+          "realtime/client.ts",
+          "store/OperatorContext.tsx"
+        ],
+        "components/format.ts": [],
+        "components/sessionScope.ts": [],
+        "main.tsx": [
+          "App.tsx",
+          "realtime/client.ts",
+          "styles/app.css",
+          "styles/tokens.css"
+        ],
+        "realtime/client.ts": [
+          "realtime/protocol.ts"
+        ],
+        "realtime/protocol.ts": [],
+        "realtime/useRealtime.ts": [
+          "realtime/client.ts"
+        ],
+        "screens/Act.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/Toast.tsx",
+          "store/OperatorContext.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/CommandCenter.tsx": [
+          "api/client.ts",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/Config.tsx": [
+          "api/client.ts",
+          "components/EmptyState.tsx",
+          "components/MasterDetail.tsx",
+          "components/SoftCard.tsx",
+          "components/StatusPill.tsx",
+          "components/Toast.tsx",
+          "screens/ScreenHead.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/Governance.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/Toast.tsx",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/Operations.tsx": [
+          "api/client.ts",
+          "components/Toast.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/OperatorCoordination.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/MailboxWorkspace.tsx",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/ScreenHead.tsx": [
+          "components/EyebrowLabel.tsx"
+        ],
+        "screens/Workspaces.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/format.ts",
+          "components/sessionScope.ts",
+          "store/useAsync.ts"
+        ],
+        "store/OperatorContext.tsx": [
+          "api/client.ts",
+          "api/types.ts"
+        ],
+        "store/useAsync.ts": [],
+        "styles/app.css": [],
+        "styles/tokens.css": []
+      },
+      "frontend_reachable_modules": [
+        "App.tsx",
+        "api/client.ts",
+        "api/types.ts",
+        "components/AppShell.tsx",
+        "components/CommandPalette.tsx",
+        "components/EmptyState.tsx",
+        "components/EyebrowLabel.tsx",
+        "components/MailboxWorkspace.tsx",
+        "components/MasterDetail.tsx",
+        "components/OperatorPrimitives.tsx",
+        "components/Sidebar.tsx",
+        "components/SoftCard.tsx",
+        "components/StatusPill.tsx",
+        "components/Toast.tsx",
+        "components/TopBar.tsx",
+        "components/format.ts",
+        "components/sessionScope.ts",
+        "main.tsx",
+        "realtime/client.ts",
+        "realtime/protocol.ts",
+        "realtime/useRealtime.ts",
+        "screens/Act.tsx",
+        "screens/CommandCenter.tsx",
+        "screens/Config.tsx",
+        "screens/Governance.tsx",
+        "screens/Operations.tsx",
+        "screens/OperatorCoordination.tsx",
+        "screens/ScreenHead.tsx",
+        "screens/Workspaces.tsx",
+        "store/OperatorContext.tsx",
+        "store/useAsync.ts",
+        "styles/app.css",
+        "styles/tokens.css"
+      ],
       "frontend_source_sha256": {
         "frontend/src/App.tsx": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
         "frontend/src/api/client.ts": "3fd51f572f7aa7c3d3115d8a8e3e6c7a000928cd532d0dbbe310fdeb9412f350",
@@ -7829,6 +8012,272 @@
         "/governance",
         "/operations",
         "/workspaces"
+      ],
+      "reachable_spa_navigation_sites": [
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 22,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 23,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 24,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 25,
+          "target": "/workspaces/:slug"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 26,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 27,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 28,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 29,
+          "target": "/operations/config/local"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 29,
+          "target": "/operations/config"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 30,
+          "target": "/operations/config/:section"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 31,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 33,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 33,
+          "target": "/inbox"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 34,
+          "target": "/operations/config/local"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 34,
+          "target": "/config"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 35,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 35,
+          "target": "*"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 12,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 13,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 14,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 15,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 16,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 45,
+          "target": "/act?capability=${encodeURIComponent(capability.key)}"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 10,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 11,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 12,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 13,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 14,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "navigate",
+          "line": 44,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "navigate",
+          "line": 52,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/components/TopBar.tsx",
+          "kind": "navigate",
+          "line": 35,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 63,
+          "target": "/workspaces/${workspace.slug}"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 88,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 116,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/screens/Config.tsx",
+          "kind": "redirect",
+          "line": 29,
+          "target": "/operations/config/mcp"
+        },
+        {
+          "file": "frontend/src/screens/Config.tsx",
+          "kind": "navigate",
+          "line": 34,
+          "target": "/operations/config/${key}"
+        },
+        {
+          "file": "frontend/src/screens/Operations.tsx",
+          "kind": "navigate",
+          "line": 25,
+          "target": "/act?category=operations"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 26,
+          "target": "/act?capability=${encodeURIComponent(capability)}"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 57,
+          "target": "/workspaces/${claim.workspace}"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 79,
+          "target": "/workspaces/${handoff.workspace}"
+        },
+        {
+          "file": "frontend/src/screens/Workspaces.tsx",
+          "kind": "navigate",
+          "line": 34,
+          "target": "/act?${query.toString()}"
+        },
+        {
+          "file": "frontend/src/screens/Workspaces.tsx",
+          "kind": "navigate",
+          "line": 54,
+          "target": "/workspaces/${item.slug}"
+        }
       ],
       "realtime_org_channels": [
         "inbox",
@@ -14694,6 +15143,189 @@
       "extras": [
         "dev"
       ],
+      "frontend_dormant_modules": [
+        "components/ApprovalToast.tsx",
+        "components/AskCard.tsx",
+        "components/Board.tsx",
+        "components/ChatDock.tsx",
+        "components/ConnectMachineModal.tsx",
+        "components/Drawer.tsx",
+        "components/Field.tsx",
+        "components/OrgSwitcher.tsx",
+        "components/PersonaCard.tsx",
+        "components/RuntimeTile.tsx",
+        "components/SkillAttachmentPanel.tsx",
+        "components/Stepper.tsx",
+        "components/blockedReason.ts",
+        "components/sessionScope.test.ts",
+        "realtime/protocol.test.ts",
+        "screens/Automation.tsx",
+        "screens/Inbox.tsx",
+        "screens/Issues.tsx",
+        "screens/Labs.tsx",
+        "screens/LegacyLabsRedirect.tsx",
+        "screens/Onboarding.tsx",
+        "screens/Personas.tsx",
+        "screens/Pods.tsx",
+        "screens/Projects.tsx",
+        "screens/Runtimes.tsx",
+        "screens/Sessions.tsx",
+        "screens/Settings.tsx",
+        "store/DockContext.tsx",
+        "store/OrgContext.tsx",
+        "vite-env.d.ts"
+      ],
+      "frontend_import_graph": {
+        "App.tsx": [
+          "components/AppShell.tsx",
+          "components/Toast.tsx",
+          "screens/Act.tsx",
+          "screens/CommandCenter.tsx",
+          "screens/Config.tsx",
+          "screens/Governance.tsx",
+          "screens/Operations.tsx",
+          "screens/OperatorCoordination.tsx",
+          "screens/Workspaces.tsx",
+          "store/OperatorContext.tsx"
+        ],
+        "api/client.ts": [],
+        "api/types.ts": [],
+        "components/AppShell.tsx": [
+          "components/CommandPalette.tsx",
+          "components/Sidebar.tsx",
+          "components/TopBar.tsx",
+          "realtime/useRealtime.ts"
+        ],
+        "components/CommandPalette.tsx": [
+          "store/OperatorContext.tsx"
+        ],
+        "components/EmptyState.tsx": [],
+        "components/EyebrowLabel.tsx": [],
+        "components/MailboxWorkspace.tsx": [
+          "api/client.ts",
+          "components/OperatorPrimitives.tsx",
+          "components/Toast.tsx",
+          "components/format.ts"
+        ],
+        "components/MasterDetail.tsx": [],
+        "components/OperatorPrimitives.tsx": [],
+        "components/Sidebar.tsx": [],
+        "components/SoftCard.tsx": [],
+        "components/StatusPill.tsx": [],
+        "components/Toast.tsx": [],
+        "components/TopBar.tsx": [
+          "realtime/client.ts",
+          "store/OperatorContext.tsx"
+        ],
+        "components/format.ts": [],
+        "components/sessionScope.ts": [],
+        "main.tsx": [
+          "App.tsx",
+          "realtime/client.ts",
+          "styles/app.css",
+          "styles/tokens.css"
+        ],
+        "realtime/client.ts": [
+          "realtime/protocol.ts"
+        ],
+        "realtime/protocol.ts": [],
+        "realtime/useRealtime.ts": [
+          "realtime/client.ts"
+        ],
+        "screens/Act.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/Toast.tsx",
+          "store/OperatorContext.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/CommandCenter.tsx": [
+          "api/client.ts",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/Config.tsx": [
+          "api/client.ts",
+          "components/EmptyState.tsx",
+          "components/MasterDetail.tsx",
+          "components/SoftCard.tsx",
+          "components/StatusPill.tsx",
+          "components/Toast.tsx",
+          "screens/ScreenHead.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/Governance.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/Toast.tsx",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/Operations.tsx": [
+          "api/client.ts",
+          "components/Toast.tsx",
+          "store/useAsync.ts"
+        ],
+        "screens/OperatorCoordination.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/MailboxWorkspace.tsx",
+          "components/format.ts",
+          "store/useAsync.ts"
+        ],
+        "screens/ScreenHead.tsx": [
+          "components/EyebrowLabel.tsx"
+        ],
+        "screens/Workspaces.tsx": [
+          "api/client.ts",
+          "api/types.ts",
+          "components/format.ts",
+          "components/sessionScope.ts",
+          "store/useAsync.ts"
+        ],
+        "store/OperatorContext.tsx": [
+          "api/client.ts",
+          "api/types.ts"
+        ],
+        "store/useAsync.ts": [],
+        "styles/app.css": [],
+        "styles/tokens.css": []
+      },
+      "frontend_reachable_modules": [
+        "App.tsx",
+        "api/client.ts",
+        "api/types.ts",
+        "components/AppShell.tsx",
+        "components/CommandPalette.tsx",
+        "components/EmptyState.tsx",
+        "components/EyebrowLabel.tsx",
+        "components/MailboxWorkspace.tsx",
+        "components/MasterDetail.tsx",
+        "components/OperatorPrimitives.tsx",
+        "components/Sidebar.tsx",
+        "components/SoftCard.tsx",
+        "components/StatusPill.tsx",
+        "components/Toast.tsx",
+        "components/TopBar.tsx",
+        "components/format.ts",
+        "components/sessionScope.ts",
+        "main.tsx",
+        "realtime/client.ts",
+        "realtime/protocol.ts",
+        "realtime/useRealtime.ts",
+        "screens/Act.tsx",
+        "screens/CommandCenter.tsx",
+        "screens/Config.tsx",
+        "screens/Governance.tsx",
+        "screens/Operations.tsx",
+        "screens/OperatorCoordination.tsx",
+        "screens/ScreenHead.tsx",
+        "screens/Workspaces.tsx",
+        "store/OperatorContext.tsx",
+        "store/useAsync.ts",
+        "styles/app.css",
+        "styles/tokens.css"
+      ],
       "frontend_source_sha256": {
         "frontend/src/App.tsx": "74c4f9ee19a9ef12fc2a13d11a772b1ad2e08209b16408df4f30c929844ff395",
         "frontend/src/api/client.ts": "3fd51f572f7aa7c3d3115d8a8e3e6c7a000928cd532d0dbbe310fdeb9412f350",
@@ -15445,6 +16077,272 @@
         "/governance",
         "/operations",
         "/workspaces"
+      ],
+      "reachable_spa_navigation_sites": [
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 22,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 23,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 24,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 25,
+          "target": "/workspaces/:slug"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 26,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 27,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 28,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 29,
+          "target": "/operations/config/local"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 29,
+          "target": "/operations/config"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 30,
+          "target": "/operations/config/:section"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 31,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 33,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 33,
+          "target": "/inbox"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 34,
+          "target": "/operations/config/local"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 34,
+          "target": "/config"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "redirect",
+          "line": 35,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/App.tsx",
+          "kind": "route",
+          "line": 35,
+          "target": "*"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 12,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 13,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 14,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 15,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 16,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/components/CommandPalette.tsx",
+          "kind": "command-target",
+          "line": 45,
+          "target": "/act?capability=${encodeURIComponent(capability.key)}"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 10,
+          "target": "/command-center"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 11,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 12,
+          "target": "/coordination"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 13,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "command-target",
+          "line": 14,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "navigate",
+          "line": 44,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/components/Sidebar.tsx",
+          "kind": "navigate",
+          "line": 52,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/components/TopBar.tsx",
+          "kind": "navigate",
+          "line": 35,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 63,
+          "target": "/workspaces/${workspace.slug}"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 88,
+          "target": "/governance"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 116,
+          "target": "/operations"
+        },
+        {
+          "file": "frontend/src/screens/Config.tsx",
+          "kind": "redirect",
+          "line": 29,
+          "target": "/operations/config/mcp"
+        },
+        {
+          "file": "frontend/src/screens/Config.tsx",
+          "kind": "navigate",
+          "line": 34,
+          "target": "/operations/config/${key}"
+        },
+        {
+          "file": "frontend/src/screens/Operations.tsx",
+          "kind": "navigate",
+          "line": 25,
+          "target": "/act?category=operations"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 26,
+          "target": "/act?capability=${encodeURIComponent(capability)}"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 57,
+          "target": "/workspaces/${claim.workspace}"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 79,
+          "target": "/workspaces/${handoff.workspace}"
+        },
+        {
+          "file": "frontend/src/screens/Workspaces.tsx",
+          "kind": "navigate",
+          "line": 34,
+          "target": "/act?${query.toString()}"
+        },
+        {
+          "file": "frontend/src/screens/Workspaces.tsx",
+          "kind": "navigate",
+          "line": 54,
+          "target": "/workspaces/${item.slug}"
+        }
       ],
       "realtime_org_channels": [
         "inbox",

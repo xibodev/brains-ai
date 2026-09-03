@@ -135,6 +135,42 @@ def test_positive_manifest_rejects_cli_contract_mutations() -> None:
         assert any(section in error for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("name", "rogue"),
+        ("spellings", ["--rogue", "-R"]),
+        ("type", "rogue-type"),
+        ("required", "changed"),
+        ("default", {"rogue": True}),
+        ("show_default", "changed"),
+        ("multiple", "changed"),
+        ("nargs", 99),
+        ("is_flag", "changed"),
+    ],
+)
+def test_positive_manifest_rejects_every_cli_parameter_field(
+    field: str, replacement: object
+) -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    parameter = actual["modes"]["normal"]["cli_nodes"]["service logs"]["parameters"][0]
+    parameter[field] = replacement
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any("cli_nodes.service logs.parameters" in error for error in errors)
+
+
+@pytest.mark.parametrize("field", ["callback", "hidden", "kind"])
+def test_positive_manifest_rejects_cli_root_contract_fields(field: str) -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    actual["modes"]["normal"]["cli_root"][field] = "changed"
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any(f"cli_root.{field}" in error for error in errors)
+
+
 def test_manifest_records_supported_secondary_option_spellings() -> None:
     manifest = _manifest()
     normal = manifest["modes"]["normal"]
@@ -196,6 +232,133 @@ def test_positive_manifest_rejects_navigation_and_wire_file_mutations() -> None:
     assert any("spa_navigation_sites" in error for error in errors)
     assert any("config_content" in error for error in errors)
     assert any("instruction_content" in error for error in errors)
+
+
+def test_positive_manifest_rejects_frontend_source_hash_mutation() -> None:
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    hashes = actual["modes"]["normal"]["frontend_source_sha256"]
+    first_source = next(iter(hashes))
+    hashes[first_source] = "0" * 64
+
+    errors = check_core_surface.manifest_violations(actual, expected)
+    assert any("frontend_source_sha256" in error for error in errors)
+
+
+def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None:
+    source = tmp_path / "frontend/src"
+    (source / "screens").mkdir(parents=True)
+    (source / "main.tsx").write_text('import { App } from "./App";\n<App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(
+        'import { LabsHome } from "./screens/Labs";\n'
+        'export function App() { return <LabsHome />; }\n'
+        '<a href="/labs">Labs</a>;\n',
+        encoding="utf-8",
+    )
+    (source / "screens/Labs.tsx").write_text(
+        "export function LabsHome() { return <div>Labs</div>; }\n", encoding="utf-8"
+    )
+
+    modules, graph, sites = check_core_surface._frontend_reachability(source)
+    expected = _manifest()
+    actual = copy.deepcopy(expected)
+    normal = actual["modes"]["normal"]
+    normal["frontend_reachable_modules"] = modules
+    normal["frontend_import_graph"] = graph
+    normal["reachable_spa_navigation_sites"] = sites
+
+    errors = check_core_surface.violations(normal)
+    assert any("screens/Labs.tsx" in error for error in errors)
+    assert any("frozen SPA target reachable: /labs" in error for error in errors)
+
+
+def test_reachability_rejects_unknown_target_without_manifest_comparison() -> None:
+    normal = copy.deepcopy(_manifest()["modes"]["normal"])
+    normal["reachable_spa_navigation_sites"].append(
+        {"file": "frontend/src/App.tsx", "kind": "route", "line": 1, "target": "/rogue"}
+    )
+
+    assert any("unknown SPA target reachable: /rogue" in error for error in check_core_surface.violations(normal))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "format",
+        "mcp_path",
+        "instruction_path",
+        "json_servers_key",
+        "mailbox_notification_mode",
+    ],
+)
+def test_positive_manifest_rejects_every_wire_adapter_field(field: str) -> None:
+    expected = _manifest()
+    adapters = expected["modes"]["normal"]["wire"]["adapters"]
+    for adapter_name in adapters:
+        actual = copy.deepcopy(expected)
+        actual_adapter = actual["modes"]["normal"]["wire"]["adapters"][adapter_name]
+        actual_adapter[field] = "changed"
+        errors = check_core_surface.manifest_violations(actual, expected)
+        assert any(f"wire.adapters.{adapter_name}.{field}" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["url", "config_content", "instruction_content", "mcp_action", "rule_action"],
+)
+def test_positive_manifest_rejects_every_wire_transport_field(field: str) -> None:
+    expected = _manifest()
+    adapters = expected["modes"]["normal"]["wire"]["adapters"]
+    for adapter_name, adapter in adapters.items():
+        for transport_name in adapter["transports"]:
+            actual = copy.deepcopy(expected)
+            transport = actual["modes"]["normal"]["wire"]["adapters"][adapter_name][
+                "transports"
+            ][transport_name]
+            transport[field] = "changed"
+            errors = check_core_surface.manifest_violations(actual, expected)
+            assert any(
+                f"wire.adapters.{adapter_name}.transports.{transport_name}.{field}" in error
+                for error in errors
+            )
+
+
+def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> None:
+    normal = _manifest()["modes"]["normal"]
+    adapters = normal["wire"]["adapters"]
+    expected = {
+        "claude-code": (".claude.json", ".claude/CLAUDE.md", {"sse", "stdio", "streamable-http"}),
+        "codex": (".codex/config.toml", ".codex/AGENTS.md", {"stdio", "streamable-http"}),
+        "copilot-cli": (
+            ".copilot/mcp-config.json",
+            ".copilot/copilot-instructions.md",
+            {"sse", "stdio", "streamable-http"},
+        ),
+        "opencode": (
+            ".config/opencode/opencode.json",
+            ".config/opencode/AGENTS.md",
+            {"sse", "stdio", "streamable-http"},
+        ),
+    }
+    assert set(adapters) == set(expected)
+    for name, adapter in adapters.items():
+        expected_mcp, expected_instruction, expected_transports = expected[name]
+        assert adapter["mcp_path"] == expected_mcp
+        assert adapter["instruction_path"] == expected_instruction
+        transports = adapter["transports"]
+        assert set(transports) == expected_transports
+        assert transports["stdio"]["url"] is None
+        assert transports["streamable-http"]["url"] == "http://127.0.0.1:9877/mcp"
+        if "sse" in transports:
+            assert transports["sse"]["url"] == "http://127.0.0.1:9877/sse"
+        for transport in transports.values():
+            assert transport["mcp_action"] == "create"
+            assert transport["rule_action"] == "create"
+            assert "brains:wire:start" in transport["instruction_content"]
+            assert "brains:wire:end" in transport["instruction_content"]
+            assert "brains" in transport["config_content"].lower()
+            if transport["url"] is not None:
+                assert transport["url"] in transport["config_content"]
 
 
 def test_checker_fails_closed_without_disclosing_inventory_error(monkeypatch, capsys) -> None:
