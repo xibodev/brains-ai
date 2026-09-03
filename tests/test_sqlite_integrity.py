@@ -1111,6 +1111,55 @@ def test_diagnose_reports_every_documented_invariant(isolated_db):
     assert report.ok is False
 
 
+@pytest.mark.parametrize("claimed_delta", [-1, 1])
+def test_verify_backup_rejects_fewer_or_more_foreign_key_anomalies_than_manifest(
+    isolated_db, claimed_delta
+):
+    """A dirty rollback image is valid only when its anomaly claim is exact."""
+    _seed_anomalies(isolated_db)
+    archive = isolated_db.parent / f"foreign-keys-{claimed_delta}.tar.gz"
+    create_backup(archive)
+
+    def misstate_foreign_keys(payload: dict) -> None:
+        actual = payload["foreign_key_violations"]
+        assert isinstance(actual, int) and actual > 0
+        payload["foreign_key_violations"] = actual + claimed_delta
+
+    rebuilt = _rebuild_archive_with_manifest(
+        archive,
+        isolated_db.parent / f"foreign-keys-{claimed_delta}",
+        misstate_foreign_keys,
+        name=f"foreign-keys-{claimed_delta}-rebuilt.tar.gz",
+    )
+
+    verification = verify_backup(rebuilt)
+    assert verification.ok is False
+    assert verification.checks["foreign_key_violations_match"] is False
+    assert any("violation count" in failure for failure in verification.failures)
+
+
+def test_older_writer_v2_manifest_with_declared_anomalies_roundtrips(isolated_db):
+    """No new manifest field is required to restore an existing v2 archive."""
+    _seed_anomalies(isolated_db)
+    before = _snapshot(isolated_db)
+    archive = isolated_db.parent / "older-writer.tar.gz"
+    create_backup(archive)
+
+    rebuilt = _rebuild_archive_with_manifest(
+        archive,
+        isolated_db.parent / "older-writer",
+        lambda payload: payload.update(brains_version="1.2.0"),
+        name="older-writer-v2.tar.gz",
+    )
+    verification = verify_backup(rebuilt)
+    assert verification.ok is True, verification.failures
+
+    restored_path = isolated_db.parent / "older-writer-restored.sqlite"
+    restored = restore_backup(rebuilt, target_url=f"sqlite:///{restored_path}")
+    assert restored.post_restore_verified is True
+    assert _snapshot(restored_path) == before
+
+
 def test_diagnosis_is_deterministic(isolated_db):
     _seed_anomalies(isolated_db)
     first = diagnose_database(isolated_db, now=FIXED_NOW).to_dict()
