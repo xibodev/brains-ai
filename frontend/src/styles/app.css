@@ -633,7 +633,6 @@ a {
   z-index: 51;
   padding: var(--s-5);
   overflow-y: auto;
-  overflow-x: hidden;
 }
 
 /* ============ RuntimeTile ============ */
@@ -965,7 +964,7 @@ a {
   --control-blue-soft: #dce6ff;
   --control-green: #187454;
   --control-green-soft: #dceee4;
-  --control-amber: #ad6818;
+  --control-amber: #784406;
   --control-amber-soft: #f7e6ca;
   --control-red: #a23f37;
   --control-red-soft: #f5ddd8;
@@ -3328,7 +3327,6 @@ body {
 
   .control-main {
     padding: 24px 15px 42px;
-    overflow-x: hidden;
   }
 
   .operator-page,

@@ -40,7 +40,7 @@ export function AsyncBoundary<T>({
   isEmpty?: (data: T) => boolean;
   children: (data: T) => ReactNode;
 }) {
-  if (state.loading && state.data === undefined) return <div data-async-state="loading"><Loading /></div>;
+  if (state.loading) return <div data-async-state="loading"><Loading /></div>;
   if (state.error) {
     const detail = state.errorKind === "unauthorized"
       ? "Sign in with an authorized local operator before using this view."

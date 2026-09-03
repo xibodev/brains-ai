@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -19,33 +20,40 @@ interface OperatorContextValue {
 const OperatorContext = createContext<OperatorContextValue | null>(null);
 
 export function OperatorProvider({ children }: { children: ReactNode }) {
-  const [catalog, setCatalog] = useState<OperatorCapabilityCatalog | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [errorKind, setErrorKind] = useState<OperatorContextValue["errorKind"]>(null);
+  const [state, setState] = useState<Omit<OperatorContextValue, "refresh">>({
+    catalog: null,
+    loading: true,
+    error: null,
+    errorKind: null,
+  });
   const [nonce, setNonce] = useState(0);
+  const refresh = useCallback(() => {
+    setState({ catalog: null, loading: true, error: null, errorKind: null });
+    setNonce((value) => value + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setErrorKind(null);
+    // Capabilities authorize and shape actions. Never retain an earlier
+    // catalog across a refresh boundary whose result is not yet known.
+    setState({ catalog: null, loading: true, error: null, errorKind: null });
     api
       .operatorCapabilities()
       .then((next) => {
-        if (!cancelled) setCatalog(next);
+        if (!cancelled) setState({ catalog: next, loading: false, error: null, errorKind: null });
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
           const status = typeof reason === "object" && reason !== null && "status" in reason
             ? Number((reason as { status?: unknown }).status)
             : undefined;
-          setErrorKind(status === 401 || status === 403 ? "unauthorized" : "error");
-          setError(reason instanceof Error ? reason.message : String(reason));
+          setState({
+            catalog: null,
+            loading: false,
+            errorKind: status === 401 || status === 403 ? "unauthorized" : "error",
+            error: reason instanceof Error ? reason.message : String(reason),
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -54,7 +62,7 @@ export function OperatorProvider({ children }: { children: ReactNode }) {
 
   return (
     <OperatorContext.Provider
-      value={{ catalog, loading, error, errorKind, refresh: () => setNonce((value) => value + 1) }}
+      value={{ ...state, refresh }}
     >
       {children}
     </OperatorContext.Provider>

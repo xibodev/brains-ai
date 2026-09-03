@@ -15,6 +15,7 @@ import { isCurrent } from "../components/sessionScope";
 import { useAsync } from "../store/useAsync";
 
 type WorkspaceTab = "overview" | "work" | "communication" | "knowledge" | "activity" | "access";
+const WORKSPACE_TABS: WorkspaceTab[] = ["overview", "work", "communication", "knowledge", "activity", "access"];
 
 export function Workspaces() {
   const { slug } = useParams<{ slug: string }>();
@@ -27,6 +28,13 @@ export function Workspaces() {
     [selectedSlug],
   );
   const workspace = detail.data;
+  // Workspace existence is itself scoped information. A denied deep link is
+  // deliberately indistinguishable from an unknown one in this view.
+  const detailKind = detail.errorKind === "unauthorized" ? "not_found" : detail.errorKind;
+
+  useEffect(() => {
+    setTab("overview");
+  }, [selectedSlug]);
 
   const openAct = (capability: string) => {
     const query = new URLSearchParams({ capability });
@@ -61,7 +69,7 @@ export function Workspaces() {
           </OperatorCard>
 
           <section className="operator-control-room">
-            <OperatorState loading={detail.loading} error={detail.error} kind={detail.errorKind} />
+            <OperatorState loading={detail.loading} error={detail.error} kind={detailKind} />
             {workspace && workspace.workspace.slug === selectedSlug && (
               <>
                 <section className="operator-workspace-banner">
@@ -76,12 +84,45 @@ export function Workspaces() {
                     <button className="operator-button" onClick={() => openAct("workspace.claim")}>Claim workspace</button>
                   </div>
                 </section>
-                <div className="operator-tabs" role="tablist">
-                  {(["overview", "work", "communication", "knowledge", "activity", "access"] as WorkspaceTab[]).map((name) => (
-                    <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name}</button>
+                <div className="operator-tabs" role="tablist" aria-label="Workspace views">
+                  {WORKSPACE_TABS.map((name, index) => (
+                    <button
+                      key={name}
+                      id={`workspace-tab-${name}`}
+                      role="tab"
+                      aria-selected={tab === name}
+                      aria-controls={`workspace-panel-${name}`}
+                      tabIndex={tab === name ? 0 : -1}
+                      className={tab === name ? "active" : ""}
+                      onClick={() => setTab(name)}
+                      onKeyDown={(event) => {
+                        const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                        const requested = event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? WORKSPACE_TABS.length - 1
+                            : direction
+                              ? (index + direction + WORKSPACE_TABS.length) % WORKSPACE_TABS.length
+                              : -1;
+                        if (requested < 0) return;
+                        event.preventDefault();
+                        const next = WORKSPACE_TABS[requested];
+                        setTab(next);
+                        event.currentTarget.parentElement
+                          ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[requested]
+                          ?.focus();
+                      }}
+                    >{name}</button>
                   ))}
                 </div>
-                <WorkspaceTabContent tab={tab} detail={workspace} />
+                <div
+                  id={`workspace-panel-${tab}`}
+                  role="tabpanel"
+                  aria-labelledby={`workspace-tab-${tab}`}
+                  tabIndex={0}
+                >
+                  <WorkspaceTabContent tab={tab} detail={workspace} />
+                </div>
               </>
             )}
           </section>

@@ -64,7 +64,12 @@ export function CommandPalette() {
       <div ref={dialogRef} className="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <input
           data-initial-focus
+          role="combobox"
           aria-label="Find a view or typed action"
+          aria-autocomplete="list"
+          aria-expanded="true"
+          aria-controls="command-palette-results"
+          aria-activedescendant={results[active] ? `command-palette-option-${active}` : undefined}
           placeholder="Find a view or typed action"
           value={query}
           onChange={(e) => {
@@ -77,10 +82,11 @@ export function CommandPalette() {
             else if (e.key === "Enter" && results[active]) go(results[active].to);
           }}
         />
-        <div className="results" role="listbox" aria-label="Available commands">
+        <div id="command-palette-results" className="results" role="listbox" aria-label="Available commands">
           {results.map((c, i) => (
             <button
               key={c.to}
+              id={`command-palette-option-${i}`}
               className={i === active ? "active" : ""}
               role="option"
               aria-selected={i === active}

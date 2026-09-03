@@ -4,6 +4,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+type AsyncSnapshot<T> = Pick<AsyncState<T>, "data" | "loading" | "error" | "errorKind">;
+
 export interface AsyncState<T> {
   data: T | undefined;
   loading: boolean;
@@ -17,10 +19,12 @@ export function useAsync<T>(
   factory: () => Promise<T>,
   deps: ReadonlyArray<unknown>,
 ): AsyncState<T> {
-  const [data, setData] = useState<T | undefined>(undefined);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [errorKind, setErrorKind] = useState<AsyncState<T>["errorKind"]>(null);
+  const [state, setState] = useState<AsyncSnapshot<T>>({
+    data: undefined,
+    loading: true,
+    error: null,
+    errorKind: null,
+  });
   const [nonce, setNonce] = useState(0);
 
   // factory is intentionally excluded — callers pass an inline closure and
@@ -30,35 +34,42 @@ export function useAsync<T>(
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setErrorKind(null);
+    // A refresh is a new observation, not permission to keep presenting the
+    // previous one as current while the request is pending or has failed.
+    setState({ data: undefined, loading: true, error: null, errorKind: null });
     run()
       .then((d) => {
-        if (!cancelled) setData(d);
+        if (!cancelled) setState({ data: d, loading: false, error: null, errorKind: null });
       })
       .catch((e: unknown) => {
         if (!cancelled) {
           const status = typeof e === "object" && e !== null && "status" in e
             ? Number((e as { status?: unknown }).status)
             : undefined;
-          setErrorKind(status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : "error");
-          setError(e instanceof Error ? e.message : String(e));
+          setState({
+            data: undefined,
+            loading: false,
+            errorKind: status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : "error",
+            error: e instanceof Error ? e.message : String(e),
+          });
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, [run, nonce]);
 
-  const refetch = useCallback(() => setNonce((n) => n + 1), []);
+  const refetch = useCallback(() => {
+    setState({ data: undefined, loading: true, error: null, errorKind: null });
+    setNonce((n) => n + 1);
+  }, []);
   const patch = useCallback(
-    (updater: (prev: T | undefined) => T) => setData((prev) => updater(prev)),
+    (updater: (prev: T | undefined) => T) => setState((current) => ({
+      ...current,
+      data: updater(current.data),
+    })),
     [],
   );
 
-  return { data, loading, error, errorKind, refetch, setData: patch };
+  return { ...state, refetch, setData: patch };
 }
