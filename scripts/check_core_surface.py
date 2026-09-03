@@ -106,6 +106,19 @@ CORE_WIRE_METADATA = {
     "copilot-cli": ("json", "mcpServers", "pull"),
     "opencode": ("json", "mcp", "pull"),
 }
+PARSER_INSTALL_HINT = "run `npm ci --ignore-scripts` in frontend/"
+
+
+class ParserDependencyError(RuntimeError):
+    """The lockfile-declared TypeScript parser has not been installed."""
+
+
+def _require_frontend_parser() -> None:
+    parser = ROOT / "frontend/node_modules/typescript/lib/typescript.js"
+    if not parser.is_file():
+        raise ParserDependencyError(
+            f"TypeScript AST parser dependency is unavailable; {PARSER_INSTALL_HINT}"
+        )
 
 
 def _expected_wire_config(adapter: str, transport: str) -> dict[str, object]:
@@ -159,6 +172,7 @@ def _parse_wire_config(adapter: str, content: str) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise ValueError("wire config root is not a mapping")
     return parsed
+
 
 WITHDRAWN_FRONTEND_API_TOKENS = (
     "/admin/configuration/",
@@ -239,7 +253,9 @@ def _environment_names() -> list[str]:
     for root in (ROOT / "src", ROOT / "frontend/src"):
         for path in root.rglob("*"):
             if path.is_file() and path.suffix in {".py", ".ts", ".tsx"}:
-                names.update(re.findall(r"\bBRAINS_[A-Z][A-Z0-9_]+\b", path.read_text(encoding="utf-8")))
+                names.update(
+                    re.findall(r"\bBRAINS_[A-Z][A-Z0-9_]+\b", path.read_text(encoding="utf-8"))
+                )
     return sorted(names)
 
 
@@ -364,6 +380,7 @@ def _frontend_reachability(
 
     root = (source_root or (ROOT / "frontend/src")).resolve()
     helper = ROOT / "scripts/inventory_spa_surface.mjs"
+    _require_frontend_parser()
     completed = subprocess.run(
         ["node", str(helper), str(root)],
         cwd=ROOT,
@@ -380,7 +397,11 @@ def _frontend_reachability(
     modules = payload.get("modules")
     graph = payload.get("graph")
     navigation = payload.get("navigation")
-    if not isinstance(modules, list) or not isinstance(graph, dict) or not isinstance(navigation, list):
+    if (
+        not isinstance(modules, list)
+        or not isinstance(graph, dict)
+        or not isinstance(navigation, list)
+    ):
         raise RuntimeError("TypeScript AST surface inventory was incomplete")
     return modules, graph, navigation
 
@@ -514,9 +535,7 @@ def inventory() -> dict[str, object]:
             "result_callback": callable_identity(getattr(command, "_result_callback", None)),
             "rich_help_panel": normalized_value(getattr(command, "rich_help_panel", None)),
             "allow_extra_args": bool(getattr(command, "allow_extra_args", False)),
-            "allow_interspersed_args": bool(
-                getattr(command, "allow_interspersed_args", True)
-            ),
+            "allow_interspersed_args": bool(getattr(command, "allow_interspersed_args", True)),
             "ignore_unknown_options": bool(getattr(command, "ignore_unknown_options", False)),
             "context_class": callable_identity(getattr(command, "context_class", None)),
             "shell_complete": callable_identity(getattr(command, "shell_complete", None)),
@@ -538,7 +557,9 @@ def inventory() -> dict[str, object]:
                 cli_groups.append(path)
             callback = command.callback
             identity = (
-                f"{callback.__module__}.{callback.__qualname__}" if callback is not None else "<none>"
+                f"{callback.__module__}.{callback.__qualname__}"
+                if callback is not None
+                else "<none>"
             )
             if callback is not None:
                 callback_paths.setdefault(identity, []).append(path)
@@ -569,13 +590,9 @@ def inventory() -> dict[str, object]:
     )
     sidebar_routes = sorted(set(re.findall(r'\bto:\s*"([^"]+)"', sidebar_source)))
     palette_routes = sorted(set(re.findall(r'\bto:\s*"([^"]+)"', palette_source)))
-    palette_dynamic_routes = sorted(
-        set(re.findall(r"\bto:\s*`([^`?]+)\?", palette_source))
-    )
+    palette_dynamic_routes = sorted(set(re.findall(r"\bto:\s*`([^`?]+)\?", palette_source)))
     browser_redirects = sorted(set(re.findall(r'<Navigate\s+to="([^"]+)"', app_source)))
-    sidebar_imperative_routes = sorted(
-        set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source))
-    )
+    sidebar_imperative_routes = sorted(set(re.findall(r'\bnavigate\("([^"]+)"', sidebar_source)))
     frontend_source_hashes = _frontend_source_hashes()
     (
         frontend_reachable_modules,
@@ -628,9 +645,7 @@ def inventory() -> dict[str, object]:
             "group",
         ),
         "cli_callbacks": {key: sorted(value) for key, value in sorted(callback_paths.items())},
-        "cli_aliases": sorted(
-            sorted(paths) for paths in callback_paths.values() if len(paths) > 1
-        ),
+        "cli_aliases": sorted(sorted(paths) for paths in callback_paths.values() if len(paths) > 1),
         "mcp_tools": sorted(TOOL_REGISTRY),
         "mcp_tool_prefix": TOOL_PREFIX,
         "mcp_advertised_tools": sorted(list_tools()),
@@ -682,7 +697,9 @@ def inventory() -> dict[str, object]:
             "dependencies": sorted(project["project"].get("dependencies", [])),
             "optional_dependencies": {
                 key: sorted(value)
-                for key, value in sorted(project["project"].get("optional-dependencies", {}).items())
+                for key, value in sorted(
+                    project["project"].get("optional-dependencies", {}).items()
+                )
             },
             "package_data": project.get("tool", {}).get("setuptools", {}).get("package-data", {}),
         },
@@ -715,7 +732,8 @@ def inventory() -> dict[str, object]:
                 ROOT / "src/brains/web/filters.py",
                 ROOT / "src/brains/web/icons.py",
             )
-            if path.is_file() or (path.is_dir() and any(child.is_file() for child in path.rglob("*")))
+            if path.is_file()
+            or (path.is_dir() and any(child.is_file() for child in path.rglob("*")))
         ),
     }
 
@@ -808,7 +826,13 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         )
     ]:
         errors.append(f"withdrawn browser routes advertised: {blocked}")
-    if blocked_sections := config_sections & {"providers", "models", "integrations", "secrets", "email"}:
+    if blocked_sections := config_sections & {
+        "providers",
+        "models",
+        "integrations",
+        "secrets",
+        "email",
+    }:
         errors.append(f"withdrawn configuration sections advertised: {sorted(blocked_sections)}")
     if summary_write_keys != accepted_write_keys:
         errors.append("configuration summary and accepted write keys differ")
@@ -848,14 +872,15 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         if route.startswith(WITHDRAWN_SPA_PREFIXES):
             errors.append(f"frozen SPA target reachable: {route}")
             continue
-        if not any(route == prefix or route.startswith(f"{prefix}/") for prefix in CORE_SPA_TARGET_PREFIXES):
+        if not any(
+            route == prefix or route.startswith(f"{prefix}/") for prefix in CORE_SPA_TARGET_PREFIXES
+        ):
             errors.append(f"unknown SPA target reachable: {route or '<empty>'}")
     if set(wire_adapters) != set(CORE_WIRE_ADAPTERS):
         errors.append("wire adapter set differs from the supported core adapters")
     if (
         wire_rule_hash != CORE_WIRE_RULE_SHA256
-        or hashlib.sha256(wire_rule_body.encode("utf-8")).hexdigest()
-        != CORE_WIRE_RULE_SHA256
+        or hashlib.sha256(wire_rule_body.encode("utf-8")).hexdigest() != CORE_WIRE_RULE_SHA256
     ):
         errors.append("wire guidance differs from the reviewed core guidance")
     expected_instruction = f"{MD_START}\n{wire_rule_body.rstrip()}\n{MD_END}\n"
@@ -870,7 +895,10 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
             or adapter.get("mailbox_notification_mode") != expected_notification
         ):
             errors.append(f"wire adapter {name} metadata differs from the supported contract")
-        if adapter.get("mcp_path") != mcp_path or adapter.get("instruction_path") != instruction_path:
+        if (
+            adapter.get("mcp_path") != mcp_path
+            or adapter.get("instruction_path") != instruction_path
+        ):
             errors.append(f"wire adapter {name} uses a noncanonical managed path")
         transports = adapter.get("transports", {})
         if not isinstance(transports, dict) or set(transports) != expected_transports:
@@ -904,9 +932,7 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
                             f"wire adapter {name}/{transport_name} config structure is not exact"
                         )
             if instruction_content != expected_instruction:
-                errors.append(
-                    f"wire adapter {name}/{transport_name} instructions are not exact"
-                )
+                errors.append(f"wire adapter {name}/{transport_name} instructions are not exact")
     for term in ("search_semantic", "graph_query", "graph_neighbors"):
         if term in wire_rule:
             errors.append(f"wire guidance advertises {term}")
@@ -941,9 +967,7 @@ def _exact_differences(expected: Any, actual: Any, path: str = "surface") -> lis
     return []
 
 
-def manifest_violations(
-    actual: dict[str, object], expected: dict[str, object]
-) -> list[str]:
+def manifest_violations(actual: dict[str, object], expected: dict[str, object]) -> list[str]:
     errors: list[str] = []
     if expected.get("schema_version") != 1:
         errors.append("core surface manifest schema is missing or unsupported")
@@ -967,11 +991,7 @@ def manifest_violations(
 
 
 def _isolated_inventory(*, all_opt_in: bool) -> dict[str, Any]:
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.upper().startswith("BRAINS_")
-    }
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("BRAINS_")}
     with tempfile.TemporaryDirectory(prefix="brains-core-surface-") as isolated_home:
         env.update(
             {
@@ -1021,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        _require_frontend_parser()
         if args.snapshot_only:
             print(json.dumps(inventory(), sort_keys=True))
             return 0
@@ -1039,9 +1060,15 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(loaded, dict):
                     existing = loaded
             actual.update(
-                {key: value for key, value in existing.items() if key not in {"schema_version", "modes"}}
+                {
+                    key: value
+                    for key, value in existing.items()
+                    if key not in {"schema_version", "modes"}
+                }
             )
-            MANIFEST.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            MANIFEST.write_text(
+                json.dumps(actual, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
             print(f"wrote reviewed core surface manifest: {MANIFEST.relative_to(ROOT)}")
             return 0
         expected = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -1053,14 +1080,23 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("reviewed core surface matches normal and all-opt-in inventories")
         return 0
-    except Exception as exc:
+    except ParserDependencyError:
         print(
             json.dumps(
                 {
                     "violations": [
-                        f"core surface inventory failed closed ({type(exc).__name__})"
+                        f"TypeScript AST parser dependency is unavailable; {PARSER_INSTALL_HINT}"
                     ]
                 },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 1
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"violations": [f"core surface inventory failed closed ({type(exc).__name__})"]},
                 indent=2,
             )
         )

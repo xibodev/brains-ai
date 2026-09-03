@@ -42,6 +42,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -49,6 +54,10 @@ jobs:
         run: uv python install 3.12
       - name: Install project + dev extras
         run: uv sync --extra dev
+
+      - name: Install checked TypeScript parser
+        working-directory: frontend
+        run: npm ci --ignore-scripts
 
       - name: Documentation contract
         run: uv run python scripts/check_docs.py

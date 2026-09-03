@@ -59,6 +59,7 @@ def _npm() -> str | None:
 
 def gates(*, fast: bool, spa: bool) -> list[Gate]:
     runner = _runner()
+    npm = _npm()
 
     def script(path: str) -> list[str]:
         return [*runner, "python", path] if runner else [sys.executable, path]
@@ -68,15 +69,26 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
             return [*runner, name, *args]
         return [sys.executable, "-m", name, *args]
 
-    plan: list[Gate] = [
-        Gate("documentation contract", script("scripts/check_docs.py")),
-        Gate("generated traceability contract", script("scripts/check_traceability.py")),
-        Gate("core surface boundary", script("scripts/check_core_surface.py")),
-        Gate("ruff lint", tool("ruff", "check", ".")),
-        Gate("ruff format", tool("ruff", "format", "--check", ".")),
-        Gate("mypy", tool("mypy")),
-        Gate("acceptance tests", tool("pytest", "-q", "-m", "acceptance")),
-    ]
+    plan: list[Gate] = []
+    if npm is not None:
+        plan.append(
+            Gate(
+                "checked TypeScript parser install",
+                [npm, "ci", "--ignore-scripts"],
+                cwd=ROOT / "frontend",
+            )
+        )
+    plan.extend(
+        [
+            Gate("documentation contract", script("scripts/check_docs.py")),
+            Gate("generated traceability contract", script("scripts/check_traceability.py")),
+            Gate("core surface boundary", script("scripts/check_core_surface.py")),
+            Gate("ruff lint", tool("ruff", "check", ".")),
+            Gate("ruff format", tool("ruff", "format", "--check", ".")),
+            Gate("mypy", tool("mypy")),
+            Gate("acceptance tests", tool("pytest", "-q", "-m", "acceptance")),
+        ]
+    )
     if fast:
         plan.append(
             Gate(
@@ -94,9 +106,7 @@ def gates(*, fast: bool, spa: bool) -> list[Gate]:
     else:
         plan.append(Gate("unit + integration tests", tool("pytest", "-q", "--maxfail=20")))
 
-    npm = _npm()
     if spa and npm is not None:
-        plan.append(Gate("spa install", [npm, "ci"], cwd=ROOT / "frontend"))
         plan.append(Gate("spa typecheck", [npm, "run", "typecheck"], cwd=ROOT / "frontend"))
         plan.append(
             Gate(
@@ -120,6 +130,8 @@ def _unavailable(plan: list[Gate], *, spa: bool) -> list[str]:
     missing = ["docker smoke", "Playwright E2E"]
     if spa and _npm() is None:
         missing.append("SPA typecheck/build/bundle (npm not on PATH)")
+    if _npm() is None:
+        missing.append("core-surface AST parser install (npm not on PATH)")
     if not shutil.which("uv"):
         missing.append("wheel/sdist build (uv not on PATH)")
     if not spa:
@@ -148,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
         if subprocess.run(sync, cwd=str(ROOT), check=False).returncode != 0:
             print("failed to prepare the locked CI Python/dev environment")
             return 1
+
+    if _npm() is None:
+        print("npm is required to install the checked TypeScript parser before core-surface gates")
+        return 1
 
     failures: list[str] = []
     for gate in plan:
