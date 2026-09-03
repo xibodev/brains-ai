@@ -914,8 +914,7 @@ def create_backup(
 ) -> BackupResult:
     """Create a backup archive of the current brains DB.
 
-    Dispatches on ``subsystems.storage.backend``. The output file is a
-    ``.tar.gz`` regardless of backend; the caller picks the path.
+    SQLite is the only shipped runtime backend. The output is ``.tar.gz``.
 
     ``source_lock`` is passed by the repair workflow, which holds the SQLite
     write lock across capture, verification, and mutation. When it is given
@@ -928,13 +927,7 @@ def create_backup(
     target = Path(out_path)
     if backend == "sqlite":
         return _backup_sqlite(target, source_lock=source_lock)
-    if source_lock is not None:
-        raise UnsupportedBackend(
-            f"a quiesced source lock only applies to the sqlite backend (got {backend!r})"
-        )
-    if backend == "postgres":
-        return _backup_postgres(target)
-    raise UnsupportedBackend(f"Cannot back up backend {backend!r}")
+    raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
 
 
 def restore_backup(
@@ -944,20 +937,18 @@ def restore_backup(
 ) -> RestoreResult:
     """Restore a brains DB from an archive.
 
-    ``target_url`` overrides the current ``settings.db_url`` so the
-    operator can restore into a staging DB without flipping config.
-    For SQLite it must be a ``sqlite:///`` URL; for Postgres it must
-    be a libpq URL.
+    ``target_url`` may select another SQLite file. Non-SQLite targets fail
+    closed even when a historical Postgres driver happens to be installed.
     """
     backend = _current_backend()
     archive = Path(archive_path).expanduser().resolve()
     if not archive.exists():
         raise BackupError(f"Archive not found: {archive}")
-    if backend == "sqlite":
-        return _restore_sqlite(archive, target_url=target_url)
-    if backend == "postgres":
-        return _restore_postgres(archive, target_url=target_url)
-    raise UnsupportedBackend(f"Cannot restore backend {backend!r}")
+    if backend != "sqlite":
+        raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
+    if target_url is not None and not target_url.startswith("sqlite:"):
+        raise UnsupportedBackend("Restore targets must use SQLite")
+    return _restore_sqlite(archive, target_url=target_url)
 
 
 def inspect_archive(archive_path: str | Path) -> dict[str, Any]:

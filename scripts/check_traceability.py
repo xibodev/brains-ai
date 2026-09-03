@@ -1071,12 +1071,15 @@ def check_repository(root: Path = ROOT) -> list[str]:
     withdrawn_exact = {normalize_path(path) for path in WITHDRAWN_HTTP_EXACT_PATHS}
     withdrawn_prefixes = tuple(normalize_path(path) for path in WITHDRAWN_HTTP_PATH_PREFIXES)
     collected_calls = collect_client_calls(root)
-    client_calls = ClientCallInventory(calls=tuple(
-        call
-        for call in collected_calls.calls
-        if normalize_path(call.path) not in withdrawn_exact
-        and not normalize_path(call.path).startswith(withdrawn_prefixes)
-    ), unmatchable=collected_calls.unmatchable)
+    client_calls = ClientCallInventory(
+        calls=tuple(
+            call
+            for call in collected_calls.calls
+            if normalize_path(call.path) not in withdrawn_exact
+            and not normalize_path(call.path).startswith(withdrawn_prefixes)
+        ),
+        unmatchable=collected_calls.unmatchable,
+    )
     errors.extend(check_client_server(client_calls, server_routes))
     errors.extend(check_server_families(server_routes, doc_families(trace)))
     # Compatibility gateway aliases are withdrawn from the core composition.

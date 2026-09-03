@@ -13,13 +13,9 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "UPDATE mailboxes SET adapter_provenance = tool "
         "WHERE kind = 'agent' AND adapter_provenance IS NULL"
     )
-    attachment_columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(mailbox_attachments)")
-    }
+    attachment_columns = {row[1] for row in conn.execute("PRAGMA table_info(mailbox_attachments)")}
     if "adapter_provenance" not in attachment_columns:
-        conn.execute(
-            "ALTER TABLE mailbox_attachments ADD COLUMN adapter_provenance VARCHAR(64)"
-        )
+        conn.execute("ALTER TABLE mailbox_attachments ADD COLUMN adapter_provenance VARCHAR(64)")
     conn.execute(
         "UPDATE mailbox_attachments SET adapter_provenance = ("
         "SELECT adapter_provenance FROM mailboxes "

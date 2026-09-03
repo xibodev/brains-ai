@@ -1313,9 +1313,7 @@ def test_successful_repair_archive_restores_the_exact_pre_repair_state(isolated_
     live_after_repair = _snapshot(isolated_db)
     live_report = diagnose_database(isolated_db, now=FIXED_NOW)
     assert live_report.foreign_key_violations == 0
-    assert {finding.code for finding in live_report.findings} == {
-        "session.ended_state_ambiguous"
-    }
+    assert {finding.code for finding in live_report.findings} == {"session.ended_state_ambiguous"}
 
     restored_path = isolated_db.parent / "restored-pre-repair.sqlite"
     restored = restore_backup(archive, target_url=f"sqlite:///{restored_path}")
@@ -1327,16 +1325,21 @@ def test_successful_repair_archive_restores_the_exact_pre_repair_state(isolated_
         assert states["ses-reaped"] == "running"
         assert states["ses-ended"] == "running"
         assert states["ses-completed-open"] == "completed"
-        assert conn.execute(
-            "SELECT ended_at FROM agent_sessions WHERE id='ses-completed-open'"
-        ).fetchone()[0] is None
-        assert conn.execute(
-            "SELECT org_id FROM workspaces WHERE slug='ws-orgless'"
-        ).fetchone()[0] is None
+        assert (
+            conn.execute(
+                "SELECT ended_at FROM agent_sessions WHERE id='ses-completed-open'"
+            ).fetchone()[0]
+            is None
+        )
+        assert (
+            conn.execute("SELECT org_id FROM workspaces WHERE slug='ws-orgless'").fetchone()[0]
+            is None
+        )
         assert conn.execute("SELECT COUNT(*) FROM workspace_claims").fetchone()[0] == 2
-        assert conn.execute(
-            "SELECT session_id FROM events WHERE kind='agent_stdout'"
-        ).fetchone()[0] == "ses-gone"
+        assert (
+            conn.execute("SELECT session_id FROM events WHERE kind='agent_stdout'").fetchone()[0]
+            == "ses-gone"
+        )
         assert conn.execute("SELECT set_by_session_id FROM handoffs").fetchone()[0] == "ses-gone"
         assert conn.execute("PRAGMA foreign_key_check").fetchall()
     finally:

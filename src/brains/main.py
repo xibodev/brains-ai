@@ -47,9 +47,7 @@ app.include_router(h)
 # generated OpenAPI document share the same boundary.
 for core_router in (admin_router, orgs_router, coordination_router, operator_router):
     core_router.routes[:] = [
-        route
-        for route in core_router.routes
-        if not withdrawn_http_path(getattr(route, "path", ""))
+        route for route in core_router.routes if not withdrawn_http_path(getattr(route, "path", ""))
     ]
 
 app.include_router(admin_router)

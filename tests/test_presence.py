@@ -307,19 +307,6 @@ def test_presence_projection_omits_workspace_names_and_session_ids(
     assert "ws-secret" not in str(row)
 
 
-# ---------- MCP tool registration ----------
-
-
-def test_mcp_tool_registered_and_calls_through(isolated_brains: Path) -> None:
-    from brains.control.operators import ensure_admin_operator
-    from brains.mcp.server import TOOL_REGISTRY, call_tool
-
-    ensure_admin_operator()
-    assert "list_other_operators_active" in TOOL_REGISTRY
-    result = call_tool("brains.list_other_operators_active")
-    assert result == []
-
-
 # ---------- dashboard wiring ----------
 
 

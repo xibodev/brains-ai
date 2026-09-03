@@ -613,12 +613,9 @@ def _analyze_ledger(
                 for later in specs
                 if later.order > spec.order
                 and later.migration_id in ledger
-                and ledger[later.migration_id].effective_status
-                in (STATUS_APPLIED, STATUS_SKIPPED)
+                and ledger[later.migration_id].effective_status in (STATUS_APPLIED, STATUS_SKIPPED)
             ]
-            exact_pre_release_repair_gap = _is_exact_pre_release_repair_gap(
-                spec, ledger, backend
-            )
+            exact_pre_release_repair_gap = _is_exact_pre_release_repair_gap(spec, ledger, backend)
             modern_gap = any(row.checksum is not None for row in later_settled) and not (
                 exact_pre_release_repair_gap
             )
@@ -939,14 +936,11 @@ def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> Migrat
                 if settled and not reapplicable:
                     _inspect_recorded(spec, row, backend, validation_findings)
             fatal = [
-                finding
-                for finding in preflight_findings
-                if finding.severity == SEVERITY_ERROR
+                finding for finding in preflight_findings if finding.severity == SEVERITY_ERROR
             ]
             if fatal:
                 detail = "; ".join(
-                    finding.code
-                    + (f" ({finding.migration_id})" if finding.migration_id else "")
+                    finding.code + (f" ({finding.migration_id})" if finding.migration_id else "")
                     for finding in fatal
                 )
                 raise MigrationLedgerStateError(
@@ -962,11 +956,11 @@ def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> Migrat
 
         for spec in specs:
             row = ledger.get(spec.migration_id)
-            status = row.effective_status if row is not None else None
-            settled = status in (STATUS_APPLIED, STATUS_SKIPPED)
+            current_status = row.effective_status if row is not None else None
+            settled = current_status in (STATUS_APPLIED, STATUS_SKIPPED)
             # A migration skipped for lack of a backend implementation becomes
             # applicable the moment that implementation ships.
-            reapplicable = status == STATUS_SKIPPED and spec.supports(backend)
+            reapplicable = current_status == STATUS_SKIPPED and spec.supports(backend)
 
             if row is not None and settled and not reapplicable:
                 if apply:
@@ -1080,9 +1074,7 @@ def run_migrations(*, apply: bool = True, include_ledger: bool = True) -> Migrat
                     candidate = candidate.removeprefix("file:").split("?", 1)[0]
             if candidate != ":memory:":
                 sqlite_database_exists = Path(candidate).expanduser().exists()
-        can_inspect_schema = not (
-            backend == "sqlite" and database and not sqlite_database_exists
-        )
+        can_inspect_schema = not (backend == "sqlite" and database and not sqlite_database_exists)
         report.schema_verified = can_inspect_schema and not _verify_schema(active)
         return report
 

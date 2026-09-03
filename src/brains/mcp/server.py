@@ -195,9 +195,7 @@ _IMPLEMENTED_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
 # old SQLite stores still need their readers and migrations. MCP is an activation
 # boundary, so only the explicit core allowlist is registered or directly callable.
 TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
-    name: handler
-    for name, handler in _IMPLEMENTED_TOOL_REGISTRY.items()
-    if name in CORE_MCP_TOOLS
+    name: handler for name, handler in _IMPLEMENTED_TOOL_REGISTRY.items() if name in CORE_MCP_TOOLS
 }
 
 mcp = FastMCP(

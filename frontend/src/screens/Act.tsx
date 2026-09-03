@@ -84,7 +84,6 @@ function capabilityDescription(key: string): string {
     "knowledge.add": "Record a reusable blocker, workaround, resolution, or caveat.",
     "pattern.decide": "Approve or reject a global reusable pattern.",
     "decision.resolve": "Resolve a queued human decision from Governance.",
-    "session.stop": "Request an idempotent stop from a contextual session view.",
     "queue.repair.preview": "Preview bounded coordination queue repairs without mutation.",
   };
   return descriptions[key] || "Use the named typed contract for this operator job.";
@@ -127,7 +126,6 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
       else if (capability.key === "knowledge.resolve") await api.operatorResolveKnowledge(title, kind);
       else if (capability.key === "pattern.decide") await api.operatorDecidePattern(title, kind === "approved");
       else if (capability.key === "decision.resolve") await api.resolveApproval(title, kind, body, kind === "rejected" ? "rejected" : kind === "deferred" ? "deferred" : "resolved");
-      else if (capability.key === "session.stop") await api.stopSession(title, crypto.randomUUID());
       else if (capability.key === "audit.verify") await api.operatorAuditVerify();
       else if (capability.key === "tool.verify") await api.operatorVerifyTool(title);
       else if (capability.key === "queue.repair.preview") await api.repairQueueHealth(false);
@@ -141,13 +139,13 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
     }
   };
 
-  const contextualRoute = capability.key === "decision.resolve" ? "/governance" : capability.key === "session.stop" ? "/labs/sessions" : null;
-  const runnable = capability.enabled && ["task.create", "task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add", "knowledge.resolve", "pattern.decide", "decision.resolve", "session.stop", "audit.verify", "tool.verify", "queue.repair.preview"].includes(capability.key);
+  const contextualRoute = capability.key === "decision.resolve" ? "/governance" : null;
+  const runnable = capability.enabled && ["task.create", "task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add", "knowledge.resolve", "pattern.decide", "decision.resolve", "audit.verify", "tool.verify", "queue.repair.preview"].includes(capability.key);
   const needsTitle = !["handoff.pick", "handoff.clear", "workspace.release", "audit.verify", "queue.repair.preview"].includes(capability.key);
   const needsSession = ["task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release"].includes(capability.key);
   const needsWorkspace = ["task.create", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add"].includes(capability.key);
   const valid = runnable && (!needsTitle || title.trim()) && (!needsSession || sessionId.trim());
-  const titleLabel = capability.key === "workspace.claim" ? "Scope" : ["task.claim", "task.complete", "task.release"].includes(capability.key) ? "Task code" : capability.key === "knowledge.resolve" ? "Knowledge code" : capability.key === "pattern.decide" ? "Pattern name" : capability.key === "decision.resolve" ? "Decision code" : capability.key === "session.stop" ? "Session ID" : capability.key === "tool.verify" ? "Tool name" : capability.key === "message.send" || capability.key === "topic.post" ? "Subject" : "Title";
+  const titleLabel = capability.key === "workspace.claim" ? "Scope" : ["task.claim", "task.complete", "task.release"].includes(capability.key) ? "Task code" : capability.key === "knowledge.resolve" ? "Knowledge code" : capability.key === "pattern.decide" ? "Pattern name" : capability.key === "decision.resolve" ? "Decision code" : capability.key === "tool.verify" ? "Tool name" : capability.key === "message.send" || capability.key === "topic.post" ? "Subject" : "Title";
 
   return (
     <aside className="operator-action-sheet">
@@ -186,7 +184,6 @@ function effectPreview(key: string, workspace: string, title: string): string {
   if (key === "knowledge.resolve") return `Transitions one named knowledge entry after Workspace authorization.`;
   if (key === "pattern.decide") return `Approves or rejects one global reusable pattern as install admin.`;
   if (key === "decision.resolve") return `Resolves one Workspace-scoped decision through the human separation-of-duty check.`;
-  if (key === "session.stop") return `Records an idempotent stop request for the named Session.`;
   if (key === "audit.verify") return "Recomputes the signed audit chain without mutation.";
   if (key === "tool.verify") return "Checks one registered executable against PATH and records the result.";
   return "Runs a dry-read preview and does not apply repair mutations.";

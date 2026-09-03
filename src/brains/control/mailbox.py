@@ -223,20 +223,10 @@ def inbox_wait(
     timeout_ms: int = 25000,
     after_message_id: int | None = None,
 ) -> dict:
-    """Block until this session has something worth waking for, or timeout.
+    """Block until claimable peer help arrives, or timeout.
 
-    The one poll primitive collapses periodic mailbox, topic, and peer-help
-    checks into a single long-poll that returns when work arrives:
-
-    * ``{"wakeup": "mail", ...}``          — unread inbox traffic exists;
-    * ``{"wakeup": "topic", ...}``         — a subscribed topic advanced;
-    * ``{"wakeup": "peer_request", ...}``  — a claimable peer-help request
-      matches this session/workspace/harness;
-    * ``{"wakeup": None}``                 — quiet for the whole timeout.
-
-    ``after_message_id`` lets a client exclude its already-processed mailbox
-    prefix. A topic wake repeats until ``read_topic(..., session_id=...)``
-    advances that subscription cursor, so delivery is acknowledged explicitly.
+    ``after_message_id`` is retained only so historical callers fail safely;
+    legacy running-session mail and topic rows never wake this core primitive.
     """
     import time as _time
 
@@ -261,9 +251,6 @@ def inbox_wait(
         row = require_live_session(session, session_id, action="inbox_wait")
         workspace_id = row.workspace_id
         my_tool = row.tool
-        from brains.control.sessions import predecessor_session_ids
-
-        recipient_ids = [session_id, *predecessor_session_ids(session, session_id)]
         if workspace_id is not None:
             ws = session.query(Workspace).filter(Workspace.id == workspace_id).one_or_none()
             resolved_slug = ws.slug if ws else None
@@ -272,27 +259,7 @@ def inbox_wait(
 
     visible = visible_workspace_ids_for_current()
 
-    def _unread_exists() -> bool:
-        with SessionLocal() as session:
-            q = session.query(MailboxMessage.id).filter(MailboxMessage.read_at.is_(None))
-            if after_message_id is not None:
-                q = q.filter(MailboxMessage.id > max(0, int(after_message_id)))
-            if workspace_id is None:
-                q = q.filter(MailboxMessage.to_session_id.in_(recipient_ids))
-            else:
-                q = q.filter(
-                    (MailboxMessage.to_session_id.in_(recipient_ids))
-                    | (
-                        MailboxMessage.to_session_id.is_(None)
-                        & (MailboxMessage.workspace_id == workspace_id)
-                    )
-                )
-            return session.query(q.exists()).scalar()
-
-    def _topic_updates() -> list[dict]:
-        from brains.control.topics import pending_topic_updates
-
-        return pending_topic_updates(session_id, limit=5)
+    del after_message_id
 
     def _claimable_request() -> dict | None:
         with SessionLocal() as session:
@@ -321,27 +288,6 @@ def inbox_wait(
                 metadata={"wakeup": "peer_request", "code": request["code"]},
             )
             return {"wakeup": "peer_request", "request": request}
-        if _unread_exists():
-            append_event(
-                "inbox_wait",
-                "wake: mail",
-                session_id=session_id,
-                metadata={"wakeup": "mail"},
-            )
-            return {"wakeup": "mail"}
-        topic_updates = _topic_updates()
-        if topic_updates:
-            append_event(
-                "inbox_wait",
-                f"wake: topic {topic_updates[0]['topic']}",
-                session_id=session_id,
-                metadata={
-                    "wakeup": "topic",
-                    "topics": list(dict.fromkeys(row["topic"] for row in topic_updates)),
-                    "latest_post_id": max(row["id"] for row in topic_updates),
-                },
-            )
-            return {"wakeup": "topic", "posts": topic_updates}
         if _time.monotonic() >= deadline:
             return {"wakeup": None, "timeout": True}
         _time.sleep(_help_poll())

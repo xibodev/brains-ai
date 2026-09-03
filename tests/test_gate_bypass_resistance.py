@@ -544,8 +544,9 @@ _EXEC_BOUNDARY = {
 
 #: Operator-invoked paths that still exec directly. They are outside the
 #: agent-execution boundary by acknowledgement, not by oversight, and are
-#: listed in BL-P0-03 so the claim and the code agree.
+#: listed here explicitly so a new process boundary cannot appear unnoticed.
 _KNOWN_UNGOVERNED_EXEC = (
+    SRC / "brains/control/durable_mailbox.py",  # local binding ACL/process identity probes
     SRC / "brains/control/supervisor.py",
     SRC / "brains/cli/app.py",  # self-update: `git pull`, `pip install`
     SRC / "brains/cli/run.py",

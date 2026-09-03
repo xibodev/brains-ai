@@ -17,12 +17,6 @@ empty and a human explicitly approves thawing it.
 - **Done when:** Clean-host install, wire, start, stop, restart, persistence, uninstall, and configuration-preservation journeys pass for every declared combination.
 - **Maps to:** F0, F7, B6, B8, B9; J1, J9, J11.
 
-### BL-P0-09 - Complete frozen and withdrawn capability containment
-
-- **Action:** Remove frozen or withdrawn discovery and activation from normal documentation, default CLI/MCP and wire surfaces, browser navigation and configuration, setup, examples, extras, and operator guidance while retaining only safe persisted-data compatibility.
-- **Done when:** Generated advertisement inventories find no supported path for Runtime execution, Personas, Projects/Issues, Pods, execution onboarding or supervision, automation/managed Skills, semantic/graph retrieval, running-agent delivery, model gateway, Postgres, telemetry, messaging bridges, GitHub linkage, Org multi-user administration, cross-process scale, automatic feedback/pattern intelligence, public defect relay, ephemeral peer launch, optional SMTP copy, or external evidence services; direct calls fail closed.
-- **Maps to:** F1, F2, F4-F6, F8-F10, B1, B3, B7-B9; J1-J11.
-
 ## P1 — Core completion
 
 ### BL-P1-05 - Complete supported configuration containment

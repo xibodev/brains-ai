@@ -668,9 +668,7 @@ def test_modern_checksummed_ledger_gap_is_refused_without_change(isolated_db):
 
     status = migration_status()
     gaps = [f for f in status["findings"] if f["code"] == "ledger_gap"]
-    assert any(
-        f["migration_id"] == "125_skills" and f["severity"] == "error" for f in gaps
-    )
+    assert any(f["migration_id"] == "125_skills" and f["severity"] == "error" for f in gaps)
     assert status["healthy"] is False
     assert _ledger_rows(isolated_db) == before
 
@@ -693,12 +691,8 @@ def test_recorded_migration_order_mismatch_is_refused_without_change(isolated_db
     assert _ledger_rows(isolated_db) == before
 
     status = migration_status()
-    mismatches = [
-        f for f in status["findings"] if f["code"] == "migration_order_mismatch"
-    ]
-    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [
-        ("125_skills", "error")
-    ]
+    mismatches = [f for f in status["findings"] if f["code"] == "migration_order_mismatch"]
+    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [("125_skills", "error")]
     assert "records order 999" in mismatches[0]["detail"]
     assert status["healthy"] is False
     assert _ledger_rows(isolated_db) == before
@@ -709,8 +703,7 @@ def test_checksummed_row_without_migration_order_is_refused_without_change(isola
     conn = _connect(isolated_db)
     try:
         conn.execute(
-            "UPDATE schema_versions SET migration_order = NULL "
-            "WHERE version = '125_skills'"
+            "UPDATE schema_versions SET migration_order = NULL WHERE version = '125_skills'"
         )
         conn.commit()
     finally:
@@ -723,12 +716,8 @@ def test_checksummed_row_without_migration_order_is_refused_without_change(isola
     assert _ledger_rows(isolated_db) == before
 
     status = migration_status()
-    mismatches = [
-        f for f in status["findings"] if f["code"] == "migration_order_mismatch"
-    ]
-    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [
-        ("125_skills", "error")
-    ]
+    mismatches = [f for f in status["findings"] if f["code"] == "migration_order_mismatch"]
+    assert [(f["migration_id"], f["severity"]) for f in mismatches] == [("125_skills", "error")]
     assert "records no migration order" in mismatches[0]["detail"]
     assert status["healthy"] is False
     assert _ledger_rows(isolated_db) == before
@@ -1071,9 +1060,7 @@ def test_a_sqlite_skipped_row_is_reapplied_once_without_data_loss(synthetic_corp
     reapplied = run_migrations()
     assert reapplied.executed == ["010_covered"]
     assert reapplied.skipped == []
-    assert (
-        _ledger_rows(synthetic_corpus.db_path)["010_covered"]["status"] == STATUS_APPLIED
-    )
+    assert _ledger_rows(synthetic_corpus.db_path)["010_covered"]["status"] == STATUS_APPLIED
 
     conn = _connect(synthetic_corpus.db_path)
     try:
@@ -1738,9 +1725,7 @@ def test_older_backup_restores_and_migrates_to_fresh_shape_with_data(
 ):
     from brains import backup as backup_module
 
-    recorded = HISTORICAL_LEDGER_IDS[
-        : HISTORICAL_LEDGER_IDS.index("100_session_machine_id")
-    ]
+    recorded = HISTORICAL_LEDGER_IDS[: HISTORICAL_LEDGER_IDS.index("100_session_machine_id")]
     _build_legacy_store(
         isolated_db,
         recorded=recorded,

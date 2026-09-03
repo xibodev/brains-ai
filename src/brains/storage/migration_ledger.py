@@ -248,9 +248,10 @@ def inspect_ledger(engine: Engine) -> dict[str, LedgerRow]:
                     database = ":memory:"
                 else:
                     database = database.removeprefix("file:").split("?", 1)[0]
-            if database not in (":memory:", "file::memory:") and not Path(
-                database
-            ).expanduser().exists():
+            if (
+                database not in (":memory:", "file::memory:")
+                and not Path(database).expanduser().exists()
+            ):
                 return {}
 
     inspector = inspect(engine)
@@ -277,9 +278,7 @@ def inspect_ledger(engine: Engine) -> dict[str, LedgerRow]:
         "error",
         "runner_version",
     )
-    projection = ", ".join(
-        name if name in existing else f"NULL AS {name}" for name in columns
-    )
+    projection = ", ".join(name if name in existing else f"NULL AS {name}" for name in columns)
     with engine.connect() as conn:
         rows = conn.execute(text(f"SELECT {projection} FROM {LEDGER_TABLE}")).mappings().all()
     return {

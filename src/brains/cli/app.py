@@ -1699,7 +1699,7 @@ def _run_features_command(
                 (r["config_enabled"] for r in report["features"] if r["feature"] == feature),
                 False,
             )
-            keep = typer.confirm(f"Enable {spec.label}?", default=default)
+            keep = typer.confirm(f"Enable {getattr(spec, 'label', feature)}?", default=default)
             if keep:
                 chosen.append(feature)
         feature_list = chosen
@@ -2127,9 +2127,8 @@ def help_file_cli(
     context: str = typer.Option("", "--context"),
     timeout_ms: int = typer.Option(30000, "--timeout-ms"),
     required_tool: str | None = typer.Option(None, "--required-tool"),
-    execution_mode: str = typer.Option("auto", "--execution-mode"),
 ):
-    """File durable peer help and return immediately."""
+    """File durable help for an existing peer and return immediately."""
     from brains.control.help import file_help_request
 
     _print_json(
@@ -2142,7 +2141,7 @@ def help_file_cli(
             context=context,
             timeout_ms=timeout_ms,
             required_tool=required_tool,
-            execution_mode=execution_mode,
+            execution_mode="existing",
         )
     )
 
@@ -2216,18 +2215,11 @@ def help_cancel_cli(
 def help_release_cli(
     code: str,
     session: str = typer.Option(..., "--session"),
-    retry_timeout_ms: int = typer.Option(30000, "--retry-timeout-ms"),
 ):
     """Release claimed help back to the open queue."""
     from brains.control.help import release_help_request
 
-    _print_json(
-        release_help_request(
-            code,
-            session_id=session,
-            retry_timeout_ms=retry_timeout_ms,
-        )
-    )
+    _print_json(release_help_request(code, session_id=session))
 
 
 @app.command("help-list")
@@ -4727,12 +4719,8 @@ def recovery_policy_cli() -> None:
 from brains.capabilities import WITHDRAWN_CLI_COMMANDS, WITHDRAWN_CLI_GROUPS  # noqa: E402
 
 app.registered_commands[:] = [
-    command
-    for command in app.registered_commands
-    if command.name not in WITHDRAWN_CLI_COMMANDS
+    command for command in app.registered_commands if command.name not in WITHDRAWN_CLI_COMMANDS
 ]
 app.registered_groups[:] = [
-    group
-    for group in app.registered_groups
-    if group.name not in WITHDRAWN_CLI_GROUPS
+    group for group in app.registered_groups if group.name not in WITHDRAWN_CLI_GROUPS
 ]

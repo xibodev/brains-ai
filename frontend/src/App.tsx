@@ -1,6 +1,4 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { OrgProvider } from "./store/OrgContext";
-import { DockProvider } from "./store/DockContext";
 import { OperatorProvider } from "./store/OperatorContext";
 import { ToastProvider } from "./components/Toast";
 import { AppShell } from "./components/AppShell";
@@ -17,9 +15,7 @@ import { Config } from "./screens/Config";
 export function App() {
   return (
     <ToastProvider>
-      <OrgProvider>
-        <DockProvider>
-          <OperatorProvider>
+      <OperatorProvider>
             <BrowserRouter basename="/app">
               <Routes>
                 <Route element={<AppShell />}>
@@ -40,9 +36,7 @@ export function App() {
                 </Route>
               </Routes>
             </BrowserRouter>
-          </OperatorProvider>
-        </DockProvider>
-      </OrgProvider>
+      </OperatorProvider>
     </ToastProvider>
   );
 }

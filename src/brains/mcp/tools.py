@@ -158,13 +158,8 @@ def ask_human(
     """Ask the operator a question and BLOCK until they answer (or timeout).
 
     The human-in-the-loop primitive for an agent that needs a decision,
-    clarification, or approval. Files the request, fans it out to the operator's
-    messaging bridges (WhatsApp/Telegram/Slack) + the dashboard, and polls until
-    the operator answers from ANY channel — then returns their answer.
-
-    Prefer this over guessing or asking in the terminal: it reaches the human
-    wherever they are (e.g. on their phone) and is the only human-loop that works
-    for a headless/remote session.
+    clarification, or approval. Files the durable local request and polls until
+    the operator answers through a supported local surface.
 
     Args:
         prompt: the question to ask.
@@ -180,6 +175,7 @@ def ask_human(
     ``resolved`` | ``rejected`` | ``pending``.
     """
     import os
+    import re
     import time
 
     from brains.control.decisions import (
@@ -187,7 +183,10 @@ def ask_human(
         get_decision,
         list_open_requests,
     )
-    from brains.exec.relay import _active_bridge_senders, code_to_short
+
+    def code_to_short(code: str) -> str:
+        match = re.match(r"^ASK-0*(\d+)$", code, re.IGNORECASE)
+        return f"a{match.group(1)}" if match else code
 
     if wait_ticket:
         code = wait_ticket
@@ -212,23 +211,6 @@ def ask_human(
                 metadata={"urgency": urgency, "kind": "ask_human"},
             )
             code = filed["code"]
-            short = code_to_short(code)
-            lines = [f"\U0001f916 brains ask ({short})", prompt]
-            if options:
-                lines.append("")
-                lines += [f"  {i + 1}. {o}" for i, o in enumerate(options)]
-                lines.append("")
-                lines.append(
-                    f"reply '{short} 1' (the number), or just '1' if it's your only open ask"
-                )
-            else:
-                lines.append(f"reply '{short} <your answer>'")
-            msg = "\n".join(lines)
-            for send in _active_bridge_senders():
-                try:
-                    send(msg)
-                except Exception:
-                    continue
 
     short = code_to_short(code)
     deadline = time.time() + max(1, int(timeout_seconds))
@@ -1292,18 +1274,9 @@ def read_messages_tool(
 def inbox_wait_tool(
     session_id: str,
     timeout_ms: int = 25000,
-    after_message_id: int | None = None,
 ):
-    """Block until mail, subscribed-topic work, or a peer request arrives.
-
-    The single long-poll an agent loops on instead of sleep-polling two
-    surfaces. ``after_message_id`` is a client-held mailbox high-water mark.
-    """
-    return inbox_wait(
-        session_id,
-        timeout_ms=timeout_ms,
-        after_message_id=after_message_id,
-    )
+    """Block until a claimable peer-help request arrives or timeout."""
+    return inbox_wait(session_id, timeout_ms=timeout_ms)
 
 
 def mail_send_tool(to: str, subject: str, body: str = "", session_id: str | None = None):
@@ -1616,9 +1589,8 @@ def file_help_request_tool(
     context: str = "",
     timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
     required_tool: str | None = None,
-    execution_mode: str = "auto",
 ):
-    """File peer help and return immediately with its durable code."""
+    """File help for an existing peer and return its durable code."""
     return file_help_request(
         subject,
         question,
@@ -1628,7 +1600,7 @@ def file_help_request_tool(
         context=context,
         timeout_ms=timeout_ms,
         required_tool=required_tool,
-        execution_mode=execution_mode,
+        execution_mode="existing",
     )
 
 
@@ -1654,13 +1626,11 @@ def cancel_help_request_tool(code: str, session_id: str):
 def release_help_request_tool(
     code: str,
     session_id: str,
-    retry_timeout_ms: int = HELP_DEFAULT_TIMEOUT_MS,
 ):
     """Release claimed help back to the open queue as its claimant."""
     return release_help_request(
         code,
         session_id=session_id,
-        retry_timeout_ms=retry_timeout_ms,
     )
 
 
@@ -1968,9 +1938,7 @@ def governed_action_list_tool(
 def backup_create_tool(out_path: str):
     """Create a backup archive of the current brains DB.
 
-    Dispatches on the configured ``subsystems.storage.backend``: the
-    SQLite path uses the stdlib online backup API; the Postgres path
-    shells out to ``pg_dump``. The archive is a ``.tar.gz`` containing
+    Uses the SQLite online backup API. The archive is a ``.tar.gz`` containing
     a ``manifest.json`` and the raw data blob. Records
     ``admin.backup_created.attempted`` before it runs - a backup whose
     attempt cannot be recorded does not run - and ``admin.backup_created``
@@ -1995,8 +1963,7 @@ def backup_create_tool(out_path: str):
 def backup_restore_tool(archive_path: str, target_url: str | None = None):
     """Restore a brains DB from a backup archive.
 
-    Destructive: overwrites the on-disk SQLite file (or replays into
-    the Postgres DB referenced by ``target_url`` / current settings).
+    Destructive: overwrites the on-disk SQLite file.
     Records ``admin.restore_run.attempted`` before it touches anything -
     a restore whose attempt cannot be recorded does not run - and
     ``admin.restore_run`` once the restore returned. The attempt entry is
