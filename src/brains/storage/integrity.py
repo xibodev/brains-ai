@@ -755,11 +755,7 @@ def _repair_preflight_integrity_check(conn: sqlite3.Connection) -> tuple[str, ..
     except sqlite3.DatabaseError as exc:
         error_code = getattr(exc, "sqlite_errorcode", None)
         corruption_codes = {sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB}
-        if (
-            isinstance(error_code, int)
-            and not isinstance(error_code, bool)
-            and error_code >= 0
-        ):
+        if isinstance(error_code, int) and not isinstance(error_code, bool) and error_code >= 0:
             is_corruption = error_code & 0xFF in corruption_codes
         else:
             message = str(exc).casefold()

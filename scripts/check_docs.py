@@ -132,6 +132,7 @@ REQUIRED_END_TO_END_OUTCOMES = tuple(f"O{i}" for i in range(1, 8))
 
 OUTCOME_ROW_RE = re.compile(r"(?m)^\|\s*(F(?:10|[0-9])|B[1-9])\s*\|.*\|\s*$")
 BACKLOG_REF_RE = re.compile(r"\bBL-P\d+-\d+\b")
+BACKLOG_RANGE_RE = re.compile(r"\bBL-P\d+-\d+\.\.\d+\b")
 BACKLOG_HEADING_RE = re.compile(r"(?m)^###\s+(BL-P[0-3]-\d+)\s+-")
 BACKLOG_ITEM_RE = re.compile(
     r"(?ms)^###\s+(?P<id>BL-P[0-3]-\d+)\s+-.*?(?=^###\s+BL-P[0-3]-\d+\s+-|\Z)"
@@ -263,6 +264,11 @@ def _backlog_contract_errors(path: Path) -> list[str]:
 def _outcome_spec_errors(root: Path, path: Path) -> list[str]:
     text = _read(path)
     errors: list[str] = []
+    for shorthand in sorted(set(BACKLOG_RANGE_RE.findall(text))):
+        errors.append(
+            "USER_OUTCOME_SPEC.md: backlog range shorthand "
+            f"{shorthand} is not allowed; list exact backlog IDs"
+        )
     rows: dict[str, list[list[str]]] = {stable_id: [] for stable_id in REQUIRED_OUTCOME_IDS}
 
     for match in OUTCOME_ROW_RE.finditer(text):

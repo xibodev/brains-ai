@@ -239,7 +239,8 @@ generic webhooks, and scheduled/manual fire are non-activatable compatibility in
 **Promise:** Target contract for exact model intent and explicit policy routing.
 
 **Lifecycle:** withdrawn. Model proxy routes, aliases, provider adapters, router,
-LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility only.
+LiteLLM, catalog, usage routing, and the retired model-execution CLI are source
+compatibility only.
 
 - AC-B1-01: explicit model IDs resolve faithfully or return model-not-found.
 - AC-B1-02: only explicit policy-routing requests may invoke classification.

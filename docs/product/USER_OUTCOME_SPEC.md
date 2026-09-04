@@ -53,7 +53,7 @@ promise that the current candidate produced them successfully.
 | B5 | An operator can evolve, back up, and restore supported SQLite data without losing integrity. | Initialize/upgrade -> inspect schema -> back up -> verify manifest -> restore/rollback. | SQLite storage, migrations, integrity, and backup/restore CLI/MCP. | Applied migration checksum/outcome; FK check; backup manifest/hash/schema; restore compatibility and result. | — | AC-B5-01..05; J10, J11 |
 | B6 | An operator can install, wire, start, inspect, and stop Brains consistently. | Install -> setup/wire -> start service -> inspect status/logs -> stop/unwire. | `brains-ai`, supported wire adapters, service renderers, and supervisor. | Exact executable/config/state identity; listener/protocol health; PID/log ownership; cleanup and rollback result. | BL-P0-06 | AC-B6-01..04; J1, J2, J9, J11 |
 | B7 | Frozen target: authenticated GitHub delivery and human-approved public defect relay. | No supported user path; verify ingress and relay surfaces are not advertised or activated. | Frozen GitHub and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-B7-01..04; J8, J9 |
-| B8 | An operator can distinguish liveness from supported-product readiness and diagnose failures. | Probe -> inspect service, storage, queue, durable-mail, wiring, and recovery posture -> recover -> recheck. | `/health`, readiness, supervisor, queue diagnosis, and recovery policy. | Dependency-specific readiness fields; count-only mailbox registration/attachment/unread/local-notification classes including bounded reclaim and uncertainty; process role, listener/protocol state, queue health, and recovery result. | BL-P0-06, BL-P1-10, BL-P1-12 | AC-B8-01..04; J7, J11 |
+| B8 | An operator can distinguish liveness from supported-product readiness and diagnose failures. | Probe -> inspect service, storage, queue, durable-mail, wiring, and recovery posture -> recover -> recheck. | `/health`, readiness, supervisor, queue diagnosis, and recovery policy. | Dependency-specific readiness fields; count-only mailbox registration/attachment/unread/local-notification classes including bounded reclaim and uncertainty; process role, listener/protocol state, queue health, and recovery result. | BL-P0-06, BL-P1-12 | AC-B8-01..04; J7, J11 |
 | B9 | A user encounters one deliberate modern browser contract while deleted HTML stays absent. | Enter `/app` -> authenticate -> use a supported route or receive explicit not-found behavior. | `/app` plus its `/admin/login` and `/admin/logout` cookie endpoints. | Source, route, command, wheel/sdist inventory, consistent local-operator/Workspace decision, and zero deleted-surface activation. | — | AC-B9-01..03; J9-J11 |
 
 ## End-to-end outcome specifications
@@ -118,7 +118,7 @@ promise that the current candidate produced them successfully.
 - **Then:** the failed dependency is explicit, repair or rollback is bounded,
   data integrity is verified, and critical journeys pass before service is
   declared ready.
-- **Evidence:** B5, B6, B8; J11; BL-P0-06..08.
+- **Evidence:** B5, B6, B8; J11; BL-P0-06.
 
 ## Cross-cutting acceptance rules
 

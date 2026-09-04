@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCoreNavigation } from "../coreRoutes";
 import { useOperator } from "../store/OperatorContext";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -21,22 +21,33 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const { catalog } = useOperator();
   const close = useCallback(() => setOpen(false), []);
   const dialogRef = useDialogFocus<HTMLDivElement>(open, close);
 
   useEffect(() => {
+    const reset = () => {
+      setQuery("");
+      setActive(0);
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen((o) => !o);
-        setQuery("");
-        setActive(0);
+        reset();
       }
     };
+    const onOpen = () => {
+      setOpen(true);
+      reset();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("brains:open-command-palette", onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("brains:open-command-palette", onOpen);
+    };
   }, []);
 
   const commands = [
@@ -55,7 +66,7 @@ export function CommandPalette() {
   if (!open) return null;
 
   const go = (to: string) => {
-    navigate(to);
+    navigation.open(to);
     setOpen(false);
   };
 

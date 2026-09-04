@@ -141,6 +141,18 @@ def test_checker_rejects_required_contract_failures(tmp_path: Path) -> None:
     )
     assert "references unknown backlog ID BL-P9-99" in _run(case).stdout
 
+    case = tmp_path / "backlog-range-shorthand"
+    _valid_tree(case)
+    outcome = case / "docs/product/USER_OUTCOME_SPEC.md"
+    outcome.write_text(
+        outcome.read_text(encoding="utf-8").replace("BL-P0-01", "BL-P0-01..03", 1),
+        encoding="utf-8",
+    )
+    assert (
+        "backlog range shorthand BL-P0-01..03 is not allowed; list exact backlog IDs"
+        in _run(case).stdout
+    )
+
     case = tmp_path / "mismatched-outcome-owner"
     _valid_tree(case)
     backlog = case / "docs/product/BACKLOG.md"

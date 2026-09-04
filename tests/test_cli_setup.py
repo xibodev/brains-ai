@@ -115,7 +115,7 @@ def test_setup_fails_closed_before_installing_incompatible_opencode_plugin(
     monkeypatch.setattr(
         wire_module,
         "_opencode_compatibility",
-        lambda: (False, "OpenCode version could not be verified"),
+        lambda: (None, "OpenCode version could not be verified"),
     )
     workspace = tmp_path / "unsupported-opencode"
     workspace.mkdir()

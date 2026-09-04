@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { useCoreNavigation } from "../coreRoutes";
 import { api } from "../api/client";
 import type { OperatorCapability, OperatorTransport, OperatorWorkspace } from "../api/types";
 import {
@@ -20,7 +21,6 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export function Act() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const { catalog, loading, error, errorKind } = useOperator();
   const workspaces = useAsync(() => api.operatorWorkspaces(), []);
   const categories = Array.from(new Set((catalog?.data ?? []).map((row) => row.category)));
@@ -62,7 +62,7 @@ export function Act() {
               {available.map((capability) => <button key={capability.key} className={`operator-capability ${selected?.key === capability.key ? "selected" : ""}`} onClick={() => selectCapability(capability)}><div><strong>{capability.label}</strong><Transport transport={capability.transport} /></div><p>{capability.reason || capabilityDescription(capability.key)}</p><code>{capability.scope} scope</code></button>)}
             </div>
 
-            {selected && <ActionSheet capability={selected} workspaces={workspaces.data} initialWorkspace={params.get("workspace") || undefined} navigate={navigate} />}
+            {selected && <ActionSheet capability={selected} workspaces={workspaces.data} initialWorkspace={params.get("workspace") || undefined} />}
           </div>
         </>
       )}
@@ -90,7 +90,8 @@ function capabilityDescription(key: string): string {
   return descriptions[key] || "Use the named typed contract for this operator job.";
 }
 
-function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { capability: OperatorCapability; workspaces: OperatorWorkspace[]; initialWorkspace?: string; navigate: (to: string) => void }) {
+function ActionSheet({ capability, workspaces, initialWorkspace }: { capability: OperatorCapability; workspaces: OperatorWorkspace[]; initialWorkspace?: string }) {
+  const navigation = useCoreNavigation();
   const visibleInitialWorkspace = workspaces.some((row) => row.slug === initialWorkspace)
     ? initialWorkspace!
     : workspaces[0]?.slug || "";
@@ -166,7 +167,7 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
         {!capability.enabled && <div className="operator-route-gap">Activation requirement: {capability.reason || "authorized typed HTTP support"}. No shell execution is involved.</div>}
         {capability.enabled && !runnable && <div className="operator-route-gap">Open the contextual screen to supply the identity and evidence this action requires.</div>}
       </div>
-      <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigate(contextualRoute)}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
+        <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigation.open(contextualRoute)}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
     </aside>
   );
 }

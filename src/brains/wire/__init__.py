@@ -183,22 +183,71 @@ class WireContext:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
 
-def render_opencode_plugin(ctx: WireContext) -> str:
-    """Render a PATH-independent plugin with only the state inputs it needs."""
+def build_wire_context(
+    *,
+    transport: str = MCP_MODE_STREAMABLE_HTTP,
+    url: str | None = None,
+    port: int = 9877,
+    python: str = "python",
+    db_url: str | None = None,
+    api_key: str = "",
+) -> WireContext:
+    """Build the exact context used by the public wire command."""
+
+    if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+        raise ValueError("unsupported MCP transport")
+    default_url = (
+        f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
+    )
+    values: dict[str, Any] = {
+        "transport": transport,
+        "url": url or default_url,
+        "python": python,
+        "api_key": api_key,
+    }
+    if db_url is not None:
+        values["db_url"] = db_url
+    return WireContext(**values)
+
+
+def _opencode_runtime_inputs() -> tuple[Path, Path]:
+    """Resolve and validate the local runtime inputs used by the plugin."""
+
+    interpreter = Path(os.path.abspath(sys.executable))
+    if not interpreter.is_file():
+        raise RuntimeError("installed Brains interpreter is unavailable")
+    return interpreter, brains_state_dir().resolve()
+
+
+def _render_opencode_plugin(ctx: WireContext, *, interpreter: Path, state_dir: Path) -> str:
+    """Render the plugin from explicit, already-resolved runtime inputs."""
+
     if not ctx.db_url.startswith("sqlite:///"):
         raise ValueError("OpenCode lifecycle requires the supported SQLite store")
-    interpreter_path = Path(os.path.abspath(sys.executable))
-    if not interpreter_path.is_file():
-        raise RuntimeError("installed Brains interpreter is unavailable")
-    interpreter = str(interpreter_path)
-    command = [interpreter, "-m", "brains"]
+    database_path = Path(ctx.db_url.removeprefix("sqlite:///"))
+    if (
+        not interpreter.is_absolute()
+        or not state_dir.is_absolute()
+        or not database_path.is_absolute()
+    ):
+        raise ValueError("OpenCode lifecycle runtime paths must be absolute")
+    if any("\x00" in str(path) for path in (interpreter, state_dir, database_path)):
+        raise ValueError("OpenCode lifecycle runtime paths are invalid")
+    command = [str(interpreter), "-m", "brains"]
     environment = {
         "BRAINS_DB_URL": ctx.db_url,
-        "BRAINS_STATE_DIR": str(brains_state_dir().resolve()),
+        "BRAINS_STATE_DIR": str(state_dir),
     }
     return _OPENCODE_PLUGIN_TEMPLATE.replace(
         "__BRAINS_LIFECYCLE_COMMAND__", json.dumps(command)
     ).replace("__BRAINS_LIFECYCLE_ENV__", json.dumps(environment, sort_keys=True))
+
+
+def render_opencode_plugin(ctx: WireContext) -> str:
+    """Render a PATH-independent plugin with only the state inputs it needs."""
+
+    interpreter, state_dir = _opencode_runtime_inputs()
+    return _render_opencode_plugin(ctx, interpreter=interpreter, state_dir=state_dir)
 
 
 # --- per-tool MCP entry builders -----------------------------------------
@@ -1239,10 +1288,10 @@ def _opencode_plugin_is_owned(home: Path, content: str) -> bool:
     return hmac.compare_digest(expected, hashlib.sha256(content.encode("utf-8")).hexdigest())
 
 
-def _opencode_compatibility() -> tuple[bool, str]:
+def _opencode_compatibility() -> tuple[str | None, str]:
     executable = shutil.which("opencode")
     if executable is None:
-        return False, "OpenCode executable is unavailable"
+        return None, "OpenCode executable is unavailable"
     try:
         completed = subprocess.run(
             [executable, "--version"],
@@ -1252,19 +1301,60 @@ def _opencode_compatibility() -> tuple[bool, str]:
             timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
-        return False, "OpenCode version could not be verified"
+        return None, "OpenCode version could not be verified"
     match = re.search(r"\b(\d+\.\d+\.\d+)\b", completed.stdout)
     if completed.returncode != 0 or match is None:
-        return False, "OpenCode version could not be verified"
+        return None, "OpenCode version could not be verified"
     if match.group(1) != OPENCODE_SUPPORTED_VERSION:
-        return False, "OpenCode version is outside the supported lifecycle contract"
-    return True, "compatible"
+        return None, "OpenCode version is outside the supported lifecycle contract"
+    return match.group(1), "compatible"
 
 
-def _wire_opencode_plugin(home: Path, ctx: WireContext, dry_run: bool) -> dict[str, Any]:
-    path = _opencode_plugin_path(home)
-    manifest = _opencode_plugin_manifest_path(home)
-    rendered = render_opencode_plugin(ctx)
+def _opencode_plugin_plan(
+    home: Path,
+    ctx: WireContext,
+    *,
+    verified_version: str,
+    interpreter: Path,
+    state_dir: Path,
+) -> dict[str, str | Path]:
+    """Render the owned plugin artifacts after an exact-version preflight."""
+
+    if verified_version != OPENCODE_SUPPORTED_VERSION:
+        raise ValueError("OpenCode version is outside the supported lifecycle contract")
+    rendered = _render_opencode_plugin(
+        ctx,
+        interpreter=interpreter,
+        state_dir=state_dir,
+    )
+    return {
+        "path": _opencode_plugin_path(home),
+        "manifest_path": _opencode_plugin_manifest_path(home),
+        "content": rendered,
+        "manifest_content": hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n",
+    }
+
+
+def _wire_opencode_plugin(
+    home: Path,
+    ctx: WireContext,
+    dry_run: bool,
+    *,
+    verified_version: str,
+    interpreter: Path,
+    state_dir: Path,
+) -> dict[str, Any]:
+    plan = _opencode_plugin_plan(
+        home,
+        ctx,
+        verified_version=verified_version,
+        interpreter=interpreter,
+        state_dir=state_dir,
+    )
+    path = cast("Path", plan["path"])
+    manifest = cast("Path", plan["manifest_path"])
+    rendered = cast("str", plan["content"])
+    manifest_content = cast("str", plan["manifest_content"])
     result: dict[str, Any] = {"path": str(path)}
     if path.exists():
         try:
@@ -1277,13 +1367,13 @@ def _wire_opencode_plugin(home: Path, ctx: WireContext, dry_run: bool) -> dict[s
             return {**result, "action": "unchanged"}
         if not dry_run:
             _write(path, rendered)
-            _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
+            _write(manifest, manifest_content)
         return {**result, "action": "update"}
     if manifest.exists():
         return {**result, "action": "conflict", "detail": "plugin ownership is inconsistent"}
     if not dry_run:
         _write(path, rendered)
-        _write(manifest, hashlib.sha256(rendered.encode("utf-8")).hexdigest() + "\n")
+        _write(manifest, manifest_content)
     return {**result, "action": "create"}
 
 
@@ -1433,9 +1523,10 @@ def wire(
     for adapter in adapters:
         detected = adapter.detect(home)
         warnings: list[str] = []
+        opencode_runtime: tuple[Path, Path] | None = None
         if adapter.name == "opencode":
-            compatible, detail = _opencode_compatibility()
-            if not compatible:
+            verified_version, detail = _opencode_compatibility()
+            if verified_version is None:
                 report["tools"].append(
                     {
                         "tool": adapter.name,
@@ -1451,9 +1542,19 @@ def wire(
                     }
                 )
                 continue
-        plugin_preflight = (
-            _wire_opencode_plugin(home, ctx, True) if adapter.name == "opencode" else None
-        )
+            opencode_runtime = _opencode_runtime_inputs()
+        plugin_preflight = None
+        if adapter.name == "opencode":
+            assert verified_version is not None
+            assert opencode_runtime is not None
+            plugin_preflight = _wire_opencode_plugin(
+                home,
+                ctx,
+                True,
+                verified_version=verified_version,
+                interpreter=opencode_runtime[0],
+                state_dir=opencode_runtime[1],
+            )
         if plugin_preflight is not None and plugin_preflight.get("action") == "conflict":
             report["tools"].append(
                 {
@@ -1489,7 +1590,16 @@ def wire(
         if rules:
             entry["rule"] = _wire_rule(adapter, home, dry_run)
         if adapter.name == "opencode":
-            entry["lifecycle_plugin"] = _wire_opencode_plugin(home, ctx, dry_run)
+            assert verified_version is not None
+            assert opencode_runtime is not None
+            entry["lifecycle_plugin"] = _wire_opencode_plugin(
+                home,
+                ctx,
+                dry_run,
+                verified_version=verified_version,
+                interpreter=opencode_runtime[0],
+                state_dir=opencode_runtime[1],
+            )
         if warnings:
             entry["warnings"] = warnings
         report["tools"].append(entry)

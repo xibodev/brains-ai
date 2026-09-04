@@ -296,9 +296,7 @@ def test_revoked_attachment_falls_back_without_disclosure(tmp_path: Path) -> Non
 def test_successor_attachment_receives_pending_nudge(tmp_path: Path) -> None:
     recipient = _managed_recipient(tmp_path, "claude-code")
     _send_private_message(tmp_path, recipient)
-    binding = read_mailbox_binding_file(
-        recipient["mailbox"]["binding_file"], managed_only=True
-    )
+    binding = read_mailbox_binding_file(recipient["mailbox"]["binding_file"], managed_only=True)
     end_session(recipient["session"]["session_id"], "synthetic restart")
     successor = start_session(str(tmp_path), tool="claude-code", reuse_existing=False)
     link_session_successor(
@@ -432,6 +430,11 @@ def harness_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".config" / "opencode").mkdir(parents=True)
     monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "synthetic-client-key")
+    monkeypatch.setattr(
+        wire,
+        "_opencode_compatibility",
+        lambda: (wire.OPENCODE_SUPPORTED_VERSION, "compatible"),
+    )
     return tmp_path
 
 
