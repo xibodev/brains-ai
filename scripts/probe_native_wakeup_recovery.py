@@ -651,11 +651,11 @@ def _seed(root: Path, candidate: str, provenance_digest: str, operation: str) ->
     )
     if not normal.get("ok"):
         raise RuntimeError("normal Claude wire setup failed")
+    _write_baseline(root, _home_snapshot(paths["home"]))
     if operation == "remove":
         wakeup = wire._wire_wakeup(_claude_adapter(wire, paths["home"]), paths["home"], False)
-        if wakeup.get("action") not in {"install", "recovered", "unchanged"}:
+        if wakeup.get("action") not in {"create", "update", "recovered", "unchanged"}:
             raise RuntimeError("native wakeup removal baseline failed")
-    _write_baseline(root, _home_snapshot(paths["home"]))
 
 
 def _crash(
@@ -771,12 +771,15 @@ def _recover(root: Path, candidate: str, provenance_digest: str, operation: str)
 
     adapter = _claude_adapter(wire, paths["home"])
     if operation == "install":
+        completed = wire._wire_wakeup(adapter, paths["home"], False)
+        if completed.get("action") not in {"create", "update", "recovered", "unchanged"}:
+            raise RuntimeError("native install recovery completion failed")
         rollback = wire._unwire_wakeup(adapter, paths["home"], False)
-        if rollback.get("action") not in {"remove", "recovered", "absent"}:
+        if rollback.get("action") != "remove":
             raise RuntimeError("native install rollback failed")
     else:
-        rollback = wire._wire_wakeup(adapter, paths["home"], False)
-        if rollback.get("action") not in {"install", "recovered", "unchanged"}:
+        rollback = wire._unwire_wakeup(adapter, paths["home"], False)
+        if rollback.get("action") != "remove":
             raise RuntimeError("native removal rollback failed")
     for key in ("lock", "manifest", "backup", "journal", "capture"):
         if paths[key].exists():

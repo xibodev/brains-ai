@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
-import sys
-import types
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -156,12 +156,49 @@ def test_candidate_and_wheel_manifest_mismatches_fail_closed(
         probe._write_package_manifest(tmp_path, COMMIT, wheel, output, str(git))
 
 
-def test_arbitrary_full_sha_cannot_claim_checked_out_candidate() -> None:
+def test_arbitrary_full_sha_cannot_claim_checked_out_candidate(tmp_path: Path) -> None:
     probe = _module()
     git = shutil.which("git")
     assert git is not None
+    repository = tmp_path / "source"
+    repository.mkdir()
+    environment = {
+        **os.environ,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+    }
+    for arguments in (
+        ("init",),
+        ("config", "--local", "user.name", "Native Proof"),
+        ("config", "--local", "user.email", "native-proof@example.invalid"),
+    ):
+        subprocess.run(
+            [git, *arguments],
+            cwd=repository,
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    (repository / "tracked.txt").write_text("synthetic source\n", encoding="utf-8")
+    subprocess.run(
+        [git, "add", "tracked.txt"],
+        cwd=repository,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [git, "commit", "-m", "synthetic-source"],
+        cwd=repository,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     with pytest.raises(RuntimeError, match="does not match"):
-        probe._source_identity(ROOT, COMMIT, str(Path(git).resolve()))
+        probe._source_identity(repository, COMMIT, str(Path(git).resolve()))
 
 
 def test_git_and_interpreter_provenance_reject_ambient_fallbacks(
@@ -205,10 +242,12 @@ def test_private_invocation_is_new_and_owner_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("operation", ["install", "remove"])
+@pytest.mark.parametrize("phase", ["prepared", "swapped", "validated", "metadata"])
 def test_recovery_restores_exact_post_wire_home_baseline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
+    phase: str,
 ) -> None:
     probe = _module()
     root = tmp_path / operation
@@ -220,48 +259,53 @@ def test_recovery_restores_exact_post_wire_home_baseline(
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
 
-    installed = b'{"hooks":{"Stop":["synthetic-wakeup"]}}\n'
+    from brains import wire as real_wire
 
-    class Adapter:
-        name = "claude-code"
+    def exchange_files(target: Path, replacement: Path) -> None:
+        target_bytes = target.read_bytes()
+        replacement_bytes = replacement.read_bytes()
+        target.write_bytes(replacement_bytes)
+        replacement.write_bytes(target_bytes)
 
-    class FakeWire:
-        @staticmethod
-        def _select_adapters(_tools, _home, _force):
-            return [Adapter()]
+    monkeypatch.setattr(real_wire, "_exchange_files", exchange_files)
+    monkeypatch.setattr(real_wire, "_harden", lambda _path: None)
+    monkeypatch.setattr(real_wire, "secure_owner_only_directory", lambda _path: None)
+    monkeypatch.setattr(real_wire, "secure_owner_only_file", lambda _path: None)
+    monkeypatch.setattr(
+        real_wire,
+        "protect_owner_only_bytes",
+        lambda data: ("posix-owner", data),
+    )
+    monkeypatch.setattr(
+        real_wire,
+        "unprotect_owner_only_bytes",
+        lambda protection, data: data if protection == "posix-owner" else None,
+    )
+    monkeypatch.setattr(real_wire, "_TRANSACTION_PHASE_HOOK", None)
 
-        @staticmethod
-        def wire(home, _context, **_kwargs):
-            (home / ".claude.json").write_text(
-                '{"normal_mcp_wire":"established"}\n', encoding="utf-8"
-            )
-            return {"ok": True}
-
-        @staticmethod
-        def _wire_wakeup(_adapter, home, _dry_run):
-            (home / ".claude" / "settings.json").write_bytes(installed)
-            shutil.rmtree(home / ".claude" / ".brains-wakeup", ignore_errors=True)
-            return {"action": "install", "mode": "turn_boundary"}
-
-        @staticmethod
-        def _unwire_wakeup(_adapter, home, _dry_run):
-            (home / ".claude" / "settings.json").write_bytes(probe.ORIGINAL_SETTINGS)
-            shutil.rmtree(home / ".claude" / ".brains-wakeup", ignore_errors=True)
-            return {"action": "remove", "mode": "pull"}
-
-    monkeypatch.setitem(sys.modules, "brains", types.SimpleNamespace(wire=FakeWire))
-    monkeypatch.setattr(probe, "_wire_context", lambda: object())
     probe._seed(root, COMMIT, DIGEST, operation)
     baseline = probe._read_baseline(root)
     assert baseline[".claude.json"] == probe._home_snapshot(root / "home")[".claude.json"]
 
     paths = probe._paths(root)
-    if operation == "install":
-        paths["settings"].write_bytes(installed)
-    else:
-        paths["settings"].write_bytes(probe.ORIGINAL_SETTINGS)
-    paths["recovery"].mkdir()
-    paths["journal"].write_text("{}", encoding="utf-8")
+    if operation == "remove":
+        assert probe._home_snapshot(paths["home"]) != baseline
+
+    class SimulatedCrash(RuntimeError):
+        pass
+
+    def crash_at_phase(name: str) -> None:
+        if name == phase:
+            raise SimulatedCrash(phase)
+
+    adapter = probe._claude_adapter(real_wire, paths["home"])
+    monkeypatch.setattr(real_wire, "_TRANSACTION_PHASE_HOOK", crash_at_phase)
+    with pytest.raises(SimulatedCrash, match=phase):
+        if operation == "install":
+            real_wire._wire_wakeup(adapter, paths["home"], False)
+        else:
+            real_wire._unwire_wakeup(adapter, paths["home"], False)
+    monkeypatch.setattr(real_wire, "_TRANSACTION_PHASE_HOOK", None)
 
     probe._recover(root, COMMIT, DIGEST, operation)
 
