@@ -1,4 +1,4 @@
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 declare const coreHrefBrand: unique symbol;
@@ -77,21 +77,38 @@ export function useCoreNavigation() {
   } as const;
 }
 
-type CoreNavLinkProps = Omit<ComponentProps<typeof NavLink>, "to"> & {
+type CoreNavLinkProps = {
   to: CoreHref | string;
+  children?: ReactNode;
+  className?: ComponentProps<typeof NavLink>["className"];
+  title?: string;
+  ariaLabel?: string;
 };
 
 /** Declarative in-product navigation with the sanitized target applied last. */
-export function CoreNavLink({ to, ...props }: CoreNavLinkProps) {
-  return <NavLink {...props} to={coreHref(to)} />;
+export function CoreNavLink({ to, children, className, title, ariaLabel }: CoreNavLinkProps) {
+  return (
+    <NavLink
+      to={coreHref(to)}
+      className={className}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </NavLink>
+  );
 }
 
-type ExternalLinkProps = Omit<ComponentProps<"a">, "href" | "target" | "rel"> & {
+type ExternalLinkProps = {
   href: string;
+  children?: ReactNode;
+  className?: string;
+  title?: string;
+  ariaLabel?: string;
 };
 
 /** Explicit external navigation; relative and non-HTTP(S) targets are refused. */
-export function ExternalLink({ href, ...props }: ExternalLinkProps) {
+export function ExternalLink({ href, children, className, title, ariaLabel }: ExternalLinkProps) {
   let safe: string | undefined;
   try {
     const parsed = new URL(href);
@@ -99,6 +116,19 @@ export function ExternalLink({ href, ...props }: ExternalLinkProps) {
   } catch {
     safe = undefined;
   }
-  if (!safe) return <span {...props} />;
-  return <a {...props} href={safe} target="_blank" rel="noopener noreferrer" />;
+  if (!safe) {
+    return <span className={className} title={title} aria-label={ariaLabel}>{children}</span>;
+  }
+  return (
+    <a
+      href={safe}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+      title={title}
+      aria-label={ariaLabel}
+    >
+      {children}
+    </a>
+  );
 }

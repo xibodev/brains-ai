@@ -180,11 +180,33 @@ function inspectRouterDeclaration(file, node) {
   }
 }
 function intrinsicTag(node) { return ts.isIdentifier(node) && node.text === node.text.toLowerCase() ? node.text : null; }
+function stringTypeValues(node) {
+  const type = checker.getTypeAtLocation(node);
+  const parts = type.isUnion() ? type.types : [type];
+  const values = [];
+  for (const part of parts) {
+    if (part.flags & ts.TypeFlags.StringLiteral) values.push(part.value);
+    else if (part.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.String)) return null;
+  }
+  return values;
+}
+function intrinsicCandidates(node) {
+  const direct = intrinsicTag(node);
+  if (direct) return { unknown: false, tags: [direct] };
+  const values = stringTypeValues(node);
+  return values === null
+    ? { unknown: true, tags: [] }
+    : { unknown: false, tags: values.map((value) => value.toLowerCase()) };
+}
 function inspectIntrinsic(file, node) {
-  const tag = intrinsicTag(node.tagName), targets = tag && INTRINSIC_TARGETS.get(tag);
-  if (!targets || relative(file.fileName) === BOUNDARY) return;
+  if (relative(file.fileName) === BOUNDARY) return;
+  const candidate = intrinsicCandidates(node.tagName);
   const attributes = node.attributes.properties;
-  if (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && targets.has(item.name.text))) fail(file, node, "intrinsic-navigation");
+  const targets = new Set(candidate.tags.flatMap((tag) => [...(INTRINSIC_TARGETS.get(tag) || [])]));
+  if ((candidate.unknown && (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && [...INTRINSIC_TARGETS.values()].some((names) => names.has(item.name.text))))) ||
+      (targets.size && (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && targets.has(item.name.text))))) {
+    fail(file, node, "intrinsic-navigation");
+  }
 }
 function reactFactory(node) {
   const expression = unwrap(node.expression);
@@ -218,17 +240,30 @@ function inspectReactFactory(file, node) {
     fail(file, node, "react-router-factory");
     return;
   }
-  const targets = ts.isStringLiteralLike(component) ? INTRINSIC_TARGETS.get(component.text.toLowerCase()) : null;
-  if (targets && objectHasTargets(node.arguments[1], targets)) fail(file, node, "react-navigation-factory");
+  const candidate = intrinsicCandidates(component);
+  const targets = new Set(candidate.tags.flatMap((tag) => [...(INTRINSIC_TARGETS.get(tag) || [])]));
+  if ((candidate.unknown && objectHasTargets(node.arguments[1], all)) || (targets.size && objectHasTargets(node.arguments[1], targets))) fail(file, node, "react-navigation-factory");
 }
 function inspectDom(file, node) {
   if (relative(file.fileName) === BOUNDARY) return;
   if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open"])) return fail(file, node, "global-navigation");
+  if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+    const sourceNames = typeNames(node.expression);
+    const target = checker.getTypeAtLocation(node);
+    const capability = sourceNames.has("Window") || sourceNames.has("Document") || [...DOM_NAV_MEMBERS.keys()].some((name) => sourceNames.has(name));
+    if (capability && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-cast");
+  }
+  if (ts.isVariableDeclaration(node) && node.initializer) {
+    const sourceNames = typeNames(node.initializer);
+    const target = checker.getTypeAtLocation(node.name);
+    const capability = sourceNames.has("Window") || sourceNames.has("Document") || [...DOM_NAV_MEMBERS.keys()].some((name) => sourceNames.has(name));
+    if (capability && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-alias");
+  }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     const base = unwrap(node.expression), name = memberName(node), names = typeNames(base);
     const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
     if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open"].includes(name))) return fail(file, node, "window-navigation");
-    if (names.has("Document") && (name === null || ["forms", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
+    if (names.has("Document") && (name === null || ["forms", "location", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
     for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
     const domElement = [...names].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value));
     if (domElement && ["innerHTML", "outerHTML"].includes(name)) return fail(file, node, "html-navigation-injection");
@@ -289,9 +324,18 @@ function inspectBoundaryUsage(file, node) {
         found = true;
         const expression = ts.isStringLiteral(item.initializer) ? item.initializer : ts.isJsxExpression(item.initializer) ? item.initializer.expression : null;
         expression ? recordGuarded(file, item, expression, "navigation") : fail(file, item, "core-link-target");
-      }
+      } else if (!["key", "className", "title", "ariaLabel"].includes(item.name.text)) fail(file, item, "core-link-prop");
     }
     if (!found) fail(file, node, "core-link-target");
+  }
+  if (ts.isJsxOpeningLikeElement(node) && boundaryDeclaration(checker.getSymbolAtLocation(node.tagName), "ExternalLink")) {
+    let found = false;
+    for (const item of node.attributes.properties) {
+      if (ts.isJsxSpreadAttribute(item)) fail(file, item, "external-link-spread");
+      else if (item.name.text === "href") found = true;
+      else if (!["className", "title", "ariaLabel"].includes(item.name.text)) fail(file, item, "external-link-prop");
+    }
+    if (!found) fail(file, node, "external-link-target");
   }
 }
 function hasExportModifier(node) { return Boolean(node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)); }
@@ -322,18 +366,33 @@ function inspectBoundaryGrammar(file, node) {
   if (ts.isJsxOpeningLikeElement(node)) {
     if (ts.isIdentifier(node.tagName) && node.tagName.text === "NavLink") {
       const attributes = node.attributes.properties;
-      if (attributes.length !== 2 || !ts.isJsxSpreadAttribute(attributes[0]) || !ts.isJsxAttribute(attributes[1]) || attributes[1].name.text !== "to") fail(file, node, "boundary-link-order");
+      const names = attributes.map((item) => ts.isJsxSpreadAttribute(item) ? null : item.name.text);
+      if (JSON.stringify(names) !== JSON.stringify(["to", "className", "title", "aria-label"])) fail(file, node, "boundary-link-grammar");
     }
     if (intrinsicTag(node.tagName) === "a") {
       const attributes = node.attributes.properties;
       const names = attributes.map((item) => ts.isJsxSpreadAttribute(item) ? null : item.name.text);
-      if (JSON.stringify(names) !== JSON.stringify([null, "href", "target", "rel"])) fail(file, node, "boundary-external-link-order");
+      if (JSON.stringify(names) !== JSON.stringify(["href", "target", "rel", "className", "title", "aria-label"])) fail(file, node, "boundary-external-link-grammar");
+    }
+    if (intrinsicTag(node.tagName) === "span") {
+      const attributes = node.attributes.properties;
+      const names = attributes.map((item) => ts.isJsxSpreadAttribute(item) ? null : item.name.text);
+      if (JSON.stringify(names) !== JSON.stringify(["className", "title", "aria-label"])) fail(file, node, "boundary-fallback-grammar");
     }
   }
 }
+function inspectAppGrammar(file, node) {
+  if (relative(file.fileName) !== APP || !ts.isIdentifier(node)) return;
+  const info = importInfo(checker.getSymbolAtLocation(node));
+  if (info?.module !== "react-router-dom" || !APP_ROUTER.has(info.name)) return;
+  const parent = node.parent;
+  const directImport = ts.isImportSpecifier(parent) && parent.name === node && !parent.propertyName && node.text === info.name;
+  const directTag = ((ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent)) && parent.tagName === node && node.text === info.name);
+  if (!directImport && !directTag) fail(file, node, "app-router-alias");
+}
 function inspectApp(file, node, appRoutes) {
   if (!ts.isJsxOpeningLikeElement(node) || !ts.isIdentifier(node.tagName) || node.tagName.text !== "Route") return;
-  if (!boundaryDeclaration(checker.getSymbolAtLocation(node.tagName)) && importInfo(checker.getSymbolAtLocation(node.tagName))?.module !== "react-router-dom") return;
+  if (importInfo(checker.getSymbolAtLocation(node.tagName))?.module !== "react-router-dom") return;
   if (node.attributes.properties.some(ts.isJsxSpreadAttribute)) fail(file, node, "route-spread");
   for (const item of node.attributes.properties) if (ts.isJsxAttribute(item) && item.name.text === "path") {
     if (!ts.isStringLiteral(item.initializer)) fail(file, item, "dynamic-route-path");
@@ -351,6 +410,7 @@ for (const file of sourceFiles) {
     inspectDynamic(file, node);
     inspectBoundaryUsage(file, node);
     inspectBoundaryGrammar(file, node);
+    inspectAppGrammar(file, node);
     if (relative(file.fileName) === APP) inspectApp(file, node, appRoutes);
     ts.forEachChild(node, visit);
   }

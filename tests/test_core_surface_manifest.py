@@ -1377,6 +1377,15 @@ def _finite_boundary_fixture(
         'export const Consumer = () => <meta httpEquiv="refresh" content="0;/labs" />;\n',
         'import React from "react"; export const Consumer = () => React.createElement("a", {href: "/labs"});\n',
         'import React from "react"; const link = <a />; export const Consumer = () => React.cloneElement(link, {href: "/labs"});\n',
+        'const Anchor = "a" as const; export const Consumer = () => <Anchor href="/labs" />;\n',
+        'declare const flag: boolean; const Anchor: "a" | "div" = flag ? "a" : "div"; export const Consumer = () => <Anchor href="/labs" />;\n',
+        'const Anchor = "a" as any; export const Consumer = () => <Anchor href="/labs" />;\n',
+        'import React from "react"; const Anchor = "a" as const; export const Consumer = () => React.createElement(Anchor, {href: "/labs"});\n',
+        'import React from "react"; const Anchor = "a" as any; export const Consumer = () => React.createElement(Anchor, {href: "/labs"});\n',
+        'const nav: any = document.location; nav.assign("/labs");\n',
+        'const nav: any = document["location"]; nav.assign("/labs");\n',
+        '(document as any).location.assign("/labs");\n',
+        'const root: any = document; root.location.assign("/labs");\n',
     ],
 )
 def test_finite_navigation_boundary_denies_acquisition_and_activation(tmp_path, consumer) -> None:
@@ -1420,6 +1429,14 @@ export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><butt
             "import { BrowserRouter, Route, Routes }",
             "import { BrowserRouter, Route as ProductRoute, Routes }",
         ),
+        lambda source: source.replace(
+            "export function App() {",
+            "const Alias = Route; void Alias; export function App() {",
+        ),
+        lambda source: source.replace(
+            "export function App() {",
+            "const Alias = Route; export function App() {",
+        ).replace('<Route path="/act"', '<Alias path="/act"'),
     ],
 )
 def test_finite_navigation_boundary_rejects_route_declaration_bypasses(
@@ -1434,14 +1451,15 @@ def test_finite_navigation_boundary_rejects_route_declaration_bypasses(
     [
         lambda source: source + "\nexport const rawNavigate = useNavigate;\n",
         lambda source: source.replace(
-            "<NavLink {...props} to={coreHref(to)} />",
-            "<NavLink to={coreHref(to)} {...props} />",
+            "to={coreHref(to)}",
+            'to={coreHref(to)} dangerouslySetInnerHTML={{__html: "<a href=/labs>x</a>"}}',
         ),
         lambda source: source.replace(
-            '<a {...props} href={safe} target="_blank" rel="noopener noreferrer" />',
-            '<a href={safe} {...props} target="_blank" rel="noopener noreferrer" />',
+            "href={safe}",
+            'href={safe} dangerouslySetInnerHTML={{__html: "<a href=/labs>x</a>"}}',
         ),
         lambda source: source.replace("navigate(coreHref(candidate));", "navigate(candidate);"),
+        lambda source: source.replace("className={className}", "{...props}"),
     ],
 )
 def test_finite_navigation_boundary_rejects_raw_exports_and_override_order(
@@ -1449,3 +1467,17 @@ def test_finite_navigation_boundary_rejects_raw_exports_and_override_order(
 ) -> None:
     with pytest.raises(RuntimeError, match="failed closed"):
         _finite_boundary_fixture(tmp_path, boundary_mutation=boundary_mutation)
+
+
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        'import { CoreNavLink } from "./coreRoutes"; export const Consumer = () => <CoreNavLink to="/act" dangerouslySetInnerHTML={{__html: "<a href=/labs>x</a>"}} />;\n',
+        'import { ExternalLink } from "./coreRoutes"; export const Consumer = () => <ExternalLink href="https://example.invalid" dangerouslySetInnerHTML={{__html: "<a href=/labs>x</a>"}} />;\n',
+        'import { CoreNavLink } from "./coreRoutes"; const props = {to: "/act"}; export const Consumer = () => <CoreNavLink {...props} />;\n',
+        'import { ExternalLink } from "./coreRoutes"; const props = {href: "https://example.invalid"}; export const Consumer = () => <ExternalLink {...props} />;\n',
+    ],
+)
+def test_finite_navigation_boundary_rejects_unsafe_wrapper_props(tmp_path, consumer) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _finite_boundary_fixture(tmp_path, consumer)
