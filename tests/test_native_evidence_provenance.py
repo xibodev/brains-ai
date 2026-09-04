@@ -771,6 +771,10 @@ def test_native_workflows_declare_full_matrix_and_success_only_upload() -> None:
         assert "--package-manifest" in probe["run"]
         assert upload["if"] == "success()"
         assert upload["with"]["if-no-files-found"] == "error"
+        if filename == "ci.yml":
+            environment = next(step for step in steps if step.get("id") == "native-environment")
+            assert 'echo "python=$probe_python" >> "$GITHUB_OUTPUT"' in environment["run"]
+            assert "steps.native-environment.outputs.python" in str(steps)
         package = workflow["jobs"]["package"]
         prepare_steps = [
             step for step in package["steps"] if "--prepare-package" in str(step.get("run", ""))
@@ -1179,6 +1183,16 @@ def _run_service_verifier(candidate: str, *paths: Path) -> subprocess.CompletedP
     "mutation",
     [
         "partial-readiness",
+        "false-health",
+        "false-gateway",
+        "false-mcp-protocol",
+        "wrong-installed-label",
+        "wrong-stopped-label",
+        "wrong-started-label",
+        "wrong-restarted-label",
+        "wrong-recovery-label",
+        "wrong-boundary-label",
+        "wrong-teardown-label",
         "same-pid",
         "missing-tool",
         "false-cleanup-link",
@@ -1204,6 +1218,25 @@ def test_service_verifier_rejects_incomplete_or_unlinked_evidence(
     cleanup_path = tmp_path / "native-service-cleanup.json"
     if mutation == "partial-readiness":
         normal["steps"][4]["evidence"]["listeners"]["mcp"] = False
+    elif mutation == "false-health":
+        normal["steps"][4]["evidence"]["healthy"] = False
+    elif mutation == "false-gateway":
+        normal["steps"][4]["evidence"]["listeners"]["gateway"] = False
+    elif mutation == "false-mcp-protocol":
+        normal["steps"][4]["evidence"]["mcp_protocol_ready"] = False
+    elif mutation.startswith("wrong-") and mutation.endswith("-label"):
+        step = {
+            "wrong-installed-label": "installed",
+            "wrong-stopped-label": "stopped",
+            "wrong-started-label": "started",
+            "wrong-restarted-label": "restarted",
+            "wrong-recovery-label": "manager-recovered-owned-process",
+            "wrong-boundary-label": "boundary-verified",
+            "wrong-teardown-label": "teardown",
+        }[mutation]
+        next(row for row in normal["steps"] if row["step"] == step)["evidence"]["label"] = (
+            "brains-serve-all-evidence-wrong"
+        )
     elif mutation == "same-pid":
         normal["steps"][6]["evidence"]["owned_process"]["pid"] = 101
     elif mutation == "missing-tool":

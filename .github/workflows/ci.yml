@@ -367,6 +367,7 @@ jobs:
         if: matrix.adapter == 'opencode'
         run: npm install --global opencode-ai@1.18.25
       - name: Install the exact wheel into a fresh private environment
+        id: native-environment
         shell: bash
         run: |
           set -euo pipefail
@@ -391,6 +392,7 @@ jobs:
           fi
           tool_paths="$("$probe_python" -c 'import json,os,shutil; names=[n for n in os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(",") if n]; values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
+          echo "python=$probe_python" >> "$GITHUB_OUTPUT"
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
@@ -427,9 +429,10 @@ jobs:
         if: runner.os == 'Windows' && matrix.adapter == 'claude-code'
         shell: pwsh
         run: |
-          & $env:BRAINS_NATIVE_PROBE_PYTHON -m pip install pytest
+          $python = '${{ steps.native-environment.outputs.python }}'
+          & $python -m pip install pytest
           if ($LASTEXITCODE -ne 0) { throw 'pytest installation failed' }
-          & $env:BRAINS_NATIVE_PROBE_PYTHON -m pytest -q tests/test_durable_mailbox_registration.py `
+          & $python -m pytest -q tests/test_durable_mailbox_registration.py `
             -k windows_managed_binding_is_dpapi_protected_and_acl_verified
           if ($LASTEXITCODE -ne 0) { throw 'Windows managed-binding proof failed' }
       - name: Prove native Claude wakeup exchange and abrupt-exit recovery
@@ -716,6 +719,7 @@ jobs:
       - spa
       - package
       - native-installation-probe
+      - claude-wakeup-probe
       - privacy
       - docker-smoke
       - opencode-lifecycle-probe
