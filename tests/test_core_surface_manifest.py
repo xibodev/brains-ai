@@ -1489,6 +1489,22 @@ def _finite_boundary_fixture(
         "declare const frame: HTMLIFrameElement; const child = frame.contentWindow; void child;\n",
         "declare const frame: HTMLIFrameElement; const child = frame.contentDocument; void child;\n",
         "declare const frame: HTMLIFrameElement; const child = frame.getSVGDocument(); void child;\n",
+        'declare const frame: HTMLFrameElement; frame.src = "/labs";\n',
+        "declare const frame: HTMLFrameElement; const child = frame.contentWindow; void child;\n",
+        "declare const frame: HTMLFrameElement; const child = frame.contentDocument; void child;\n",
+        'declare const object: HTMLObjectElement; object.data = "/labs";\n',
+        'declare const object: HTMLObjectElement; object["data"] = "/labs";\n',
+        "declare const object: HTMLObjectElement; const child = object.contentWindow; void child;\n",
+        "declare const object: HTMLObjectElement; const child = object.contentDocument; void child;\n",
+        "declare const object: HTMLObjectElement; const child = object.getSVGDocument(); void child;\n",
+        'const ref = {current: null as HTMLObjectElement | null}; ref.current!.data = "/labs";\n',
+        'declare const embed: HTMLEmbedElement; embed.src = "/labs";\n',
+        "declare const embed: HTMLEmbedElement; const child = embed.getSVGDocument(); void child;\n",
+        'declare const anchor: HTMLAnchorElement; anchor.href = "/labs";\n',
+        'declare const area: HTMLAreaElement; area["href"] = "/labs";\n',
+        'declare const form: HTMLFormElement; form.action = "/labs";\n',
+        'declare const button: HTMLButtonElement; button.formAction = "/labs";\n',
+        'declare const input: HTMLInputElement; input["formAction"] = "/labs";\n',
         "declare const element: any; element.click();\n",
         'declare const element: any; element.dispatchEvent(new Event("open"));\n',
         'declare const element: any; element.setAttribute("title", "x");\n',
@@ -1512,10 +1528,12 @@ const service = { open: (_target: string) => undefined };
 const emitter = { dispatchEvent: (_event: string) => true };
 const model = { location: { assign: (_target: string) => undefined } };
 const frameModel = { srcdoc: "data", src: "data", contentWindow: "data", contentDocument: "data" };
+const embeddedModel = { data: "data", getSVGDocument: () => "data", action: "data", formAction: "data", href: "data" };
 const record = { innerHTML: "data" };
 const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
 service.open("/labs"); emitter.dispatchEvent("data"); model.location.assign("/labs"); record.innerHTML = "safe";
 frameModel.srcdoc = "safe"; frameModel.src = "safe"; void frameModel.contentWindow; void frameModel.contentDocument;
+embeddedModel.data = "safe"; embeddedModel.action = "safe"; embeddedModel.formAction = "safe"; embeddedModel.href = "safe"; void embeddedModel.getSVGDocument();
 window.setTimeout(() => undefined, 1); setInterval(() => undefined, 1);
 void Object.keys(record); void Object.values(record); void Object.entries(record); void Object.fromEntries([["x", 1]]);
 export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget href="/labs" to="/labs" action="/labs" /><div title="/labs" />{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
@@ -1538,6 +1556,8 @@ def test_finite_navigation_boundary_tracks_pinned_dom_navigation_api_scope(tmp_p
         # The pinned compiler is the scope authority; the analyzer already reserves
         # Navigation/global navigation so a future DOM-lib addition fails closed.
         assert "interface Navigation {" not in lib_dom
+    assert "interface HTMLPortalElement" not in lib_dom
+    assert "interface HTMLFencedFrameElement" not in lib_dom
 
 
 @pytest.mark.parametrize(
