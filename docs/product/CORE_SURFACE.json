@@ -358,6 +358,7 @@
       "tests/test_mcp_transport.py",
       "tests/test_memberships.py",
       "tests/test_migration_contract.py",
+      "tests/test_native_evidence_provenance.py",
       "tests/test_native_service_lifecycle_foundation.py",
       "tests/test_native_wakeup_recovery_probe.py",
       "tests/test_nonembedding_lookup.py",
