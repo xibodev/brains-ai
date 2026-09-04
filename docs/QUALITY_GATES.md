@@ -100,7 +100,9 @@ Current workflow facts at HEAD:
   production build and committed-bundle comparison; wheel/sdist build with shipped-data
   assertions; the machine-readable Task Scheduler/launchd/systemd-user × Python
   3.11/3.12 × four-adapter × Streamable HTTP clean-home package, service-definition,
-  and reversible wire matrix; the privacy scan; the
+  and reversible wire matrix; isolated native Windows/macOS Claude-hook
+  atomic-exchange, owner-bound recovery-state, and abrupt-exit recovery probes; the
+  pinned real-Claude generated-hook discovery probe; the privacy scan; the
   runtime image build and container health smoke; and the Playwright journey suite. The
   native probe does not mutate or certify the runner's service manager.
 - Native installation evidence runs from a fresh virtual environment, verifies the
@@ -127,6 +129,16 @@ Current workflow facts at HEAD:
   persistent disposable VM and a changed machine-observed boot marker. Login-only
   attestation remains unsupported and is emitted as null rather than accepted from a
   self-asserted input.
+- `scripts/probe_native_wakeup_recovery.py` requires a fresh private invocation path,
+  binds a clean checked-out candidate and source tree to the exact wheel, and runs from
+  a fresh virtual environment using explicit absolute Git and Python executables. It
+  verifies wheel and installed RECORD entries, exact METADATA/WHEEL bytes,
+  `direct_url.json`, module, launcher, and interpreter before each scenario. Windows or
+  macOS scenarios use a private synthetic home and state root with a controlled PATH,
+  capture the complete Claude client-home snapshot, and prove abrupt install/removal
+  rollback through the native exchange and owner boundary. Recovery must restore that
+  snapshot exactly and remove its recovery directory; only re-verified sanitized
+  success evidence is exposed for artifact upload.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The reviewed positive core-surface manifest is generated independently for normal and all-opt-in startup. The package job and local quality runner install the lockfile-declared TypeScript parser, build a fresh wheel and sdist, and then supply that artifact directory explicitly to the gate; the checker never downloads dependencies and refuses to validate or rewrite the manifest without exactly one wheel and one sdist. Exact inventories cover the normalized `src/brains` and package-input source tree; normalized, regular-file-only wheel/sdist members; resolved Click commands/groups and normalized public command, option, and argument activation fields; advertised MCP names and callable contracts; HTTP operations; a pinned TypeScript-compiler import graph rooted at the real SPA entry; the exact `App.tsx` route grammar; the audited `coreRoutes.tsx` capability boundary; deny-at-source router, DOM, intrinsic, and React navigation checks in every other reachable module; separately retained dormant frontend source; supported configuration keys; every generated harness file and transport contract; package entry points/dependencies/extras; and canonical IDs and actionable canonical-doc command/path/surface claims. Semantic allowlists reject reachable unknown or frozen SPA modules and targets, modified route/navigation guards or analysis, noncanonical harness paths/transports/content, and newly advertised frozen documentation surfaces even if the manifest is regenerated. Missing, extra, stale, malformed, dynamically unresolved, or uninspectable source or artifact inventory fails closed; field-level, boundary-order, capability-provenance, and syntax-bypass mutation tests prove each discoverability family cannot silently expand.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.

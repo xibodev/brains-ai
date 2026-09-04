@@ -19,8 +19,8 @@ empty and a human explicitly approves thawing it.
 
 ## P1 — Core completion
 
-### BL-P1-12 - Complete supported harness wakeup adapters
+### BL-P1-12 - Validate native Claude wakeup recovery
 
-- **Action:** Install consented body-free hook or plugin wakeups where a supported harness permits them and expose truthful pull fallback everywhere else.
-- **Done when:** Supported-harness journeys prove wakeup or pull fallback, bounded retry and uncertainty, and zero message-body or credential disclosure.
+- **Action:** Validate consented Claude hook configuration exchange, owner-only recovery state, and interruption recovery on isolated native Windows and macOS homes.
+- **Done when:** The exact candidate passes real Windows `ReplaceFileW`, DPAPI, and current-user-DACL recovery plus real macOS `renamex_np(RENAME_SWAP)` and owner-only-mode recovery, including abrupt install and removal interruption at every durable transaction phase, exact prior-configuration restoration, and a blocking pinned-Claude discovery and continuation probe.
 - **Maps to:** F3, B2, B8; J7, J8, J11.

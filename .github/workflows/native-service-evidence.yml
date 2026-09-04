@@ -37,11 +37,12 @@ jobs:
           wheel="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
           test -n "$wheel"
           git_executable="$(realpath "$(command -v git)")"
-          uv run python scripts/native_evidence.py --prepare-package \
+          uv run python scripts/probe_native_wakeup_recovery.py \
+            --prepare-package \
             --candidate "$GITHUB_SHA" \
             --git-executable "$git_executable" \
             --wheel "$wheel" \
-            --output "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json"
+            --package-manifest "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json"
           echo "manifest-sha256=$(sha256sum "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         id: package-artifact
