@@ -20,44 +20,114 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, macos-14, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+        host:
+          - os: windows-2022
+            manager: task-scheduler
+          - os: macos-14
+            manager: launchd
+          - os: ubuntu-24.04
+            manager: systemd-user
+        python: ["3.11", "3.12"]
+        adapter: [copilot-cli, claude-code, codex, opencode]
+        transport: [streamable-http]
+    runs-on: ${{ matrix.host.os }}
     env:
       BRAINS_NATIVE_EVIDENCE_DISPOSABLE: disposable-native-service-host
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        if: matrix.adapter == 'opencode'
+        with:
+          node-version: "22"
       - uses: astral-sh/setup-uv@v3
-      - name: Build and install the exact candidate wheel
+      - name: Provision pinned supported OpenCode
+        if: matrix.adapter == 'opencode'
+        run: npm install --global opencode-ai@1.18.25
+      - name: Build and install the exact candidate in a fresh private environment
         shell: bash
         run: |
-          uv build --wheel
-          python -m pip install "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
-          python -c "import glob,hashlib,os; p=glob.glob('dist/*.whl')[0]; open(os.environ['GITHUB_ENV'],'a',encoding='utf-8').write('BRAINS_EVIDENCE_WHEEL_SHA256='+hashlib.sha256(open(p,'rb').read()).hexdigest()+'\n')"
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          runtime="$RUNNER_TEMP/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          venv="$RUNNER_TEMP/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          test ! -e "$artifact"
+          test ! -e "$runtime"
+          test ! -e "$venv"
+          mkdir "$artifact"
+          uv build --wheel --out-dir "$artifact/dist"
+          wheel_count="$(find "$artifact/dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          test "$wheel_count" = 1
+          wheel="$(find "$artifact/dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          python -m venv "$venv"
+          if test -x "$venv/Scripts/python.exe"; then
+            probe_python="$venv/Scripts/python.exe"
+          else
+            probe_python="$venv/bin/python"
+          fi
+          "$probe_python" -m pip install "$wheel"
+          git_executable="$("$probe_python" -c 'import shutil; value=shutil.which("git"); assert value; print(value)')"
+          case "$RUNNER_OS" in
+            Windows) required_tools=powershell,schtasks,taskkill ;;
+            macOS) required_tools=launchctl,ps,sysctl ;;
+            Linux) required_tools=ps,systemctl ;;
+            *) exit 1 ;;
+          esac
+          if test "${{ matrix.adapter }}" = opencode; then
+            required_tools="$required_tools,node,opencode"
+          fi
+          export BRAINS_REQUIRED_NATIVE_TOOLS="$required_tools"
+          tool_paths="$("$probe_python" -c 'import json,os,shutil; names=os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(","); values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
+          echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_EVIDENCE_ROOT=$runtime" >> "$GITHUB_ENV"
+          echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"
       - name: Exercise native manager lifecycle without login claim
         shell: bash
         run: >-
-          python scripts/probe_native_service_lifecycle.py manager-cycle
-          --candidate "${{ github.sha }}"
-          --output native-service-evidence.json
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py manager-cycle
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --adapter "${{ matrix.adapter }}"
+          --repo "$GITHUB_WORKSPACE"
+          --output "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-evidence.json"
       - name: Cleanup disposable native identity
         if: always()
         shell: bash
         run: >-
-          python scripts/probe_native_service_lifecycle.py cleanup
-          --candidate "${{ github.sha }}"
-          --output native-service-cleanup.json
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py cleanup
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --adapter "${{ matrix.adapter }}"
+          --repo "$GITHUB_WORKSPACE"
+          --output "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
+      - name: Verify private native lifecycle evidence before export
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/verify_native_evidence.py
+          --kind service
+          --candidate "$GITHUB_SHA"
+          --manager "${{ matrix.host.manager }}"
+          --python "${{ matrix.python }}"
+          --adapter "${{ matrix.adapter }}"
+          --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-evidence.json"
+          --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
       - name: Upload sanitized native evidence
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: native-service-${{ matrix.os }}-${{ github.sha }}
+          name: native-service-${{ matrix.host.manager }}-py${{ matrix.python }}-${{ matrix.adapter }}-${{ github.sha }}
           path: |
-            native-service-evidence.json
-            native-service-evidence.xml
-            native-service-cleanup.json
-            native-service-cleanup.xml
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-evidence.json
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-evidence.xml
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-cleanup.json
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-cleanup.xml
           if-no-files-found: error
           retention-days: 14

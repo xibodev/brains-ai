@@ -13,8 +13,8 @@ empty and a human explicitly approves thawing it.
 
 ### BL-P0-06 - Validate supported local installation, wiring, and transport
 
-- **Action:** Validate package, executable, endpoint, and wire identity, safe harness transport selection, and service lifecycle on the declared supported host/harness matrix.
-- **Done when:** Clean-host install, wire, start, stop, restart, persistence, uninstall, and configuration-preservation journeys pass for every declared combination.
+- **Action:** Execute the machine-readable workflow matrix `task-scheduler/windows-2022 | launchd/macos-14 | systemd-user/ubuntu-24.04` × `CPython 3.11 | CPython 3.12` × `copilot-cli | claude-code | codex | opencode` × `streamable-http`; validate one provenance-bound package, executable, endpoint, wire identity, native manager lifecycle, and login/reboot boundary per combination.
+- **Done when:** Every declared matrix cell proves clean-host install, wire, start, stop, restart, owned-process recovery, login and reboot persistence, uninstall, listener teardown, and exact configuration restoration from sanitized structured evidence bound to the candidate commit and installed wheel.
 - **Maps to:** F0, F7, B6, B8, B9; J1, J9, J11.
 
 ## P1 — Core completion

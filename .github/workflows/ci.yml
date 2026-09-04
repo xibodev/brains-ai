@@ -314,28 +314,92 @@ jobs:
           retention-days: 7
 
   native-installation-probe:
-    name: native package/wire probe (${{ matrix.os }}, py${{ matrix.python }})
+    name: native package/wire probe (${{ matrix.host.manager }}, py${{ matrix.python }}, ${{ matrix.adapter }})
     needs: [package]
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        host:
+          - os: windows-2022
+            manager: task-scheduler
+          - os: macos-14
+            manager: launchd
+          - os: ubuntu-24.04
+            manager: systemd-user
         python: ["3.11", "3.12"]
-    runs-on: ${{ matrix.os }}
+        adapter: [copilot-cli, claude-code, codex, opencode]
+        transport: [streamable-http]
+    runs-on: ${{ matrix.host.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        if: matrix.adapter == 'opencode'
+        with:
+          node-version: "22"
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
-      - name: Install the built wheel into the clean runner environment
+      - name: Provision pinned supported OpenCode
+        if: matrix.adapter == 'opencode'
+        run: npm install --global opencode-ai@1.18.25
+      - name: Install the exact wheel into a fresh private environment
         shell: bash
-        run: python -m pip install "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
-      - name: Probe clean-home setup, native rendering, and every wire adapter
-        run: python scripts/probe_native_installation.py
+        run: |
+          set -euo pipefail
+          wheel_count="$(find dist -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          test "$wheel_count" = 1
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          venv="$RUNNER_TEMP/brains-native-install-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          test ! -e "$venv"
+          python -m venv "$venv"
+          if test -x "$venv/Scripts/python.exe"; then
+            probe_python="$venv/Scripts/python.exe"
+          else
+            probe_python="$venv/bin/python"
+          fi
+          "$probe_python" -m pip install "$wheel"
+          git_executable="$("$probe_python" -c 'import shutil; value=shutil.which("git"); assert value; print(value)')"
+          if test "${{ matrix.adapter }}" = opencode; then
+            export BRAINS_REQUIRED_NATIVE_TOOLS=node,opencode
+          else
+            export BRAINS_REQUIRED_NATIVE_TOOLS=
+          fi
+          tool_paths="$("$probe_python" -c 'import json,os,shutil; names=[n for n in os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(",") if n]; values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
+          echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+      - name: Probe exact package, native rendering, and selected wire adapter
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_installation.py
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --tool "${{ matrix.adapter }}"
+          --output "$RUNNER_TEMP/native-installation-evidence.json"
+      - name: Verify private native installation evidence before export
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/verify_native_evidence.py
+          --kind installation
+          --candidate "$GITHUB_SHA"
+          --manager "${{ matrix.host.manager }}"
+          --python "${{ matrix.python }}"
+          --adapter "${{ matrix.adapter }}"
+          --input "$RUNNER_TEMP/native-installation-evidence.json"
+      - name: Upload sanitized native installation evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-install-${{ matrix.host.manager }}-py${{ matrix.python }}-${{ matrix.adapter }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-installation-evidence.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Prove Windows managed-binding DPAPI and owner-only DACL
         if: runner.os == 'Windows'
         shell: bash

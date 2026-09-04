@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -251,11 +252,18 @@ def test_native_evidence_scaffold_is_manual_guarded_and_truthful() -> None:
     assert "ubuntu-24.04" in workflow
     assert "manager-cycle" in workflow
     assert "BRAINS_NATIVE_EVIDENCE_DISPOSABLE" in workflow
-    assert "BRAINS_EVIDENCE_WHEEL_SHA256" in workflow
+    assert "BRAINS_NATIVE_EVIDENCE_ROOT" in workflow
+    assert "opencode-ai@1.18.25" in workflow
+    assert 'python: ["3.11", "3.12"]' in workflow
+    assert "adapter: [copilot-cli, claude-code, codex, opencode]" in workflow
+    assert "transport: [streamable-http]" in workflow
+    assert "create_provenance" in probe
+    assert "provenance_sha256" in probe
     assert "FORBIDDEN_PORTS = {9876, 9877}" in probe
-    assert '"login_persistence": False' in probe
+    assert '"login_transition_operator_attested": False' in probe
     assert 'choices=("prepare", "verify", "manager-cycle", "cleanup")' in probe
     assert "if: always()" in workflow
+    assert "if: success()" in workflow
     assert '"error_type": type(exc).__name__' in probe
     assert '"error": str(exc)' not in probe
 
@@ -265,6 +273,16 @@ def test_native_evidence_probe_refuses_without_guard_and_redacts_bad_input(tmp_p
     script = root / "scripts/probe_native_service_lifecycle.py"
     env = dict(os.environ)
     env.pop("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", None)
+    env["BRAINS_NATIVE_EVIDENCE_ROOT"] = str(tmp_path / "runtime")
+    env["BRAINS_STATE_DIR"] = str(tmp_path / "runtime" / "state")
+    common = [
+        "--wheel",
+        str(tmp_path / "candidate.whl"),
+        "--git-executable",
+        str(Path(shutil.which("git") or "")),
+        "--adapter",
+        "codex",
+    ]
     guarded_output = tmp_path / "guarded.json"
     guarded = subprocess.run(
         [
@@ -273,6 +291,7 @@ def test_native_evidence_probe_refuses_without_guard_and_redacts_bad_input(tmp_p
             "prepare",
             "--candidate",
             "a" * 40,
+            *common,
             "--output",
             str(guarded_output),
         ],
@@ -297,6 +316,7 @@ def test_native_evidence_probe_refuses_without_guard_and_redacts_bad_input(tmp_p
             "prepare",
             "--candidate",
             invalid_value,
+            *common,
             "--output",
             str(invalid_output),
         ],
