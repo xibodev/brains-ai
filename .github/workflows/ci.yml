@@ -6,7 +6,7 @@ name: ci
 # command that did not run. The release workflow (release.yml) does NOT re-run
 # this — tag pushes are expected to be on commits that already passed ci.
 #
-# Gate map (docs/QUALITY_GATES.md §4):
+# Gate map (docs/QUALITY_GATES.md):
 #   docs        documentation contract + generated traceability contract
 #   lint        ruff check + ruff format
 #   typecheck   mypy
@@ -14,6 +14,8 @@ name: ci
 #   migrations  migration contract + frozen-baseline rendering contract
 #   spa         SPA typecheck, production build, committed-bundle comparison
 #   package     wheel + sdist build and shipped-data assertions
+#   native      exact-package installation and native recovery probes
+#   harness     isolated Claude and OpenCode lifecycle probes
 #   privacy     personal-identifier and product-vocabulary scan
 #   docker      runtime image build + container health smoke
 #   e2e         Playwright journey suite against an ephemeral hub

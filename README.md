@@ -32,9 +32,11 @@ brains-ai serve-all
 
 Open `http://127.0.0.1:8787/app`. Keep the generated admin key private.
 
-Native service installation commands are implemented, but clean-host lifecycle and
-persistence validation remains an open backlog item. See
-[Operations](docs/OPERATIONS.md) before relying on a background service.
+Repository checks exercise exact-package installation, reversible harness wiring, and
+generated Claude hook behavior in isolation. An exact candidate is not qualified until
+the fail-closed aggregate accepts its required native and container results. Native
+service-manager persistence and platform-specific Claude recovery remain backlog work;
+see [Operations](docs/OPERATIONS.md) before relying on a background service.
 
 ## Documentation
 
