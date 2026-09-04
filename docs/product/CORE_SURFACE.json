@@ -359,6 +359,7 @@
       "tests/test_memberships.py",
       "tests/test_migration_contract.py",
       "tests/test_native_service_lifecycle_foundation.py",
+      "tests/test_native_wakeup_recovery_probe.py",
       "tests/test_nonembedding_lookup.py",
       "tests/test_observability_metrics.py",
       "tests/test_opencode_lifecycle.py",

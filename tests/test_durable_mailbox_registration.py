@@ -379,7 +379,7 @@ def test_windows_managed_binding_is_dpapi_protected_and_acl_verified(tmp_path) -
     path = Path(created["binding_file"])
     assert path.read_text(encoding="utf-8").startswith("dpapi-v1:")
     verified = subprocess.run(
-        ["icacls", str(path), "/verify"],
+        [mailbox_ctl._windows_system_tool("System32/icacls.exe"), str(path), "/verify"],
         check=True,
         capture_output=True,
         text=True,
@@ -388,7 +388,12 @@ def test_windows_managed_binding_is_dpapi_protected_and_acl_verified(tmp_path) -
     assert verified.returncode == 0
     assert mailbox_ctl._windows_binding_acl_sids(path) == (mailbox_ctl._windows_current_user_sid(),)
     subprocess.run(
-        ["icacls", str(path), "/grant", "*S-1-1-0:(R)"],
+        [
+            mailbox_ctl._windows_system_tool("System32/icacls.exe"),
+            str(path),
+            "/grant",
+            "*S-1-1-0:(R)",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -404,6 +409,47 @@ def test_windows_binding_acl_proof_is_required_by_native_ci() -> None:
     )
     assert "if: runner.os == 'Windows'" in workflow
     assert "-k windows_managed_binding_is_dpapi_protected_and_acl_verified" in workflow
+
+
+def test_windows_acl_tools_ignore_ambient_path_shadowing(tmp_path, monkeypatch) -> None:
+    from brains.control import durable_mailbox as mailbox_ctl
+
+    system_root = tmp_path / "Windows"
+    tools = (
+        system_root / "System32" / "whoami.exe",
+        system_root / "System32" / "icacls.exe",
+        system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe",
+    )
+    for tool in tools:
+        tool.parent.mkdir(parents=True, exist_ok=True)
+        tool.write_bytes(b"synthetic-system-tool")
+    shadow = tmp_path / "shadow"
+    shadow.mkdir()
+    for name in ("whoami.exe", "icacls.exe", "powershell.exe"):
+        (shadow / name).write_bytes(b"must-not-run")
+    monkeypatch.setenv("SYSTEMROOT", str(system_root))
+    monkeypatch.setenv("PATH", str(shadow))
+    calls: list[list[str]] = []
+
+    def completed(command, **_kwargs):
+        calls.append(command)
+        stdout = '"synthetic","S-1-5-21-1000"\n' if command[0].endswith("whoami.exe") else ""
+        if command[0].endswith("powershell.exe"):
+            stdout = "S-1-5-21-1000\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(mailbox_ctl.subprocess, "run", completed)
+    target = tmp_path / "binding"
+    target.write_text("synthetic", encoding="utf-8")
+
+    mailbox_ctl._windows_secure_binding_file(target)
+
+    expected_root = system_root.resolve()
+    assert calls
+    for command in calls:
+        executable = Path(command[0]).resolve()
+        executable.relative_to(expected_root)
+        assert shadow.resolve() not in executable.parents
 
 
 def test_invalid_mailbox_start_does_not_register_workspace(tmp_path) -> None:
