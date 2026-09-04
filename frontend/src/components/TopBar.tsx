@@ -21,7 +21,7 @@ export function TopBar({ connection }: { connection: ConnState }) {
         className="control-search"
         onClick={() => {
           window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", ctrlKey: true }),
+            new Event("brains:open-command-palette"),
           );
         }}
       >

@@ -65,6 +65,12 @@ const checker = program.getTypeChecker();
 const sourceFiles = [...discovered.keys()].map((file) => program.getSourceFile(file)).filter(Boolean);
 
 const APP = "App.tsx", BOUNDARY = "coreRoutes.tsx";
+const REACT_MODULES = new Set(["react", "react/jsx-runtime", "react/jsx-dev-runtime"]);
+const REVIEWED_REACT_IMPORTS = new Set([
+  "StrictMode", "ComponentProps", "CSSProperties", "ReactNode", "RefObject",
+  "createContext", "useCallback", "useContext", "useEffect", "useMemo", "useRef", "useState",
+]);
+const REVIEWED_OBJECT_METHODS = new Set(["entries", "fromEntries", "keys", "values"]);
 const READ_ONLY_ROUTER = new Set(["Outlet", "useLocation", "useParams", "useSearchParams"]);
 const APP_ROUTER = new Set(["BrowserRouter", "Route", "Routes"]), BOUNDARY_ROUTER = new Set(["NavLink", "useNavigate"]);
 const BOUNDARY_EXPORTS = new Set(["CoreHref", "CORE_ROUTE_PATTERNS", "coreHref", "workspaceHref", "configHref", "actHref", "useCoreNavigation", "CoreNavLink", "ExternalLink"]);
@@ -146,6 +152,24 @@ function importInfo(symbol) {
   }
   return null;
 }
+function unsafeReactLocalBinding(file, identifier) {
+  if (!ts.isIdentifier(identifier)) return false;
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || !REACT_MODULES.has(statement.moduleSpecifier.text)) continue;
+    const clause = statement.importClause;
+    if (!clause) continue;
+    if (clause.name?.text === identifier.text) return true;
+    if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings) && clause.namedBindings.name.text === identifier.text) return true;
+    if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+      const item = clause.namedBindings.elements.find((candidate) => candidate.name.text === identifier.text);
+      if (item) {
+        const imported = item.propertyName?.text || item.name.text;
+        return statement.moduleSpecifier.text !== "react" || !REVIEWED_REACT_IMPORTS.has(imported);
+      }
+    }
+  }
+  return false;
+}
 
 const sites = [], unresolved = [];
 const lineOf = (file, node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
@@ -207,7 +231,7 @@ function inspectFiniteSyntax(file, node) {
     if (module === "react/jsx-runtime" || module === "react/jsx-dev-runtime") {
       fail(file, node, "react-jsx-runtime");
     }
-    if (module === "react" && node.importClause && !node.importClause.isTypeOnly) {
+    if (module === "react" && node.importClause) {
       const clause = node.importClause;
       if (clause.name || (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))) {
         fail(file, node, "react-factory-acquisition");
@@ -215,24 +239,41 @@ function inspectFiniteSyntax(file, node) {
       if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
         for (const item of clause.namedBindings.elements) {
           const imported = item.propertyName?.text || item.name.text;
-          if (!item.isTypeOnly && ["createElement", "cloneElement", "createFactory"].includes(imported)) {
-            fail(file, item, "react-factory-acquisition");
+          if (!REVIEWED_REACT_IMPORTS.has(imported) || item.name.text !== imported) {
+            fail(file, item, "react-import-outside-reviewed-set");
           }
         }
       }
     }
   }
-  if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
-    const module = node.moduleSpecifier.text;
-    if (module === "react/jsx-runtime" || module === "react/jsx-dev-runtime") {
-      fail(file, node, "react-jsx-runtime");
-    }
-    if (module === "react" && (!node.exportClause || (ts.isNamedExports(node.exportClause) && node.exportClause.elements.some((item) => ["createElement", "cloneElement", "createFactory"].includes(item.propertyName?.text || item.name.text))))) {
-      fail(file, node, "react-factory-acquisition");
+  if (ts.isExportDeclaration(node)) {
+    if (node.moduleSpecifier && REACT_MODULES.has(node.moduleSpecifier.text)) {
+      fail(file, node, "react-reexport");
+    } else if (!node.moduleSpecifier && node.exportClause && ts.isNamedExports(node.exportClause)) {
+      for (const item of node.exportClause.elements) {
+        const local = item.propertyName || item.name;
+        if (unsafeReactLocalBinding(file, local)) {
+          fail(file, item, "react-reexport");
+        }
+      }
     }
   }
-  if (ambientGlobal(node, ["eval", "Function", "Proxy", "Reflect"])) {
+  if (ts.isExportAssignment(node)) {
+    const expression = unwrap(node.expression);
+    if (ts.isIdentifier(expression) && unsafeReactLocalBinding(file, expression)) {
+      fail(file, node, "react-reexport");
+    }
+  }
+  if (ambientGlobal(node, ["eval", "Function", "Proxy", "Reflect", "DOMParser"])) {
     fail(file, node, "dynamic-language-capability");
+  }
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["Object"])) {
+    const member = node.parent;
+    const directMember = (ts.isPropertyAccessExpression(member) || ts.isElementAccessExpression(member)) && member.expression === node;
+    const directCall = directMember && ts.isCallExpression(member.parent) && member.parent.expression === member;
+    if (!directCall || !REVIEWED_OBJECT_METHODS.has(memberName(member))) {
+      fail(file, node, "object-meta-outside-reviewed-set");
+    }
   }
   if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
       ts.isIdentifier(unwrap(node.expression)) && libraryGlobal(unwrap(node.expression), ["Object"]) &&
@@ -249,8 +290,9 @@ function inspectFiniteSyntax(file, node) {
     const base = unwrap(node.expression), name = memberName(node);
     const ambientObject = ts.isIdentifier(base) && libraryGlobal(base, ["Object"]);
     const ambientWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window"]);
-    if (ambientObject && ts.isElementAccessExpression(node) && name === null) {
-      fail(file, node, "computed-object-meta");
+    if (ambientObject) {
+      const directCall = ts.isCallExpression(node.parent) && node.parent.expression === node;
+      if (!REVIEWED_OBJECT_METHODS.has(name) || !directCall) fail(file, node, "object-meta-outside-reviewed-set");
     }
     if (name === "constructor" && constructorRisk(base, false)) {
       fail(file, node, "dynamic-constructor");
@@ -293,7 +335,8 @@ function isDomCapability(node) {
     const symbol = type.symbol || type.aliasSymbol;
     const name = symbol?.name || "";
     const capabilityName = name === "Window" || name === "Document" || DOM_NAV_MEMBERS.has(name) ||
-      name === "Element" || name === "HTMLElement" || /^HTML.*Element$/.test(name) || /^SVG.*Element$/.test(name);
+      ["DOMImplementation", "DOMParser", "DocumentFragment", "Element", "HTMLElement", "Range"].includes(name) ||
+      /^HTML.*Element$/.test(name) || /^SVG.*Element$/.test(name);
     const domDeclaration = (symbol?.declarations || []).some((declaration) => declaration.getSourceFile().fileName.replaceAll("\\", "/").endsWith("/lib.dom.d.ts"));
     if (capabilityName && domDeclaration) return true;
     return (type.types || []).some(visit) || (type.getBaseTypes?.() || []).some(visit);
@@ -336,6 +379,16 @@ function staticallyCallable(node) {
 }
 function validTimerCall(node) {
   return ts.isCallExpression(node) && node.arguments.length > 0 && staticallyCallable(node.arguments[0]);
+}
+function safeWindowDispatch(file, node) {
+  if (relative(file.fileName) !== "components/TopBar.tsx" || !ts.isPropertyAccessExpression(node) || node.name.text !== "dispatchEvent") return false;
+  const base = unwrap(node.expression);
+  if (!ts.isIdentifier(base) || !libraryGlobal(base, ["window"])) return false;
+  const call = node.parent;
+  if (!ts.isCallExpression(call) || call.expression !== node || call.arguments.length !== 1) return false;
+  const event = unwrap(call.arguments[0]);
+  if (!ts.isNewExpression(event) || event.arguments?.length !== 1 || staticLiteral(event.arguments[0]) !== "brains:open-command-palette") return false;
+  return ts.isIdentifier(event.expression) && libraryGlobal(event.expression, ["Event"]);
 }
 function constructorRisk(node, unresolved) {
   const type = checker.getTypeAtLocation(node);
@@ -415,7 +468,7 @@ function inspectReactFactory(file, node) {
 }
 function inspectDom(file, node) {
   if (relative(file.fileName) === BOUNDARY) return;
-  if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open", "navigation"])) return fail(file, node, "global-navigation");
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open", "navigation", "frames", "opener", "frameElement"])) return fail(file, node, "global-navigation");
   if (ts.isIdentifier(node) && libraryGlobal(node, [...SAFE_GLOBAL_MEMBERS.keys()])) {
     const parent = node.parent;
     const safe = ts.isPropertyAccessExpression(parent) && parent.expression === node &&
@@ -462,9 +515,10 @@ function inspectDom(file, node) {
     const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
     if (ts.isElementAccessExpression(node) && name === null && (isDomCapability(base) || erasedBase)) return fail(file, node, "computed-dom-member");
     if (["innerHTML", "outerHTML", "insertAdjacentHTML"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "html-navigation-injection");
-    if (["click", "submit", "requestSubmit"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "dom-programmatic-activation");
+    if (["append", "prepend", "replaceChildren", "insertAdjacentElement", "createContextualFragment", "createHTMLDocument", "parseFromString"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "dom-markup-construction");
+    if (["click", "submit", "requestSubmit", "dispatchEvent"].includes(name) && (isDomCapability(base) || erasedBase) && !safeWindowDispatch(file, node)) return fail(file, node, "dom-programmatic-activation");
     if (["setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "dom-attribute-mutation");
-    if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open", "navigation"].includes(name))) return fail(file, node, "window-navigation");
+    if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open", "navigation", "frames", "opener", "frameElement", "parent", "top", "self"].includes(name))) return fail(file, node, "window-navigation");
     if (names.has("Document") && (name === null || ["forms", "location", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
     for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
   }

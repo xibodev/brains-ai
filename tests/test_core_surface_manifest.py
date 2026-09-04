@@ -1362,6 +1362,10 @@ def _finite_boundary_fixture(
         'import { createElement as make } from "react"; void make;\n',
         'import { cloneElement } from "react"; void cloneElement;\n',
         'import { createFactory } from "react"; void createFactory;\n',
+        'import type React from "react"; void (0 as unknown as React.ReactNode);\n',
+        'import type * as React from "react"; void (0 as unknown as React.ReactNode);\n',
+        'import { useState as state } from "react"; void state;\n',
+        'import { Children } from "react"; void Children;\n',
         'import { createFactory as make } from "react"; const factory = make("a"); void factory;\n',
         'import React from "react"; const make = React.createFactory.bind(React); void make;\n',
         'import React from "react"; const make = React.createElement.bind(React); void make;\n',
@@ -1372,12 +1376,24 @@ def _finite_boundary_fixture(
         'export { jsx as make } from "react/jsx-runtime";\n',
         'export * from "react/jsx-dev-runtime";\n',
         'export { createFactory as make } from "react";\n',
+        'export { useState } from "react";\n',
+        'export * as React from "react";\n',
         'export * from "react";\n',
+        'import React from "react"; export { React };\n',
+        'import React from "react"; export default React;\n',
         'import { useLocation as currentLocation } from "react-router-dom"; void currentLocation;\n',
         'Function("return location")();\n',
         "const proxy = new Proxy({}, {}); void proxy;\n",
         'Reflect.get({}, "href");\n',
         'Object.defineProperty({}, "href", {value: "/labs"});\n',
+        "Object.defineProperties({}, {});\n",
+        "Object.create(null);\n",
+        "Object.getPrototypeOf({});\n",
+        'Object.getOwnPropertyDescriptor({}, "x");\n',
+        "Object.getOwnPropertyDescriptors({});\n",
+        "Object.setPrototypeOf({}, null);\n",
+        "const meta = Object; void meta;\n",
+        "const entries = Object.entries; void entries;\n",
         "declare const key: string; void Object[key];\n",
         'void (() => undefined).constructor("return location")();\n',
         'void (() => undefined)["constructor"]("return location")();\n',
@@ -1423,6 +1439,12 @@ def _finite_boundary_fixture(
         "const root = self; void root;\n",
         "const root = top; void root;\n",
         "const root = parent; void root;\n",
+        "const root = frames; void root;\n",
+        "const root = opener; void root;\n",
+        "const root = frameElement; void root;\n",
+        "void window.frames;\n",
+        "void window.opener;\n",
+        "void window.frameElement;\n",
         'let root: any; root = document; root.location.assign("/labs");\n',
         "const store = { root: document }; void store;\n",
         "function capture(root: any = document) { return root; } void capture;\n",
@@ -1450,7 +1472,17 @@ def _finite_boundary_fixture(
         'declare const element: HTMLDivElement; element.setAttribute("title", "x");\n',
         'declare const element: HTMLDivElement; element.removeAttribute("title");\n',
         'declare const element: HTMLDivElement; element.toggleAttribute("hidden");\n',
+        'declare const element: HTMLDivElement; element.dispatchEvent(new Event("open"));\n',
+        "declare const element: HTMLDivElement; element.append(document.body);\n",
+        "declare const element: HTMLDivElement; element.prepend(document.body);\n",
+        "declare const element: HTMLDivElement; element.replaceChildren(document.body);\n",
+        'declare const element: HTMLDivElement; element.insertAdjacentElement("beforeend", document.body);\n',
+        'declare const range: Range; range.createContextualFragment("<a href=/labs>x</a>");\n',
+        'const parser = new DOMParser(); parser.parseFromString("<a href=/labs>x</a>", "text/html");\n',
+        'declare const parser: DOMParser; parser.parseFromString("<a href=/labs>x</a>", "text/html");\n',
+        'window.dispatchEvent(new Event("open"));\n',
         "declare const element: any; element.click();\n",
+        'declare const element: any; element.dispatchEvent(new Event("open"));\n',
         'declare const element: any; element.setAttribute("title", "x");\n',
         "const Widget = (_props: object) => <div />; const props = {}; export const Consumer = () => <Widget {...props} />;\n",
     ],
@@ -1467,12 +1499,15 @@ def test_finite_navigation_boundary_preserves_non_navigation_false_positive_cont
         tmp_path,
         """
 import { Outlet, useLocation, useParams, useSearchParams } from "react-router-dom";
+import { useState } from "react"; export { useState };
 const service = { open: (_target: string) => undefined };
+const emitter = { dispatchEvent: (_event: string) => true };
 const model = { location: { assign: (_target: string) => undefined } };
 const record = { innerHTML: "data" };
 const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
-service.open("/labs"); model.location.assign("/labs"); record.innerHTML = "safe";
+service.open("/labs"); emitter.dispatchEvent("data"); model.location.assign("/labs"); record.innerHTML = "safe";
 window.setTimeout(() => undefined, 1); setInterval(() => undefined, 1);
+void Object.keys(record); void Object.values(record); void Object.entries(record); void Object.fromEntries([["x", 1]]);
 export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget href="/labs" to="/labs" action="/labs" /><div title="/labs" />{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
 """,
     )

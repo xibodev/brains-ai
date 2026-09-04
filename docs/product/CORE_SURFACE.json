@@ -281,7 +281,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-BfTwPff3.js",
+      "src/brains/web/spa/assets/index-D9wS5MSb.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -679,7 +679,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-BfTwPff3.js",
+      "src/brains/web/spa/assets/index-D9wS5MSb.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -961,7 +961,7 @@
       "brains/storage/sql_migrations/__init__.py",
       "brains/web/__init__.py",
       "brains/web/spa.py",
-      "brains/web/spa/assets/index-BfTwPff3.js",
+      "brains/web/spa/assets/index-D9wS5MSb.js",
       "brains/web/spa/assets/index-SXYrWt-w.css",
       "brains/web/spa/index.html",
       "brains/web/templates/admin/login.html",
@@ -26320,7 +26320,7 @@
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "frontend/src/components/CommandPalette.tsx": "84cd6dd44376fcd4e656b04cfcde8fed8c2f181cb80ab7aec18e544ea0195798",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
         "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
         "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
@@ -26338,11 +26338,11 @@
         "frontend/src/components/StatusPill.tsx": "5d6cf0c2ae069cc855d0ea7fd30e5dd99e391987f0a500d5a50ed5f8bf453d4c",
         "frontend/src/components/Stepper.tsx": "a034810f69ef088a800bd70e8b7987da87f29859f0db36d7d1e78d1ae55bf7f9",
         "frontend/src/components/Toast.tsx": "9b683c489c2dd25c20f63945156bf2e64763b6bbddf84cecd4492b04f856bdec",
-        "frontend/src/components/TopBar.tsx": "35d2ec0ad45e53855c75cdaab3be0e112380137ba45f66addc6ac55befa1a97b",
+        "frontend/src/components/TopBar.tsx": "33d1da3b097b929cba16628b05a23e31b15998d76dcc2e8e624f7a2c2dfa5ced",
         "frontend/src/components/blockedReason.ts": "38807be9a2a43862ac43873b3a5ae1c2495f2f60578e36111e39f87611ee5fb1",
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
-        "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
+        "frontend/src/components/sessionScope.ts": "57e6fb4ccdbf51836f2403aff1d0fedda4aeb7a710fd8a614ef3223fdbfe9838",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
         "frontend/src/coreRoutes.tsx": "4ca8bb17336e2947aac674aa55275bff4633f5fbec1d14f4004c3a559f88ad32",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
@@ -27142,7 +27142,7 @@
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 58,
+          "line": 69,
           "target": "@core-route-guard"
         },
         {
@@ -27279,10 +27279,10 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "3ca380dceaa287d9e1109dec2c1ea8946e8f3904453b11880e5f4cbcc6671a0a",
+      "spa_ast_helper_sha256": "eb9503b5f20df3f3a58259b5e249cffab9037846a6648e67c65d8489d090ec09",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
-        "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "palette": "84cd6dd44376fcd4e656b04cfcde8fed8c2f181cb80ab7aec18e544ea0195798",
         "sidebar": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c"
       },
       "wire": {
@@ -52777,7 +52777,7 @@
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "frontend/src/components/CommandPalette.tsx": "84cd6dd44376fcd4e656b04cfcde8fed8c2f181cb80ab7aec18e544ea0195798",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
         "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
         "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
@@ -52795,11 +52795,11 @@
         "frontend/src/components/StatusPill.tsx": "5d6cf0c2ae069cc855d0ea7fd30e5dd99e391987f0a500d5a50ed5f8bf453d4c",
         "frontend/src/components/Stepper.tsx": "a034810f69ef088a800bd70e8b7987da87f29859f0db36d7d1e78d1ae55bf7f9",
         "frontend/src/components/Toast.tsx": "9b683c489c2dd25c20f63945156bf2e64763b6bbddf84cecd4492b04f856bdec",
-        "frontend/src/components/TopBar.tsx": "35d2ec0ad45e53855c75cdaab3be0e112380137ba45f66addc6ac55befa1a97b",
+        "frontend/src/components/TopBar.tsx": "33d1da3b097b929cba16628b05a23e31b15998d76dcc2e8e624f7a2c2dfa5ced",
         "frontend/src/components/blockedReason.ts": "38807be9a2a43862ac43873b3a5ae1c2495f2f60578e36111e39f87611ee5fb1",
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
-        "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
+        "frontend/src/components/sessionScope.ts": "57e6fb4ccdbf51836f2403aff1d0fedda4aeb7a710fd8a614ef3223fdbfe9838",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
         "frontend/src/coreRoutes.tsx": "4ca8bb17336e2947aac674aa55275bff4633f5fbec1d14f4004c3a559f88ad32",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
@@ -53599,7 +53599,7 @@
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 58,
+          "line": 69,
           "target": "@core-route-guard"
         },
         {
@@ -53736,10 +53736,10 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "3ca380dceaa287d9e1109dec2c1ea8946e8f3904453b11880e5f4cbcc6671a0a",
+      "spa_ast_helper_sha256": "eb9503b5f20df3f3a58259b5e249cffab9037846a6648e67c65d8489d090ec09",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
-        "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "palette": "84cd6dd44376fcd4e656b04cfcde8fed8c2f181cb80ab7aec18e544ea0195798",
         "sidebar": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c"
       },
       "wire": {

@@ -27,16 +27,27 @@ export function CommandPalette() {
   const dialogRef = useDialogFocus<HTMLDivElement>(open, close);
 
   useEffect(() => {
+    const reset = () => {
+      setQuery("");
+      setActive(0);
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen((o) => !o);
-        setQuery("");
-        setActive(0);
+        reset();
       }
     };
+    const onOpen = () => {
+      setOpen(true);
+      reset();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("brains:open-command-palette", onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("brains:open-command-palette", onOpen);
+    };
   }, []);
 
   const commands = [
