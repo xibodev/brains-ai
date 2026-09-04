@@ -80,8 +80,8 @@ const DOM_NAV_MEMBERS = new Map([
   ["HTMLAreaElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
 ]);
 const SAFE_GLOBAL_MEMBERS = new Map([
-  ["document", new Set(["activeElement", "addEventListener", "removeEventListener", "baseURI", "getElementById"])],
-  ["window", new Set(["addEventListener", "removeEventListener", "setTimeout", "dispatchEvent", "requestAnimationFrame", "cancelAnimationFrame"])],
+  ["document", new Set(["activeElement", "addEventListener", "removeEventListener", "baseURI"])],
+  ["window", new Set(["addEventListener", "removeEventListener", "setTimeout", "setInterval", "dispatchEvent", "requestAnimationFrame", "cancelAnimationFrame"])],
   ["globalThis", new Set()],
   ["self", new Set()],
   ["top", new Set()],
@@ -192,7 +192,10 @@ function inspectRouterDeclaration(file, node) {
   }
 }
 function ambientGlobal(identifier, names) {
-  return ts.isIdentifier(identifier) && names.includes(identifier.text) &&
+  if (!ts.isIdentifier(identifier)) return false;
+  const parent = identifier.parent;
+  const isMemberName = Boolean(parent) && ts.isPropertyAccessExpression(parent) && parent.name === identifier;
+  return !isMemberName && names.includes(identifier.text) &&
     (!checker.getSymbolAtLocation(identifier) || libraryGlobal(identifier, names));
 }
 function inspectFiniteSyntax(file, node) {
@@ -212,11 +215,20 @@ function inspectFiniteSyntax(file, node) {
       if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
         for (const item of clause.namedBindings.elements) {
           const imported = item.propertyName?.text || item.name.text;
-          if (!item.isTypeOnly && ["createElement", "cloneElement"].includes(imported)) {
+          if (!item.isTypeOnly && ["createElement", "cloneElement", "createFactory"].includes(imported)) {
             fail(file, item, "react-factory-acquisition");
           }
         }
       }
+    }
+  }
+  if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+    const module = node.moduleSpecifier.text;
+    if (module === "react/jsx-runtime" || module === "react/jsx-dev-runtime") {
+      fail(file, node, "react-jsx-runtime");
+    }
+    if (module === "react" && (!node.exportClause || (ts.isNamedExports(node.exportClause) && node.exportClause.elements.some((item) => ["createElement", "cloneElement", "createFactory"].includes(item.propertyName?.text || item.name.text))))) {
+      fail(file, node, "react-factory-acquisition");
     }
   }
   if (ambientGlobal(node, ["eval", "Function", "Proxy", "Reflect"])) {
@@ -226,6 +238,32 @@ function inspectFiniteSyntax(file, node) {
       ts.isIdentifier(unwrap(node.expression)) && libraryGlobal(unwrap(node.expression), ["Object"]) &&
       memberName(node) === "defineProperty") {
     fail(file, node, "dynamic-language-capability");
+  }
+  if (ts.isIdentifier(node) && ambientGlobal(node, ["setTimeout", "setInterval"])) {
+    const parent = node.parent;
+    if (!ts.isCallExpression(parent) || parent.expression !== node || !validTimerCall(parent)) {
+      fail(file, node, "unsafe-timer");
+    }
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    const base = unwrap(node.expression), name = memberName(node);
+    const ambientObject = ts.isIdentifier(base) && libraryGlobal(base, ["Object"]);
+    const ambientWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window"]);
+    if (ambientObject && ts.isElementAccessExpression(node) && name === null) {
+      fail(file, node, "computed-object-meta");
+    }
+    if (name === "constructor" && constructorRisk(base, false)) {
+      fail(file, node, "dynamic-constructor");
+    }
+    if (ts.isElementAccessExpression(node) && name === null && constructorRisk(base, true) && !safeComputedData(base, node.argumentExpression)) {
+      fail(file, node, "dynamic-constructor");
+    }
+    if (["setTimeout", "setInterval"].includes(name) && (ambientWindow || typeNames(base).has("Window"))) {
+      const parent = node.parent;
+      if (!ts.isCallExpression(parent) || parent.expression !== node || !validTimerCall(parent)) {
+        fail(file, node, "unsafe-timer");
+      }
+    }
   }
   if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) {
     fail(file, node, "import-meta");
@@ -277,6 +315,42 @@ function safeDomArgument(file, call, argument, index) {
   return (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) &&
     ts.isIdentifier(unwrap(receiver.expression)) && libraryGlobal(unwrap(receiver.expression), ["document"]) &&
     memberName(receiver) === "getElementById";
+}
+function safeMountRoot(file, node) {
+  if (relative(file.fileName) !== "main.tsx" || node.text !== "document") return false;
+  const member = node.parent;
+  if (!ts.isPropertyAccessExpression(member) || member.expression !== node || member.name.text !== "getElementById") return false;
+  const sourceCall = member.parent;
+  if (!ts.isCallExpression(sourceCall) || sourceCall.expression !== member) return false;
+  let argument = sourceCall;
+  while (argument.parent && [ts.SyntaxKind.NonNullExpression, ts.SyntaxKind.ParenthesizedExpression, ts.SyntaxKind.AsExpression, ts.SyntaxKind.TypeAssertionExpression].includes(argument.parent.kind)) argument = argument.parent;
+  const outer = argument.parent;
+  return ts.isCallExpression(outer) && outer.arguments.some((item, index) => item === argument && safeDomArgument(file, outer, item, index));
+}
+function staticallyCallable(node) {
+  node = unwrap(node);
+  if (!node) return false;
+  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return true;
+  const type = checker.getTypeAtLocation(node);
+  return !(type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.StringLike)) && type.getCallSignatures().length > 0;
+}
+function validTimerCall(node) {
+  return ts.isCallExpression(node) && node.arguments.length > 0 && staticallyCallable(node.arguments[0]);
+}
+function constructorRisk(node, unresolved) {
+  const type = checker.getTypeAtLocation(node);
+  if (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+  if (type.getCallSignatures().length > 0) return true;
+  if (!(type.flags & ts.TypeFlags.Object)) return false;
+  if (!unresolved) return true;
+  return !type.getStringIndexType() && !type.getNumberIndexType();
+}
+function safeComputedData(base, argument) {
+  const type = checker.getTypeAtLocation(base);
+  if (type.getStringIndexType() || type.getNumberIndexType()) return true;
+  const values = stringTypeValues(argument);
+  const properties = new Set(type.getProperties().map((property) => property.name));
+  return Boolean(values?.length) && values.every((value) => value !== "constructor" && properties.has(value));
 }
 function intrinsicCandidates(node) {
   const direct = intrinsicTag(node);
@@ -346,7 +420,7 @@ function inspectDom(file, node) {
     const parent = node.parent;
     const safe = ts.isPropertyAccessExpression(parent) && parent.expression === node &&
       SAFE_GLOBAL_MEMBERS.get(node.text)?.has(parent.name.text);
-    if (!safe) return fail(file, node, "global-dom-root-escape");
+    if (!safe && !safeMountRoot(file, node)) return fail(file, node, "global-dom-root-escape");
   }
   if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
     const target = checker.getTypeAtLocation(node);
@@ -378,6 +452,9 @@ function inspectDom(file, node) {
   if (ts.isYieldExpression(node) && node.expression && isDomCapability(node.expression)) {
     return fail(file, node, "dom-capability-yield");
   }
+  if (ts.isArrowFunction(node) && !ts.isBlock(node.body) && isDomCapability(node.body)) {
+    return fail(file, node, "dom-capability-return");
+  }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     const base = unwrap(node.expression), name = memberName(node), names = typeNames(base);
     const baseType = checker.getTypeAtLocation(base);
@@ -385,6 +462,8 @@ function inspectDom(file, node) {
     const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
     if (ts.isElementAccessExpression(node) && name === null && (isDomCapability(base) || erasedBase)) return fail(file, node, "computed-dom-member");
     if (["innerHTML", "outerHTML", "insertAdjacentHTML"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "html-navigation-injection");
+    if (["click", "submit", "requestSubmit"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "dom-programmatic-activation");
+    if (["setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "dom-attribute-mutation");
     if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open", "navigation"].includes(name))) return fail(file, node, "window-navigation");
     if (names.has("Document") && (name === null || ["forms", "location", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
     for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
