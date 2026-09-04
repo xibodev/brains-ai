@@ -15450,7 +15450,7 @@
           "deprecation_help": null,
           "epilog": null,
           "group_class": null,
-          "help": "Coordination queue health + continuity repair (BL-P1-12): family summary, orphan/stale detection, and dry-run/apply repair.",
+          "help": "Coordination queue health + continuity repair: family summary, orphan/stale detection, and dry-run/apply repair.",
           "hidden": false,
           "ignore_unknown_options": false,
           "invoke_without_command": false,
@@ -25617,11 +25617,7 @@
           "AC-F9-04",
           "AC-F9-05"
         ],
-        "backlog": [
-          "BL-P0-06",
-          "BL-P1-12",
-          "BL-P1-22"
-        ],
+        "backlog": [],
         "boundaries": [
           "B1",
           "B2",
@@ -25634,24 +25630,7 @@
           "B9"
         ],
         "by_file": {
-          "docs/product/BACKLOG.md": [
-            "B2",
-            "B6",
-            "B8",
-            "BL-P0-06",
-            "BL-P1-12",
-            "BL-P1-22",
-            "F0",
-            "F3",
-            "F7",
-            "J1",
-            "J11",
-            "J7",
-            "J8",
-            "J9",
-            "P0",
-            "P1"
-          ],
+          "docs/product/BACKLOG.md": [],
           "docs/product/FEATURE_CONTRACT.md": [
             "AC-B1-01",
             "AC-B1-02",
@@ -25757,8 +25736,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P0-06",
-            "BL-P1-12",
             "BL-P1-16",
             "F0",
             "F1",
@@ -25840,7 +25817,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P1-12",
             "J1",
             "J10",
             "J11",
@@ -25940,9 +25916,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P0-06",
-            "BL-P1-12",
-            "BL-P1-22",
             "F0",
             "F1",
             "F10",
@@ -41880,7 +41853,7 @@
           "deprecation_help": null,
           "epilog": null,
           "group_class": null,
-          "help": "Coordination queue health + continuity repair (BL-P1-12): family summary, orphan/stale detection, and dry-run/apply repair.",
+          "help": "Coordination queue health + continuity repair: family summary, orphan/stale detection, and dry-run/apply repair.",
           "hidden": false,
           "ignore_unknown_options": false,
           "invoke_without_command": false,
@@ -52047,11 +52020,7 @@
           "AC-F9-04",
           "AC-F9-05"
         ],
-        "backlog": [
-          "BL-P0-06",
-          "BL-P1-12",
-          "BL-P1-22"
-        ],
+        "backlog": [],
         "boundaries": [
           "B1",
           "B2",
@@ -52064,24 +52033,7 @@
           "B9"
         ],
         "by_file": {
-          "docs/product/BACKLOG.md": [
-            "B2",
-            "B6",
-            "B8",
-            "BL-P0-06",
-            "BL-P1-12",
-            "BL-P1-22",
-            "F0",
-            "F3",
-            "F7",
-            "J1",
-            "J11",
-            "J7",
-            "J8",
-            "J9",
-            "P0",
-            "P1"
-          ],
+          "docs/product/BACKLOG.md": [],
           "docs/product/FEATURE_CONTRACT.md": [
             "AC-B1-01",
             "AC-B1-02",
@@ -52187,8 +52139,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P0-06",
-            "BL-P1-12",
             "BL-P1-16",
             "F0",
             "F1",
@@ -52270,7 +52220,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P1-12",
             "J1",
             "J10",
             "J11",
@@ -52370,9 +52319,6 @@
             "B7",
             "B8",
             "B9",
-            "BL-P0-06",
-            "BL-P1-12",
-            "BL-P1-22",
             "F0",
             "F1",
             "F10",

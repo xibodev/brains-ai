@@ -387,9 +387,9 @@ and represented no more strongly than its observed result.
 
 **Acceptance IDs:** AC-F3-04 through AC-F3-07, AC-B4-01 through AC-B4-04, AC-B7-01.
 
-**Validation gaps:** Native-platform atomic exchange and owner-only recovery-state proof
-remain BL-P1-12 work. Automatic native identity lifecycle, abrupt process exit, and the
-residual in-process governance boundary remain core concerns.
+**Release conditions:** Native-platform atomic exchange, owner-only recovery-state
+proof, automatic native identity lifecycle, and abrupt process-exit recovery must pass
+for the exact candidate. The residual in-process governance boundary remains explicit.
 
 ## J9 - Configure local Brains operation
 

@@ -211,9 +211,9 @@ read-only and needs no preparation.
 ## Service operation
 
 User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd
-user services. Repository checks exercise renderer and hermetic backend behavior, but
-native managers remain opt-in until the persistent lifecycle qualification and
-exact-candidate aggregate in the core backlog are complete.
+user services. Repository checks exercise renderer and hermetic backend behavior. Each
+release candidate separately requires the disposable native lifecycle and reboot-boundary
+evidence defined in [Quality gates](QUALITY_GATES.md).
 
 ```text
 brains-ai service status
@@ -263,7 +263,7 @@ Use `brains-ai setup --path . --service` or `brains-ai service install` only aft
 reviewing the rendered definition and configuration backup. Inspect the result with
 `brains-ai service status`. Do not run a foreground `serve-all` against the same ports
 or state directory. Test install, restart, persistence, uninstall, and restoration only
-on a disposable native host until the backlog matrix is complete.
+on a disposable native host. Treat successful proof for an earlier commit as stale.
 
 ## Coordination operation
 
@@ -503,7 +503,7 @@ ports only in a disposable environment with synthetic credentials and state. Do 
 mount or address another Brains installation. Verify teardown and configuration
 restoration before discarding the environment.
 
-Current schedulable validation gaps are listed in the
-[Core Backlog](product/BACKLOG.md). Deferred expansion and scale work is listed in the
-[Frozen Backlog](product/FROZEN_BACKLOG.md). Those lists, rather than observations in
-this runbook, define unfinished work.
+The [Core Backlog](product/BACKLOG.md) contains schedulable implementation TODOs and is
+currently empty. Candidate-specific validation follows [Quality gates](QUALITY_GATES.md).
+Deferred expansion and scale work remains in the
+[Frozen Backlog](product/FROZEN_BACKLOG.md) and is not a current product promise.

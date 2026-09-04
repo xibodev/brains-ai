@@ -2,7 +2,8 @@
 
 This probe never invokes a native service manager. It validates the installed
 wheel, rendered manager definition, and one explicitly selected adapter on a
-fresh synthetic home. Real manager/login/reboot execution remains BL-P0-06.
+fresh synthetic home. Real manager/login/reboot execution is a separate recurring
+release-qualification condition.
 """
 
 from __future__ import annotations
