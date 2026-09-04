@@ -109,7 +109,9 @@ can add cost as well as avoid repeated work.
 - CLI and MCP coordination surfaces;
 - SQLite storage;
 - backup, audit, observability, wiring, service definitions, and isolated validation
-  tools; native service lifecycle proof remains an explicit backlog requirement;
+  tools; native service-manager lifecycle, platform-specific Claude recovery,
+  exact-candidate aggregation, and publication controls remain explicit backlog
+  requirements;
 
 ### Target-only or withdrawn
 

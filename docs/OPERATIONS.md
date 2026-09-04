@@ -45,9 +45,11 @@ brains-ai serve-all
 Open `http://127.0.0.1:8787/app` after the stack is ready. Keep the generated admin key out
 of URLs, logs, issues, fixtures, and repositories.
 
-The native service commands and OS-manager definitions exist, but clean-host install,
-persistence, and restoration validation remains open. Review the service section below
-before opting into `--service`.
+Repository checks exercise exact-wheel installation, service-definition rendering,
+reversible wiring, and hermetic lifecycle behavior. An exact candidate is not qualified
+until the fail-closed aggregate accepts its required native and container results. Real
+native manager persistence and restoration across the supported host matrix remain
+open. Review the service section below before opting into `--service`.
 
 The supported installed executable is `brains-ai`. Helpers that invoke `brains` are
 obsolete.
@@ -209,8 +211,9 @@ read-only and needs no preparation.
 ## Service operation
 
 User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd
-user services. Treat them as an opt-in source path until the clean-host matrix in the
-core backlog is complete.
+user services. Repository checks exercise renderer and hermetic backend behavior, but
+native managers remain opt-in until the persistent lifecycle qualification and
+exact-candidate aggregate in the core backlog are complete.
 
 ```text
 brains-ai service status

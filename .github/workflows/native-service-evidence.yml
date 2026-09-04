@@ -1,8 +1,9 @@
 name: native service-manager evidence
 
 # This manual workflow proves real manager verbs on disposable hosted VMs. It
-# deliberately does not claim a logout/reboot boundary; the same checked
-# two-phase script must be run on persistent disposable VMs for BL-P0-06 E4.
+# deliberately does not claim a machine-observed reboot boundary; the same checked
+# two-phase script must be run on persistent disposable VMs to complete the native
+# lifecycle qualification in the core backlog.
 on:
   workflow_dispatch:
     inputs:

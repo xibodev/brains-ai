@@ -29,7 +29,7 @@ backlog lists only unfinished actions.
 | B3 Workspace knowledge and repository lookup | supported bounded, non-semantic lookup | `AC-B3-*` |
 | B4 Human governance and audit | supported governed actions and local audit | `AC-B4-*` |
 | B5 SQLite storage, migrations, backup, and recovery | supported SQLite lifecycle | `AC-B5-*` |
-| B6 CLI, wiring, and service management | supported local lifecycle | `AC-B6-*` |
+| B6 CLI, wiring, and service management | supported foreground lifecycle and wiring; native manager qualification open | `AC-B6-*` |
 | B7 Authenticated external events | frozen target and compatibility source | `AC-B7-*` |
 | B8 Observability, health, and readiness | supported local operations | `AC-B8-*` |
 | B9 Deleted legacy browser surfaces | supported modern application; legacy surfaces absent | `AC-B9-*` |
@@ -122,8 +122,11 @@ surfaces. Tests and the generated core-surface manifest are the live evidence in
   generated core-surface manifest expose now.
 - Target contract is the behavior stated in `FEATURE_CONTRACT.md`; it does not become a
   current claim until implementation and acceptance evidence agree.
-- Evidence gaps are unfinished validation actions in `BACKLOG.md`. `BL-P0-06` and
-  `BL-P1-12` remain owned there until their completion conditions are satisfied.
+- Persistent native service lifecycle qualification, native Claude recovery
+  qualification, exact-candidate aggregation across source, wheel, sdist, and OCI image
+  manifest digests, and publication reuse of those exact qualified artifacts are
+  unfinished implementation actions in `BACKLOG.md`. Container and hermetic tests do
+  not establish native persistence or platform-specific recovery guarantees.
 - Deferred ideas remain in `FROZEN_BACKLOG.md` and are not current product promises.
 
 Run `python scripts/check_traceability.py` for mapping drift. The full quality runner

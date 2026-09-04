@@ -37,6 +37,17 @@ use no host mounts or published ports unless the test validates a synthetic boun
 
 ## Native lifecycle probes
 
+The required installation probe validates exact-wheel identity, native-definition
+rendering, and reversible harness wiring without mutating a service manager. The
+isolated Claude probe validates generated hook discovery and continuation. Neither
+substitutes for native service-manager, reboot, atomic-exchange, or owner-permission
+evidence.
+
+Candidate qualification must bind the source, wheel, sdist, and OCI image manifest
+digests in one fail-closed result. Container runtime smoke must execute against that
+exact OCI image, and publication must reuse the qualified wheel, sdist, and image;
+missing, rebuilt, or mismatched artifacts invalidate the result.
+
 Platform service-manager behavior cannot be established by a Linux container. Use the
 repository's native lifecycle workflow on each supported operating system. The workflow
 must exercise the real installer and service manager, bind the installed artifact to the

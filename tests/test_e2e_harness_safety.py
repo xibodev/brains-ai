@@ -237,7 +237,72 @@ def test_claude_wakeup_probe_is_pinned_checked_and_isolated() -> None:
     assert "no-new-privileges:true" in script
     assert "--mount" not in script and "--volume" not in script
     assert "-p " not in script and "--publish" not in script
+    assert "function Invoke-DockerQuiet" in script
+    assert '$ErrorActionPreference = "SilentlyContinue"' in script
+    assert 'Invoke-DockerQuiet @("container", "inspect", $container)' in script
+    assert 'Invoke-DockerQuiet @("image", "inspect", $image)' in script
+    assert 'Invoke-DockerQuiet @("rm", "-f", $container)' in script
+    assert 'Invoke-DockerQuiet @("image", "rm", $image)' in script
     assert "run_docker_claude_wakeup_probe.ps1" in workflow
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell 5 regression")
+def test_claude_wakeup_probe_tolerates_expected_absence_in_windows_powershell_5(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell")
+    assert powershell is not None
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    probe = scripts / CLAUDE_WAKEUP_UAT.name
+    shutil.copyfile(CLAUDE_WAKEUP_UAT, probe)
+    command_log = tmp_path / "docker-commands.txt"
+    (tmp_path / "git.cmd").write_text(
+        "@echo off\n"
+        'if "%3"=="status" exit /b 0\n'
+        'if "%3"=="rev-parse" echo 0000000000000000000000000000000000000000& exit /b 0\n'
+        "exit /b 1\n",
+        encoding="ascii",
+    )
+    (tmp_path / "docker.cmd").write_text(
+        "@echo off\n"
+        'echo %*>>"%FAKE_DOCKER_LOG%"\n'
+        'if "%1 %2"=="container inspect" echo expected absent 1>&2& exit /b 1\n'
+        'if "%1 %2"=="image inspect" echo expected absent 1>&2& exit /b 1\n'
+        "exit /b 0\n",
+        encoding="ascii",
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_DOCKER_LOG": str(command_log),
+    }
+
+    result = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(probe),
+            "-Name",
+            "brains-claude-ps5-regression",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    commands = command_log.read_text(encoding="utf-8")
+    assert "container inspect brains-claude-ps5-regression" in commands
+    assert "image inspect brains-claude-ps5-regression:local" in commands
+    assert "rm -f brains-claude-ps5-regression" in commands
+    assert "image rm brains-claude-ps5-regression:local" in commands
 
 
 def test_docker_context_excludes_private_host_state_and_linux_script_keeps_lf() -> None:

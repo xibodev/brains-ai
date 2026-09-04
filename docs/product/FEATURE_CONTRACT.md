@@ -275,8 +275,9 @@ pull fallback.
 
 With explicit consent, `wire --mailbox-wakeups` installs the Claude Code stop-hook
 adapter. Its nudge contains no mail body or address, pull remains authoritative, and
-unwiring restores the prior configuration. Native-platform atomic exchange and
-owner-only recovery-state acceptance remain BL-P1-12 work.
+unwiring restores the prior configuration. A required isolated-container probe is
+defined for generated-hook discovery and continuation. Native-platform atomic exchange,
+owner-only recovery behavior, and exact-candidate binding remain BL-P1-12 work.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -365,8 +366,13 @@ bounded restart loop can recover it. Install success now requires an owned proto
 process or compensating uninstall; native deregistration failure retains its definition.
 Windows uninstall stops the verified owned tree before deleting its task, macOS stop
 unloads the KeepAlive job, and Linux preserves the pre-existing linger policy.
-Brains-confined labels support isolated disposable-host validation, while actual native
-manager and login/reboot validation remains active backlog work.
+Repository checks exercise exact package, executable, endpoint, wiring, renderer, and
+hermetic lifecycle contracts. An exact candidate is not qualified until the fail-closed
+aggregate binds its source, wheel, sdist, and OCI image manifest digests, accepts the
+required native results and container smoke against that exact image, and requires
+publication to reuse those qualified artifacts. Brains-confined labels
+support isolated disposable-host validation, while real manager execution and
+persistence across a machine boundary remain BL-P0-06 work.
 
 ### B7 - Authenticated external events
 
