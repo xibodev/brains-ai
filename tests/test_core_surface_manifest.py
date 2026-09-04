@@ -1386,6 +1386,19 @@ def _finite_boundary_fixture(
         'const nav: any = document["location"]; nav.assign("/labs");\n',
         '(document as any).location.assign("/labs");\n',
         'const root: any = document; root.location.assign("/labs");\n',
+        'let root: any; root = document; root.location.assign("/labs");\n',
+        "const store = { root: document }; void store;\n",
+        "function capture(root: any = document) { return root; } void capture;\n",
+        "class Holder { root: any = document; } void Holder;\n",
+        'export const Consumer = () => <div dangerouslySetInnerHTML={{__html: "<a href=/labs>x</a>"}} />;\n',
+        'import React from "react"; export const Consumer = () => React.createElement("div", {dangerouslySetInnerHTML: {__html: "<a href=/labs>x</a>"}});\n',
+        'declare const element: HTMLDivElement; const escaped: any = element; escaped.innerHTML = "<a href=/labs>x</a>";\n',
+        'declare const element: HTMLDivElement; let escaped: any; escaped = element; escaped.outerHTML = "<a href=/labs>x</a>";\n',
+        "declare const element: HTMLDivElement; function capture(value: any = element) { return value; } void capture;\n",
+        "declare const element: HTMLDivElement; class Holder { value: any = element; } void Holder;\n",
+        "declare const element: HTMLDivElement; const store = { element }; void store;\n",
+        'const escaped = document.createElement("div") as any; escaped.innerHTML = "<a href=/labs>x</a>";\n',
+        'const escaped = document.body as any; escaped.insertAdjacentHTML("beforeend", "<a href=/labs>x</a>");\n',
     ],
 )
 def test_finite_navigation_boundary_denies_acquisition_and_activation(tmp_path, consumer) -> None:
@@ -1403,13 +1416,29 @@ import React from "react";
 import { Outlet, useLocation, useParams, useSearchParams } from "react-router-dom";
 const service = { open: (_target: string) => undefined };
 const model = { location: { assign: (_target: string) => undefined } };
-const record = { innerHTML: "data" };
 const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
-service.open("/labs"); model.location.assign("/labs"); record.innerHTML = "safe";
-window.setTimeout(() => undefined, 1); document.addEventListener("ready", () => undefined);
+service.open("/labs"); model.location.assign("/labs");
+window.setTimeout(() => undefined, 1); document.getElementById("root");
 export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget {...{href: "/labs", to: "/labs", action: "/labs"}} />{React.createElement("div", {title: "/labs"})}{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
 """,
     )
+
+
+def test_finite_navigation_boundary_tracks_pinned_dom_navigation_api_scope(tmp_path) -> None:
+    lib_dom = (
+        check_core_surface.ROOT / "frontend/node_modules/typescript/lib/lib.dom.d.ts"
+    ).read_text(encoding="utf-8")
+    modern_global = "declare var navigation: Navigation;" in lib_dom
+    if modern_global:
+        with pytest.raises(RuntimeError, match="failed closed"):
+            _finite_boundary_fixture(
+                tmp_path,
+                'navigation.navigate("/labs"); window.navigation.reload();\n',
+            )
+    else:
+        # The pinned compiler is the scope authority; the analyzer already reserves
+        # Navigation/global navigation so a future DOM-lib addition fails closed.
+        assert "interface Navigation {" not in lib_dom
 
 
 @pytest.mark.parametrize(
@@ -1437,6 +1466,13 @@ export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><butt
             "export function App() {",
             "const Alias = Route; export function App() {",
         ).replace('<Route path="/act"', '<Alias path="/act"'),
+        lambda source: source.replace(
+            'import { BrowserRouter, Route, Routes } from "react-router-dom";',
+            'import { cloneElement } from "react"; import { BrowserRouter, Route, Routes } from "react-router-dom";',
+        ).replace(
+            '<Route path="/act" element={<div />} />',
+            '{cloneElement(<Route path="/act" element={<div />} />, {path: "/labs"})}',
+        ),
     ],
 )
 def test_finite_navigation_boundary_rejects_route_declaration_bypasses(

@@ -72,11 +72,16 @@ const ROUTE_PATTERNS = new Set(["/command-center", "/workspaces", "/workspaces/:
 const CORE_PREFIXES = ["/act", "/command-center", "/config", "/coordination", "/governance", "/inbox", "/operations", "/workspaces"];
 const DOM_NAV_MEMBERS = new Map([
   ["Location", null], ["History", null],
+  ["Navigation", new Set(["navigate", "reload", "traverseTo", "back", "forward"])],
   ["HTMLFormElement", new Set(["action", "submit", "requestSubmit", "setAttribute", "setAttributeNS"])],
   ["HTMLButtonElement", new Set(["formAction", "setAttribute", "setAttributeNS"])],
   ["HTMLInputElement", new Set(["formAction", "setAttribute", "setAttributeNS"])],
   ["HTMLAnchorElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
   ["HTMLAreaElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
+]);
+const SAFE_GLOBAL_MEMBERS = new Map([
+  ["document", new Set(["activeElement", "addEventListener", "removeEventListener", "baseURI", "getElementById"])],
+  ["window", new Set(["addEventListener", "removeEventListener", "setTimeout", "dispatchEvent", "requestAnimationFrame", "cancelAnimationFrame"])],
 ]);
 const INTRINSIC_TARGETS = new Map([
   ["a", new Set(["href", "xlinkHref"])], ["area", new Set(["href"])], ["iframe", new Set(["src", "srcDoc"])],
@@ -190,6 +195,21 @@ function stringTypeValues(node) {
   }
   return values;
 }
+function isDomCapability(node) {
+  const seen = new Set();
+  function visit(type) {
+    if (!type || seen.has(type)) return false;
+    seen.add(type);
+    const symbol = type.symbol || type.aliasSymbol;
+    const name = symbol?.name || "";
+    const capabilityName = name === "Window" || name === "Document" || DOM_NAV_MEMBERS.has(name) ||
+      name === "Element" || name === "HTMLElement" || /^HTML.*Element$/.test(name) || /^SVG.*Element$/.test(name);
+    const domDeclaration = (symbol?.declarations || []).some((declaration) => declaration.getSourceFile().fileName.replaceAll("\\", "/").endsWith("/lib.dom.d.ts"));
+    if (capabilityName && domDeclaration) return true;
+    return (type.types || []).some(visit) || (type.getBaseTypes?.() || []).some(visit);
+  }
+  return visit(checker.getTypeAtLocation(node));
+}
 function intrinsicCandidates(node) {
   const direct = intrinsicTag(node);
   if (direct) return { unknown: false, tags: [direct] };
@@ -199,9 +219,12 @@ function intrinsicCandidates(node) {
     : { unknown: false, tags: values.map((value) => value.toLowerCase()) };
 }
 function inspectIntrinsic(file, node) {
+  const attributes = node.attributes.properties;
+  if (attributes.some((item) => ts.isJsxAttribute(item) && item.name.text === "dangerouslySetInnerHTML")) {
+    fail(file, node, "dangerous-html");
+  }
   if (relative(file.fileName) === BOUNDARY) return;
   const candidate = intrinsicCandidates(node.tagName);
-  const attributes = node.attributes.properties;
   const targets = new Set(candidate.tags.flatMap((tag) => [...(INTRINSIC_TARGETS.get(tag) || [])]));
   if ((candidate.unknown && (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && [...INTRINSIC_TARGETS.values()].some((names) => names.has(item.name.text))))) ||
       (targets.size && (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && targets.has(item.name.text))))) {
@@ -228,7 +251,11 @@ function objectHasTargets(node, targets) {
 }
 function inspectReactFactory(file, node) {
   const factory = reactFactory(node);
-  if (!factory || relative(file.fileName) === BOUNDARY) return;
+  if (!factory) return;
+  if (node.arguments.length > 1 && objectHasTargets(node.arguments[1], new Set(["dangerouslySetInnerHTML"]))) {
+    fail(file, node, "dangerous-html");
+  }
+  if (relative(file.fileName) === BOUNDARY) return;
   const all = new Set(["href", "to", "action", "formAction", "src", "srcDoc", "data", "httpEquiv", "content"]);
   if (factory === "cloneElement") {
     if (objectHasTargets(node.arguments[1], all)) fail(file, node, "react-navigation-factory");
@@ -246,27 +273,41 @@ function inspectReactFactory(file, node) {
 }
 function inspectDom(file, node) {
   if (relative(file.fileName) === BOUNDARY) return;
-  if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open"])) return fail(file, node, "global-navigation");
-  if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
-    const sourceNames = typeNames(node.expression);
-    const target = checker.getTypeAtLocation(node);
-    const capability = sourceNames.has("Window") || sourceNames.has("Document") || [...DOM_NAV_MEMBERS.keys()].some((name) => sourceNames.has(name));
-    if (capability && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-cast");
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open", "navigation"])) return fail(file, node, "global-navigation");
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["document", "window"])) {
+    const parent = node.parent;
+    const safe = ts.isPropertyAccessExpression(parent) && parent.expression === node &&
+      SAFE_GLOBAL_MEMBERS.get(node.text)?.has(parent.name.text);
+    if (!safe) return fail(file, node, "global-dom-root-escape");
   }
-  if (ts.isVariableDeclaration(node) && node.initializer) {
-    const sourceNames = typeNames(node.initializer);
+  if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+    const target = checker.getTypeAtLocation(node);
+    if (isDomCapability(node.expression) && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-cast");
+  }
+  if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isPropertyDeclaration(node)) && node.initializer) {
     const target = checker.getTypeAtLocation(node.name);
-    const capability = sourceNames.has("Window") || sourceNames.has("Document") || [...DOM_NAV_MEMBERS.keys()].some((name) => sourceNames.has(name));
-    if (capability && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-alias");
+    if (isDomCapability(node.initializer) && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-alias");
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isDomCapability(node.right)) {
+    const target = checker.getTypeAtLocation(node.left);
+    if (target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-assignment");
+  }
+  if (ts.isPropertyAssignment(node) && isDomCapability(node.initializer)) {
+    return fail(file, node, "dom-capability-store");
+  }
+  if (ts.isShorthandPropertyAssignment(node) && isDomCapability(node.name)) {
+    return fail(file, node, "dom-capability-store");
+  }
+  if (ts.isArrayLiteralExpression(node)) {
+    for (const item of node.elements) if (isDomCapability(item)) return fail(file, item, "dom-capability-store");
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     const base = unwrap(node.expression), name = memberName(node), names = typeNames(base);
     const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
-    if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open"].includes(name))) return fail(file, node, "window-navigation");
+    if (["innerHTML", "outerHTML", "insertAdjacentHTML"].includes(name)) return fail(file, node, "html-navigation-injection");
+    if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open", "navigation"].includes(name))) return fail(file, node, "window-navigation");
     if (names.has("Document") && (name === null || ["forms", "location", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
     for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
-    const domElement = [...names].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value));
-    if (domElement && ["innerHTML", "outerHTML"].includes(name)) return fail(file, node, "html-navigation-injection");
   }
   if (ts.isBindingElement(node)) {
     const parent = node.parent?.parent;
@@ -281,11 +322,6 @@ function inspectDynamic(file, node) {
   if (relative(file.fileName) === BOUNDARY) return;
   if (ts.isIdentifier(node) && libraryGlobal(node, ["eval", "Function"])) fail(file, node, "dynamic-code-navigation");
   if (!ts.isCallExpression(node)) return;
-  if (memberName(node.expression) === "insertAdjacentHTML") {
-    const owner = ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression) ? node.expression.expression : null;
-    const names = owner ? typeNames(owner) : new Set();
-    if ([...names].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value))) fail(file, node, "html-navigation-injection");
-  }
   const expression = unwrap(node.expression), target = staticLiteral(node.arguments[0]);
   if (ts.isIdentifier(expression) && expression.text === "require" && (target === null || target === "react-router-dom")) fail(file, node, target === null ? "dynamic-require" : "router-require");
   if (expression.kind === ts.SyntaxKind.ImportKeyword && target === "react-router-dom") fail(file, node, "router-dynamic-import");
@@ -390,11 +426,33 @@ function inspectAppGrammar(file, node) {
   const directTag = ((ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent)) && parent.tagName === node && node.text === info.name);
   if (!directImport && !directTag) fail(file, node, "app-router-alias");
 }
+function appRouterTag(node, name) {
+  return Boolean(node) && ts.isIdentifier(node) && node.text === name &&
+    importInfo(checker.getSymbolAtLocation(node))?.module === "react-router-dom";
+}
+function exactElementAttribute(item) {
+  return Boolean(item) && ts.isJsxAttribute(item) && item.name.text === "element" &&
+    ts.isJsxExpression(item.initializer) && ts.isJsxSelfClosingElement(item.initializer.expression);
+}
 function inspectApp(file, node, appRoutes) {
   if (!ts.isJsxOpeningLikeElement(node) || !ts.isIdentifier(node.tagName) || node.tagName.text !== "Route") return;
   if (importInfo(checker.getSymbolAtLocation(node.tagName))?.module !== "react-router-dom") return;
-  if (node.attributes.properties.some(ts.isJsxSpreadAttribute)) fail(file, node, "route-spread");
-  for (const item of node.attributes.properties) if (ts.isJsxAttribute(item) && item.name.text === "path") {
+  const attributes = node.attributes.properties;
+  const names = attributes.map((item) => ts.isJsxSpreadAttribute(item) ? null : item.name.text);
+  const element = ts.isJsxOpeningElement(node) && ts.isJsxElement(node.parent) ? node.parent : node;
+  const parent = element.parent;
+  const parentTag = ts.isJsxElement(parent) ? parent.openingElement.tagName : null;
+  const outer = JSON.stringify(names) === JSON.stringify(["element"]);
+  const index = JSON.stringify(names) === JSON.stringify(["index", "element"]);
+  const path = JSON.stringify(names) === JSON.stringify(["path", "element"]);
+  const correctParent = outer ? appRouterTag(parentTag, "Routes") : (index || path) ? appRouterTag(parentTag, "Route") : false;
+  const correctShape = outer ? ts.isJsxOpeningElement(node) : ts.isJsxSelfClosingElement(node);
+  const elementAttribute = attributes.find((item) => ts.isJsxAttribute(item) && item.name.text === "element");
+  const indexAttribute = attributes.find((item) => ts.isJsxAttribute(item) && item.name.text === "index");
+  if (!correctParent || !correctShape || !exactElementAttribute(elementAttribute) || (index && indexAttribute.initializer)) {
+    fail(file, node, "route-declaration-grammar");
+  }
+  for (const item of attributes) if (ts.isJsxAttribute(item) && item.name.text === "path") {
     if (!ts.isStringLiteral(item.initializer)) fail(file, item, "dynamic-route-path");
     else { appRoutes.push(item.initializer.text); marker(file, item, "route", item.initializer.text); }
   }
