@@ -965,12 +965,12 @@ def test_ast_reachability_fails_closed_on_dynamic_create_element_props(
         _synthetic_spa_sites(tmp_path, app_source)
 
 
-def test_ast_reachability_ignores_non_navigation_create_element(tmp_path) -> None:
-    sites = _synthetic_spa_sites(
-        tmp_path,
-        'import React from "react"; export const App = () => React.createElement("div", {title: "/labs"});\n',
-    )
-    assert not any(site["target"] == "/labs" for site in sites)
+def test_ast_reachability_rejects_react_factory_for_non_navigation_tag(tmp_path) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(
+            tmp_path,
+            'import React from "react"; export const App = () => React.createElement("div", {title: "/labs"});\n',
+        )
 
 
 def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(tmp_path) -> None:

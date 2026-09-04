@@ -39,3 +39,4 @@ reports
 htmlcov
 .coverage*
 *.log
+*.tar
