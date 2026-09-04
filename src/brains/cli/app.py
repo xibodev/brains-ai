@@ -4718,7 +4718,7 @@ def readiness_cli() -> None:
 
 
 queue_health_app = typer.Typer(
-    help="Coordination queue health + continuity repair (BL-P1-12): family "
+    help="Coordination queue health + continuity repair: family "
     "summary, orphan/stale detection, and dry-run/apply repair."
 )
 app.add_typer(queue_health_app, name="queue-health")

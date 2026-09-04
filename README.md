@@ -33,10 +33,10 @@ brains-ai serve-all
 Open `http://127.0.0.1:8787/app`. Keep the generated admin key private.
 
 Repository checks exercise exact-package installation, reversible harness wiring, and
-generated Claude hook behavior in isolation. An exact candidate is not qualified until
-the fail-closed aggregate accepts its required native and container results. Native
-service-manager persistence and platform-specific Claude recovery remain backlog work;
-see [Operations](docs/OPERATIONS.md) before relying on a background service.
+generated Claude hook behavior in isolation. Native service-manager persistence,
+platform-specific Claude recovery, and the Docker-isolated full gate are recurring
+release conditions for the exact candidate; see [Quality gates](docs/QUALITY_GATES.md)
+and [Operations](docs/OPERATIONS.md) before relying on a background service.
 
 ## Documentation
 

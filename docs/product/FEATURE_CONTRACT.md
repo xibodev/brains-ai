@@ -277,7 +277,7 @@ With explicit consent, `wire --mailbox-wakeups` installs the Claude Code stop-ho
 adapter. Its nudge contains no mail body or address, pull remains authoritative, and
 unwiring restores the prior configuration. A required isolated-container probe is
 defined for generated-hook discovery and continuation. Native-platform atomic exchange,
-owner-only recovery behavior, and exact-candidate binding remain BL-P1-12 work.
+owner-only recovery behavior, and exact-candidate binding are recurring release gates.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -369,10 +369,10 @@ unloads the KeepAlive job, and Linux preserves the pre-existing linger policy.
 Repository checks exercise exact package, executable, endpoint, wiring, renderer, and
 hermetic lifecycle contracts. An exact candidate is not qualified until the fail-closed
 aggregate binds its source, wheel, sdist, and OCI image manifest digests, accepts the
-required native results and container smoke against that exact image, and requires
-publication to reuse those qualified artifacts. Brains-confined labels
-support isolated disposable-host validation, while real manager execution and
-persistence across a machine boundary remain BL-P0-06 work.
+required native results and container smoke against that exact image. Brains-confined
+labels support isolated disposable-host validation. Before a release is approved,
+the existing guarded native lifecycle probe must also demonstrate real manager
+execution and persistence across a machine boundary on a disposable native account.
 
 ### B7 - Authenticated external events
 

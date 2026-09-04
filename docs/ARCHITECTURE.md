@@ -177,9 +177,9 @@ attachment may emit the constant nudge and request one continuation; abandoned c
 are lease-reclaimed and become uncertain after three attempts. Copilot CLI, Codex, and
 OpenCode remain pull-only because their notification continuation behavior has no
 equivalent real-binary proof. Claude settings mutation is cross-process locked and uses
-a recoverable atomic exchange that preserves displaced bytes; BL-P1-12 remains open
-until the exchange and owner-only recovery state pass every supported native platform
-gate.
+a recoverable atomic exchange that preserves displaced bytes. Each release candidate
+must pass the native exchange and owner-only recovery probes on every supported native
+platform before publication.
 Brains does not retain a generic live model-input channel.
 
 Migration 152 preserves the reserved per-operator SMTP setting and outbox schema for
