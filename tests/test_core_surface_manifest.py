@@ -574,17 +574,8 @@ def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None
         "export function LabsHome() { return <div>Labs</div>; }\n", encoding="utf-8"
     )
 
-    modules, graph, sites = check_core_surface._frontend_reachability(source)
-    expected = _manifest()
-    actual = copy.deepcopy(expected)
-    normal = actual["modes"]["normal"]
-    normal["frontend_reachable_modules"] = modules
-    normal["frontend_import_graph"] = graph
-    normal["reachable_spa_navigation_sites"] = sites
-
-    errors = check_core_surface.violations(normal)
-    assert any("screens/Labs.tsx" in error for error in errors)
-    assert any("frozen SPA target reachable: /labs" in error for error in errors)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
 
 
 @pytest.mark.parametrize(
@@ -592,8 +583,6 @@ def test_reachability_rejects_rendered_retained_labs_component(tmp_path) -> None
     [
         'import { Route } from "react-router-dom"; export function App() { return <Route path={"/labs"} />; }\n',
         'import { Route } from "react-router-dom"; export function App() { return <Route path={"/" + "labs"} />; }\n',
-        'import { LabsHome as Core } from "./screens/Labs"; export function App() { return <Core />; }\n',
-        'const Core = import("./screens/Labs"); export function App() { return <div>{Core}</div>; }\n',
         'window.history.pushState({}, "", "/labs"); export function App() { return <div />; }\n',
         'const h = globalThis["history"]; h.replaceState(null, "", "/labs"); export function App() { return <div />; }\n',
         'const push = window.history.pushState; push({}, "", "/labs"); export function App() { return <div />; }\n',
@@ -614,12 +603,8 @@ def test_ast_reachability_rejects_expression_alias_and_dynamic_import_bypasses(
         "export const LabsHome = () => <div />;\n", encoding="utf-8"
     )
 
-    modules, graph, sites = check_core_surface._frontend_reachability(source)
-    normal = copy.deepcopy(_manifest()["modes"]["normal"])
-    normal["frontend_reachable_modules"] = modules
-    normal["frontend_import_graph"] = graph
-    normal["reachable_spa_navigation_sites"] = sites
-    assert check_core_surface.violations(normal)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
 
 
 def test_reachability_rejects_unknown_target_without_manifest_comparison() -> None:
@@ -698,8 +683,8 @@ def test_ast_reachability_detects_namespace_router_and_window_location(
     (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
     (source / "App.tsx").write_text(app_source, encoding="utf-8")
 
-    _modules, _graph, sites = check_core_surface._frontend_reachability(source)
-    assert any(site["target"] == "/labs" for site in sites)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
 
 
 def _synthetic_spa_sites(tmp_path, app_source: str):
@@ -728,7 +713,8 @@ def _synthetic_spa_sites(tmp_path, app_source: str):
     ],
 )
 def test_ast_reachability_closes_navigate_callback_aliases(tmp_path, app_source: str) -> None:
-    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
 
 
 @pytest.mark.parametrize(
@@ -744,7 +730,8 @@ def test_ast_reachability_closes_navigate_callback_aliases(tmp_path, app_source:
     ],
 )
 def test_ast_reachability_covers_window_open_and_aliases(tmp_path, app_source: str) -> None:
-    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
 
 
 @pytest.mark.parametrize(
@@ -764,7 +751,8 @@ def test_ast_reachability_covers_window_open_and_aliases(tmp_path, app_source: s
     ],
 )
 def test_ast_reachability_covers_location_dot_and_bracket_forms(tmp_path, app_source: str) -> None:
-    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
 
 
 @pytest.mark.parametrize(
@@ -778,7 +766,8 @@ def test_ast_reachability_covers_location_dot_and_bracket_forms(tmp_path, app_so
     ],
 )
 def test_ast_reachability_covers_form_navigation_activators(tmp_path, app_source: str) -> None:
-    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
 
 
 @pytest.mark.parametrize(
@@ -834,7 +823,8 @@ def test_ast_reachability_ignores_non_navigation_members_and_custom_attributes(t
 def test_ast_reachability_uses_symbol_provenance_for_aliases_and_activators(
     tmp_path, app_source: str
 ) -> None:
-    assert any(site["target"] == "/labs" for site in _synthetic_spa_sites(tmp_path, app_source))
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
 
 
 def test_ast_reachability_follows_reexported_router_component_symbol(tmp_path) -> None:
@@ -852,9 +842,8 @@ def test_ast_reachability_follows_reexported_router_component_symbol(tmp_path) -
         'import { ProductLink } from "./router"; export const App = () => <ProductLink to="/labs" />;\n',
         encoding="utf-8",
     )
-    assert any(
-        site["target"] == "/labs" for site in check_core_surface._frontend_reachability(source)[2]
-    )
+    with pytest.raises(RuntimeError, match="failed closed"):
+        check_core_surface._frontend_reachability(source)
 
 
 @pytest.mark.parametrize(
@@ -878,22 +867,22 @@ def test_ast_reachability_fails_closed_on_capability_escape_and_dynamic_joins(
 
 
 def test_ast_reachability_tracks_alias_kills_and_lexical_shadowing(tmp_path) -> None:
-    ignored = _synthetic_spa_sites(
-        tmp_path / "ignored",
-        'const local = (_target: string) => {}; let go = window.open; go = local; go("/labs"); '
-        "function nested(open: (_target: string) => void, location: {assign: (_target: string) => void}) {"
-        ' open("/labs"); location.assign("/labs"); } '
-        "const history = {pushState: (_a: object, _b: string, _c: string) => {}}; "
-        'history.pushState({}, "", "/labs"); export const App = () => <div />;\n',
-    )
-    assert not any(site["target"] == "/labs" for site in ignored)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(
+            tmp_path / "ignored",
+            'const local = (_target: string) => {}; let go = window.open; go = local; go("/labs"); '
+            "function nested(open: (_target: string) => void, location: {assign: (_target: string) => void}) {"
+            ' open("/labs"); location.assign("/labs"); } '
+            "const history = {pushState: (_a: object, _b: string, _c: string) => {}}; "
+            'history.pushState({}, "", "/labs"); export const App = () => <div />;\n',
+        )
 
-    detected = _synthetic_spa_sites(
-        tmp_path / "detected",
-        "const local = (_target: string) => {}; let go = local; go = window.open; "
-        'function nested() { go("/labs"); } export const App = () => <div />;\n',
-    )
-    assert any(site["target"] == "/labs" for site in detected)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(
+            tmp_path / "detected",
+            "const local = (_target: string) => {}; let go = local; go = window.open; "
+            'function nested() { go("/labs"); } export const App = () => <div />;\n',
+        )
 
 
 @pytest.mark.parametrize(
@@ -911,11 +900,11 @@ def test_ast_reachability_fails_closed_on_conditional_or_unknown_alias_kill(
 
 
 def test_ast_reachability_records_dom_submit_activation_without_inventing_target(tmp_path) -> None:
-    sites = _synthetic_spa_sites(
-        tmp_path,
-        'const form = document.createElement("form"); form.requestSubmit(); export const App = () => <div />;\n',
-    )
-    assert any(site["target"] == "@form-submit" for site in sites)
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(
+            tmp_path,
+            'const form = document.createElement("form"); form.requestSubmit(); export const App = () => <div />;\n',
+        )
 
 
 def test_ast_reachability_fails_closed_on_import_meta_glob(tmp_path) -> None:
@@ -924,6 +913,64 @@ def test_ast_reachability_fails_closed_on_import_meta_glob(tmp_path) -> None:
             tmp_path,
             'const modules = import.meta.glob("./screens/*.tsx"); export const App = () => <div />;\n',
         )
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'const local = (_target: string) => {}; const go = flag ? window.open : local; go("/labs"); export const App = () => <div />;\n',
+        'const local = (_target: string) => {}; let go = local; go ||= window.open; go("/labs"); export const App = () => <div />;\n',
+        'const local = (_target: string) => {}; let go = window.open; go &&= local; go("/labs"); export const App = () => <div />;\n',
+        'const local = (_target: string) => {}; let go = window.open; go ??= local; go("/labs"); export const App = () => <div />;\n',
+        "const box = {go: window.open}; export const App = () => <div />;\n",
+        "const slots: unknown[] = []; slots[0] = window.open; export const App = () => <div />;\n",
+        "function factory() { return window.open; } export const App = () => <div />;\n",
+        "const factory = () => window.open; export const App = () => <div />;\n",
+        "let go = window.open; go += local; export const App = () => <div />;\n",
+    ],
+)
+def test_ast_reachability_denies_unmodeled_capability_flow(tmp_path, app_source: str) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'import { createBrowserRouter } from "react-router-dom"; createBrowserRouter([{path: "/", children: [{path: "/labs", element: <div />}]}]); export const App = () => <div />;\n',
+        'import React from "react"; export const App = () => React.createElement("a", {href: "/labs"});\n',
+        'import { createElement as h } from "react"; export const App = () => h("form", {action: "/labs"});\n',
+        'import * as React from "react"; export const App = () => React.createElement("button", {...{formAction: "/labs"}});\n',
+        'import { createElement as h } from "react"; import { Link } from "react-router-dom"; export const App = () => h(Link, {...{to: "/labs"}});\n',
+    ],
+)
+def test_ast_reachability_covers_nested_routes_and_create_element_forms(
+    tmp_path, app_source: str
+) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
+
+
+@pytest.mark.parametrize(
+    "app_source",
+    [
+        'import React from "react"; export const App = () => React.createElement("a", props);\n',
+        'import { createElement as h } from "react"; import { Link } from "react-router-dom"; export const App = () => h(Link, {...props});\n',
+    ],
+)
+def test_ast_reachability_fails_closed_on_dynamic_create_element_props(
+    tmp_path, app_source: str
+) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _synthetic_spa_sites(tmp_path, app_source)
+
+
+def test_ast_reachability_ignores_non_navigation_create_element(tmp_path) -> None:
+    sites = _synthetic_spa_sites(
+        tmp_path,
+        'import React from "react"; export const App = () => React.createElement("div", {title: "/labs"});\n',
+    )
+    assert not any(site["target"] == "/labs" for site in sites)
 
 
 def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(tmp_path) -> None:
@@ -1031,6 +1078,7 @@ def test_ast_reachability_fails_closed_on_nonliteral_dynamic_import(tmp_path) ->
         "instruction_path",
         "json_servers_key",
         "mailbox_notification_mode",
+        "mailbox_wakeup_mode",
     ],
 )
 def test_positive_manifest_rejects_every_wire_adapter_field(field: str) -> None:
@@ -1250,3 +1298,154 @@ def test_configuration_inventory_reads_actual_acceptance_map(tmp_path, monkeypat
     assert readable == ["visible"]
     assert summary_writable == ["visible"]
     assert accepted_writable == ["accepted_only", "visible"]
+
+
+_FINITE_APP = """
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import "./coreRoutes";
+import "./Consumer";
+export function App() {
+  return <BrowserRouter><Routes><Route element={<div />}>
+    <Route index element={<div />} />
+    <Route path="/command-center" element={<div />} />
+    <Route path="/workspaces" element={<div />} />
+    <Route path="/workspaces/:slug" element={<div />} />
+    <Route path="/coordination" element={<div />} />
+    <Route path="/governance" element={<div />} />
+    <Route path="/operations" element={<div />} />
+    <Route path="/operations/config" element={<div />} />
+    <Route path="/operations/config/:section" element={<div />} />
+    <Route path="/act" element={<div />} />
+    <Route path="/inbox" element={<div />} />
+    <Route path="/config" element={<div />} />
+    <Route path="*" element={<div />} />
+  </Route></Routes></BrowserRouter>;
+}
+"""
+
+
+def _finite_boundary_fixture(
+    tmp_path,
+    consumer: str = "export const Consumer = () => null;\n",
+    *,
+    app: str = _FINITE_APP,
+    boundary_mutation=None,
+):
+    source = tmp_path / "frontend/src"
+    source.mkdir(parents=True)
+    (tmp_path / "frontend/tsconfig.json").write_text(
+        '{"compilerOptions":{"moduleResolution":"bundler","jsx":"react-jsx"}}',
+        encoding="utf-8",
+    )
+    (source / "main.tsx").write_text('import { App } from "./App"; <App />;\n', encoding="utf-8")
+    (source / "App.tsx").write_text(app, encoding="utf-8")
+    (source / "Consumer.tsx").write_text(consumer, encoding="utf-8")
+    boundary = (check_core_surface.ROOT / "frontend/src/coreRoutes.tsx").read_text(encoding="utf-8")
+    if boundary_mutation is not None:
+        boundary = boundary_mutation(boundary)
+    (source / "coreRoutes.tsx").write_text(boundary, encoding="utf-8")
+    return check_core_surface._frontend_reachability(source)
+
+
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        'import { useNavigate as acquire } from "react-router-dom"; void acquire;\n',
+        'import * as Router from "react-router-dom"; void Router;\n',
+        'export { Link as ProductLink } from "react-router-dom";\n',
+        'const Router = require("react-router-dom"); void Router;\n',
+        'const moduleName = "react-router-dom"; const Router = require(moduleName); void Router;\n',
+        'void import("react-router-dom");\n',
+        "const go = window.open; class Holder { go = window.open; } void go; void Holder;\n",
+        "const go = await window.open; void go;\n",
+        "const { open: go = () => undefined } = window; void go;\n",
+        'const loc = window["location"]; void loc;\n',
+        'const form = document.createElement("form"); form.requestSubmit();\n',
+        'const tag = "a"; const node = document.createElement(tag); node.setAttribute("href", "/labs");\n',
+        'const node = document.createElement("div"); node.setAttribute(name, "/labs");\n',
+        'const node = document.createElement("div"); node.innerHTML = `<a href="/labs">x</a>`;\n',
+        'document.body.insertAdjacentHTML("beforeend", `<form action="/labs"></form>`);\n',
+        'document.write(`<meta http-equiv="refresh" content="0;/labs">`);\n',
+        'eval(`location.href="/labs"`);\n',
+        'const modules = import.meta.glob("./*.tsx"); void modules;\n',
+        'export const Consumer = () => <a href="/" {...{href: "/labs"}}>x</a>;\n',
+        "export const Consumer = () => <form {...props} onSubmit={() => undefined} />;\n",
+        'export const Consumer = () => <iframe src="/labs" />;\n',
+        'export const Consumer = () => <object data="/labs" />;\n',
+        'export const Consumer = () => <embed src="/labs" />;\n',
+        'export const Consumer = () => <base href="/labs" />;\n',
+        'export const Consumer = () => <meta httpEquiv="refresh" content="0;/labs" />;\n',
+        'import React from "react"; export const Consumer = () => React.createElement("a", {href: "/labs"});\n',
+        'import React from "react"; const link = <a />; export const Consumer = () => React.cloneElement(link, {href: "/labs"});\n',
+    ],
+)
+def test_finite_navigation_boundary_denies_acquisition_and_activation(tmp_path, consumer) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _finite_boundary_fixture(tmp_path, consumer)
+
+
+def test_finite_navigation_boundary_preserves_non_navigation_false_positive_controls(
+    tmp_path,
+) -> None:
+    _finite_boundary_fixture(
+        tmp_path,
+        """
+import React from "react";
+import { Outlet, useLocation, useParams, useSearchParams } from "react-router-dom";
+const service = { open: (_target: string) => undefined };
+const model = { location: { assign: (_target: string) => undefined } };
+const record = { innerHTML: "data" };
+const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
+service.open("/labs"); model.location.assign("/labs"); record.innerHTML = "safe";
+window.setTimeout(() => undefined, 1); document.addEventListener("ready", () => undefined);
+export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget {...{href: "/labs", to: "/labs", action: "/labs"}} />{React.createElement("div", {title: "/labs"})}{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
+""",
+    )
+
+
+@pytest.mark.parametrize(
+    "app_mutation",
+    [
+        lambda source: source.replace('path="/act"', 'path={"/act"}'),
+        lambda source: source.replace('path="/act"', '{...{path: "/labs"}}'),
+        lambda source: source.replace('path="/act"', 'path="/labs"'),
+        lambda source: source.replace(
+            "return <BrowserRouter>",
+            'React.createElement(Route, {path: "/labs", element: <div />}); return <BrowserRouter>',
+        ).replace(
+            'import { BrowserRouter, Route, Routes } from "react-router-dom";',
+            'import React from "react"; import { BrowserRouter, Route, Routes } from "react-router-dom";',
+        ),
+        lambda source: source.replace(
+            "import { BrowserRouter, Route, Routes }",
+            "import { BrowserRouter, Route as ProductRoute, Routes }",
+        ),
+    ],
+)
+def test_finite_navigation_boundary_rejects_route_declaration_bypasses(
+    tmp_path, app_mutation
+) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _finite_boundary_fixture(tmp_path, app=app_mutation(_FINITE_APP))
+
+
+@pytest.mark.parametrize(
+    "boundary_mutation",
+    [
+        lambda source: source + "\nexport const rawNavigate = useNavigate;\n",
+        lambda source: source.replace(
+            "<NavLink {...props} to={coreHref(to)} />",
+            "<NavLink to={coreHref(to)} {...props} />",
+        ),
+        lambda source: source.replace(
+            '<a {...props} href={safe} target="_blank" rel="noopener noreferrer" />',
+            '<a href={safe} {...props} target="_blank" rel="noopener noreferrer" />',
+        ),
+        lambda source: source.replace("navigate(coreHref(candidate));", "navigate(candidate);"),
+    ],
+)
+def test_finite_navigation_boundary_rejects_raw_exports_and_override_order(
+    tmp_path, boundary_mutation
+) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _finite_boundary_fixture(tmp_path, boundary_mutation=boundary_mutation)

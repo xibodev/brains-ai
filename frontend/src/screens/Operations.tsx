@@ -1,5 +1,5 @@
-import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { actHref, useCoreNavigation } from "../coreRoutes";
 import {
   OperatorCard,
   OperatorMiniList,
@@ -11,7 +11,7 @@ import { useToast } from "../components/Toast";
 import { useAsync } from "../store/useAsync";
 
 export function Operations() {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const state = useAsync(() => api.operatorOperations(), []);
   const { toast } = useToast();
   const data = state.data;
@@ -23,7 +23,7 @@ export function Operations() {
         eyebrow="Install and continuity"
         title="Operations"
         lede="The service tree, tools, wiring, storage, recovery, access, and configuration, with typed safeguards for every host-level effect."
-        actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigate("/act?category=operations")}>Operational action</button></>}
+        actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigation.open(actHref({ category: "operations" }))}>Operational action</button></>}
       />
       <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="operations" emptyTitle="No operational state" emptyBody="Required service, readiness, queue, or recovery state is unavailable." />
       {data && !empty && (

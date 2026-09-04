@@ -165,7 +165,10 @@ def test_docker_quality_has_no_network_mount_or_capabilities() -> None:
     assert "COPY . ." in dockerfile
     assert "uv sync --extra dev --python 3.12" in dockerfile
     assert 'uv pip install "setuptools==84.0.0" "wheel==0.48.0"' in dockerfile
-    assert "uv build --no-build-isolation" in _text(ROOT / "docker" / "run-quality-gates.sh")
+    quality_runner = _text(ROOT / "docker" / "run-quality-gates.sh")
+    assert quality_runner.count("PYTHONPATH=/work pytest") == 2
+    assert "uv build --no-build-isolation" in quality_runner
+    assert "python scripts/check_core_surface.py --dist dist" in quality_runner
 
 
 def test_real_cli_uat_uses_owned_isolation_and_real_resume_contracts() -> None:

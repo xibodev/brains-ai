@@ -50,8 +50,8 @@ CORE_SPA_TARGET_PREFIXES = (
     "/operations",
     "/workspaces",
 )
-CORE_ROUTE_GUARD_SHA256 = "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225"
-SPA_AST_HELPER_SHA256 = "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e"
+CORE_ROUTE_GUARD_SHA256 = "ef63576878cd6b5345ce1460b921a0a0696c6f4a19f6dcf109b5cc750d2dfbe5"
+SPA_AST_HELPER_SHA256 = "38722f76b4ab3eaf442308f8cfdae97b45b409fc1c5fda8d3572558af3c6f09b"
 CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
@@ -73,7 +73,7 @@ CORE_FRONTEND_MODULES = frozenset(
         "components/format.ts",
         "components/sessionScope.ts",
         "components/useDialogFocus.ts",
-        "coreRoutes.ts",
+        "coreRoutes.tsx",
         "main.tsx",
         "realtime/client.ts",
         "realtime/protocol.ts",
@@ -108,10 +108,10 @@ CORE_WIRE_ADAPTERS = {
     ),
 }
 CORE_WIRE_METADATA = {
-    "claude-code": ("json", "mcpServers", "pull"),
-    "codex": ("toml", "mcpServers", "pull"),
-    "copilot-cli": ("json", "mcpServers", "pull"),
-    "opencode": ("json", "mcp", "pull"),
+    "claude-code": ("json", "mcpServers", "pull", "turn_boundary"),
+    "codex": ("toml", "mcpServers", "pull", None),
+    "copilot-cli": ("json", "mcpServers", "pull", None),
+    "opencode": ("json", "mcp", "pull", None),
 }
 PARSER_INSTALL_HINT = "run `npm ci --ignore-scripts` in frontend/"
 
@@ -498,7 +498,8 @@ def _wire_inventory() -> dict[str, object]:
                 .relative_to(canonical_home)
                 .as_posix(),
                 "json_servers_key": adapter.json_servers_key,
-                "mailbox_notification_mode": adapter.mailbox_notification_mode,
+                "mailbox_notification_mode": "pull",
+                "mailbox_wakeup_mode": adapter.wakeup_mode,
                 "transports": entries,
             }
     finally:
@@ -1029,7 +1030,7 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         errors.append(f"unknown or frozen frontend modules reachable: {sorted(extra_modules)}")
     if (
         not isinstance(frontend_hashes, dict)
-        or frontend_hashes.get("frontend/src/coreRoutes.ts") != CORE_ROUTE_GUARD_SHA256
+        or frontend_hashes.get("frontend/src/coreRoutes.tsx") != CORE_ROUTE_GUARD_SHA256
     ):
         errors.append("runtime core-route guard differs from the reviewed semantic boundary")
     if ast_helper_hash != SPA_AST_HELPER_SHA256:
@@ -1064,11 +1065,14 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         adapter = wire_adapters.get(name)
         if not isinstance(adapter, dict):
             continue
-        expected_format, expected_servers_key, expected_notification = CORE_WIRE_METADATA[name]
+        expected_format, expected_servers_key, expected_notification, expected_wakeup = (
+            CORE_WIRE_METADATA[name]
+        )
         if (
             adapter.get("format") != expected_format
             or adapter.get("json_servers_key") != expected_servers_key
             or adapter.get("mailbox_notification_mode") != expected_notification
+            or adapter.get("mailbox_wakeup_mode") != expected_wakeup
         ):
             errors.append(f"wire adapter {name} metadata differs from the supported contract")
         if (

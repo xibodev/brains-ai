@@ -1,6 +1,5 @@
-import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import { coreRoute } from "../coreRoutes";
+import { useCoreNavigation, workspaceHref } from "../coreRoutes";
 import { relativeTime } from "../components/format";
 import {
   OperatorCard,
@@ -12,7 +11,7 @@ import {
 import { useAsync } from "../store/useAsync";
 
 export function CommandCenter() {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const state = useAsync(() => api.operatorOverview(), []);
   const data = state.data;
 
@@ -45,7 +44,7 @@ export function CommandCenter() {
             <OperatorCard
               kicker="Workspace pulse"
               title="Where work stands now"
-              action={<div className="operator-action-row"><button className="operator-button" onClick={() => navigate("/workspaces")}>Portfolio</button><button className="operator-button primary" onClick={() => navigate("/act")}>New action</button></div>}
+              action={<div className="operator-action-row"><button className="operator-button" onClick={() => navigation.open("/workspaces")}>Portfolio</button><button className="operator-button primary" onClick={() => navigation.open("/act")}>New action</button></div>}
               className="operator-workspace-table-card"
             >
               <div className="operator-workspace-header" aria-hidden>
@@ -61,7 +60,7 @@ export function CommandCenter() {
                     <button
                       className="operator-workspace-row"
                       key={workspace.slug}
-                      onClick={() => navigate(coreRoute(`/workspaces/${workspace.slug}`))}
+                      onClick={() => navigation.open(workspaceHref(workspace.slug))}
                     >
                       <div><strong>{workspace.name || workspace.slug}</strong><code>{workspace.path}</code></div>
                       <div><b>{workspace.live_agents ? `${workspace.live_agents} live` : "Quiet"}</b><small>{relativeTime(workspace.last_touched_at)}</small></div>
@@ -86,7 +85,7 @@ export function CommandCenter() {
                   </div>
                 ))}
                 {!data.attention.decisions.length && !data.attention.handoffs.length && <p>No open decisions or handoffs.</p>}
-                <button className="operator-button inverse" onClick={() => navigate("/governance")}>Open governance</button>
+                <button className="operator-button inverse" onClick={() => navigation.open("/governance")}>Open governance</button>
               </section>
 
               <OperatorCard kicker="Presence" title="Agents working now">
@@ -114,7 +113,7 @@ export function CommandCenter() {
                 {!data.recent_events.length && <span className="operator-muted">No recent durable events.</span>}
               </div>
             </OperatorCard>
-            <OperatorCard kicker="Brain posture" title="Operational truth" action={<button className="operator-button quiet" onClick={() => navigate("/operations")}>Inspect</button>}>
+            <OperatorCard kicker="Brain posture" title="Operational truth" action={<button className="operator-button quiet" onClick={() => navigation.open("/operations")}>Inspect</button>}>
               <OperatorMiniList rows={[
                 { label: "Protected readiness", value: data.readiness ? <OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus> : "Install admin only" },
                 { label: "Blocked work", value: `${data.situation.blocked_tasks} tasks` },

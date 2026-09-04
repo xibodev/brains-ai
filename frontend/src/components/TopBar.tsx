@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useCoreNavigation } from "../coreRoutes";
 import { useOperator } from "../store/OperatorContext";
 import type { ConnState } from "../realtime/client";
 
@@ -10,7 +10,7 @@ const CONNECTION_LABEL: Record<ConnState, string> = {
 };
 
 export function TopBar({ connection }: { connection: ConnState }) {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const { catalog } = useOperator();
 
   return (
@@ -32,7 +32,7 @@ export function TopBar({ connection }: { connection: ConnState }) {
         className="control-icon-button"
         aria-label="Open governance queue"
         title="Governance"
-        onClick={() => navigate("/governance")}
+        onClick={() => navigation.open("/governance")}
       >
         !
       </button>

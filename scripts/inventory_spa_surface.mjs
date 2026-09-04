@@ -35,9 +35,7 @@ function dependencies(sourceFile) {
       found.push(node.arguments[0].text);
     } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
       ts.isMetaProperty(node.expression.expression) && node.expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
-      ["glob", "globEager"].includes(node.expression.name.text)) {
-      throw new Error("import.meta glob frontend reachability is unresolved");
-    }
+      ["glob", "globEager"].includes(node.expression.name.text)) throw new Error("import.meta glob frontend reachability is unresolved");
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
@@ -61,18 +59,37 @@ while (pending.length) {
   graph[relative(file)] = [...new Set(local.map(relative))].sort();
 }
 if (!discovered.has(path.join(sourceRoot, "App.tsx"))) throw new Error("frontend entry does not reach App.tsx");
+const hasBoundary = discovered.has(path.join(sourceRoot, "coreRoutes.tsx"));
 const program = ts.createProgram({ rootNames: [...discovered.keys()].filter((file) => /\.[cm]?[jt]sx?$/.test(file)), options: parsed.options });
 const checker = program.getTypeChecker();
 const sourceFiles = [...discovered.keys()].map((file) => program.getSourceFile(file)).filter(Boolean);
+
+const APP = "App.tsx", BOUNDARY = "coreRoutes.tsx";
+const READ_ONLY_ROUTER = new Set(["Outlet", "useLocation", "useParams", "useSearchParams"]);
+const APP_ROUTER = new Set(["BrowserRouter", "Route", "Routes"]), BOUNDARY_ROUTER = new Set(["NavLink", "useNavigate"]);
+const BOUNDARY_EXPORTS = new Set(["CoreHref", "CORE_ROUTE_PATTERNS", "coreHref", "workspaceHref", "configHref", "actHref", "useCoreNavigation", "CoreNavLink", "ExternalLink"]);
+const ROUTE_PATTERNS = new Set(["/command-center", "/workspaces", "/workspaces/:slug", "/coordination", "/governance", "/operations", "/operations/config", "/operations/config/:section", "/act", "/inbox", "/config", "*"]);
+const CORE_PREFIXES = ["/act", "/command-center", "/config", "/coordination", "/governance", "/inbox", "/operations", "/workspaces"];
+const DOM_NAV_MEMBERS = new Map([
+  ["Location", null], ["History", null],
+  ["HTMLFormElement", new Set(["action", "submit", "requestSubmit", "setAttribute", "setAttributeNS"])],
+  ["HTMLButtonElement", new Set(["formAction", "setAttribute", "setAttributeNS"])],
+  ["HTMLInputElement", new Set(["formAction", "setAttribute", "setAttributeNS"])],
+  ["HTMLAnchorElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
+  ["HTMLAreaElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
+]);
+const INTRINSIC_TARGETS = new Map([
+  ["a", new Set(["href", "xlinkHref"])], ["area", new Set(["href"])], ["iframe", new Set(["src", "srcDoc"])],
+  ["object", new Set(["data"])], ["embed", new Set(["src"])], ["base", new Set(["href"])],
+  ["meta", new Set(["httpEquiv", "content"])], ["form", new Set(["action"])],
+  ["button", new Set(["formAction"])], ["input", new Set(["formAction"])],
+]);
 
 function unwrap(node) {
   while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))) node = node.expression;
   return node;
 }
-function staticLiteral(node) {
-  node = unwrap(node);
-  return node && (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)) ? node.text : null;
-}
+function staticLiteral(node) { node = unwrap(node); return node && (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node)) ? node.text : null; }
 function propertyName(node) {
   node = unwrap(node);
   if (node && (ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isNumericLiteral(node))) return node.text;
@@ -83,55 +100,33 @@ function memberName(node) {
   if (node && ts.isPropertyAccessExpression(node)) return node.name.text;
   return node && ts.isElementAccessExpression(node) ? staticLiteral(node.argumentExpression) : null;
 }
-function owner(node) {
-  node = unwrap(node);
-  return node && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) ? node.expression : null;
+function libraryGlobal(identifier, names) {
+  if (!ts.isIdentifier(identifier) || !names.includes(identifier.text)) return false;
+  const symbol = checker.getSymbolAtLocation(identifier);
+  const declarations = symbol?.declarations || [];
+  if (identifier.text === "globalThis" && !declarations.length) return Boolean(symbol && symbol.flags & ts.SymbolFlags.Module);
+  return declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile);
 }
-function scope(node) {
-  for (let cursor = node?.parent; cursor; cursor = cursor.parent) if (ts.isFunctionLike(cursor)) return cursor;
-  return null;
-}
-function scopeContains(outer, inner) {
-  if (!outer) return true;
-  for (let cursor = inner; cursor; cursor = scope(cursor.parent)) if (cursor === outer) return true;
-  return false;
-}
-function conditional(node, boundary) {
-  for (let cursor = node.parent; cursor && cursor !== boundary && !ts.isSourceFile(cursor); cursor = cursor.parent) {
-    if (ts.isIfStatement(cursor) || ts.isConditionalExpression(cursor) || ts.isSwitchStatement(cursor) ||
-      ts.isForStatement(cursor) || ts.isForInStatement(cursor) || ts.isForOfStatement(cursor) ||
-      ts.isWhileStatement(cursor) || ts.isDoStatement(cursor) || ts.isTryStatement(cursor)) return true;
+function typeNames(node) {
+  const found = new Set(), seen = new Set();
+  function add(type) {
+    if (!type || seen.has(type)) return;
+    seen.add(type);
+    if (type.symbol?.name) found.add(type.symbol.name);
+    if (type.aliasSymbol?.name) found.add(type.aliasSymbol.name);
+    for (const part of type.types || []) add(part);
+    for (const base of type.getBaseTypes?.() || []) add(base);
   }
-  return false;
+  add(checker.getTypeAtLocation(node));
+  return found;
 }
 function importInfo(symbol) {
   if (!symbol) return null;
   for (const declaration of symbol.declarations || []) {
-    if (ts.isImportSpecifier(declaration)) {
-      const module = declaration.parent.parent.parent.moduleSpecifier.text;
-      if (module.startsWith(".") && symbol.flags & ts.SymbolFlags.Alias) {
-        const target = checker.getAliasedSymbol(symbol);
-        if (target && target !== symbol) {
-          const targetInfo = importInfo(target);
-          if (targetInfo && !targetInfo.module.startsWith(".")) return targetInfo;
-        }
-        const importedFile = resolveLocal(module, declaration.getSourceFile().fileName);
-        const importedSource = importedFile && program.getSourceFile(importedFile);
-        const importedName = declaration.propertyName?.text || declaration.name.text;
-        for (const statement of importedSource?.statements || []) {
-          if (!ts.isExportDeclaration(statement) || !statement.moduleSpecifier || !ts.isNamedExports(statement.exportClause)) continue;
-          const exported = statement.exportClause.elements.find((item) => item.name.text === importedName);
-          if (exported) return { module: statement.moduleSpecifier.text, name: exported.propertyName?.text || exported.name.text };
-        }
-      }
-      return { module, name: declaration.propertyName?.text || declaration.name.text };
-    }
+    if (ts.isImportSpecifier(declaration)) return { module: declaration.parent.parent.parent.moduleSpecifier.text, name: declaration.propertyName?.text || declaration.name.text };
     if (ts.isNamespaceImport(declaration)) return { module: declaration.parent.parent.moduleSpecifier.text, name: "*" };
     if (ts.isImportClause(declaration)) return { module: declaration.parent.moduleSpecifier.text, name: "default" };
-    if (ts.isExportSpecifier(declaration)) {
-      const exportDeclaration = declaration.parent.parent;
-      if (exportDeclaration.moduleSpecifier) return { module: exportDeclaration.moduleSpecifier.text, name: declaration.propertyName?.text || declaration.name.text };
-    }
+    if (ts.isExportSpecifier(declaration) && declaration.parent.parent.moduleSpecifier) return { module: declaration.parent.parent.moduleSpecifier.text, name: declaration.propertyName?.text || declaration.name.text };
   }
   if (symbol.flags & ts.SymbolFlags.Alias) {
     const target = checker.getAliasedSymbol(symbol);
@@ -139,303 +134,235 @@ function importInfo(symbol) {
   }
   return null;
 }
-function libraryGlobal(identifier, names) {
-  if (!ts.isIdentifier(identifier) || !names.includes(identifier.text)) return false;
-  const symbol = checker.getSymbolAtLocation(identifier);
-  const declarations = symbol?.declarations || [];
-  if (identifier.text === "globalThis" && !declarations.length) {
-    return Boolean(symbol && symbol.flags & ts.SymbolFlags.Module);
-  }
-  return declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile);
-}
 
-const writes = new Map();
-function addWrite(identifier, expression, selector, origin, symbolOverride = null) {
-  if (!ts.isIdentifier(identifier)) return;
-  const symbol = symbolOverride || checker.getSymbolAtLocation(identifier);
-  if (!symbol) return;
-  const lexicalScope = scope(origin);
-  const records = writes.get(symbol) || [];
-  records.push({ expression, selector, pos: origin.getStart(), scope: lexicalScope, conditional: conditional(origin, lexicalScope) });
-  writes.set(symbol, records);
-}
-function bind(pattern, expression, selector, origin, assignment = false) {
-  pattern = unwrap(pattern);
-  if (ts.isIdentifier(pattern)) return addWrite(pattern, expression, selector, origin);
-  const objectPattern = assignment ? ts.isObjectLiteralExpression(pattern) : ts.isObjectBindingPattern(pattern);
-  const arrayPattern = assignment ? ts.isArrayLiteralExpression(pattern) : ts.isArrayBindingPattern(pattern);
-  if (objectPattern) for (const item of assignment ? pattern.properties : pattern.elements) {
-    if (ts.isBindingElement(item)) { const key = propertyName(item.propertyName || item.name); if (key !== null) bind(item.name, expression, [...selector, key], origin); }
-    else if (ts.isShorthandPropertyAssignment(item)) addWrite(
-      item.name,
-      expression,
-      [...selector, item.name.text],
-      origin,
-      checker.getShorthandAssignmentValueSymbol(item),
-    );
-    else if (ts.isPropertyAssignment(item)) { const key = propertyName(item.name); if (key !== null) bind(item.initializer, expression, [...selector, key], origin, true); }
-  }
-  if (arrayPattern) pattern.elements.forEach((item, index) => {
-    if (ts.isBindingElement(item)) bind(item.name, expression, [...selector, index], origin);
-    else if (item && !ts.isOmittedExpression(item)) bind(item, expression, [...selector, index], origin, true);
-  });
-}
-for (const sourceFile of sourceFiles) {
-  function index(node) {
-    if (ts.isVariableDeclaration(node)) bind(node.name, node.initializer || null, [], node);
-    else if (ts.isParameter(node)) bind(node.name, node.initializer || null, [], node);
-    else if (ts.isFunctionDeclaration(node) && node.name) addWrite(node.name, node, [], node);
-    else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) bind(node.left, node.right, [], node, true);
-    ts.forEachChild(node, index);
-  }
-  index(sourceFile);
-}
-for (const records of writes.values()) records.sort((a, b) => a.pos - b.pos);
-
-const NON = "non-nav", UNKNOWN = "unknown", MAYBE = "maybe-navigation";
-const capabilities = new Set(["window", "document", "location", "history", "open-fn", "location-fn", "history-fn", "navigate-fn", "navigate-factory", "router-ns", "route", "navigate-component", "link", "router-form", "route-factory", "core-route", "form", "form-collection", "form-factory", "button", "input", "anchor"]);
-const callable = new Set(["open-fn", "location-fn", "history-fn", "navigate-fn"]);
-const isCapability = (kind) => capabilities.has(kind) || kind === MAYBE;
-function routerKind(name) {
-  return ({ useNavigate: "navigate-factory", redirect: "navigate-fn", Route: "route", Navigate: "navigate-component", Link: "link", NavLink: "link", Form: "router-form", createBrowserRouter: "route-factory", useRoutes: "route-factory", createRoutesFromElements: "route-factory" })[name] || NON;
-}
-function memberKind(base, name) {
-  if (base === MAYBE) return MAYBE;
-  if (base === UNKNOWN) return NON;
-  if (base === "router-ns") return routerKind(name);
-  if (base === "window") return ["window", "self", "top", "parent"].includes(name) ? "window" : ({ document: "document", location: "location", history: "history", open: "open-fn" })[name] || NON;
-  if (base === "document") return name === "location" ? "location" : name === "forms" ? "form-collection" : NON;
-  if (base === "form-collection") return /^\d+$/.test(name || "") ? "form" : ["item", "namedItem"].includes(name) ? "form-factory" : NON;
-  if (base === "location" && ["assign", "replace"].includes(name)) return "location-fn";
-  if (base === "history" && ["pushState", "replaceState"].includes(name)) return "history-fn";
-  if (callable.has(base) && name === "bind") return base;
-  if (["form", "button", "input"].includes(base) && name === "form") return "form";
-  if (["form", "button", "input", "anchor"].includes(base) && ["setAttribute", "setAttributeNS"].includes(name)) return `${base}-setattr`;
-  if (base === "form" && ["submit", "requestSubmit"].includes(name)) return "form-submit";
-  if (base === "anchor" && name === "click") return "anchor-click";
-  return NON;
-}
-function applicable(symbol, use) {
-  const useScope = scope(use);
-  return (writes.get(symbol) || []).filter((record) => scopeContains(record.scope, useScope) && (record.pos <= use.getStart() || (!record.scope && useScope)));
-}
-function selectKind(expression, selector, use, seen) {
-  let current = unwrap(expression), kind = null;
-  for (const key of selector) {
-    current = unwrap(current);
-    if (current && ts.isObjectLiteralExpression(current)) {
-      const item = current.properties.find((value) => (ts.isPropertyAssignment(value) || ts.isShorthandPropertyAssignment(value)) && propertyName(value.name) === String(key));
-      if (!item) return NON;
-      if (ts.isShorthandPropertyAssignment(item)) {
-        const valueSymbol = checker.getShorthandAssignmentValueSymbol(item);
-        return valueSymbol ? symbolKind(valueSymbol, use, seen) : UNKNOWN;
-      }
-      current = item.initializer;
-    } else if (current && ts.isArrayLiteralExpression(current) && typeof key === "number") current = current.elements[key];
-    else { kind ||= kindOf(current, use, seen); return memberKind(kind, String(key)); }
-  }
-  return kindOf(current, use, seen);
-}
-function symbolKind(symbol, use, seen) {
-  if (seen.has(symbol)) return UNKNOWN;
-  const next = new Set(seen).add(symbol), records = applicable(symbol, use);
-  if (!records.length) return NON;
-  const latest = records.at(-1);
-  const value = latest.expression ? selectKind(latest.expression, latest.selector, use, next) : UNKNOWN;
-  const priorCapability = records.slice(0, -1).some((record) => record.expression && isCapability(selectKind(record.expression, record.selector, use, next)));
-  return (latest.conditional || value === UNKNOWN) && (isCapability(value) || priorCapability) ? MAYBE : value;
-}
-function coreRouteSymbol(symbol) {
-  if (!symbol) return false;
-  if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
-  return (symbol?.declarations || []).some((declaration) => relative(declaration.getSourceFile().fileName) === "coreRoutes.ts" && declaration.name?.text === "coreRoute");
-}
-function kindOf(node, use = node, seen = new Set()) {
-  node = unwrap(node);
-  if (!node) return UNKNOWN;
-  if (ts.isIdentifier(node)) {
-    const symbol = checker.getSymbolAtLocation(node), info = importInfo(symbol);
-    if (coreRouteSymbol(symbol)) return "core-route";
-    if (info?.module === "react-router-dom") return info.name === "*" ? "router-ns" : routerKind(info.name);
-    if (libraryGlobal(node, ["window", "globalThis", "self", "top", "parent"])) return "window";
-    if (libraryGlobal(node, ["document"])) return "document";
-    if (libraryGlobal(node, ["location"])) return "location";
-    if (libraryGlobal(node, ["history"])) return "history";
-    if (libraryGlobal(node, ["open"])) return "open-fn";
-    return symbol ? symbolKind(symbol, use, seen) : UNKNOWN;
-  }
-  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-    const literalOwner = unwrap(node.expression), name = memberName(node);
-    if (ts.isObjectLiteralExpression(literalOwner) && name !== null) {
-      const item = literalOwner.properties.find((value) =>
-        (ts.isPropertyAssignment(value) || ts.isShorthandPropertyAssignment(value)) && propertyName(value.name) === name);
-      if (item) return kindOf(ts.isShorthandPropertyAssignment(item) ? item.name : item.initializer, use, seen);
-    }
-    const base = kindOf(node.expression, use, seen);
-    return name === null && isCapability(base) ? MAYBE : memberKind(base, name);
-  }
-  if (ts.isCallExpression(node)) {
-    const callee = kindOf(node.expression, node, seen);
-    if (callee === "navigate-factory") return "navigate-fn";
-    if (callee === "form-factory") return "form";
-    if (callable.has(callee) && memberName(node.expression) === "bind") return callee;
-    const base = owner(node.expression) ? kindOf(owner(node.expression), node, seen) : NON, name = memberName(node.expression);
-    if (base === "document" && name === "createElement") return ({ form: "form", button: "button", input: "input", a: "anchor", area: "anchor" })[staticLiteral(node.arguments[0])?.toLowerCase()] || NON;
-    if (base === "document" && ["querySelector", "getElementById"].includes(name)) {
-      const selector = staticLiteral(node.arguments[0])?.toLowerCase();
-      if (!selector) return MAYBE;
-      for (const [tag, kind] of [["form", "form"], ["button", "button"], ["input", "input"], ["a", "anchor"], ["area", "anchor"]]) if (selector === tag || [".", "#", "[", ":"].some((suffix) => selector.startsWith(`${tag}${suffix}`))) return kind;
-    }
-    return NON;
-  }
-  return NON;
-}
-
-function selectStatic(expression, selector, use, seen) {
-  let current = unwrap(expression);
-  for (const key of selector) {
-    current = unwrap(current);
-    if (current && ts.isObjectLiteralExpression(current)) {
-      const item = current.properties.find((value) => (ts.isPropertyAssignment(value) || ts.isShorthandPropertyAssignment(value)) && propertyName(value.name) === String(key));
-      if (!item) return null;
-      if (ts.isShorthandPropertyAssignment(item)) {
-        const valueSymbol = checker.getShorthandAssignmentValueSymbol(item);
-        if (!valueSymbol || seen.has(valueSymbol)) return null;
-        const records = applicable(valueSymbol, use), latest = records.at(-1);
-        if (!latest || latest.conditional || !latest.expression) return null;
-        return selectStatic(latest.expression, latest.selector, use, new Set(seen).add(valueSymbol));
-      }
-      current = item.initializer;
-    } else if (current && ts.isArrayLiteralExpression(current) && typeof key === "number") current = current.elements[key];
-    else return null;
-  }
-  return staticValues(current, use, seen);
-}
-function staticValues(node, use = node, seen = new Set()) {
-  node = unwrap(node);
-  if (!node) return null;
-  if (ts.isStringLiteralLike(node)) return [node.text];
-  if (ts.isTemplateExpression(node)) {
-    let values = [node.head.text];
-    for (const span of node.templateSpans) { const part = staticValues(span.expression, use, seen); if (!part) return null; values = values.flatMap((left) => part.map((right) => `${left}${right}${span.literal.text}`)); }
-    return values;
-  }
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = staticValues(node.left, use, seen), right = staticValues(node.right, use, seen);
-    return left && right ? left.flatMap((a) => right.map((b) => `${a}${b}`)) : null;
-  }
-  if (ts.isConditionalExpression(node)) {
-    const yes = staticValues(node.whenTrue, use, seen), no = staticValues(node.whenFalse, use, seen);
-    return yes && no ? [...new Set([...yes, ...no])] : null;
-  }
-  if (ts.isCallExpression(node) && kindOf(node.expression, node) === "core-route") return ["@core-route-guard"];
-  if (ts.isIdentifier(node)) {
-    const symbol = checker.getSymbolAtLocation(node);
-    if (!symbol || seen.has(symbol)) return null;
-    const records = applicable(symbol, use), latest = records.at(-1);
-    if (!latest || latest.conditional || !latest.expression) return null;
-    return selectStatic(latest.expression, latest.selector, use, new Set(seen).add(symbol));
-  }
-  return null;
-}
-const staticSingle = (node) => { const values = node ? staticValues(node) : null; return values?.length === 1 ? values[0] : null; };
 const sites = [], unresolved = [];
 const lineOf = (file, node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
 function fail(file, node, kind) { unresolved.push({ file: `frontend/src/${relative(file.fileName)}`, kind, line: lineOf(file, node) }); }
-function record(file, node, kind, expression) {
-  const values = staticValues(expression, node);
-  if (!values) return fail(file, node, kind);
-  for (const target of values) sites.push({ file: `frontend/src/${relative(file.fileName)}`, kind, line: lineOf(file, node), target });
-}
 function marker(file, node, kind, target) { sites.push({ file: `frontend/src/${relative(file.fileName)}`, kind, line: lineOf(file, node), target }); }
-function historyDelta(node) { node = unwrap(node); return node && (ts.isNumericLiteral(node) || (ts.isPrefixUnaryExpression(node) && [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator) && ts.isNumericLiteral(node.operand))); }
-function jsxTarget(node, name) {
-  for (const item of node.attributes.properties) {
-    if (ts.isJsxAttribute(item) && item.name.text === name) return { node: item, expression: ts.isStringLiteral(item.initializer) ? item.initializer : ts.isJsxExpression(item.initializer) ? item.initializer.expression : null };
-    if (ts.isJsxSpreadAttribute(item)) {
-      const value = unwrap(item.expression);
-      if (!ts.isObjectLiteralExpression(value)) return { node: item, expression: null };
-      const match = value.properties.find((property) => (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)) && propertyName(property.name) === name);
-      if (match) return { node: match, expression: ts.isShorthandPropertyAssignment(match) ? match.name : match.initializer };
-    }
+function sanitize(candidate) {
+  if (!candidate.startsWith("/") || candidate.startsWith("//")) return "/command-center";
+  try {
+    const parsed = new URL(candidate, "http://brains.invalid");
+    if (parsed.origin !== "http://brains.invalid") return "/command-center";
+    return CORE_PREFIXES.some((prefix) => parsed.pathname === prefix || parsed.pathname.startsWith(`${prefix}/`)) ? candidate : "/command-center";
+  } catch { return "/command-center"; }
+}
+function staticValues(node) {
+  node = unwrap(node);
+  if (!node) return null;
+  if (ts.isStringLiteralLike(node)) return [node.text];
+  if (ts.isConditionalExpression(node)) {
+    const yes = staticValues(node.whenTrue), no = staticValues(node.whenFalse);
+    return yes && no ? [...new Set([...yes, ...no])] : null;
+  }
+  if (ts.isCallExpression(node)) {
+    const symbol = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(node.expression) ? node.expression.name : node.expression);
+    if ((symbol?.declarations || []).some((declaration) => relative(declaration.getSourceFile().fileName) === BOUNDARY)) return ["@core-route-guard"];
   }
   return null;
 }
-function routeObjects(file, node) {
-  node = unwrap(node);
-  if (ts.isArrayLiteralExpression(node)) return node.elements.forEach((item) => routeObjects(file, item));
-  if (!ts.isObjectLiteralExpression(node)) return fail(file, node, "route-config");
-  for (const item of node.properties) {
-    if (ts.isSpreadAssignment(item)) fail(file, item, "route-config");
-    else if (ts.isPropertyAssignment(item) && propertyName(item.name) === "path") record(file, item, "route", item.initializer);
+function recordGuarded(file, node, expression, kind = "navigate") {
+  const values = staticValues(expression);
+  if (!values) return marker(file, node, kind, "@core-route-guard");
+  for (const value of values) marker(file, node, kind, value === "@core-route-guard" ? value : sanitize(value));
+}
+function inspectRouterDeclaration(file, node) {
+  if (!node.moduleSpecifier || node.moduleSpecifier.text !== "react-router-dom") return;
+  const fileName = relative(file.fileName);
+  if (ts.isExportDeclaration(node)) return fail(file, node, "router-reexport");
+  const clause = node.importClause;
+  if (!clause || clause.name || !clause.namedBindings || ts.isNamespaceImport(clause.namedBindings)) return fail(file, node, "router-import");
+  for (const item of clause.namedBindings.elements) {
+    if (clause.isTypeOnly || item.isTypeOnly) continue;
+    const imported = item.propertyName?.text || item.name.text;
+    const allowed = fileName === APP ? APP_ROUTER : fileName === BOUNDARY ? BOUNDARY_ROUTER : READ_ONLY_ROUTER;
+    if (!allowed.has(imported) || ((fileName === APP || fileName === BOUNDARY) && item.name.text !== imported)) fail(file, item, "router-import");
   }
 }
-function reactCreateElement(node) {
+function intrinsicTag(node) { return ts.isIdentifier(node) && node.text === node.text.toLowerCase() ? node.text : null; }
+function inspectIntrinsic(file, node) {
+  const tag = intrinsicTag(node.tagName), targets = tag && INTRINSIC_TARGETS.get(tag);
+  if (!targets || relative(file.fileName) === BOUNDARY) return;
+  const attributes = node.attributes.properties;
+  if (attributes.some(ts.isJsxSpreadAttribute) || attributes.some((item) => ts.isJsxAttribute(item) && targets.has(item.name.text))) fail(file, node, "intrinsic-navigation");
+}
+function reactFactory(node) {
   const expression = unwrap(node.expression);
-  if (!ts.isPropertyAccessExpression(expression) || expression.name.text !== "createElement") return false;
-  const info = ts.isIdentifier(expression.expression) ? importInfo(checker.getSymbolAtLocation(expression.expression)) : null;
-  return info?.module === "react" && ["*", "default"].includes(info.name);
+  if (ts.isIdentifier(expression)) {
+    const info = importInfo(checker.getSymbolAtLocation(expression));
+    return info?.module === "react" && ["createElement", "cloneElement"].includes(info.name) ? info.name : null;
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    const info = importInfo(checker.getSymbolAtLocation(expression.expression));
+    return info?.module === "react" && ["*", "default"].includes(info.name) && ["createElement", "cloneElement"].includes(expression.name.text) ? expression.name.text : null;
+  }
+  return null;
+}
+function objectHasTargets(node, targets) {
+  node = unwrap(node);
+  if (!node || node.kind === ts.SyntaxKind.NullKeyword) return false;
+  if (!ts.isObjectLiteralExpression(node)) return true;
+  return node.properties.some((item) => ts.isSpreadAssignment(item) || targets.has(propertyName(item.name)));
+}
+function inspectReactFactory(file, node) {
+  const factory = reactFactory(node);
+  if (!factory || relative(file.fileName) === BOUNDARY) return;
+  const all = new Set(["href", "to", "action", "formAction", "src", "srcDoc", "data", "httpEquiv", "content"]);
+  if (factory === "cloneElement") {
+    if (objectHasTargets(node.arguments[1], all)) fail(file, node, "react-navigation-factory");
+    return;
+  }
+  const component = unwrap(node.arguments[0]);
+  const componentInfo = ts.isIdentifier(component) ? importInfo(checker.getSymbolAtLocation(component)) : null;
+  if (componentInfo?.module === "react-router-dom" && !READ_ONLY_ROUTER.has(componentInfo.name)) {
+    fail(file, node, "react-router-factory");
+    return;
+  }
+  const targets = ts.isStringLiteralLike(component) ? INTRINSIC_TARGETS.get(component.text.toLowerCase()) : null;
+  if (targets && objectHasTargets(node.arguments[1], targets)) fail(file, node, "react-navigation-factory");
+}
+function inspectDom(file, node) {
+  if (relative(file.fileName) === BOUNDARY) return;
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open"])) return fail(file, node, "global-navigation");
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    const base = unwrap(node.expression), name = memberName(node), names = typeNames(base);
+    const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
+    if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open"].includes(name))) return fail(file, node, "window-navigation");
+    if (names.has("Document") && (name === null || ["forms", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
+    for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
+    const domElement = [...names].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value));
+    if (domElement && ["innerHTML", "outerHTML"].includes(name)) return fail(file, node, "html-navigation-injection");
+  }
+  if (ts.isBindingElement(node)) {
+    const parent = node.parent?.parent;
+    const initializer = ts.isVariableDeclaration(parent) ? parent.initializer : ts.isBinaryExpression(parent) ? parent.right : null;
+    if (initializer) {
+      const names = typeNames(initializer), key = propertyName(node.propertyName || node.name);
+      if ((names.has("Window") && (key === null || ["location", "history", "open"].includes(key))) || [...DOM_NAV_MEMBERS].some(([typeName, members]) => names.has(typeName) && (members === null || key === null || members.has(key)))) fail(file, node, "destructured-navigation");
+    }
+  }
+}
+function inspectDynamic(file, node) {
+  if (relative(file.fileName) === BOUNDARY) return;
+  if (ts.isIdentifier(node) && libraryGlobal(node, ["eval", "Function"])) fail(file, node, "dynamic-code-navigation");
+  if (!ts.isCallExpression(node)) return;
+  if (memberName(node.expression) === "insertAdjacentHTML") {
+    const owner = ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression) ? node.expression.expression : null;
+    const names = owner ? typeNames(owner) : new Set();
+    if ([...names].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value))) fail(file, node, "html-navigation-injection");
+  }
+  const expression = unwrap(node.expression), target = staticLiteral(node.arguments[0]);
+  if (ts.isIdentifier(expression) && expression.text === "require" && (target === null || target === "react-router-dom")) fail(file, node, target === null ? "dynamic-require" : "router-require");
+  if (expression.kind === ts.SyntaxKind.ImportKeyword && target === "react-router-dom") fail(file, node, "router-dynamic-import");
+  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+    const owner = expression.expression, ownerTypes = typeNames(owner), name = memberName(expression);
+    if (ownerTypes.has("Document") && name === "createElement") {
+      const tag = target?.toLowerCase();
+      if (!tag || INTRINSIC_TARGETS.has(tag)) fail(file, node, "dom-navigation-construction");
+    }
+    const element = [...ownerTypes].some((value) => value === "Element" || value === "HTMLElement" || /^HTML.*Element$/.test(value) || /^SVG.*Element$/.test(value));
+    if (element && ["setAttribute", "setAttributeNS"].includes(name)) {
+      const offset = name === "setAttributeNS" ? 1 : 0;
+      const attribute = staticLiteral(node.arguments[offset])?.toLowerCase();
+      if (!attribute || ["href", "xlink:href", "action", "formaction", "src", "srcdoc", "data", "http-equiv", "content"].includes(attribute)) fail(file, node, "dom-navigation-attribute");
+    }
+  }
+}
+function boundaryDeclaration(symbol, name = null) {
+  if (!symbol) return false;
+  if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+  return (symbol?.declarations || []).some((declaration) => relative(declaration.getSourceFile().fileName) === BOUNDARY && (!name || declaration.name?.text === name));
+}
+function inspectBoundaryUsage(file, node) {
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    const symbol = checker.getSymbolAtLocation(node.expression.name);
+    if (boundaryDeclaration(symbol)) {
+      if (node.expression.name.text === "open") return node.arguments[0] ? recordGuarded(file, node, node.arguments[0]) : fail(file, node, "core-navigation-call");
+      if (node.expression.name.text === "back") return marker(file, node, "history", "@history-delta");
+    }
+  }
+  if (ts.isJsxOpeningLikeElement(node) && boundaryDeclaration(checker.getSymbolAtLocation(node.tagName), "CoreNavLink")) {
+    let found = false;
+    for (const item of node.attributes.properties) {
+      if (ts.isJsxSpreadAttribute(item)) fail(file, item, "core-link-spread");
+      else if (item.name.text === "to") {
+        found = true;
+        const expression = ts.isStringLiteral(item.initializer) ? item.initializer : ts.isJsxExpression(item.initializer) ? item.initializer.expression : null;
+        expression ? recordGuarded(file, item, expression, "navigation") : fail(file, item, "core-link-target");
+      }
+    }
+    if (!found) fail(file, node, "core-link-target");
+  }
+}
+function hasExportModifier(node) { return Boolean(node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)); }
+function inspectBoundaryGrammar(file, node) {
+  if (relative(file.fileName) !== BOUNDARY) return;
+  if (hasExportModifier(node) && (ts.isFunctionDeclaration(node) || ts.isVariableStatement(node) || ts.isTypeAliasDeclaration(node))) {
+    const names = ts.isVariableStatement(node)
+      ? node.declarationList.declarations.map((declaration) => ts.isIdentifier(declaration.name) ? declaration.name.text : null)
+      : [node.name?.text || null];
+    if (names.some((name) => !name || !BOUNDARY_EXPORTS.has(name))) fail(file, node, "boundary-raw-export");
+  }
+  if (ts.isIdentifier(node)) {
+    const info = importInfo(checker.getSymbolAtLocation(node));
+    if (info?.module === "react-router-dom" && info.name === "useNavigate" && !ts.isImportSpecifier(node.parent)) {
+      const call = node.parent;
+      const declaration = call?.parent;
+      const valid = ts.isCallExpression(call) && call.expression === node && ts.isVariableDeclaration(declaration) &&
+        ts.isIdentifier(declaration.name) && declaration.name.text === "navigate";
+      if (!valid) fail(file, node, "boundary-raw-router-use");
+    }
+  }
+  if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "navigate") {
+    const argument = unwrap(node.arguments[0]);
+    const guarded = ts.isCallExpression(argument) && ts.isIdentifier(unwrap(argument.expression)) && unwrap(argument.expression).text === "coreHref";
+    const back = ts.isPrefixUnaryExpression(argument) && argument.operator === ts.SyntaxKind.MinusToken && staticLiteral(argument.operand) === "1";
+    if (node.arguments.length !== 1 || (!guarded && !back)) fail(file, node, "boundary-raw-navigate");
+  }
+  if (ts.isJsxOpeningLikeElement(node)) {
+    if (ts.isIdentifier(node.tagName) && node.tagName.text === "NavLink") {
+      const attributes = node.attributes.properties;
+      if (attributes.length !== 2 || !ts.isJsxSpreadAttribute(attributes[0]) || !ts.isJsxAttribute(attributes[1]) || attributes[1].name.text !== "to") fail(file, node, "boundary-link-order");
+    }
+    if (intrinsicTag(node.tagName) === "a") {
+      const attributes = node.attributes.properties;
+      const names = attributes.map((item) => ts.isJsxSpreadAttribute(item) ? null : item.name.text);
+      if (JSON.stringify(names) !== JSON.stringify([null, "href", "target", "rel"])) fail(file, node, "boundary-external-link-order");
+    }
+  }
+}
+function inspectApp(file, node, appRoutes) {
+  if (!ts.isJsxOpeningLikeElement(node) || !ts.isIdentifier(node.tagName) || node.tagName.text !== "Route") return;
+  if (!boundaryDeclaration(checker.getSymbolAtLocation(node.tagName)) && importInfo(checker.getSymbolAtLocation(node.tagName))?.module !== "react-router-dom") return;
+  if (node.attributes.properties.some(ts.isJsxSpreadAttribute)) fail(file, node, "route-spread");
+  for (const item of node.attributes.properties) if (ts.isJsxAttribute(item) && item.name.text === "path") {
+    if (!ts.isStringLiteral(item.initializer)) fail(file, item, "dynamic-route-path");
+    else { appRoutes.push(item.initializer.text); marker(file, item, "route", item.initializer.text); }
+  }
 }
 
+const appRoutes = [];
 for (const file of sourceFiles) {
   function visit(node) {
-    if (ts.isJsxOpeningLikeElement(node)) {
-      const intrinsic = ts.isIdentifier(node.tagName) && node.tagName.text === node.tagName.text.toLowerCase();
-      const kind = intrinsic ? null : kindOf(node.tagName, node);
-      let name = null, siteKind = "navigation";
-      if (kind === "route") { name = "path"; siteKind = "route"; }
-      else if (["navigate-component", "link"].includes(kind)) name = "to";
-      else if (kind === "router-form") { name = "action"; siteKind = "form-action"; }
-      else if (intrinsic && ["a", "area"].includes(node.tagName.text)) name = "href";
-      else if (intrinsic && node.tagName.text === "form") { name = "action"; siteKind = "form-action"; }
-      else if (intrinsic && ["button", "input"].includes(node.tagName.text)) { name = "formAction"; siteKind = "form-action"; }
-      if (name) {
-        const target = jsxTarget(node, name);
-        if (target) target.expression ? record(file, target.node, siteKind, target.expression) : fail(file, target.node, siteKind);
-        else if (kind && node.attributes.properties.some((item) => ts.isJsxAttribute(item) && ["path", "to", "href", "action", "formAction"].includes(item.name.text))) fail(file, node, "unknown-router-jsx");
-      }
-      else if (kind === MAYBE) fail(file, node, "unknown-router-jsx");
-    } else if (ts.isCallExpression(node)) {
-      const kind = kindOf(node.expression, node);
-      if (reactCreateElement(node)) {
-        const component = kindOf(node.arguments[0], node), props = unwrap(node.arguments[1]);
-        const targetName = component === "route" ? "path" : ["navigate-component", "link"].includes(component) ? "to" : component === "router-form" ? "action" : null;
-        if (targetName) {
-          if (!ts.isObjectLiteralExpression(props)) fail(file, node, "create-element-navigation");
-          else {
-            const target = props.properties.find((item) => (ts.isPropertyAssignment(item) || ts.isShorthandPropertyAssignment(item)) && propertyName(item.name) === targetName);
-            if (!target) fail(file, node, "create-element-navigation");
-            else record(file, target, component === "route" ? "route" : component === "router-form" ? "form-action" : "navigation", ts.isShorthandPropertyAssignment(target) ? target.name : target.initializer);
-          }
-        }
-      } else if (kind === "navigate-fn") node.arguments.length ? (historyDelta(node.arguments[0]) ? marker(file, node, "history", "@history-delta") : record(file, node, "navigate", node.arguments[0])) : fail(file, node, "navigate");
-      else if (["open-fn", "location-fn"].includes(kind)) node.arguments.length ? record(file, node, kind === "open-fn" ? "window-open" : "location", node.arguments[0]) : fail(file, node, kind);
-      else if (kind === "history-fn") node.arguments.length >= 3 ? record(file, node, "history-state", node.arguments[2]) : fail(file, node, "history-state");
-      else if (kind === "route-factory") node.arguments.length ? routeObjects(file, node.arguments[0]) : fail(file, node, "route-config");
-      else if (kind.endsWith?.("-setattr")) {
-        const offset = memberName(node.expression) === "setAttributeNS" ? 1 : 0, attribute = staticSingle(node.arguments[offset]), base = kind.slice(0, -8), allowed = base === "anchor" ? ["href"] : ["action", "formaction"];
-        if (attribute === null) fail(file, node, "dom-attribute");
-        else if (allowed.includes(attribute.toLowerCase())) node.arguments[offset + 1] ? record(file, node, base === "anchor" ? "navigation" : "form-action", node.arguments[offset + 1]) : fail(file, node, "dom-attribute");
-      } else if (kind === "form-submit") marker(file, node, "form-submit", "@form-submit");
-      else if (kind === "anchor-click") marker(file, node, "anchor-click", "@anchor-click");
-      else if (kind === MAYBE) fail(file, node, "maybe-navigation");
-      else for (const argument of node.arguments) if (isCapability(kindOf(argument, node))) fail(file, argument, "navigation-capability-escape");
-    } else if (ts.isBinaryExpression(node)) {
-      const left = unwrap(node.left), base = owner(left) ? kindOf(owner(left), node) : NON, name = memberName(left), assignment = node.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-      const location = (ts.isIdentifier(left) && libraryGlobal(left, ["location"])) || (["window", "document"].includes(base) && name === "location") || (base === "location" && ["href", "pathname", "search", "hash"].includes(name));
-      const form = ["form", "button", "input"].includes(base) && ["action", "formAction"].includes(name), anchor = base === "anchor" && name === "href";
-      if (location || form || anchor) assignment ? record(file, node, form ? "form-action" : anchor ? "navigation" : "location", node.right) : fail(file, node, "navigation-write");
-      else if (owner(left) && isCapability(base) && name === null) fail(file, node, "computed-navigation-write");
-    }
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) inspectRouterDeclaration(file, node);
+    if (ts.isJsxOpeningLikeElement(node)) inspectIntrinsic(file, node);
+    if (ts.isCallExpression(node)) inspectReactFactory(file, node);
+    inspectDom(file, node);
+    inspectDynamic(file, node);
+    inspectBoundaryUsage(file, node);
+    inspectBoundaryGrammar(file, node);
+    if (relative(file.fileName) === APP) inspectApp(file, node, appRoutes);
     ts.forEachChild(node, visit);
   }
   visit(file);
 }
+if (hasBoundary && (new Set(appRoutes).size !== appRoutes.length || appRoutes.some((route) => !ROUTE_PATTERNS.has(route)) || [...ROUTE_PATTERNS].some((route) => !appRoutes.includes(route)))) {
+  const appFile = sourceFiles.find((file) => relative(file.fileName) === APP);
+  fail(appFile, appFile, "route-registry-mismatch");
+}
 if (unresolved.length) {
-  const counts = Object.fromEntries([...new Set(unresolved.map((item) => item.kind))].sort().map(
-    (kind) => [kind, unresolved.filter((item) => item.kind === kind).length],
-  ));
-  throw new Error(`unresolved reachable navigation target count=${unresolved.length} kinds=${JSON.stringify(counts)} sites=${JSON.stringify(unresolved)}`);
+  const counts = Object.fromEntries([...new Set(unresolved.map((item) => item.kind))].sort().map((kind) => [kind, unresolved.filter((item) => item.kind === kind).length]));
+  throw new Error(`navigation boundary violation count=${unresolved.length} kinds=${JSON.stringify(counts)} sites=${JSON.stringify(unresolved)}`);
 }
 sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.kind.localeCompare(b.kind) || a.target.localeCompare(b.target));
 console.log(JSON.stringify({ modules: [...discovered.keys()].map(relative).sort(), graph, navigation: sites }));

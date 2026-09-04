@@ -81,6 +81,7 @@
       "src/brains/control/feedback.py",
       "src/brains/control/github.py",
       "src/brains/control/handoffs.py",
+      "src/brains/control/harness_wakeup.py",
       "src/brains/control/help.py",
       "src/brains/control/help_execution.py",
       "src/brains/control/integration_deliveries.py",
@@ -280,7 +281,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-4cCCKU8I.js",
+      "src/brains/web/spa/assets/index-BfTwPff3.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -341,6 +342,7 @@
       "tests/test_gateway_readiness.py",
       "tests/test_governed_actions.py",
       "tests/test_handoff_ttl.py",
+      "tests/test_harness_wakeups.py",
       "tests/test_health.py",
       "tests/test_help_requests.py",
       "tests/test_installation_lifecycle_contract.py",
@@ -477,6 +479,7 @@
       "src/brains/control/feedback.py",
       "src/brains/control/github.py",
       "src/brains/control/handoffs.py",
+      "src/brains/control/harness_wakeup.py",
       "src/brains/control/help.py",
       "src/brains/control/help_execution.py",
       "src/brains/control/integration_deliveries.py",
@@ -676,7 +679,7 @@
       "src/brains/storage/sql_migrations/__init__.py",
       "src/brains/web/__init__.py",
       "src/brains/web/spa.py",
-      "src/brains/web/spa/assets/index-4cCCKU8I.js",
+      "src/brains/web/spa/assets/index-BfTwPff3.js",
       "src/brains/web/spa/assets/index-SXYrWt-w.css",
       "src/brains/web/spa/index.html",
       "src/brains/web/templates/admin/login.html",
@@ -758,6 +761,7 @@
       "brains/control/feedback.py",
       "brains/control/github.py",
       "brains/control/handoffs.py",
+      "brains/control/harness_wakeup.py",
       "brains/control/help.py",
       "brains/control/help_execution.py",
       "brains/control/integration_deliveries.py",
@@ -957,7 +961,7 @@
       "brains/storage/sql_migrations/__init__.py",
       "brains/web/__init__.py",
       "brains/web/spa.py",
-      "brains/web/spa/assets/index-4cCCKU8I.js",
+      "brains/web/spa/assets/index-BfTwPff3.js",
       "brains/web/spa/assets/index-SXYrWt-w.css",
       "brains/web/spa/index.html",
       "brains/web/templates/admin/login.html",
@@ -1138,6 +1142,9 @@
         ],
         "brains.cli.app.mailbox_forward_cli": [
           "mailbox forward"
+        ],
+        "brains.cli.app.mailbox_harness_wakeup_cli": [
+          "mailbox harness-wakeup"
         ],
         "brains.cli.app.mailbox_inbox_cli": [
           "mailbox inbox"
@@ -10191,6 +10198,95 @@
                 "resolve_path": true,
                 "types": [],
                 "writable": false
+              }
+            }
+          ],
+          "result_callback": null,
+          "rich_help_panel": {
+            "type": "DefaultPlaceholder"
+          },
+          "shell_complete": "typer._click.core.Command.shell_complete",
+          "short_help": null,
+          "subcommand_metavar": null
+        },
+        "mailbox harness-wakeup": {
+          "add_help_option": true,
+          "allow_extra_args": false,
+          "allow_interspersed_args": true,
+          "callback": "brains.cli.app.mailbox_harness_wakeup_cli",
+          "chain": false,
+          "command_class": null,
+          "context_class": "typer._click.core.Context",
+          "context_settings": {},
+          "deprecated": false,
+          "deprecation": null,
+          "deprecation_help": null,
+          "epilog": null,
+          "group_class": null,
+          "help": "Translate one supported harness event into a body-free nudge.",
+          "hidden": true,
+          "ignore_unknown_options": false,
+          "invoke_without_command": false,
+          "kind": "command",
+          "name": "harness-wakeup",
+          "no_args_is_help": false,
+          "options_metavar": "[OPTIONS]",
+          "parameters": [
+            {
+              "allow_from_autoenv": true,
+              "autocompletion": null,
+              "callback": null,
+              "confirmation_prompt": false,
+              "count": false,
+              "default": null,
+              "deprecated": null,
+              "deprecation": null,
+              "deprecation_help": null,
+              "envvar": null,
+              "expose_value": true,
+              "flag_value": null,
+              "help": null,
+              "hidden": false,
+              "hide_input": false,
+              "is_bool_flag": false,
+              "is_eager": false,
+              "is_flag": false,
+              "kind": "TyperOption",
+              "metavar": null,
+              "multiple": false,
+              "name": "adapter",
+              "nargs": 1,
+              "prompt": null,
+              "prompt_required": true,
+              "required": true,
+              "rich_help_panel": null,
+              "shell_complete": "typer._click.core.Parameter.shell_complete",
+              "show_choices": true,
+              "show_default": true,
+              "show_envvar": true,
+              "spellings": [
+                "--adapter"
+              ],
+              "type": {
+                "allow_dash": null,
+                "case_sensitive": null,
+                "choices": null,
+                "clamp": null,
+                "class": "StringParamType",
+                "dir_okay": null,
+                "exists": null,
+                "file_okay": null,
+                "formats": null,
+                "max": null,
+                "max_open": null,
+                "min": null,
+                "min_open": null,
+                "name": "text",
+                "path_type": null,
+                "readable": null,
+                "resolve_path": null,
+                "types": [],
+                "writable": null
               }
             }
           ],
@@ -23003,6 +23099,63 @@
               "envvar": null,
               "expose_value": true,
               "flag_value": null,
+              "help": "Explicitly install supported body-free mailbox wakeups; unsupported harnesses remain pull-only.",
+              "hidden": false,
+              "hide_input": false,
+              "is_bool_flag": true,
+              "is_eager": false,
+              "is_flag": true,
+              "kind": "TyperOption",
+              "metavar": null,
+              "multiple": false,
+              "name": "mailbox_wakeups",
+              "nargs": 1,
+              "prompt": null,
+              "prompt_required": true,
+              "required": false,
+              "rich_help_panel": null,
+              "shell_complete": "typer._click.core.Parameter.shell_complete",
+              "show_choices": true,
+              "show_default": true,
+              "show_envvar": true,
+              "spellings": [
+                "--mailbox-wakeups"
+              ],
+              "type": {
+                "allow_dash": null,
+                "case_sensitive": null,
+                "choices": null,
+                "clamp": null,
+                "class": "BoolParamType",
+                "dir_okay": null,
+                "exists": null,
+                "file_okay": null,
+                "formats": null,
+                "max": null,
+                "max_open": null,
+                "min": null,
+                "min_open": null,
+                "name": "boolean",
+                "path_type": null,
+                "readable": null,
+                "resolve_path": null,
+                "types": [],
+                "writable": null
+              }
+            },
+            {
+              "allow_from_autoenv": true,
+              "autocompletion": null,
+              "callback": null,
+              "confirmation_prompt": false,
+              "count": false,
+              "default": false,
+              "deprecated": null,
+              "deprecation": null,
+              "deprecation_help": null,
+              "envvar": null,
+              "expose_value": true,
+              "flag_value": null,
               "help": "Wire even tools whose config dir is absent.",
               "hidden": false,
               "hide_input": false,
@@ -25264,6 +25417,7 @@
         "mailbox",
         "mailbox broadcast",
         "mailbox forward",
+        "mailbox harness-wakeup",
         "mailbox inbox",
         "mailbox lookup",
         "mailbox managed-create",
@@ -25600,6 +25754,7 @@
             "B7",
             "B8",
             "B9",
+            "BL-P1-12",
             "BL-P1-16",
             "F0",
             "F1",
@@ -25681,6 +25836,7 @@
             "B7",
             "B8",
             "B9",
+            "BL-P1-12",
             "J1",
             "J10",
             "J11",
@@ -25744,6 +25900,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-12",
             "F0",
             "F1",
             "F10",
@@ -25991,7 +26148,7 @@
         ],
         "components/CommandPalette.tsx": [
           "components/useDialogFocus.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/OperatorContext.tsx"
         ],
         "components/EmptyState.tsx": [],
@@ -26007,19 +26164,20 @@
         "components/MasterDetail.tsx": [],
         "components/OperatorPrimitives.tsx": [],
         "components/Sidebar.tsx": [
-          "coreRoutes.ts"
+          "coreRoutes.tsx"
         ],
         "components/SoftCard.tsx": [],
         "components/StatusPill.tsx": [],
         "components/Toast.tsx": [],
         "components/TopBar.tsx": [
+          "coreRoutes.tsx",
           "realtime/client.ts",
           "store/OperatorContext.tsx"
         ],
         "components/format.ts": [],
         "components/sessionScope.ts": [],
         "components/useDialogFocus.ts": [],
-        "coreRoutes.ts": [],
+        "coreRoutes.tsx": [],
         "main.tsx": [
           "App.tsx",
           "realtime/client.ts",
@@ -26038,7 +26196,7 @@
           "api/types.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/OperatorContext.tsx",
           "store/useAsync.ts"
         ],
@@ -26046,7 +26204,7 @@
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/Config.tsx": [
@@ -26057,7 +26215,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
@@ -26071,12 +26229,14 @@
           "store/useAsync.ts"
         ],
         "screens/NotFound.tsx": [
-          "components/OperatorPrimitives.tsx"
+          "components/OperatorPrimitives.tsx",
+          "coreRoutes.tsx"
         ],
         "screens/Operations.tsx": [
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/OperatorCoordination.tsx": [
@@ -26085,7 +26245,7 @@
           "components/MailboxWorkspace.tsx",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/ScreenHead.tsx": [
@@ -26097,7 +26257,7 @@
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
           "components/sessionScope.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "store/OperatorContext.tsx": [
@@ -26127,7 +26287,7 @@
         "components/format.ts",
         "components/sessionScope.ts",
         "components/useDialogFocus.ts",
-        "coreRoutes.ts",
+        "coreRoutes.tsx",
         "main.tsx",
         "realtime/client.ts",
         "realtime/protocol.ts",
@@ -26155,7 +26315,7 @@
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
+        "frontend/src/components/CommandPalette.tsx": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
         "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
         "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
@@ -26167,37 +26327,37 @@
         "frontend/src/components/OrgSwitcher.tsx": "79bc69b317edb70e3da2b76f3d0d3ccf2fa15ef4902e5467bfabdc1a34cea389",
         "frontend/src/components/PersonaCard.tsx": "5861ffbdbb88e9fe950dae1c0e50cd767a3991b76850ba0e973dc6fe4fc1aeff",
         "frontend/src/components/RuntimeTile.tsx": "afda8edb44208fa73964ca4bfedd6847d55a26185c9aa8009962ff17102a09b9",
-        "frontend/src/components/Sidebar.tsx": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e",
+        "frontend/src/components/Sidebar.tsx": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c",
         "frontend/src/components/SkillAttachmentPanel.tsx": "b94d20b71f0b8daa73c33cbaa3b0f5e80e39039d761e957419346a3e41029a34",
         "frontend/src/components/SoftCard.tsx": "29a4fe4c4e7ba1f9e156e2af1c3184f037a4fd6780b12220790cfbfb2e2086b5",
         "frontend/src/components/StatusPill.tsx": "5d6cf0c2ae069cc855d0ea7fd30e5dd99e391987f0a500d5a50ed5f8bf453d4c",
         "frontend/src/components/Stepper.tsx": "a034810f69ef088a800bd70e8b7987da87f29859f0db36d7d1e78d1ae55bf7f9",
         "frontend/src/components/Toast.tsx": "9b683c489c2dd25c20f63945156bf2e64763b6bbddf84cecd4492b04f856bdec",
-        "frontend/src/components/TopBar.tsx": "3af751e2e14c74f8af2f49cd4fa0b0cbbfeec03b3559fc674b4056fd697915b9",
+        "frontend/src/components/TopBar.tsx": "35d2ec0ad45e53855c75cdaab3be0e112380137ba45f66addc6ac55befa1a97b",
         "frontend/src/components/blockedReason.ts": "38807be9a2a43862ac43873b3a5ae1c2495f2f60578e36111e39f87611ee5fb1",
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
-        "frontend/src/coreRoutes.ts": "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225",
+        "frontend/src/coreRoutes.tsx": "ef63576878cd6b5345ce1460b921a0a0696c6f4a19f6dcf109b5cc750d2dfbe5",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
-        "frontend/src/realtime/client.ts": "c4748c63f308f18b0e932694ac57a081e4c994339e9b9c18d5acc861e5ae746f",
+        "frontend/src/realtime/client.ts": "ec59e07aae1569a8844daabb62f6bf9de761491e1c438b56ab88b9fe14a61ab8",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
         "frontend/src/realtime/protocol.ts": "6925d7e1ae1f63abf0ab2af15c4d5bf816ada921448afa3eea5d3a988230bc86",
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
-        "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
+        "frontend/src/screens/Act.tsx": "f5582d2a5c345fc3dfd77a83a59f440ba273aa73518297c2291cc767ee59b7b7",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "f26f4782534cfa4b3fa199671f8acc577304ddefa22cc0396434fa02530a6391",
-        "frontend/src/screens/Config.tsx": "a6283abcaab96382dece1cf4a24e641c78afc9eec623cd851bf3fbc383aacaf3",
+        "frontend/src/screens/CommandCenter.tsx": "cd2169d14bef94fb0991a9e3b743733f8997d8bc0355e1028240b95f353c1b10",
+        "frontend/src/screens/Config.tsx": "389b084f2a152d1310f9ff7f1ef8ef88c8577a348db22980a0418d7b49c8b142",
         "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
         "frontend/src/screens/Labs.tsx": "376093d6d8056d31be3d8ded29fed1ddce303324de91a3442f2fc27a70f0c0f1",
         "frontend/src/screens/LegacyLabsRedirect.tsx": "a7ff6bd81aca3e2ba7cfb0e174f027dc7d8d49e0b55f58d9633583f5f0d447bc",
-        "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
+        "frontend/src/screens/NotFound.tsx": "69eba2616355e095aaa674a829f4ae3613a49b764043105a69fa9a55e914e404",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
-        "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
-        "frontend/src/screens/OperatorCoordination.tsx": "3c87fe31728dc4d85597a4da22c8d2da6e608dc0b5aa9b11b38d09bf483e4cf4",
+        "frontend/src/screens/Operations.tsx": "d76ac5223299473807ef4618645475535968cbf068ba69762047a12b56133ce6",
+        "frontend/src/screens/OperatorCoordination.tsx": "33037edaf74fb20f27139468aceeb58520d2850c018cdc3e6996dbb470f5ed27",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -26205,7 +26365,7 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "eef78992683143d687a9617daf58dcb5d52430c20e31785b86762d3f3263061f",
+        "frontend/src/screens/Workspaces.tsx": "2fd865bd64d9ae5083c129224697204f2e231775fdc9540b2fa50e4c5008e07c",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
         "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
@@ -26977,25 +27137,25 @@
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 59,
+          "line": 58,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigation",
-          "line": 24,
+          "line": 23,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigate",
-          "line": 45,
+          "line": 44,
           "target": "/act"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigate",
-          "line": 53,
+          "line": 52,
           "target": "/act"
         },
         {
@@ -27005,33 +27165,39 @@
           "target": "/governance"
         },
         {
-          "file": "frontend/src/screens/CommandCenter.tsx",
+          "file": "frontend/src/screens/Act.tsx",
           "kind": "navigate",
-          "line": 48,
-          "target": "/act"
-        },
-        {
-          "file": "frontend/src/screens/CommandCenter.tsx",
-          "kind": "navigate",
-          "line": 48,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/screens/CommandCenter.tsx",
-          "kind": "navigate",
-          "line": 64,
+          "line": 170,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 89,
+          "line": 47,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 63,
+          "target": "@core-route-guard"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 88,
           "target": "/governance"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 117,
+          "line": 116,
           "target": "/operations"
         },
         {
@@ -27056,24 +27222,24 @@
           "file": "frontend/src/screens/Operations.tsx",
           "kind": "navigate",
           "line": 26,
-          "target": "/act?category=operations"
-        },
-        {
-          "file": "frontend/src/screens/OperatorCoordination.tsx",
-          "kind": "navigate",
-          "line": 28,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 59,
+          "line": 27,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 81,
+          "line": 58,
+          "target": "@core-route-guard"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 80,
           "target": "@core-route-guard"
         },
         {
@@ -27100,9 +27266,7 @@
         "sessions"
       ],
       "runtime_extra_registry": [],
-      "sidebar_imperative_routes": [
-        "/act"
-      ],
+      "sidebar_imperative_routes": [],
       "sidebar_routes": [
         "/command-center",
         "/coordination",
@@ -27110,11 +27274,11 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e",
+      "spa_ast_helper_sha256": "38722f76b4ab3eaf442308f8cfdae97b45b409fc1c5fda8d3572558af3c6f09b",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
-        "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
-        "sidebar": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e"
+        "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "sidebar": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c"
       },
       "wire": {
         "adapters": {
@@ -27123,6 +27287,7 @@
             "instruction_path": ".claude/CLAUDE.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": "turn_boundary",
             "mcp_path": ".claude.json",
             "transports": {
               "sse": {
@@ -27153,6 +27318,7 @@
             "instruction_path": ".codex/AGENTS.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".codex/config.toml",
             "transports": {
               "stdio": {
@@ -27176,6 +27342,7 @@
             "instruction_path": ".copilot/copilot-instructions.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".copilot/mcp-config.json",
             "transports": {
               "sse": {
@@ -27206,6 +27373,7 @@
             "instruction_path": ".config/opencode/AGENTS.md",
             "json_servers_key": "mcp",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".config/opencode/opencode.json",
             "transports": {
               "sse": {
@@ -27427,6 +27595,9 @@
         "brains.cli.app.mailbox_forward_cli": [
           "mailbox forward"
         ],
+        "brains.cli.app.mailbox_harness_wakeup_cli": [
+          "mailbox harness-wakeup"
+        ],
         "brains.cli.app.mailbox_inbox_cli": [
           "mailbox inbox"
         ],
@@ -36479,6 +36650,95 @@
                 "resolve_path": true,
                 "types": [],
                 "writable": false
+              }
+            }
+          ],
+          "result_callback": null,
+          "rich_help_panel": {
+            "type": "DefaultPlaceholder"
+          },
+          "shell_complete": "typer._click.core.Command.shell_complete",
+          "short_help": null,
+          "subcommand_metavar": null
+        },
+        "mailbox harness-wakeup": {
+          "add_help_option": true,
+          "allow_extra_args": false,
+          "allow_interspersed_args": true,
+          "callback": "brains.cli.app.mailbox_harness_wakeup_cli",
+          "chain": false,
+          "command_class": null,
+          "context_class": "typer._click.core.Context",
+          "context_settings": {},
+          "deprecated": false,
+          "deprecation": null,
+          "deprecation_help": null,
+          "epilog": null,
+          "group_class": null,
+          "help": "Translate one supported harness event into a body-free nudge.",
+          "hidden": true,
+          "ignore_unknown_options": false,
+          "invoke_without_command": false,
+          "kind": "command",
+          "name": "harness-wakeup",
+          "no_args_is_help": false,
+          "options_metavar": "[OPTIONS]",
+          "parameters": [
+            {
+              "allow_from_autoenv": true,
+              "autocompletion": null,
+              "callback": null,
+              "confirmation_prompt": false,
+              "count": false,
+              "default": null,
+              "deprecated": null,
+              "deprecation": null,
+              "deprecation_help": null,
+              "envvar": null,
+              "expose_value": true,
+              "flag_value": null,
+              "help": null,
+              "hidden": false,
+              "hide_input": false,
+              "is_bool_flag": false,
+              "is_eager": false,
+              "is_flag": false,
+              "kind": "TyperOption",
+              "metavar": null,
+              "multiple": false,
+              "name": "adapter",
+              "nargs": 1,
+              "prompt": null,
+              "prompt_required": true,
+              "required": true,
+              "rich_help_panel": null,
+              "shell_complete": "typer._click.core.Parameter.shell_complete",
+              "show_choices": true,
+              "show_default": true,
+              "show_envvar": true,
+              "spellings": [
+                "--adapter"
+              ],
+              "type": {
+                "allow_dash": null,
+                "case_sensitive": null,
+                "choices": null,
+                "clamp": null,
+                "class": "StringParamType",
+                "dir_okay": null,
+                "exists": null,
+                "file_okay": null,
+                "formats": null,
+                "max": null,
+                "max_open": null,
+                "min": null,
+                "min_open": null,
+                "name": "text",
+                "path_type": null,
+                "readable": null,
+                "resolve_path": null,
+                "types": [],
+                "writable": null
               }
             }
           ],
@@ -49291,6 +49551,63 @@
               "envvar": null,
               "expose_value": true,
               "flag_value": null,
+              "help": "Explicitly install supported body-free mailbox wakeups; unsupported harnesses remain pull-only.",
+              "hidden": false,
+              "hide_input": false,
+              "is_bool_flag": true,
+              "is_eager": false,
+              "is_flag": true,
+              "kind": "TyperOption",
+              "metavar": null,
+              "multiple": false,
+              "name": "mailbox_wakeups",
+              "nargs": 1,
+              "prompt": null,
+              "prompt_required": true,
+              "required": false,
+              "rich_help_panel": null,
+              "shell_complete": "typer._click.core.Parameter.shell_complete",
+              "show_choices": true,
+              "show_default": true,
+              "show_envvar": true,
+              "spellings": [
+                "--mailbox-wakeups"
+              ],
+              "type": {
+                "allow_dash": null,
+                "case_sensitive": null,
+                "choices": null,
+                "clamp": null,
+                "class": "BoolParamType",
+                "dir_okay": null,
+                "exists": null,
+                "file_okay": null,
+                "formats": null,
+                "max": null,
+                "max_open": null,
+                "min": null,
+                "min_open": null,
+                "name": "boolean",
+                "path_type": null,
+                "readable": null,
+                "resolve_path": null,
+                "types": [],
+                "writable": null
+              }
+            },
+            {
+              "allow_from_autoenv": true,
+              "autocompletion": null,
+              "callback": null,
+              "confirmation_prompt": false,
+              "count": false,
+              "default": false,
+              "deprecated": null,
+              "deprecation": null,
+              "deprecation_help": null,
+              "envvar": null,
+              "expose_value": true,
+              "flag_value": null,
               "help": "Wire even tools whose config dir is absent.",
               "hidden": false,
               "hide_input": false,
@@ -51552,6 +51869,7 @@
         "mailbox",
         "mailbox broadcast",
         "mailbox forward",
+        "mailbox harness-wakeup",
         "mailbox inbox",
         "mailbox lookup",
         "mailbox managed-create",
@@ -51888,6 +52206,7 @@
             "B7",
             "B8",
             "B9",
+            "BL-P1-12",
             "BL-P1-16",
             "F0",
             "F1",
@@ -51969,6 +52288,7 @@
             "B7",
             "B8",
             "B9",
+            "BL-P1-12",
             "J1",
             "J10",
             "J11",
@@ -52032,6 +52352,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-12",
             "F0",
             "F1",
             "F10",
@@ -52279,7 +52600,7 @@
         ],
         "components/CommandPalette.tsx": [
           "components/useDialogFocus.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/OperatorContext.tsx"
         ],
         "components/EmptyState.tsx": [],
@@ -52295,19 +52616,20 @@
         "components/MasterDetail.tsx": [],
         "components/OperatorPrimitives.tsx": [],
         "components/Sidebar.tsx": [
-          "coreRoutes.ts"
+          "coreRoutes.tsx"
         ],
         "components/SoftCard.tsx": [],
         "components/StatusPill.tsx": [],
         "components/Toast.tsx": [],
         "components/TopBar.tsx": [
+          "coreRoutes.tsx",
           "realtime/client.ts",
           "store/OperatorContext.tsx"
         ],
         "components/format.ts": [],
         "components/sessionScope.ts": [],
         "components/useDialogFocus.ts": [],
-        "coreRoutes.ts": [],
+        "coreRoutes.tsx": [],
         "main.tsx": [
           "App.tsx",
           "realtime/client.ts",
@@ -52326,7 +52648,7 @@
           "api/types.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/OperatorContext.tsx",
           "store/useAsync.ts"
         ],
@@ -52334,7 +52656,7 @@
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/Config.tsx": [
@@ -52345,7 +52667,7 @@
           "components/SoftCard.tsx",
           "components/StatusPill.tsx",
           "components/Toast.tsx",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "screens/NotFound.tsx",
           "screens/ScreenHead.tsx",
           "store/useAsync.ts"
@@ -52359,12 +52681,14 @@
           "store/useAsync.ts"
         ],
         "screens/NotFound.tsx": [
-          "components/OperatorPrimitives.tsx"
+          "components/OperatorPrimitives.tsx",
+          "coreRoutes.tsx"
         ],
         "screens/Operations.tsx": [
           "api/client.ts",
           "components/OperatorPrimitives.tsx",
           "components/Toast.tsx",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/OperatorCoordination.tsx": [
@@ -52373,7 +52697,7 @@
           "components/MailboxWorkspace.tsx",
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "screens/ScreenHead.tsx": [
@@ -52385,7 +52709,7 @@
           "components/OperatorPrimitives.tsx",
           "components/format.ts",
           "components/sessionScope.ts",
-          "coreRoutes.ts",
+          "coreRoutes.tsx",
           "store/useAsync.ts"
         ],
         "store/OperatorContext.tsx": [
@@ -52415,7 +52739,7 @@
         "components/format.ts",
         "components/sessionScope.ts",
         "components/useDialogFocus.ts",
-        "coreRoutes.ts",
+        "coreRoutes.tsx",
         "main.tsx",
         "realtime/client.ts",
         "realtime/protocol.ts",
@@ -52443,7 +52767,7 @@
         "frontend/src/components/AskCard.tsx": "922018fc57f38330e107456ebcbe6b2481434eb74dda8c5ef7e1379912088294",
         "frontend/src/components/Board.tsx": "5f8e4640fc0b1ec7f9c16435bffafa585e58df024348cdb7b572a383eb824812",
         "frontend/src/components/ChatDock.tsx": "b77dd64c0372a4b5ad25c9455253779ed3873d33429255c16de397db83a2a002",
-        "frontend/src/components/CommandPalette.tsx": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
+        "frontend/src/components/CommandPalette.tsx": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
         "frontend/src/components/ConnectMachineModal.tsx": "bb72b57b4d7e9c53dbb9aab15629edddba3968233a129dce85731b33ae0bf2bc",
         "frontend/src/components/Drawer.tsx": "886611158c576fefa2f17d23eaf1b91b83b5162e743bd88e81f6d37384241a9d",
         "frontend/src/components/EmptyState.tsx": "1494f75282b2cd82c5d01716fe65c3b8742ad49f447b480b4924c52460dd7a35",
@@ -52455,37 +52779,37 @@
         "frontend/src/components/OrgSwitcher.tsx": "79bc69b317edb70e3da2b76f3d0d3ccf2fa15ef4902e5467bfabdc1a34cea389",
         "frontend/src/components/PersonaCard.tsx": "5861ffbdbb88e9fe950dae1c0e50cd767a3991b76850ba0e973dc6fe4fc1aeff",
         "frontend/src/components/RuntimeTile.tsx": "afda8edb44208fa73964ca4bfedd6847d55a26185c9aa8009962ff17102a09b9",
-        "frontend/src/components/Sidebar.tsx": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e",
+        "frontend/src/components/Sidebar.tsx": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c",
         "frontend/src/components/SkillAttachmentPanel.tsx": "b94d20b71f0b8daa73c33cbaa3b0f5e80e39039d761e957419346a3e41029a34",
         "frontend/src/components/SoftCard.tsx": "29a4fe4c4e7ba1f9e156e2af1c3184f037a4fd6780b12220790cfbfb2e2086b5",
         "frontend/src/components/StatusPill.tsx": "5d6cf0c2ae069cc855d0ea7fd30e5dd99e391987f0a500d5a50ed5f8bf453d4c",
         "frontend/src/components/Stepper.tsx": "a034810f69ef088a800bd70e8b7987da87f29859f0db36d7d1e78d1ae55bf7f9",
         "frontend/src/components/Toast.tsx": "9b683c489c2dd25c20f63945156bf2e64763b6bbddf84cecd4492b04f856bdec",
-        "frontend/src/components/TopBar.tsx": "3af751e2e14c74f8af2f49cd4fa0b0cbbfeec03b3559fc674b4056fd697915b9",
+        "frontend/src/components/TopBar.tsx": "35d2ec0ad45e53855c75cdaab3be0e112380137ba45f66addc6ac55befa1a97b",
         "frontend/src/components/blockedReason.ts": "38807be9a2a43862ac43873b3a5ae1c2495f2f60578e36111e39f87611ee5fb1",
         "frontend/src/components/format.ts": "f7041433dc3554d32a11277dccc3b1c2343f2a009dbb3909518059b39e57ddd0",
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
-        "frontend/src/coreRoutes.ts": "7cc4382abdf32681404f3e0b68cf16c7fc781d2d4d66de229c8cc72354120225",
+        "frontend/src/coreRoutes.tsx": "ef63576878cd6b5345ce1460b921a0a0696c6f4a19f6dcf109b5cc750d2dfbe5",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
-        "frontend/src/realtime/client.ts": "c4748c63f308f18b0e932694ac57a081e4c994339e9b9c18d5acc861e5ae746f",
+        "frontend/src/realtime/client.ts": "ec59e07aae1569a8844daabb62f6bf9de761491e1c438b56ab88b9fe14a61ab8",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
         "frontend/src/realtime/protocol.ts": "6925d7e1ae1f63abf0ab2af15c4d5bf816ada921448afa3eea5d3a988230bc86",
         "frontend/src/realtime/useRealtime.ts": "b283eaf946615160fa739201d9feee298242e9cd054317cc2539d73a4747f741",
-        "frontend/src/screens/Act.tsx": "fc456d80e8e9abadbedb0092f2edc96c14ff972565aa8d8d0fc03e8c6e1ac492",
+        "frontend/src/screens/Act.tsx": "f5582d2a5c345fc3dfd77a83a59f440ba273aa73518297c2291cc767ee59b7b7",
         "frontend/src/screens/Automation.tsx": "91d1936bd8af908c462419c4e1788352065169c0ad0721d4106ce2adfb5d77ec",
-        "frontend/src/screens/CommandCenter.tsx": "f26f4782534cfa4b3fa199671f8acc577304ddefa22cc0396434fa02530a6391",
-        "frontend/src/screens/Config.tsx": "a6283abcaab96382dece1cf4a24e641c78afc9eec623cd851bf3fbc383aacaf3",
+        "frontend/src/screens/CommandCenter.tsx": "cd2169d14bef94fb0991a9e3b743733f8997d8bc0355e1028240b95f353c1b10",
+        "frontend/src/screens/Config.tsx": "389b084f2a152d1310f9ff7f1ef8ef88c8577a348db22980a0418d7b49c8b142",
         "frontend/src/screens/Governance.tsx": "5547f3e874d5b4f511bdeb91a864ce50ce84606299a30e5f907a36e899375d1b",
         "frontend/src/screens/Inbox.tsx": "2d07f6fcdcf2ada4e582f436ca7eec2ab7d1cdec0517d23ab1af7f92ef8ae6ac",
         "frontend/src/screens/Issues.tsx": "e3bc6fd3182fbc0a0ac73c63b4808abede91aee81eed4c0cfdb705ad034192bf",
         "frontend/src/screens/Labs.tsx": "376093d6d8056d31be3d8ded29fed1ddce303324de91a3442f2fc27a70f0c0f1",
         "frontend/src/screens/LegacyLabsRedirect.tsx": "a7ff6bd81aca3e2ba7cfb0e174f027dc7d8d49e0b55f58d9633583f5f0d447bc",
-        "frontend/src/screens/NotFound.tsx": "a091febbf9fae94fe350c1d5679ec19c96f665f1eee373492d580000d79ab64d",
+        "frontend/src/screens/NotFound.tsx": "69eba2616355e095aaa674a829f4ae3613a49b764043105a69fa9a55e914e404",
         "frontend/src/screens/Onboarding.tsx": "8ad81392b60e2aeac071aa0a7862972e7e92c3f7f090d2b725f8be46d18162d9",
-        "frontend/src/screens/Operations.tsx": "bc025dae62ff96d83f5f0f9a71efd3e42c92c78800c44817c2d3dcbd2fb571c4",
-        "frontend/src/screens/OperatorCoordination.tsx": "3c87fe31728dc4d85597a4da22c8d2da6e608dc0b5aa9b11b38d09bf483e4cf4",
+        "frontend/src/screens/Operations.tsx": "d76ac5223299473807ef4618645475535968cbf068ba69762047a12b56133ce6",
+        "frontend/src/screens/OperatorCoordination.tsx": "33037edaf74fb20f27139468aceeb58520d2850c018cdc3e6996dbb470f5ed27",
         "frontend/src/screens/Personas.tsx": "68b79f9ffb5f6b0dc44bf15faa89e46603b9057a95a328d73f11b53d226314a6",
         "frontend/src/screens/Pods.tsx": "1822b70da0b811f3e1490d0744d09491352f0a6425624a2d4c8e20b17f94df36",
         "frontend/src/screens/Projects.tsx": "6ea2d8dae6d573ac6fd03044d5c056e7b2bcd224baff72992233a84ab77abcdd",
@@ -52493,7 +52817,7 @@
         "frontend/src/screens/ScreenHead.tsx": "4e848df7a8e07370f4877ff29b3844c40cb0ce92901e545f74433e70269db300",
         "frontend/src/screens/Sessions.tsx": "fc81d102351678e608ba37c1a8e6f062893ef89b5a3bccdb06fdd70aa98b459e",
         "frontend/src/screens/Settings.tsx": "24ab300e99d00f6b422869cee93d3d6dc9232494ae821533a3a1e15f53300182",
-        "frontend/src/screens/Workspaces.tsx": "eef78992683143d687a9617daf58dcb5d52430c20e31785b86762d3f3263061f",
+        "frontend/src/screens/Workspaces.tsx": "2fd865bd64d9ae5083c129224697204f2e231775fdc9540b2fa50e4c5008e07c",
         "frontend/src/store/DockContext.tsx": "24fb9d6871e740e6db747a98a2ab263eeee9ee39e46aa72783077120ca8fbfc4",
         "frontend/src/store/OperatorContext.tsx": "d684a4af3df35ca773c8227719d67a8e46044994499f1618424699b34414b641",
         "frontend/src/store/OrgContext.tsx": "37fef7e18bf4e0cc2d0b58cd97649bacfdb8c9836704eb89744eef991b472ed3",
@@ -53265,25 +53589,25 @@
         {
           "file": "frontend/src/components/CommandPalette.tsx",
           "kind": "navigate",
-          "line": 59,
+          "line": 58,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigation",
-          "line": 24,
+          "line": 23,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigate",
-          "line": 45,
+          "line": 44,
           "target": "/act"
         },
         {
           "file": "frontend/src/components/Sidebar.tsx",
           "kind": "navigate",
-          "line": 53,
+          "line": 52,
           "target": "/act"
         },
         {
@@ -53293,33 +53617,39 @@
           "target": "/governance"
         },
         {
-          "file": "frontend/src/screens/CommandCenter.tsx",
+          "file": "frontend/src/screens/Act.tsx",
           "kind": "navigate",
-          "line": 48,
-          "target": "/act"
-        },
-        {
-          "file": "frontend/src/screens/CommandCenter.tsx",
-          "kind": "navigate",
-          "line": 48,
-          "target": "/workspaces"
-        },
-        {
-          "file": "frontend/src/screens/CommandCenter.tsx",
-          "kind": "navigate",
-          "line": 64,
+          "line": 170,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 89,
+          "line": 47,
+          "target": "/act"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 47,
+          "target": "/workspaces"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 63,
+          "target": "@core-route-guard"
+        },
+        {
+          "file": "frontend/src/screens/CommandCenter.tsx",
+          "kind": "navigate",
+          "line": 88,
           "target": "/governance"
         },
         {
           "file": "frontend/src/screens/CommandCenter.tsx",
           "kind": "navigate",
-          "line": 117,
+          "line": 116,
           "target": "/operations"
         },
         {
@@ -53344,24 +53674,24 @@
           "file": "frontend/src/screens/Operations.tsx",
           "kind": "navigate",
           "line": 26,
-          "target": "/act?category=operations"
-        },
-        {
-          "file": "frontend/src/screens/OperatorCoordination.tsx",
-          "kind": "navigate",
-          "line": 28,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 59,
+          "line": 27,
           "target": "@core-route-guard"
         },
         {
           "file": "frontend/src/screens/OperatorCoordination.tsx",
           "kind": "navigate",
-          "line": 81,
+          "line": 58,
+          "target": "@core-route-guard"
+        },
+        {
+          "file": "frontend/src/screens/OperatorCoordination.tsx",
+          "kind": "navigate",
+          "line": 80,
           "target": "@core-route-guard"
         },
         {
@@ -53388,9 +53718,7 @@
         "sessions"
       ],
       "runtime_extra_registry": [],
-      "sidebar_imperative_routes": [
-        "/act"
-      ],
+      "sidebar_imperative_routes": [],
       "sidebar_routes": [
         "/command-center",
         "/coordination",
@@ -53398,11 +53726,11 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "91c3e29fa420ca940bd142ff2f363b6ef32e39ad24917282e919251b28aeb43e",
+      "spa_ast_helper_sha256": "38722f76b4ab3eaf442308f8cfdae97b45b409fc1c5fda8d3572558af3c6f09b",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
-        "palette": "6a4288f6c11dbad7f9802324118f464adaa938b0a46745676d490ae613a47a91",
-        "sidebar": "24c7bb9bc20d5eca3d2a69158594d2e1c5ded02ce5964a72ea970353cee8fd0e"
+        "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
+        "sidebar": "4e582e44467f4ddd20c43b0c165b0ed9472db6fd2e1a381154a55efef80ebc6c"
       },
       "wire": {
         "adapters": {
@@ -53411,6 +53739,7 @@
             "instruction_path": ".claude/CLAUDE.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": "turn_boundary",
             "mcp_path": ".claude.json",
             "transports": {
               "sse": {
@@ -53441,6 +53770,7 @@
             "instruction_path": ".codex/AGENTS.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".codex/config.toml",
             "transports": {
               "stdio": {
@@ -53464,6 +53794,7 @@
             "instruction_path": ".copilot/copilot-instructions.md",
             "json_servers_key": "mcpServers",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".copilot/mcp-config.json",
             "transports": {
               "sse": {
@@ -53494,6 +53825,7 @@
             "instruction_path": ".config/opencode/AGENTS.md",
             "json_servers_key": "mcp",
             "mailbox_notification_mode": "pull",
+            "mailbox_wakeup_mode": null,
             "mcp_path": ".config/opencode/opencode.json",
             "transports": {
               "sse": {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { coreRoute } from "../coreRoutes";
+import { useParams } from "react-router-dom";
+import { actHref, coreHref, useCoreNavigation, workspaceHref } from "../coreRoutes";
 import { api } from "../api/client";
 import type { OperatorWorkspaceDetail, WorkspaceLookupEnvelope } from "../api/types";
 import { relativeTime } from "../components/format";
@@ -20,7 +20,7 @@ const WORKSPACE_TABS: WorkspaceTab[] = ["overview", "work", "communication", "kn
 
 export function Workspaces() {
   const { slug } = useParams<{ slug: string }>();
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const [tab, setTab] = useState<WorkspaceTab>("overview");
   const list = useAsync(() => api.operatorWorkspaces(), []);
   const selectedSlug = slug || list.data?.[0]?.slug;
@@ -41,7 +41,7 @@ export function Workspaces() {
   const openAct = (capability: string) => {
     const query = new URLSearchParams({ capability });
     if (selectedSlug) query.set("workspace", selectedSlug);
-    navigate(coreRoute(`/act?${query.toString()}`));
+    navigation.open(actHref(query));
   };
 
   return (
@@ -61,7 +61,7 @@ export function Workspaces() {
                 <button
                   key={item.slug}
                   className={`operator-workspace-choice ${item.slug === selectedSlug ? "selected" : ""}`}
-                  onClick={() => navigate(coreRoute(`/workspaces/${item.slug}`))}
+                  onClick={() => navigation.open(workspaceHref(item.slug))}
                 >
                   <strong>{item.name || item.slug}</strong><small>{item.path}</small>
                   <span><OperatorStatus tone={item.live_agents ? "ready" : "neutral"}>{item.live_agents ? `${item.live_agents} live` : "quiet"}</OperatorStatus>{item.open_decisions > 0 && <OperatorStatus tone="warning">{item.open_decisions} decisions</OperatorStatus>}</span>
@@ -144,13 +144,13 @@ export function Workspaces() {
 }
 
 function WorkspaceTabContent({ tab, detail }: { tab: WorkspaceTab; detail: OperatorWorkspaceDetail }) {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const activeHandoff = detail.handoffs.find((row) => row.status === "active");
   if (tab === "work") {
     return <div className="operator-room-grid"><OperatorCard kicker="Tasks" title={`${detail.tasks.length} durable tasks`}><div className="operator-work-list">{detail.tasks.map((task) => <div className="operator-work-item" key={task.code}><div><code>{task.code}</code><OperatorStatus tone={task.status === "blocked" ? "warning" : task.status === "done" ? "ready" : "neutral"}>{task.status}</OperatorStatus></div><strong>{task.title}</strong><small>{task.priority} / {task.claimed_by_session_id ? `claimed by ${task.claimed_by_session_id.slice(0, 8)}` : "unclaimed"}</small></div>)}</div></OperatorCard><OperatorCard kicker="Human authority" title="Open decisions"><div className="operator-work-list">{detail.decisions.map((row) => <div className="operator-work-item" key={row.code}><code>{row.code}</code><strong>{row.title}</strong><small>{relativeTime(row.created_at)}</small></div>)}{!detail.decisions.length && <span className="operator-muted">No open decisions.</span>}</div></OperatorCard></div>;
   }
   if (tab === "communication") {
-    return <div className="operator-room-grid"><OperatorCard kicker="Continuity" title="Handoffs"><div className="operator-work-list">{detail.handoffs.map((row) => <div className="operator-work-item" key={String(row.handoff_id || row.id)}><OperatorStatus tone={row.status === "active" ? "ready" : "neutral"}>{row.status || "unknown"}</OperatorStatus><strong>{row.title || "Untitled handoff"}</strong><small>{relativeTime(row.set_at || row.created_at)}</small></div>)}{!detail.handoffs.length && <span className="operator-muted">No handoffs recorded.</span>}</div></OperatorCard><OperatorCard kicker="Presence" title="Live agents"><div className="operator-agent-list">{detail.live_agents.map((agent) => <div className="operator-agent-row" key={agent.session_id}><span><i>{(agent.tool || "A").slice(0, 1).toUpperCase()}</i><b>{agent.tool || "agent"}<small>{agent.session_id.slice(0, 12)}</small></b></span><span className="operator-agent-actions"><code>{relativeTime(agent.last_activity_at)}</code>{agent.mailbox_deep_link && <button className="operator-button quiet" onClick={() => navigate(coreRoute(agent.mailbox_deep_link!.replace(/^\/app/, "")))}>Open mailbox</button>}</span></div>)}{!detail.live_agents.length && <span className="operator-muted">No live agents.</span>}</div></OperatorCard></div>;
+    return <div className="operator-room-grid"><OperatorCard kicker="Continuity" title="Handoffs"><div className="operator-work-list">{detail.handoffs.map((row) => <div className="operator-work-item" key={String(row.handoff_id || row.id)}><OperatorStatus tone={row.status === "active" ? "ready" : "neutral"}>{row.status || "unknown"}</OperatorStatus><strong>{row.title || "Untitled handoff"}</strong><small>{relativeTime(row.set_at || row.created_at)}</small></div>)}{!detail.handoffs.length && <span className="operator-muted">No handoffs recorded.</span>}</div></OperatorCard><OperatorCard kicker="Presence" title="Live agents"><div className="operator-agent-list">{detail.live_agents.map((agent) => <div className="operator-agent-row" key={agent.session_id}><span><i>{(agent.tool || "A").slice(0, 1).toUpperCase()}</i><b>{agent.tool || "agent"}<small>{agent.session_id.slice(0, 12)}</small></b></span><span className="operator-agent-actions"><code>{relativeTime(agent.last_activity_at)}</code>{agent.mailbox_deep_link && <button className="operator-button quiet" onClick={() => navigation.open(coreHref(agent.mailbox_deep_link!.replace(/^\/app/, "")))}>Open mailbox</button>}</span></div>)}{!detail.live_agents.length && <span className="operator-muted">No live agents.</span>}</div></OperatorCard></div>;
   }
   if (tab === "knowledge") {
     return <div className="operator-room-grid"><LookupPanel key={detail.workspace.slug} slug={detail.workspace.slug} /><OperatorCard kicker="Knowledge ledger" title={`${detail.knowledge.length} entries`}><div className="operator-work-list">{detail.knowledge.map((row) => <div className="operator-work-item" key={row.code}><div><code>{row.code}</code><OperatorStatus tone={row.severity === "critical" ? "danger" : row.type === "blocker" ? "warning" : "neutral"}>{row.type}</OperatorStatus></div><strong>{row.title}</strong><small>{row.scope} / {row.status}</small></div>)}</div></OperatorCard><OperatorCard kicker="Advisory signals" title="What agents should know"><OperatorMiniList rows={detail.signals.map((signal) => ({ label: signal.type.replaceAll("_", " "), value: signal.count }))} /></OperatorCard></div>;

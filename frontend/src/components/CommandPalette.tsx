@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { coreRoute } from "../coreRoutes";
+import { useCoreNavigation } from "../coreRoutes";
 import { useOperator } from "../store/OperatorContext";
 import { useDialogFocus } from "./useDialogFocus";
 
@@ -22,7 +21,7 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const { catalog } = useOperator();
   const close = useCallback(() => setOpen(false), []);
   const dialogRef = useDialogFocus<HTMLDivElement>(open, close);
@@ -56,7 +55,7 @@ export function CommandPalette() {
   if (!open) return null;
 
   const go = (to: string) => {
-    navigate(coreRoute(to));
+    navigation.open(to);
     setOpen(false);
   };
 
