@@ -302,9 +302,11 @@ jobs:
           set -euo pipefail
           wheel=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
           test -n "$wheel"
+          git_executable=$(realpath "$(command -v git)")
           uv run python scripts/probe_native_wakeup_recovery.py \
             --prepare-package \
             --candidate "${{ github.sha }}" \
+            --git-executable "$git_executable" \
             --wheel "$wheel" \
             --package-manifest dist/native-wakeup-package-provenance.json
       - name: Core surface boundary from fresh artifacts
@@ -392,19 +394,47 @@ jobs:
           }
           $wheel = (Get-ChildItem -LiteralPath dist -Filter '*.whl' | Select-Object -First 1).FullName
           if (-not $wheel) { throw 'native candidate wheel is absent' }
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application).Source).Path
+          $invocation = Join-Path $env:RUNNER_TEMP ("brains-native-wakeup-" + [guid]::NewGuid())
+          if (Test-Path -LiteralPath $invocation) { throw 'native evidence path already exists' }
+          "NATIVE_WAKEUP_INVOCATION=$invocation" >> $env:GITHUB_ENV
           & $bootstrap scripts/probe_native_wakeup_recovery.py `
             --candidate "${{ github.sha }}" `
+            --git-executable $git `
             --wheel $wheel `
             --package-manifest dist/native-wakeup-package-provenance.json `
-            --evidence-base $env:RUNNER_TEMP `
-            --github-output $env:GITHUB_OUTPUT
+            --invocation-path $invocation
           if ($LASTEXITCODE -ne 0) { throw 'native wakeup recovery proof failed' }
+      - name: Verify successful native wakeup evidence for publication
+        id: native-wakeup-evidence
+        if: success() && (runner.os == 'Windows' || runner.os == 'macOS')
+        shell: pwsh
+        run: |
+          $bootstrap = if ($IsWindows) {
+            Join-Path $env:pythonLocation 'python.exe'
+          } else {
+            Join-Path $env:pythonLocation 'bin/python'
+          }
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application).Source).Path
+          $wheel = (Get-ChildItem -LiteralPath dist -Filter '*.whl' | Select-Object -First 1).FullName
+          $result = Join-Path $env:NATIVE_WAKEUP_INVOCATION 'native-wakeup-recovery.json'
+          & $bootstrap scripts/probe_native_wakeup_recovery.py `
+            --verify-result `
+            --candidate "${{ github.sha }}" `
+            --git-executable $git `
+            --wheel $wheel `
+            --package-manifest dist/native-wakeup-package-provenance.json `
+            --result $result
+          if ($LASTEXITCODE -ne 0) { throw 'native wakeup evidence attestation failed' }
+          $evidence = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          "evidence_path=$result" >> $env:GITHUB_OUTPUT
+          "evidence_digest=$($evidence.provenance_digest)" >> $env:GITHUB_OUTPUT
       - name: Upload sanitized native wakeup evidence
         if: success() && (runner.os == 'Windows' || runner.os == 'macOS')
         uses: actions/upload-artifact@v4
         with:
           name: native-wakeup-${{ matrix.os }}-py${{ matrix.python }}-${{ github.sha }}
-          path: ${{ steps.native-wakeup.outputs.evidence_path }}
+          path: ${{ steps.native-wakeup-evidence.outputs.evidence_path }}
           if-no-files-found: error
           retention-days: 7
 

@@ -108,12 +108,18 @@ Current workflow facts at HEAD:
   guarded manager-cycle evidence on disposable native runners. It does not certify a
   login/reboot boundary; that requires the checked probe's two-phase journey on a
   persistent disposable VM.
-- `scripts/probe_native_wakeup_recovery.py` creates a private temporary home and state
-  root per scenario, removes ambient Brains and client-home variables from each child,
-  and fails if any managed path escapes that root. On Windows and macOS it terminates a
-  child without unwinding at every durable install/removal transaction phase, verifies
-  the real platform exchange primitive and owner boundary, recovers in a new process,
-  and emits only a sanitized candidate/platform/count report.
+- `scripts/probe_native_wakeup_recovery.py` requires a fresh private invocation path,
+  binds a clean checked-out candidate and source tree to the exact wheel, and runs from
+  a fresh virtual environment using explicit absolute Git and Python executables. It
+  verifies the wheel and installed RECORD entries, exact METADATA/WHEEL bytes,
+  `direct_url.json`, module, launcher, and interpreter before any scenario. Each Windows
+  or macOS scenario uses a private synthetic home and state root with a controlled PATH,
+  captures the complete Claude client-home snapshot after normal MCP wiring and
+  immediately before the wakeup transaction, then proves abrupt install/removal rollback
+  at every durable phase through the real native exchange and owner boundary. Recovery
+  must restore that snapshot exactly and remove its recovery directory. Only a successful
+  schema/provenance re-verification step exposes the sanitized result path for artifact
+  upload; failed or stale output is never uploaded.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The reviewed positive core-surface manifest is generated independently for normal and all-opt-in startup. The package job and local quality runner install the lockfile-declared TypeScript parser, build a fresh wheel and sdist, and then supply that artifact directory explicitly to the gate; the checker never downloads dependencies and refuses to validate or rewrite the manifest without exactly one wheel and one sdist. Exact inventories cover the normalized `src/brains` and package-input source tree; normalized, regular-file-only wheel/sdist members; resolved Click commands/groups and normalized public command, option, and argument activation fields; advertised MCP names and callable contracts; HTTP operations; a pinned TypeScript-compiler import graph rooted at the real SPA entry; the exact `App.tsx` route grammar; the audited `coreRoutes.tsx` capability boundary; deny-at-source router, DOM, intrinsic, and React navigation checks in every other reachable module; separately retained dormant frontend source; supported configuration keys; every generated harness file and transport contract; package entry points/dependencies/extras; and canonical IDs and actionable canonical-doc command/path/surface claims. Semantic allowlists reject reachable unknown or frozen SPA modules and targets, modified route/navigation guards or analysis, noncanonical harness paths/transports/content, and newly advertised frozen documentation surfaces even if the manifest is regenerated. Missing, extra, stale, malformed, dynamically unresolved, or uninspectable source or artifact inventory fails closed; field-level, boundary-order, capability-provenance, and syntax-bypass mutation tests prove each discoverability family cannot silently expand.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.

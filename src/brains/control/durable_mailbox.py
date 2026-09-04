@@ -288,9 +288,23 @@ def _decode_binding_payload(payload: str) -> str:
         raise MailboxValidationError("mailbox binding file is unavailable") from exc
 
 
+def _windows_system_tool(relative: str) -> str:
+    system_root = os.environ.get("SYSTEMROOT")
+    if not system_root:
+        raise OSError("Windows system root is unavailable")
+    executable = (Path(system_root).resolve(strict=True) / relative).resolve(strict=True)
+    try:
+        executable.relative_to(Path(system_root).resolve(strict=True))
+    except ValueError as exc:
+        raise OSError("Windows system tool escaped the system root") from exc
+    if not executable.is_file():
+        raise OSError("Windows system tool is unavailable")
+    return str(executable)
+
+
 def _windows_current_user_sid() -> str:
     completed = subprocess.run(
-        ["whoami", "/user", "/fo", "csv", "/nh"],
+        [_windows_system_tool("System32/whoami.exe"), "/user", "/fo", "csv", "/nh"],
         check=True,
         capture_output=True,
         text=True,
@@ -307,7 +321,7 @@ def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     environment["BRAINS_BINDING_ACL_PATH"] = str(path)
     completed = subprocess.run(
         [
-            "powershell.exe",
+            _windows_system_tool("System32/WindowsPowerShell/v1.0/powershell.exe"),
             "-NoProfile",
             "-NonInteractive",
             "-Command",
@@ -325,20 +339,18 @@ def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     return tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
 
 
-def _secure_binding_file(path: Path) -> None:
-    if os.name != "nt":
-        path.chmod(0o600)
-        return
+def _windows_secure_binding_file(path: Path) -> None:
     sid = _windows_current_user_sid()
+    icacls = _windows_system_tool("System32/icacls.exe")
     subprocess.run(
-        ["icacls", str(path), "/inheritance:r", "/grant:r", f"*{sid}:(F)"],
+        [icacls, str(path), "/inheritance:r", "/grant:r", f"*{sid}:(F)"],
         check=True,
         capture_output=True,
         text=True,
         timeout=10,
     )
     subprocess.run(
-        ["icacls", str(path), "/verify"],
+        [icacls, str(path), "/verify"],
         check=True,
         capture_output=True,
         text=True,
@@ -349,6 +361,13 @@ def _secure_binding_file(path: Path) -> None:
     # entries. The managed file needs no explicit access principal except its user.
     if acl_sids != (sid,):
         raise OSError("mailbox binding file ACL contains an unexpected principal")
+
+
+def _secure_binding_file(path: Path) -> None:
+    if os.name != "nt":
+        path.chmod(0o600)
+        return
+    _windows_secure_binding_file(path)
 
 
 def protect_owner_only_bytes(data: bytes) -> tuple[str, bytes]:

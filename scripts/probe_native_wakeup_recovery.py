@@ -66,12 +66,19 @@ def _canonical_digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _git(root: Path, *arguments: str) -> str:
-    git = shutil.which("git")
-    if git is None:
-        raise RuntimeError("candidate source tool is unavailable")
+def _git_path(raw: str) -> Path:
+    supplied = Path(raw)
+    if not supplied.is_absolute():
+        raise RuntimeError("candidate source tool must be an absolute path")
+    git = supplied.resolve(strict=True)
+    if git.name.casefold() not in {"git", "git.exe"} or not git.is_file():
+        raise RuntimeError("candidate source tool is invalid")
+    return git
+
+
+def _git(root: Path, git: Path, *arguments: str) -> str:
     completed = subprocess.run(
-        [str(Path(git).resolve(strict=True)), "-C", str(root), *arguments],
+        [str(git), "-C", str(root), *arguments],
         capture_output=True,
         text=True,
         check=False,
@@ -82,20 +89,18 @@ def _git(root: Path, *arguments: str) -> str:
     return completed.stdout.strip()
 
 
-def _source_identity(root: Path, candidate: str) -> dict[str, str]:
+def _source_identity(root: Path, candidate: str, git_executable: str) -> dict[str, str]:
     root = root.resolve(strict=True)
-    head = _git(root, "rev-parse", "HEAD").lower()
-    tree = _git(root, "rev-parse", "HEAD^{tree}").lower()
+    git = _git_path(git_executable)
+    head = _git(root, git, "rev-parse", "HEAD").lower()
+    tree = _git(root, git, "rev-parse", "HEAD^{tree}").lower()
     if candidate.lower() != head or not _CANDIDATE_RE.fullmatch(head):
         raise RuntimeError("candidate does not match checked-out source")
     if not _CANDIDATE_RE.fullmatch(tree):
         raise RuntimeError("candidate source tree identity is unavailable")
     for arguments in (("diff", "--quiet"), ("diff", "--cached", "--quiet")):
-        git = shutil.which("git")
-        if git is None:
-            raise RuntimeError("candidate source tool is unavailable")
         completed = subprocess.run(
-            [str(Path(git).resolve(strict=True)), "-C", str(root), *arguments],
+            [str(git), "-C", str(root), *arguments],
             capture_output=True,
             check=False,
             timeout=30,
@@ -105,13 +110,31 @@ def _source_identity(root: Path, candidate: str) -> dict[str, str]:
     return {"candidate": head, "source_tree": tree}
 
 
-def _wheel_record_digest(wheel: Path) -> str:
+def _wheel_attestation(wheel: Path) -> dict[str, str]:
     with zipfile.ZipFile(wheel) as archive:
-        names = [name for name in archive.namelist() if name.endswith(".dist-info/RECORD")]
-        if len(names) != 1:
-            raise RuntimeError("wheel RECORD identity is ambiguous")
-        rows = sorted(csv.reader(archive.read(names[0]).decode("utf-8").splitlines()))
-    return _canonical_digest(rows)
+        record_names = [name for name in archive.namelist() if name.endswith(".dist-info/RECORD")]
+        metadata_names = [
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        ]
+        wheel_names = [name for name in archive.namelist() if name.endswith(".dist-info/WHEEL")]
+        if any(len(names) != 1 for names in (record_names, metadata_names, wheel_names)):
+            raise RuntimeError("wheel distribution identity is ambiguous")
+        rows = sorted(csv.reader(archive.read(record_names[0]).decode("utf-8").splitlines()))
+        for relative, digest, _size in rows:
+            if not digest:
+                continue
+            algorithm, encoded = digest.split("=", 1)
+            if algorithm != "sha256":
+                raise RuntimeError("wheel RECORD uses an unsupported digest")
+            if hashlib.sha256(archive.read(relative)).digest() != _decode_record_digest(encoded):
+                raise RuntimeError("wheel RECORD verification failed")
+        metadata = archive.read(metadata_names[0])
+        wheel_metadata = archive.read(wheel_names[0])
+    return {
+        "wheel_record_sha256": _canonical_digest(rows),
+        "wheel_archive_metadata_sha256": hashlib.sha256(metadata).hexdigest(),
+        "wheel_archive_wheel_sha256": hashlib.sha256(wheel_metadata).hexdigest(),
+    }
 
 
 def _write_package_manifest(
@@ -119,8 +142,10 @@ def _write_package_manifest(
     candidate: str,
     wheel: Path,
     output: Path,
+    git_executable: str,
 ) -> dict[str, str]:
-    identity = _source_identity(source_root, candidate)
+    git = _git_path(git_executable)
+    identity = _source_identity(source_root, candidate, str(git))
     wheel = wheel.resolve(strict=True)
     if output.exists() or output.is_symlink():
         raise RuntimeError("package provenance path already exists")
@@ -129,7 +154,8 @@ def _write_package_manifest(
         **identity,
         "wheel_filename": wheel.name,
         "wheel_sha256": _sha256(wheel),
-        "wheel_record_sha256": _wheel_record_digest(wheel),
+        **_wheel_attestation(wheel),
+        "builder_git_sha256": _sha256(git),
     }
     output.parent.resolve(strict=True)
     with output.open("x", encoding="utf-8") as handle:
@@ -143,8 +169,10 @@ def _read_package_manifest(
     source_root: Path,
     candidate: str,
     wheel: Path,
+    git_executable: str,
 ) -> dict[str, str]:
-    identity = _source_identity(source_root, candidate)
+    git = _git_path(git_executable)
+    identity = _source_identity(source_root, candidate, str(git))
     try:
         raw = json.loads(manifest_path.resolve(strict=True).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -154,11 +182,17 @@ def _read_package_manifest(
         **identity,
         "wheel_filename": wheel.name,
         "wheel_sha256": _sha256(wheel),
-        "wheel_record_sha256": _wheel_record_digest(wheel),
+        **_wheel_attestation(wheel),
     }
-    if raw != expected:
+    expected_keys = {*expected, "builder_git_sha256"}
+    if (
+        not isinstance(raw, dict)
+        or set(raw) != expected_keys
+        or {key: raw.get(key) for key in expected} != expected
+        or not _DIGEST_RE.fullmatch(str(raw.get("builder_git_sha256", "")))
+    ):
         raise RuntimeError("package provenance does not match candidate wheel")
-    return expected
+    return {key: str(value) for key, value in raw.items()}
 
 
 def _inside(path: Path, root: Path) -> bool:
@@ -183,9 +217,11 @@ def _make_private(path: Path) -> None:
             raise RuntimeError("private probe path mode is not owner-only")
         return
     system_root = Path(os.environ["SYSTEMROOT"]).resolve(strict=True)
-    powershell = system_root / "System32/WindowsPowerShell/v1.0/powershell.exe"
-    icacls = system_root / "System32/icacls.exe"
-    whoami = system_root / "System32/whoami.exe"
+    powershell = (system_root / "System32/WindowsPowerShell/v1.0/powershell.exe").resolve(
+        strict=True
+    )
+    icacls = (system_root / "System32/icacls.exe").resolve(strict=True)
+    whoami = (system_root / "System32/whoami.exe").resolve(strict=True)
     identity = subprocess.run(
         [str(whoami), "/user", "/fo", "csv", "/nh"],
         check=True,
@@ -235,11 +271,19 @@ def _make_private(path: Path) -> None:
         raise RuntimeError("private probe path ACL is not owner-only")
 
 
-def _new_private_invocation(base: Path) -> Path:
-    base = base.resolve(strict=True)
-    if base.is_symlink() or not base.is_dir():
-        raise RuntimeError("evidence base is not a real directory")
-    invocation = Path(tempfile.mkdtemp(prefix="brains-native-wakeup-evidence-", dir=base))
+def _new_private_invocation(invocation: Path) -> Path:
+    if not invocation.is_absolute():
+        raise RuntimeError("evidence invocation path must be absolute")
+    supplied_parent = invocation.parent
+    if supplied_parent.is_symlink():
+        raise RuntimeError("evidence invocation parent is not a real directory")
+    parent = supplied_parent.resolve(strict=True)
+    if not parent.is_dir():
+        raise RuntimeError("evidence invocation parent is not a real directory")
+    invocation = parent / invocation.name
+    if invocation.exists() or invocation.is_symlink():
+        raise RuntimeError("evidence invocation path already exists")
+    invocation.mkdir()
     try:
         if any(invocation.iterdir()):
             raise RuntimeError("new evidence invocation directory is not empty")
@@ -256,6 +300,45 @@ def _venv_python(root: Path) -> Path:
 
 def _venv_launcher(root: Path) -> Path:
     return root / ("Scripts/brains-ai.exe" if os.name == "nt" else "bin/brains-ai")
+
+
+def _controlled_path(venv_root: Path | None = None) -> str:
+    entries: list[str] = []
+    if venv_root is not None:
+        entries.append(str(_venv_python(venv_root).parent.resolve(strict=True)))
+    if os.name == "nt":
+        system_root = Path(os.environ["SYSTEMROOT"]).resolve(strict=True)
+        entries.extend(
+            (
+                str((system_root / "System32").resolve(strict=True)),
+                str((system_root / "System32/WindowsPowerShell/v1.0").resolve(strict=True)),
+            )
+        )
+    else:
+        entries.extend(("/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+    return os.pathsep.join(entries)
+
+
+def _worker_environment(invocation: Path, git: Path, venv_root: Path) -> dict[str, str]:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() in {"SYSTEMDRIVE", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"}
+    }
+    environment.update(
+        {
+            "HOME": str(invocation),
+            "USERPROFILE": str(invocation),
+            "TMP": str(invocation),
+            "TEMP": str(invocation),
+            "PATH": _controlled_path(venv_root),
+            "PIP_NO_CACHE_DIR": "1",
+            "BRAINS_NATIVE_WAKEUP_PROBE_GIT_SHA256": _sha256(git),
+        }
+    )
+    if os.name == "nt":
+        environment["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+    return environment
 
 
 def _decode_record_digest(encoded: str) -> bytes:
@@ -279,6 +362,34 @@ def _runtime_provenance(package: dict[str, str], wheel: Path) -> dict[str, str]:
     if None in {record_text, metadata_text, wheel_text, direct_url_text}:
         raise RuntimeError("installed distribution provenance is incomplete")
     assert record_text is not None
+    assert metadata_text is not None
+    assert wheel_text is not None
+    assert direct_url_text is not None
+    if (
+        hashlib.sha256(metadata_text.encode("utf-8")).hexdigest()
+        != package["wheel_archive_metadata_sha256"]
+    ):
+        raise RuntimeError("installed METADATA differs from the candidate wheel")
+    if (
+        hashlib.sha256(wheel_text.encode("utf-8")).hexdigest()
+        != package["wheel_archive_wheel_sha256"]
+    ):
+        raise RuntimeError("installed WHEEL differs from the candidate wheel")
+    try:
+        direct_url = json.loads(direct_url_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("installed direct_url provenance is invalid") from exc
+    archive_info = direct_url.get("archive_info", {}) if isinstance(direct_url, dict) else {}
+    hashes = archive_info.get("hashes", {}) if isinstance(archive_info, dict) else {}
+    if (
+        not isinstance(direct_url, dict)
+        or direct_url.get("url") != wheel.resolve(strict=True).as_uri()
+        or not isinstance(archive_info, dict)
+        or archive_info.get("hash") != f"sha256={package['wheel_sha256']}"
+        or not isinstance(hashes, dict)
+        or hashes.get("sha256") != package["wheel_sha256"]
+    ):
+        raise RuntimeError("installed direct_url does not identify the exact candidate wheel")
     rows = sorted(csv.reader(record_text.splitlines()))
     distribution_root = Path(distribution.locate_file("")).resolve(strict=True)
     try:
@@ -298,6 +409,26 @@ def _runtime_provenance(package: dict[str, str], wheel: Path) -> dict[str, str]:
             raise RuntimeError("installed RECORD path escaped its virtual environment") from exc
         if hashlib.sha256(installed.read_bytes()).digest() != _decode_record_digest(encoded):
             raise RuntimeError("installed distribution RECORD verification failed")
+    with zipfile.ZipFile(wheel) as archive:
+        wheel_record_name = next(
+            name for name in archive.namelist() if name.endswith(".dist-info/RECORD")
+        )
+        wheel_rows = sorted(
+            csv.reader(archive.read(wheel_record_name).decode("utf-8").splitlines())
+        )
+    for relative, digest, _size in wheel_rows:
+        if not digest:
+            continue
+        algorithm, encoded = digest.split("=", 1)
+        if algorithm != "sha256":
+            raise RuntimeError("candidate wheel RECORD uses an unsupported digest")
+        installed = Path(distribution.locate_file(relative)).resolve(strict=True)
+        try:
+            installed.relative_to(prefix)
+        except ValueError as exc:
+            raise RuntimeError("candidate wheel file escaped its virtual environment") from exc
+        if hashlib.sha256(installed.read_bytes()).digest() != _decode_record_digest(encoded):
+            raise RuntimeError("installed package file differs from the candidate wheel RECORD")
 
     import brains
 
@@ -313,9 +444,10 @@ def _runtime_provenance(package: dict[str, str], wheel: Path) -> dict[str, str]:
     safe = {
         **package,
         "schema": RUNTIME_PROVENANCE_SCHEMA,
+        "runner_git_sha256": os.environ["BRAINS_NATIVE_WAKEUP_PROBE_GIT_SHA256"],
         "installed_record_sha256": _canonical_digest(rows),
-        "metadata_sha256": hashlib.sha256(metadata_text.encode("utf-8")).hexdigest(),
-        "wheel_metadata_sha256": hashlib.sha256(wheel_text.encode("utf-8")).hexdigest(),
+        "installed_metadata_sha256": hashlib.sha256(metadata_text.encode("utf-8")).hexdigest(),
+        "installed_wheel_sha256": hashlib.sha256(wheel_text.encode("utf-8")).hexdigest(),
         "direct_url_sha256": hashlib.sha256(direct_url_text.encode("utf-8")).hexdigest(),
         "module_sha256": _sha256(module),
         "launcher_sha256": _sha256(launcher),
@@ -361,14 +493,15 @@ def _isolated_environment(root: Path, candidate: str, provenance_digest: str) ->
             "SYSTEMDRIVE",
             "SYSTEMROOT",
             "WINDIR",
-            "PATH",
-            "PATHEXT",
             "LANG",
             "LC_ALL",
-            "LD_LIBRARY_PATH",
-            "DYLD_LIBRARY_PATH",
         }
     }
+    if os.name == "nt":
+        inherited["PATH"] = _controlled_path()
+        inherited["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+    else:
+        inherited["PATH"] = _controlled_path()
     inherited.update(
         {
             "HOME": str(paths["home"]),
@@ -442,6 +575,13 @@ def _wire_context():
     )
 
 
+def _claude_adapter(wire, home: Path):
+    selected = wire._select_adapters(["claude-code"], home, True)
+    if len(selected) != 1 or selected[0].name != "claude-code":
+        raise RuntimeError("Claude wakeup adapter is unavailable")
+    return selected[0]
+
+
 def _home_snapshot(home: Path) -> dict[str, dict[str, object]]:
     snapshot: dict[str, dict[str, object]] = {".": {"kind": "directory"}}
     if os.name != "nt":
@@ -500,19 +640,22 @@ def _seed(root: Path, candidate: str, provenance_digest: str, operation: str) ->
             directory.chmod(0o700)
         for file_path in (paths["settings"], paths["home"] / ".claude.json", sentinel):
             file_path.chmod(0o600)
-    _write_baseline(root, _home_snapshot(paths["home"]))
-    if operation == "remove":
-        from brains import wire
+    from brains import wire
 
-        report = wire.wire(
-            paths["home"],
-            _wire_context(),
-            tools=["claude-code"],
-            rules=False,
-            mailbox_wakeups=True,
-        )
-        if not report.get("ok"):
-            raise RuntimeError("native wakeup seed failed")
+    normal = wire.wire(
+        paths["home"],
+        _wire_context(),
+        tools=["claude-code"],
+        rules=False,
+        mailbox_wakeups=False,
+    )
+    if not normal.get("ok"):
+        raise RuntimeError("normal Claude wire setup failed")
+    if operation == "remove":
+        wakeup = wire._wire_wakeup(_claude_adapter(wire, paths["home"]), paths["home"], False)
+        if wakeup.get("action") not in {"install", "recovered", "unchanged"}:
+            raise RuntimeError("native wakeup removal baseline failed")
+    _write_baseline(root, _home_snapshot(paths["home"]))
 
 
 def _crash(
@@ -526,16 +669,11 @@ def _crash(
             os._exit(CRASH_EXIT_CODE)
 
     wire._TRANSACTION_PHASE_HOOK = terminate
+    adapter = _claude_adapter(wire, paths["home"])
     if operation == "install":
-        wire.wire(
-            paths["home"],
-            _wire_context(),
-            tools=["claude-code"],
-            rules=False,
-            mailbox_wakeups=True,
-        )
+        wire._wire_wakeup(adapter, paths["home"], False)
     else:
-        wire.unwire(paths["home"], tools=["claude-code"], rules=False)
+        wire._unwire_wakeup(adapter, paths["home"], False)
     raise RuntimeError("transaction did not reach the requested crash phase")
 
 
@@ -548,7 +686,11 @@ def _assert_owner_only(path: Path) -> None:
 
         subprocess.run(
             [
-                str(Path(os.environ["SYSTEMROOT"]).resolve(strict=True) / "System32/icacls.exe"),
+                str(
+                    (
+                        Path(os.environ["SYSTEMROOT"]).resolve(strict=True) / "System32/icacls.exe"
+                    ).resolve(strict=True)
+                ),
                 str(path),
                 "/verify",
             ],
@@ -627,27 +769,15 @@ def _recover(root: Path, candidate: str, provenance_digest: str, operation: str)
     paths = _assert_child_isolation(root, candidate, provenance_digest)
     from brains import wire
 
+    adapter = _claude_adapter(wire, paths["home"])
     if operation == "install":
-        report = wire.wire(
-            paths["home"],
-            _wire_context(),
-            tools=["claude-code"],
-            rules=False,
-            mailbox_wakeups=True,
-        )
-        if not report.get("ok"):
-            raise RuntimeError("native install recovery failed")
-        removed = wire.unwire(paths["home"], tools=["claude-code"], rules=False)
-        action = removed["tools"][0]["mailbox_wakeup"].get("action")
-        if action != "remove":
-            raise RuntimeError("native install recovery rollback failed")
+        rollback = wire._unwire_wakeup(adapter, paths["home"], False)
+        if rollback.get("action") not in {"remove", "recovered", "absent"}:
+            raise RuntimeError("native install rollback failed")
     else:
-        removed = wire.unwire(paths["home"], tools=["claude-code"], rules=False)
-        action = removed["tools"][0]["mailbox_wakeup"].get("action")
-        if action != "remove":
-            raise RuntimeError("native removal recovery failed")
-    if paths["settings"].read_bytes() != ORIGINAL_SETTINGS:
-        raise RuntimeError("native recovery did not restore exact settings bytes")
+        rollback = wire._wire_wakeup(adapter, paths["home"], False)
+        if rollback.get("action") not in {"install", "recovered", "unchanged"}:
+            raise RuntimeError("native removal rollback failed")
     for key in ("lock", "manifest", "backup", "journal", "capture"):
         if paths[key].exists():
             raise RuntimeError("native recovery left transaction state behind")
@@ -754,9 +884,13 @@ def _validate_result(
         "wheel_filename",
         "wheel_sha256",
         "wheel_record_sha256",
+        "wheel_archive_metadata_sha256",
+        "wheel_archive_wheel_sha256",
+        "builder_git_sha256",
+        "runner_git_sha256",
         "installed_record_sha256",
-        "metadata_sha256",
-        "wheel_metadata_sha256",
+        "installed_metadata_sha256",
+        "installed_wheel_sha256",
         "direct_url_sha256",
         "module_sha256",
         "launcher_sha256",
@@ -779,6 +913,9 @@ def _validate_result(
         "wheel_filename",
         "wheel_sha256",
         "wheel_record_sha256",
+        "wheel_archive_metadata_sha256",
+        "wheel_archive_wheel_sha256",
+        "builder_git_sha256",
     ):
         if provenance[key] != package[key]:
             raise RuntimeError("runtime provenance differs from package attestation")
@@ -804,6 +941,43 @@ def _validate_result(
     return result
 
 
+def _verify_existing_result(arguments: argparse.Namespace) -> int:
+    if not all(
+        (
+            arguments.git_executable,
+            arguments.wheel,
+            arguments.package_manifest,
+            arguments.result,
+        )
+    ):
+        raise RuntimeError("native evidence verification inputs are incomplete")
+    source_root = Path(__file__).resolve(strict=True).parents[1]
+    git = _git_path(arguments.git_executable)
+    wheel = Path(arguments.wheel).resolve(strict=True)
+    package = _read_package_manifest(
+        Path(arguments.package_manifest),
+        source_root,
+        arguments.candidate,
+        wheel,
+        str(git),
+    )
+    result_path = Path(arguments.result).resolve(strict=True)
+    if result_path.name != "native-wakeup-recovery.json" or result_path.parent.is_symlink():
+        raise RuntimeError("native evidence path is invalid")
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    provenance = result.get("provenance") if isinstance(result, dict) else None
+    if not isinstance(provenance, dict):
+        raise RuntimeError("native wakeup provenance is absent")
+    if provenance.get("runner_git_sha256") != _sha256(git):
+        raise RuntimeError("native evidence Git provenance does not match the runner")
+    _validate_result(result, provenance, package)
+    sys.stdout.write(
+        json.dumps({"ok": True, "provenance_digest": result["provenance_digest"]}, sort_keys=True)
+        + "\n"
+    )
+    return 0
+
+
 def _worker(arguments: argparse.Namespace) -> int:
     if sys.platform not in {"win32", "darwin"}:
         raise RuntimeError("native wakeup recovery proof requires Windows or macOS")
@@ -811,6 +985,7 @@ def _worker(arguments: argparse.Namespace) -> int:
         raise RuntimeError("exact candidate identity is required")
     required = (
         arguments.source_root,
+        arguments.git_executable,
         arguments.wheel,
         arguments.package_manifest,
         arguments.invocation_root,
@@ -820,11 +995,18 @@ def _worker(arguments: argparse.Namespace) -> int:
         raise RuntimeError("native worker attestation inputs are incomplete")
     script = Path(__file__).resolve(strict=True)
     source_root = Path(arguments.source_root).resolve(strict=True)
+    git = _git_path(arguments.git_executable)
+    if os.environ.get("BRAINS_NATIVE_WAKEUP_PROBE_GIT_SHA256") != _sha256(git):
+        raise RuntimeError("native worker Git provenance is unavailable")
     wheel = Path(arguments.wheel).resolve(strict=True)
     invocation = Path(arguments.invocation_root).resolve(strict=True)
     output = _owned(Path(arguments.output), invocation)
     package = _read_package_manifest(
-        Path(arguments.package_manifest), source_root, arguments.candidate, wheel
+        Path(arguments.package_manifest),
+        source_root,
+        arguments.candidate,
+        wheel,
+        str(git),
     )
     provenance = _runtime_provenance(package, wheel)
     provenance_digest = _canonical_digest(provenance)
@@ -907,17 +1089,22 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
         (
             arguments.wheel,
             arguments.package_manifest,
-            arguments.evidence_base,
-            arguments.github_output,
+            arguments.invocation_path,
+            arguments.git_executable,
         )
     ):
         raise RuntimeError("native probe bootstrap inputs are incomplete")
     source_root = Path(__file__).resolve(strict=True).parents[1]
+    git = _git_path(arguments.git_executable)
     wheel = Path(arguments.wheel).resolve(strict=True)
     package = _read_package_manifest(
-        Path(arguments.package_manifest), source_root, arguments.candidate, wheel
+        Path(arguments.package_manifest),
+        source_root,
+        arguments.candidate,
+        wheel,
+        str(git),
     )
-    invocation = _new_private_invocation(Path(arguments.evidence_base))
+    invocation = _new_private_invocation(Path(arguments.invocation_path))
     environment = invocation / "venv"
     output = invocation / "native-wakeup-recovery.json"
     succeeded = False
@@ -925,11 +1112,12 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
         venv.EnvBuilder(with_pip=True, clear=False, symlinks=False).create(environment)
         python = _venv_python(environment).resolve(strict=True)
         installed = subprocess.run(
-            [str(python), "-m", "pip", "install", str(wheel)],
+            [str(python), "-m", "pip", "install", "--no-cache-dir", str(wheel)],
             capture_output=True,
             text=True,
             check=False,
             timeout=300,
+            env=_worker_environment(invocation, git, environment),
         )
         if installed.returncode != 0:
             raise RuntimeError("exact candidate wheel installation failed")
@@ -941,6 +1129,8 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
             package["candidate"],
             "--source-root",
             str(source_root),
+            "--git-executable",
+            str(git),
             "--wheel",
             str(wheel),
             "--package-manifest",
@@ -956,6 +1146,7 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
             text=True,
             check=False,
             timeout=900,
+            env=_worker_environment(invocation, git, environment),
         )
         if completed.returncode != 0:
             raise RuntimeError("attested native wakeup worker failed")
@@ -974,9 +1165,6 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
                 shutil.rmtree(invocation, ignore_errors=False)
     if environment.exists() or sorted(path.name for path in invocation.iterdir()) != [output.name]:
         raise RuntimeError("native invocation cleanup is incomplete")
-    github_output = Path(arguments.github_output).resolve(strict=True)
-    with github_output.open("a", encoding="utf-8") as handle:
-        handle.write(f"evidence_path={output}\n")
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0
 
@@ -985,14 +1173,16 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--prepare-package", action="store_true")
+    parser.add_argument("--verify-result", action="store_true")
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--source-root")
+    parser.add_argument("--git-executable")
     parser.add_argument("--wheel")
     parser.add_argument("--package-manifest")
-    parser.add_argument("--evidence-base")
-    parser.add_argument("--github-output")
+    parser.add_argument("--invocation-path")
     parser.add_argument("--invocation-root")
     parser.add_argument("--output")
+    parser.add_argument("--result")
     parser.add_argument("--child-action", choices=("seed", "crash", "inspect", "recover"))
     parser.add_argument("--root")
     parser.add_argument("--operation", choices=OPERATIONS)
@@ -1007,7 +1197,11 @@ def main() -> int:
         if arguments.child_action:
             return _child(arguments)
         if arguments.prepare_package:
-            if not arguments.wheel or not arguments.package_manifest:
+            if (
+                not arguments.wheel
+                or not arguments.package_manifest
+                or not arguments.git_executable
+            ):
                 raise RuntimeError("package provenance inputs are incomplete")
             source_root = Path(__file__).resolve(strict=True).parents[1]
             _write_package_manifest(
@@ -1015,8 +1209,11 @@ def main() -> int:
                 arguments.candidate,
                 Path(arguments.wheel),
                 Path(arguments.package_manifest),
+                arguments.git_executable,
             )
             return 0
+        if arguments.verify_result:
+            return _verify_existing_result(arguments)
         if arguments.worker:
             return _worker(arguments)
         return _bootstrap(arguments)
