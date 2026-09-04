@@ -3,12 +3,56 @@ from __future__ import annotations
 import io
 import stat
 import tarfile
+import tomllib
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from scripts import check_distribution
 from scripts.check_distribution import check_sdist, check_wheel
+
+SUPPORTED_PYTHON_MINORS = ["3.11", "3.12"]
+LEGACY_INSTALLER_PATHS = (
+    "install/install-windows.ps1",
+    "install/uninstall-windows.ps1",
+    "install/install-launchd.sh",
+    "install/uninstall-launchd.sh",
+    "install/install-systemd.sh",
+    "install/uninstall-systemd.sh",
+)
+
+
+def test_supported_python_bounds_match_classifiers_and_canonical_docs() -> None:
+    root = check_distribution.ROOT
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert project["requires-python"] == ">=3.11,<3.13"
+    assert [
+        classifier.rsplit(" :: ", 1)[-1]
+        for classifier in project["classifiers"]
+        if classifier.startswith("Programming Language :: Python :: 3.")
+    ] == SUPPORTED_PYTHON_MINORS
+    assert "Brains requires Python 3.11 or 3.12." in (root / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Brains supports Python 3.11 and 3.12." in (root / "docs" / "OPERATIONS.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_only_canonical_installer_identity_and_executable_remain() -> None:
+    root = check_distribution.ROOT
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert project["scripts"] == {"brains-ai": "brains.cli.app:app"}
+    assert all(not (root / Path(path)).exists() for path in LEGACY_INSTALLER_PATHS)
+
+    from brains.service.common import LAUNCHD_LABEL, SYSTEMD_UNIT, WINDOWS_TASK_NAME
+
+    assert WINDOWS_TASK_NAME == "BrainsServeAll"
+    assert LAUNCHD_LABEL == "com.brains.serve-all"
+    assert SYSTEMD_UNIT == "brains-serve-all.service"
 
 
 def test_source_inventory_is_normalized_and_tracks_product_source(tmp_path) -> None:
