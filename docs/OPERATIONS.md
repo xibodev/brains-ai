@@ -541,13 +541,19 @@ withdrawn source are test-debt inputs, not acceptance evidence.
   rendering and reversible wiring rather than mutating the runner's service manager.
   The guarded `probe_native_service_lifecycle.py` and manual workflow can collect
   manager-cycle evidence on disposable hosts, but only a two-phase persistent VM run
-  across a real login/reboot can close the persistence requirement.
-  On such a VM, install the exact candidate wheel, export its SHA-256 as
-  `BRAINS_EVIDENCE_WHEEL_SHA256`, set
+  across a real reboot can close the persistence requirement; login-only proof remains
+  unsupported until a trustworthy machine-observed cross-platform session marker exists.
+  On such a VM, download the package job's exact wheel plus
+  `native-wakeup-package-provenance.json`, verify the published manifest digest, set
   `BRAINS_NATIVE_EVIDENCE_DISPOSABLE=disposable-native-service-host`, then run the
-  probe's `prepare --candidate <full-commit-sha>` phase. After a genuine login or
-  reboot boundary, run the `verify` phase with the same full commit SHA and
-  `--login-transition-observed`. The probe refuses pre-existing Brains/client state or
+  probe's `prepare --candidate <full-commit-sha> --package-manifest <path>` phase into
+  an artifact path outside the runtime root and retain that file's SHA-256. After a
+  genuine reboot boundary, run `verify` with the same candidate and package manifest,
+  plus `--prepare-record` and `--prepare-record-sha256`. Verification fails
+  unless the OS boot marker changed; self-asserted login flags or attestations are not
+  accepted. Run `cleanup --prior-record <verify-record>` with the same immutable
+  prepare record, then validate all three records together with
+  `verify_native_evidence.py`. The probe refuses pre-existing Brains/client state or
   a pre-existing namespaced manager identity and emits only sanitized JSON/JUnit
   evidence; retain the disposable VM until teardown is confirmed.
 - Session end/detach and liveness renewal are not reliable across every harness.

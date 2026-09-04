@@ -279,6 +279,10 @@ jobs:
     name: build wheel + sdist
     needs: [docs, lint, typecheck, test, migrations, spa]
     runs-on: ubuntu-latest
+    outputs:
+      manifest-sha256: ${{ steps.package-provenance.outputs.manifest-sha256 }}
+      artifact-id: ${{ steps.package-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package-artifact.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -296,6 +300,20 @@ jobs:
         run: uv sync --extra dev
       - name: Build distribution
         run: uv build
+      - name: Bind native evidence to source tree and exact wheel
+        id: package-provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          test -n "$wheel"
+          git_executable="$(realpath "$(command -v git)")"
+          uv run python scripts/native_evidence.py --prepare-package \
+            --candidate "$GITHUB_SHA" \
+            --git-executable "$git_executable" \
+            --wheel "$wheel" \
+            --output dist/native-wakeup-package-provenance.json
+          echo "manifest-sha256=$(sha256sum dist/native-wakeup-package-provenance.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Core surface boundary from fresh artifacts
         run: uv run python scripts/check_core_surface.py --dist dist
       - name: Show artifacts
@@ -308,6 +326,7 @@ jobs:
         run: python scripts/check_distribution.py
 
       - uses: actions/upload-artifact@v4
+        id: package-artifact
         with:
           name: dist
           path: dist/
@@ -342,7 +361,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: dist
-          path: dist
+          path: ${{ runner.temp }}/native-dist
       - name: Provision pinned supported OpenCode
         if: matrix.adapter == 'opencode'
         run: npm install --global opencode-ai@1.18.25
@@ -350,9 +369,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          wheel_count="$(find dist -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          wheel_count="$(find "$RUNNER_TEMP/native-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
           test "$wheel_count" = 1
-          wheel="$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          test "$(sha256sum "$RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" = "${{ needs.package.outputs.manifest-sha256 }}"
+          wheel="$(find "$RUNNER_TEMP/native-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
           venv="$RUNNER_TEMP/brains-native-install-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
           test ! -e "$venv"
           python -m venv "$venv"
@@ -371,6 +391,7 @@ jobs:
           tool_paths="$("$probe_python" -c 'import json,os,shutil; names=[n for n in os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(",") if n]; values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
       - name: Probe exact package, native rendering, and selected wire adapter
@@ -379,6 +400,7 @@ jobs:
           "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_installation.py
           --candidate "$GITHUB_SHA"
           --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --package-manifest "$BRAINS_NATIVE_PACKAGE_MANIFEST"
           --git-executable "$BRAINS_NATIVE_PROBE_GIT"
           --tool "${{ matrix.adapter }}"
           --output "$RUNNER_TEMP/native-installation-evidence.json"

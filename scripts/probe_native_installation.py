@@ -33,6 +33,8 @@ from native_evidence import (
     snapshot_files,
 )
 
+from brains.service.common import native_service_identity
+
 TOOLS = ("copilot-cli", "claude-code", "codex", "opencode")
 OPENCODE_VERSION = "1.18.25"
 FORBIDDEN_PORTS = {9876, 9877}
@@ -141,10 +143,95 @@ def _remove_synthetic_root(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
+def _manager_definition_evidence(
+    rendered: dict[str, Any], *, gateway_port: int, mcp_port: int
+) -> dict[str, Any]:
+    platform_slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}.get(
+        platform.system()
+    )
+    manager = _manager()
+    if platform_slug is None or manager == "unsupported":
+        raise ProvenanceFailure("native manager platform is unsupported")
+    definition_key = {"windows": "xml", "macos": "plist", "linux": "unit"}[platform_slug]
+    command = rendered.get("command")
+    definition = rendered.get(definition_key)
+    endpoints = rendered.get("endpoints")
+    expected_label = native_service_identity(platform_slug, "brains-serve-all")
+    expected_arguments = [
+        "-m",
+        "brains",
+        "serve-all",
+        "--gateway-host",
+        "127.0.0.1",
+        "--gateway-port",
+        str(gateway_port),
+        "--mcp-port",
+        str(mcp_port),
+    ]
+    if (
+        rendered.get("action") != "would-install"
+        or rendered.get("platform") != platform_slug
+        or rendered.get("label") != expected_label
+        or not isinstance(command, list)
+        or not all(isinstance(item, str) for item in command)
+        or command[1:] != expected_arguments
+    ):
+        raise ProvenanceFailure("native manager definition command differs")
+    if (
+        not isinstance(endpoints, dict)
+        or endpoints
+        != {
+            "console": f"http://127.0.0.1:{gateway_port}/app",
+            "mcp": f"http://127.0.0.1:{mcp_port}/mcp",
+        }
+        or not isinstance(definition, str)
+    ):
+        raise ProvenanceFailure("native manager definition endpoint differs")
+    policy_tokens = {
+        "windows": ("<LogonTrigger>", "<RestartOnFailure>"),
+        "macos": ("<key>RunAtLoad</key>", "<key>KeepAlive</key>"),
+        "linux": ("WantedBy=default.target", "Restart=always"),
+    }[platform_slug]
+    if not all(token in definition for token in policy_tokens):
+        raise ProvenanceFailure("native manager autostart or restart policy differs")
+    return {
+        "manager": manager,
+        "platform": platform_slug,
+        "native_execution": False,
+        "identity": expected_label,
+        "gateway_port": gateway_port,
+        "mcp_port": mcp_port,
+        "command_sha256": canonical_sha256(command),
+        "definition_sha256": canonical_sha256(definition),
+        "autostart": True,
+        "restart_on_failure": True,
+    }
+
+
+def _assert_setup_idempotent(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+) -> None:
+    first_init = [row for row in first.get("steps", []) if row.get("step") == "init"]
+    second_init = [row for row in second.get("steps", []) if row.get("step") == "init"]
+    if (
+        len(first_init) != 1
+        or len(second_init) != 1
+        or second_init[0].get("workspace", {}).get("slug")
+        != first_init[0].get("workspace", {}).get("slug")
+        or second_init[0].get("admin_key", {}).get("source") != "existing"
+        or before != after
+    ):
+        raise ProvenanceFailure("clean-home setup was not idempotent")
+
+
 def run_probe(
     *,
     candidate: str,
     wheel: Path,
+    package_manifest: Path,
     tool: str,
     output: Path,
     repo: Path,
@@ -165,6 +252,7 @@ def run_probe(
         wheel=wheel,
         executable=executable,
         git_executable=git_executable,
+        package_manifest=package_manifest,
         runtime_tools=runtime_tools,
     )
     binding = str(provenance["binding_sha256"])
@@ -213,9 +301,6 @@ def run_probe(
         record("harness", _verify_harness(tool))
 
         first = _run(executable, env, "setup", "--path", str(workspace), "--no-wire", "--json")
-        first_workspace = next(row for row in first["steps"] if row["step"] == "init")["workspace"][
-            "slug"
-        ]
         gateway_port, mcp_port = _port(), _port()
         while mcp_port == gateway_port:
             mcp_port = _port()
@@ -230,20 +315,9 @@ def run_probe(
             "--mcp-port",
             str(mcp_port),
         )
-        if rendered.get("action") != "would-install" or rendered.get("platform") not in {
-            "windows",
-            "macos",
-            "linux",
-        }:
-            raise ProvenanceFailure("native manager definition rendering failed")
         record(
             "manager-definition",
-            {
-                "manager": _manager(),
-                "platform": rendered["platform"],
-                "native_execution": False,
-                "identity": "brains-serve-all",
-            },
+            _manager_definition_evidence(rendered, gateway_port=gateway_port, mcp_port=mcp_port),
         )
 
         path = _config_path(home, tool)
@@ -267,7 +341,11 @@ def run_probe(
         if wired.get("ok") is not True:
             raise ProvenanceFailure("adapter wire failed")
         status = _run(executable, env, "wire", "--status")
-        selected = next(row for row in status["tools"] if row["tool"] == tool)
+        selected_rows = [row for row in status.get("tools", []) if row.get("tool") == tool]
+        wired_rows = [row for row in wired.get("tools", []) if row.get("tool") == tool]
+        if len(selected_rows) != 1 or len(wired_rows) != 1 or len(wired.get("tools", [])) != 1:
+            raise ProvenanceFailure("wire result does not contain exactly one selected adapter")
+        selected = selected_rows[0]
         parsed = urllib.parse.urlparse(str(selected.get("mcp_url", "")))
         if (
             selected.get("mcp_wired") is not True
@@ -292,12 +370,11 @@ def run_probe(
         _run(executable, env, "unwire", "--tool", tool, "--no-rules")
         restored = snapshot_files(config_roots)
         managed_backups = account_managed_backups(baseline, wired_snapshot, restored)
+        setup_roots = (("state", state), ("workspace", workspace))
+        before_second_setup = snapshot_files(setup_roots)
         second = _run(executable, env, "setup", "--path", str(workspace), "--no-wire", "--json")
-        second_workspace = next(row for row in second["steps"] if row["step"] == "init")[
-            "workspace"
-        ]["slug"]
-        if second_workspace != first_workspace:
-            raise ProvenanceFailure("clean-home setup was not idempotent")
+        after_second_setup = snapshot_files(setup_roots)
+        _assert_setup_idempotent(first, second, before_second_setup, after_second_setup)
         _remove_synthetic_root(config_root)
         if snapshot_files(config_roots) != original_snapshot:
             raise ProvenanceFailure("synthetic client home was not restored to its initial state")
@@ -311,6 +388,7 @@ def run_probe(
                 "managed_backup_manifest_sha256": canonical_sha256(managed_backups),
                 "initial_home_restored": True,
                 "setup_idempotent": True,
+                "setup_state_sha256": canonical_sha256(before_second_setup),
             },
         )
 
@@ -344,6 +422,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--wheel", type=Path, required=True)
+    parser.add_argument("--package-manifest", type=Path, required=True)
     parser.add_argument("--git-executable", type=Path, required=True)
     parser.add_argument("--tool", choices=TOOLS, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -356,6 +435,7 @@ def main() -> int:
         run_probe(
             candidate=args.candidate,
             wheel=args.wheel,
+            package_manifest=args.package_manifest,
             tool=args.tool,
             output=args.output,
             repo=Path.cwd(),

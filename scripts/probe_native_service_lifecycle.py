@@ -17,6 +17,8 @@ import hashlib
 import json
 import os
 import platform
+import re
+import secrets
 import shutil
 import signal
 import socket
@@ -38,9 +40,28 @@ from native_evidence import (
     snapshot_files,
 )
 
+from brains.service.common import native_service_identity
+
 ACKNOWLEDGEMENT = "disposable-native-service-host"
 TOOLS = ("copilot-cli", "claude-code", "codex", "opencode")
 FORBIDDEN_PORTS = {9876, 9877}
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+PLAN_CORE_FIELDS = {
+    "candidate",
+    "adapter",
+    "provenance",
+    "journey",
+    "executable",
+    "label",
+    "gateway_port",
+    "mcp_port",
+    "boot_marker",
+    "original_snapshot",
+    "baseline_snapshot",
+    "wired_snapshot",
+    "steps",
+}
+PLAN_FIELDS = set(PLAN_CORE_FIELDS)
 
 
 class EvidenceFailure(RuntimeError):
@@ -124,14 +145,41 @@ def _status(executable: str, label: str) -> dict[str, Any]:
     return _run(executable, ["service", "status", "--label", label])
 
 
+def _status_identity(report: dict[str, Any], label: str) -> tuple[str, str]:
+    platform_slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}.get(
+        platform.system()
+    )
+    if platform_slug is None:
+        raise EvidenceFailure("unsupported service status platform")
+    expected_label = native_service_identity(platform_slug, label)
+    state = report.get("state")
+    if (
+        report.get("platform") != platform_slug
+        or report.get("label") != expected_label
+        or not isinstance(state, str)
+        or not state
+    ):
+        raise EvidenceFailure("native service status identity differs")
+    return expected_label, state
+
+
 def _wait_healthy(executable: str, label: str, timeout: float = 150) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         report = _status(executable, label)
-        if report.get("healthy") is True:
+        _status_identity(report, label)
+        listeners = report.get("listeners", {})
+        protocol = report.get("mcp_protocol", {})
+        if (
+            report.get("installed") is True
+            and report.get("healthy") is True
+            and listeners.get("gateway") is True
+            and listeners.get("mcp") is True
+            and protocol.get("ready") is True
+        ):
             return report
         time.sleep(1)
-    raise EvidenceFailure("service did not become healthy")
+    raise EvidenceFailure("service did not become fully ready")
 
 
 def _wait_removed(executable: str, label: str, timeout: float = 30) -> dict[str, Any]:
@@ -139,9 +187,18 @@ def _wait_removed(executable: str, label: str, timeout: float = 30) -> dict[str,
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         last = _status(executable, label)
+        _status_identity(last, label)
         listeners = last.get("listeners", {})
-        if not last.get("installed") and not any(
-            listeners.get(name) for name in ("gateway", "mcp")
+        process = last.get("service_pid", {})
+        protocol = last.get("mcp_protocol", {})
+        if (
+            last.get("installed") is False
+            and last.get("healthy") is False
+            and listeners == {"gateway": False, "mcp": False}
+            and protocol.get("ready") is False
+            and process.get("pid") is None
+            and process.get("confidence") == "absent"
+            and last.get("runtime_classification") == "stopped"
         ):
             return last
         time.sleep(0.5)
@@ -237,6 +294,27 @@ def _write_plan(plan: dict[str, Any]) -> None:
     temporary.replace(target)
 
 
+def _seal_plan(plan: dict[str, Any]) -> str:
+    if set(plan) != PLAN_FIELDS:
+        raise EvidenceFailure("native operational plan schema differs")
+    digest = canonical_sha256({key: plan[key] for key in PLAN_CORE_FIELDS})
+    plan["plan_core_sha256"] = digest
+    _write_plan(plan)
+    return digest
+
+
+def _validated_plan_digest(plan: dict[str, Any]) -> str:
+    if set(plan) != {*PLAN_FIELDS, "plan_core_sha256"}:
+        raise EvidenceFailure("native operational plan schema differs")
+    claimed = plan["plan_core_sha256"]
+    bound = {key: plan[key] for key in PLAN_CORE_FIELDS}
+    if not isinstance(claimed, str) or not SHA256_RE.fullmatch(claimed):
+        raise EvidenceFailure("native operational plan digest is invalid")
+    if claimed != canonical_sha256(bound):
+        raise EvidenceFailure("native operational plan digest differs")
+    return claimed
+
+
 def _record(plan: dict[str, Any], step: str, evidence: dict[str, Any]) -> None:
     plan["steps"].append(
         {
@@ -250,19 +328,44 @@ def _record(plan: dict[str, Any], step: str, evidence: dict[str, Any]) -> None:
     _write_plan(plan)
 
 
-def _status_evidence(report: dict[str, Any]) -> dict[str, Any]:
+def _status_evidence(report: dict[str, Any], label: str) -> dict[str, Any]:
+    reported_label, reported_state = _status_identity(report, label)
     identity = report.get("service_pid", {})
     pid = identity.get("pid")
-    if report.get("healthy") and (
-        not isinstance(pid, int) or identity.get("confidence") != "verified"
-    ):
-        raise EvidenceFailure("healthy service lacks verified owned process identity")
+    active = report.get("healthy") is True
+    if report.get("runtime_classification") != ("installed-owned-ready" if active else "stopped"):
+        raise EvidenceFailure("native runtime classification differs")
+    if active:
+        listeners = report.get("listeners", {})
+        protocol = report.get("mcp_protocol", {})
+        if (
+            report.get("installed") is not True
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or identity.get("confidence") != "verified"
+            or listeners.get("gateway") is not True
+            or listeners.get("mcp") is not True
+            or protocol.get("ready") is not True
+        ):
+            raise EvidenceFailure("healthy service lacks complete readiness evidence")
     marker_path = _evidence_root() / "state" / "sessions" / "service.pid"
-    marker_sha256 = _digest(marker_path) if marker_path.is_file() else None
+    marker_sha256 = (
+        _digest(marker_path)
+        if isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and pid > 0
+        and identity.get("confidence") == "verified"
+        and marker_path.is_file()
+        else None
+    )
     listeners = report.get("listeners", {})
     protocol = report.get("mcp_protocol", {})
     return {
         "manager": _manager(),
+        "platform": {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[platform.system()],
+        "label": reported_label,
+        "state": reported_state,
         "installed": bool(report.get("installed")),
         "healthy": bool(report.get("healthy")),
         "runtime_classification": report.get("runtime_classification"),
@@ -277,6 +380,38 @@ def _status_evidence(report: dict[str, Any]) -> dict[str, Any]:
         },
         "mcp_protocol_ready": bool(protocol.get("ready")),
     }
+
+
+def _ready_incarnation(evidence: dict[str, Any]) -> tuple[int, str]:
+    process = evidence.get("owned_process", {})
+    pid = process.get("pid")
+    marker = process.get("start_marker_sha256")
+    if (
+        evidence.get("installed") is not True
+        or evidence.get("healthy") is not True
+        or evidence.get("listeners") != {"gateway": True, "mcp": True}
+        or evidence.get("mcp_protocol_ready") is not True
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid <= 0
+        or process.get("confidence") != "verified"
+        or not isinstance(marker, str)
+        or not SHA256_RE.fullmatch(marker)
+    ):
+        raise EvidenceFailure("service readiness evidence is incomplete")
+    return pid, marker
+
+
+def _assert_stopped(evidence: dict[str, Any]) -> None:
+    if (
+        evidence.get("installed") is not True
+        or evidence.get("healthy") is not False
+        or evidence.get("listeners") != {"gateway": False, "mcp": False}
+        or evidence.get("mcp_protocol_ready") is not False
+        or evidence.get("owned_process")
+        != {"pid": None, "confidence": "absent", "start_marker_sha256": None}
+    ):
+        raise EvidenceFailure("native service did not reach the stopped state")
 
 
 def _remove_synthetic_config(tool: str) -> None:
@@ -328,6 +463,168 @@ def _write_result(output: Path, result: dict[str, Any], *, passed: bool) -> None
         ET.ElementTree(suite).write(stream, encoding="unicode", xml_declaration=True)
 
 
+def _journey(candidate: str, adapter: str, provenance_sha256: str) -> dict[str, Any]:
+    bound = {
+        "candidate": candidate.casefold(),
+        "manager": _manager(),
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "adapter": adapter,
+        "transport": "streamable-http",
+        "provenance_sha256": provenance_sha256,
+        "journey_id": secrets.token_hex(32),
+    }
+    return {
+        "schema": "brains.native-service-journey.v1",
+        **bound,
+        "binding_sha256": canonical_sha256(bound),
+    }
+
+
+def _valid_journey(journey: Any, *, candidate: str, adapter: str, provenance_sha256: str) -> bool:
+    if not isinstance(journey, dict):
+        return False
+    keys = {
+        "schema",
+        "candidate",
+        "manager",
+        "python",
+        "adapter",
+        "transport",
+        "provenance_sha256",
+        "journey_id",
+        "binding_sha256",
+    }
+    if set(journey) != keys:
+        return False
+    bound = {key: journey[key] for key in keys - {"schema", "binding_sha256"}}
+    return bool(
+        journey["schema"] == "brains.native-service-journey.v1"
+        and journey["candidate"] == candidate.casefold()
+        and journey["manager"] == _manager()
+        and journey["python"] == f"{sys.version_info.major}.{sys.version_info.minor}"
+        and journey["adapter"] == adapter
+        and journey["transport"] == "streamable-http"
+        and journey["provenance_sha256"] == provenance_sha256
+        and isinstance(journey["journey_id"], str)
+        and SHA256_RE.fullmatch(journey["journey_id"])
+        and journey["binding_sha256"] == canonical_sha256(bound)
+    )
+
+
+def _prior_normal_record(prior: Path, binding: str, candidate: str, adapter: str) -> dict[str, Any]:
+    if prior.is_symlink() or not prior.is_file():
+        raise EvidenceFailure("prior normal-cycle evidence is absent")
+    try:
+        record = json.loads(prior.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceFailure("prior normal-cycle evidence is unreadable") from exc
+    if (
+        not isinstance(record, dict)
+        or set(record)
+        != {
+            "schema",
+            "phase",
+            "passed",
+            "matrix",
+            "provenance",
+            "journey",
+            "plan_core_sha256",
+            "steps",
+            "boundary",
+        }
+        or record.get("schema") != "brains.native-service-evidence.v1"
+        or record.get("phase") not in {"prepare", "verify"}
+        or record.get("passed") is not True
+        or record.get("provenance", {}).get("binding_sha256") != binding
+        or not isinstance(record.get("plan_core_sha256"), str)
+        or not SHA256_RE.fullmatch(record["plan_core_sha256"])
+        or not _valid_journey(
+            record.get("journey"),
+            candidate=candidate,
+            adapter=adapter,
+            provenance_sha256=binding,
+        )
+    ):
+        raise EvidenceFailure("prior normal-cycle evidence is not provenance-bound")
+    return {
+        "sha256": _digest(prior),
+        "phase": record["phase"],
+        "journey": record["journey"],
+        "plan_core_sha256": record["plan_core_sha256"],
+        "prepare_record_sha256": record.get("prepare_record_sha256"),
+        "record": record,
+    }
+
+
+def _prepared_binding_matched(
+    plan: dict[str, Any],
+    prior_journey: dict[str, Any],
+    prior_plan_core_sha256: str,
+    *,
+    candidate: str,
+    adapter: str,
+    provenance_sha256: str,
+) -> bool:
+    if not plan:
+        return False
+    plan_core_sha256 = _validated_plan_digest(plan)
+    if (
+        not _valid_journey(
+            plan.get("journey"),
+            candidate=candidate,
+            adapter=adapter,
+            provenance_sha256=provenance_sha256,
+        )
+        or plan["journey"] != prior_journey
+        or plan_core_sha256 != prior_plan_core_sha256
+    ):
+        raise EvidenceFailure("prepared cleanup journey differs from normal evidence")
+    return True
+
+
+def _read_prepare_record(
+    path: Path,
+    expected_sha256: str,
+    *,
+    candidate: str,
+    adapter: str,
+    provenance_sha256: str,
+) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file() or not SHA256_RE.fullmatch(expected_sha256):
+        raise EvidenceFailure("immutable prepare evidence is absent")
+    if _digest(path) != expected_sha256:
+        raise EvidenceFailure("immutable prepare evidence digest differs")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceFailure("immutable prepare evidence is unreadable") from exc
+    if (
+        not isinstance(record, dict)
+        or record.get("schema") != "brains.native-service-evidence.v1"
+        or record.get("phase") != "prepare"
+        or record.get("passed") is not True
+        or record.get("provenance", {}).get("binding_sha256") != provenance_sha256
+        or not _valid_journey(
+            record.get("journey"),
+            candidate=candidate,
+            adapter=adapter,
+            provenance_sha256=provenance_sha256,
+        )
+        or not isinstance(record.get("plan_core_sha256"), str)
+        or not SHA256_RE.fullmatch(record["plan_core_sha256"])
+        or record.get("matrix")
+        != {
+            "manager": _manager(),
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "adapter": adapter,
+            "transport": "streamable-http",
+        }
+        or record.get("boundary") != {"boot_changed": False, "login_transition_attestation": None}
+    ):
+        raise EvidenceFailure("immutable prepare evidence identity differs")
+    return record
+
+
 def prepare(
     executable: str,
     candidate: str,
@@ -350,10 +647,12 @@ def prepare(
     original_snapshot = _config_snapshot(adapter)
     if original_snapshot:
         raise EvidenceFailure("synthetic adapter home was not initially empty")
+    journey = _journey(candidate, adapter, str(provenance["binding_sha256"]))
     plan: dict[str, Any] = {
         "candidate": candidate.lower(),
         "adapter": adapter,
         "provenance": provenance,
+        "journey": journey,
         "executable": executable,
         "label": label,
         "gateway_port": gateway_port,
@@ -444,30 +743,41 @@ def prepare(
             str(mcp_port),
         ],
     )
-    installed = _wait_healthy(executable, label)
-    _record(plan, "installed", _status_evidence(installed))
+    installed = _status_evidence(_wait_healthy(executable, label), label)
+    installed_incarnation = _ready_incarnation(installed)
+    _record(plan, "installed", installed)
     _run(executable, ["service", "stop", "--label", label])
-    _record(plan, "stopped", _status_evidence(_status(executable, label)))
+    stopped = _status_evidence(_status(executable, label), label)
+    _assert_stopped(stopped)
+    _record(plan, "stopped", stopped)
     _run(executable, ["service", "start", "--label", label])
-    started = _wait_healthy(executable, label)
-    _record(plan, "started", _status_evidence(started))
+    started = _status_evidence(_wait_healthy(executable, label), label)
+    started_incarnation = _ready_incarnation(started)
+    if started_incarnation[0] == installed_incarnation[0]:
+        raise EvidenceFailure("native start reused the installed process identity")
+    _record(plan, "started", started)
     _run(executable, ["service", "restart", "--label", label])
-    restarted = _wait_healthy(executable, label)
-    _record(plan, "restarted", _status_evidence(restarted))
-    old_pid = int(restarted["service_pid"]["pid"])
+    restarted = _status_evidence(_wait_healthy(executable, label), label)
+    restarted_incarnation = _ready_incarnation(restarted)
+    if restarted_incarnation[0] == started_incarnation[0]:
+        raise EvidenceFailure("native restart reused the prior process identity")
+    _record(plan, "restarted", restarted)
+    old_pid = restarted_incarnation[0]
     _kill_owned_tree(old_pid)
-    recovered = _wait_healthy(executable, label)
-    if int(recovered["service_pid"]["pid"]) == old_pid:
+    recovered = _status_evidence(_wait_healthy(executable, label), label)
+    recovered_incarnation = _ready_incarnation(recovered)
+    if recovered_incarnation[0] == old_pid:
         raise EvidenceFailure("native manager did not establish a new owned incarnation")
-    _record(plan, "manager-recovered-owned-process", _status_evidence(recovered))
+    _record(plan, "manager-recovered-owned-process", recovered)
     _record(
         plan,
         "boundary-prepared",
         {
             "boot_marker_sha256": plan["boot_marker"],
-            "login_transition_operator_attested": False,
+            "login_transition_attestation": None,
         },
     )
+    plan_core_sha256 = _seal_plan(plan)
     return {
         "schema": "brains.native-service-evidence.v1",
         "phase": "prepare",
@@ -478,10 +788,12 @@ def prepare(
             "transport": "streamable-http",
         },
         "provenance": provenance,
+        "journey": journey,
+        "plan_core_sha256": plan_core_sha256,
         "steps": plan["steps"],
         "boundary": {
             "boot_changed": False,
-            "login_transition_operator_attested": False,
+            "login_transition_attestation": None,
         },
     }
 
@@ -490,28 +802,59 @@ def verify(
     candidate: str,
     *,
     adapter: str,
-    login_observed: bool,
     provenance: dict[str, Any],
+    prepare_record_path: Path,
+    prepare_record_sha256: str,
+    installed_executable: Path,
 ) -> dict[str, Any]:
     _guard("verify")
+    prepare_record = _read_prepare_record(
+        prepare_record_path,
+        prepare_record_sha256,
+        candidate=candidate,
+        adapter=adapter,
+        provenance_sha256=str(provenance["binding_sha256"]),
+    )
     plan = json.loads(_plan_path().read_text(encoding="utf-8"))
+    plan_core_sha256 = _validated_plan_digest(plan)
     if str(plan["candidate"]) != candidate.lower():
         raise EvidenceFailure("candidate differs from the prepared native journey")
     if plan.get("provenance", {}).get("binding_sha256") != provenance["binding_sha256"]:
         raise EvidenceFailure("installed provenance differs across the native boundary")
+    if not _valid_journey(
+        plan.get("journey"),
+        candidate=candidate,
+        adapter=adapter,
+        provenance_sha256=str(provenance["binding_sha256"]),
+    ):
+        raise EvidenceFailure("native journey binding differs across the boundary")
     executable = str(plan["executable"])
+    if Path(executable).resolve(strict=True) != installed_executable.resolve(strict=True):
+        raise EvidenceFailure("prepared executable differs from current provenance")
+    if (
+        prepare_record["journey"] != plan["journey"]
+        or prepare_record["plan_core_sha256"] != plan_core_sha256
+        or prepare_record.get("steps") != plan["steps"]
+    ):
+        raise EvidenceFailure("runtime plan differs from immutable prepare evidence")
     label = str(plan["label"])
     if str(plan["adapter"]) != adapter:
         raise EvidenceFailure("adapter differs from the prepared native journey")
-    boot_changed = _boot_marker() != str(plan["boot_marker"])
+    prepared_boot_marker = str(plan["boot_marker"])
+    observed_boot_marker = _boot_marker()
+    boot_changed = observed_boot_marker != prepared_boot_marker
+    if not boot_changed:
+        raise EvidenceFailure("native boundary has no machine-observed reboot")
     healthy = _wait_healthy(executable, label)
     _record(
         plan,
         "boundary-verified",
         {
-            **_status_evidence(healthy),
+            **_status_evidence(healthy, label),
             "boot_changed": boot_changed,
-            "login_transition_operator_attested": login_observed,
+            "prepared_boot_marker_sha256": prepared_boot_marker,
+            "observed_boot_marker_sha256": observed_boot_marker,
+            "login_transition_attestation": None,
         },
     )
     if _config_snapshot(adapter) != plan["wired_snapshot"]:
@@ -540,7 +883,7 @@ def verify(
     )
     _run(executable, ["service", "uninstall", "--label", label])
     removed = _wait_removed(executable, label)
-    removed_evidence = _status_evidence(removed)
+    removed_evidence = _status_evidence(removed, label)
     if removed_evidence["installed"] or any(removed_evidence["listeners"].values()):
         raise EvidenceFailure("native identity or listener survived teardown")
     _remove_synthetic_config(adapter)
@@ -559,6 +902,7 @@ def verify(
         },
     )
     steps = list(plan["steps"])
+    _seal_plan({key: plan[key] for key in PLAN_FIELDS})
     result = {
         "schema": "brains.native-service-evidence.v1",
         "phase": "verify",
@@ -569,78 +913,96 @@ def verify(
             "transport": "streamable-http",
         },
         "provenance": provenance,
+        "journey": plan["journey"],
+        "plan_core_sha256": plan_core_sha256,
+        "prepare_record_sha256": prepare_record_sha256,
         "steps": steps,
         "boundary": {
             "boot_changed": boot_changed,
-            "login_transition_operator_attested": login_observed,
+            "prepared_boot_marker_sha256": prepared_boot_marker,
+            "observed_boot_marker_sha256": observed_boot_marker,
+            "login_transition_attestation": None,
         },
     }
-    root = _evidence_root()
-    shutil.rmtree(root)
-    if root.exists():
-        raise EvidenceFailure("synthetic evidence runtime root survived teardown")
     return result
 
 
-def cleanup() -> bool:
-    """Best-effort bounded cleanup for a failed disposable-host journey."""
+def cleanup(
+    *,
+    expected_executable: Path | None = None,
+    completed_restoration: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Perform bounded cleanup and return only directly measured evidence."""
     root = _evidence_root()
     plan_path = _plan_path()
     if not root.exists():
-        return True
+        raise EvidenceFailure("native runtime root is absent before cleanup")
     if not plan_path.is_file():
-        try:
-            root.rmdir()
-        except OSError:
-            return False
-        return True
+        raise EvidenceFailure("native operational plan is absent")
     try:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        _validated_plan_digest(plan)
         executable = str(plan.get("executable", ""))
         label = str(plan.get("label", ""))
         adapter = str(plan.get("adapter", ""))
-    except (OSError, json.JSONDecodeError):
-        return False
-    complete = bool(executable and label and adapter in TOOLS)
-    if complete:
-        result = subprocess.run(
-            [executable, "unwire", "--tool", adapter, "--no-rules"],
-            capture_output=True,
-            timeout=60,
-            check=False,
-        )
-        complete = result.returncode == 0
-        expected = plan.get("baseline_snapshot")
-        wired = plan.get("wired_snapshot")
-        if isinstance(expected, dict) and isinstance(wired, dict):
-            try:
-                account_managed_backups(expected, wired, _config_snapshot(adapter))
-            except Exception:  # noqa: BLE001 - cleanup returns one bounded result
-                complete = False
-        result = subprocess.run(
-            [executable, "service", "uninstall", "--label", label],
-            capture_output=True,
-            timeout=180,
-            check=False,
-        )
-        complete = complete and result.returncode == 0
-        try:
-            removed = _wait_removed(executable, label)
-            complete = (
-                complete
-                and not removed.get("installed")
-                and not any(removed.get("listeners", {}).values())
-            )
-        except Exception:  # noqa: BLE001 - cleanup returns one bounded result
-            complete = False
-    if complete:
-        if plan.get("original_snapshot") == {}:
-            _remove_synthetic_config(adapter)
-            complete = _config_snapshot(adapter) == {}
-        if complete:
-            shutil.rmtree(root)
-            complete = not root.exists()
-    return complete
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvidenceFailure("native operational plan is unreadable") from exc
+    if not executable or adapter not in TOOLS:
+        raise EvidenceFailure("native operational plan cleanup identity differs")
+    resolved_executable = Path(executable).resolve(strict=True)
+    if expected_executable is not None and resolved_executable != expected_executable.resolve(
+        strict=True
+    ):
+        raise EvidenceFailure("cleanup executable differs from current provenance")
+    baseline = plan.get("baseline_snapshot")
+    wired = plan.get("wired_snapshot")
+    if not isinstance(baseline, dict) or not isinstance(wired, dict):
+        raise EvidenceFailure("native cleanup snapshots are invalid")
+    if completed_restoration is None:
+        _run(str(resolved_executable), ["unwire", "--tool", adapter, "--no-rules"])
+        restored = _config_snapshot(adapter)
+        managed_backups = account_managed_backups(baseline, wired, restored)
+        restoration = {
+            "baseline_config_sha256": canonical_sha256(baseline),
+            "restored_config_sha256": canonical_sha256(restored),
+            "primary_configuration_restored": True,
+            "managed_backup_count": len(managed_backups),
+            "managed_backup_manifest_sha256": canonical_sha256(managed_backups),
+        }
+    else:
+        restoration = completed_restoration
+        if (
+            set(restoration)
+            != {
+                "baseline_config_sha256",
+                "restored_config_sha256",
+                "primary_configuration_restored",
+                "managed_backup_count",
+                "managed_backup_manifest_sha256",
+            }
+            or restoration.get("primary_configuration_restored") is not True
+        ):
+            raise EvidenceFailure("completed restoration evidence differs")
+    _run(str(resolved_executable), ["service", "uninstall", "--label", label])
+    removed = _status_evidence(_wait_removed(str(resolved_executable), label), label)
+    if plan.get("original_snapshot") != {}:
+        raise EvidenceFailure("native cleanup initial home was not empty")
+    _remove_synthetic_config(adapter)
+    initial_restored = _config_snapshot(adapter) == {}
+    if not initial_restored:
+        raise EvidenceFailure("native cleanup did not restore the initial client home")
+    result = {
+        "final_status": removed,
+        **restoration,
+        "initial_client_home_restored": initial_restored,
+        "definition_removed": removed["installed"] is False,
+        "listeners_removed": removed["listeners"] == {"gateway": False, "mcp": False},
+    }
+    shutil.rmtree(root)
+    result["runtime_root_removed"] = not root.exists()
+    if not result["runtime_root_removed"]:
+        raise EvidenceFailure("native runtime root survived cleanup")
+    return result
 
 
 def main() -> int:
@@ -648,10 +1010,13 @@ def main() -> int:
     parser.add_argument("phase", choices=("prepare", "verify", "manager-cycle", "cleanup"))
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--wheel", type=Path, required=True)
+    parser.add_argument("--package-manifest", type=Path, required=True)
     parser.add_argument("--git-executable", type=Path, required=True)
     parser.add_argument("--adapter", choices=TOOLS, required=True)
     parser.add_argument("--repo", type=Path, default=Path.cwd())
-    parser.add_argument("--login-transition-observed", action="store_true")
+    parser.add_argument("--prepare-record", type=Path)
+    parser.add_argument("--prepare-record-sha256")
+    parser.add_argument("--prior-record", type=Path)
     parser.add_argument("--output", type=Path, default=Path("native-service-evidence.json"))
     args = parser.parse_args()
     try:
@@ -683,18 +1048,70 @@ def main() -> int:
             candidate=args.candidate,
             repo=args.repo,
             wheel=args.wheel,
+            package_manifest=args.package_manifest,
             executable=executable_path,
             git_executable=args.git_executable,
             runtime_tools=runtime_tools,
         )
         if args.phase == "cleanup":
+            if args.prior_record is None:
+                raise EvidenceFailure("cleanup prior record is required")
             plan = (
                 json.loads(_plan_path().read_text(encoding="utf-8"))
                 if _plan_path().is_file()
                 else {}
             )
-            if not cleanup():
-                raise EvidenceFailure("disposable-host cleanup was incomplete")
+            prior = _prior_normal_record(
+                args.prior_record,
+                str(provenance["binding_sha256"]),
+                args.candidate,
+                args.adapter,
+            )
+            if prior["phase"] == "prepare":
+                prepared_binding_matched = _prepared_binding_matched(
+                    plan,
+                    prior["journey"],
+                    prior["plan_core_sha256"],
+                    candidate=args.candidate,
+                    adapter=args.adapter,
+                    provenance_sha256=str(provenance["binding_sha256"]),
+                )
+                prepare_sha256 = prior["sha256"]
+            else:
+                if args.prepare_record is None or args.prepare_record_sha256 is None:
+                    raise EvidenceFailure("verified cleanup requires immutable prepare evidence")
+                prepared = _read_prepare_record(
+                    args.prepare_record,
+                    args.prepare_record_sha256,
+                    candidate=args.candidate,
+                    adapter=args.adapter,
+                    provenance_sha256=str(provenance["binding_sha256"]),
+                )
+                _validated_plan_digest(plan)
+                if (
+                    prior["prepare_record_sha256"] != args.prepare_record_sha256
+                    or prior["journey"] != prepared["journey"]
+                    or prior["plan_core_sha256"] != prepared["plan_core_sha256"]
+                    or plan.get("journey") != prepared["journey"]
+                    or str(plan.get("candidate")) != args.candidate.lower()
+                    or plan.get("adapter") != args.adapter
+                    or plan.get("provenance", {}).get("binding_sha256")
+                    != provenance["binding_sha256"]
+                ):
+                    raise EvidenceFailure("verified cleanup evidence chain differs")
+                prepared_binding_matched = False
+                prepare_sha256 = args.prepare_record_sha256
+            completed_restoration = None
+            if prior["phase"] == "verify":
+                completed_restoration = next(
+                    step["evidence"]
+                    for step in prior["record"]["steps"]
+                    if step["step"] == "configuration-restored"
+                )
+            cleanup_evidence = cleanup(
+                expected_executable=executable_path,
+                completed_restoration=completed_restoration,
+            )
             result = {
                 "schema": "brains.native-service-evidence.v1",
                 "phase": "cleanup",
@@ -705,16 +1122,13 @@ def main() -> int:
                     "transport": "streamable-http",
                 },
                 "provenance": provenance,
+                "journey": prior["journey"],
+                "plan_core_sha256": prior["plan_core_sha256"],
                 "cleanup": {
-                    "definition_removed": True,
-                    "listeners_removed": True,
-                    "runtime_root_removed": True,
-                    "prepared_binding_matched": (
-                        plan.get("provenance", {}).get("binding_sha256")
-                        == provenance["binding_sha256"]
-                        if plan
-                        else None
-                    ),
+                    **cleanup_evidence,
+                    "prepared_binding_matched": prepared_binding_matched,
+                    "prior_normal_record_sha256": prior["sha256"],
+                    "prepare_record_sha256": prepare_sha256,
                 },
             }
         elif args.phase == "prepare":
@@ -726,29 +1140,27 @@ def main() -> int:
                 guard_completed=True,
             )
         elif args.phase == "verify":
+            if args.prepare_record is None or args.prepare_record_sha256 is None:
+                raise EvidenceFailure("immutable prepare evidence is required for verification")
             result = verify(
                 args.candidate,
                 adapter=args.adapter,
-                login_observed=args.login_transition_observed,
                 provenance=provenance,
+                prepare_record_path=args.prepare_record,
+                prepare_record_sha256=args.prepare_record_sha256,
+                installed_executable=executable_path,
             )
         else:
-            prepare(
+            result = prepare(
                 executable,
                 args.candidate,
                 args.adapter,
                 provenance,
                 guard_completed=True,
             )
-            result = verify(
-                args.candidate,
-                adapter=args.adapter,
-                login_observed=False,
-                provenance=provenance,
-            )
     except Exception as exc:  # noqa: BLE001 - artifact exposes type only
         with contextlib.suppress(Exception):
-            cleanup()
+            cleanup(expected_executable=executable_path)
         result.update({"passed": False, "error_type": type(exc).__name__})
         assert_sanitized(
             result,

@@ -260,7 +260,8 @@ def test_native_evidence_scaffold_is_manual_guarded_and_truthful() -> None:
     assert "create_provenance" in probe
     assert "provenance_sha256" in probe
     assert "FORBIDDEN_PORTS = {9876, 9877}" in probe
-    assert '"login_transition_operator_attested": False' in probe
+    assert '"login_transition_attestation": None' in probe
+    assert "--login-transition-observed" not in probe
     assert 'choices=("prepare", "verify", "manager-cycle", "cleanup")' in probe
     assert "if: always()" in workflow
     assert "if: success()" in workflow
@@ -278,6 +279,8 @@ def test_native_evidence_probe_refuses_without_guard_and_redacts_bad_input(tmp_p
     common = [
         "--wheel",
         str(tmp_path / "candidate.whl"),
+        "--package-manifest",
+        str(tmp_path / "package-manifest.json"),
         "--git-executable",
         str(Path(shutil.which("git") or "")),
         "--adapter",
