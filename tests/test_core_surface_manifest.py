@@ -1356,6 +1356,20 @@ def _finite_boundary_fixture(
         'const Router = require("react-router-dom"); void Router;\n',
         'const moduleName = "react-router-dom"; const Router = require(moduleName); void Router;\n',
         'void import("react-router-dom");\n',
+        'void import("./Consumer");\n',
+        'const helper = require("./Consumer"); void helper;\n',
+        'import { createElement } from "react"; void createElement;\n',
+        'import { createElement as make } from "react"; void make;\n',
+        'import { cloneElement } from "react"; void cloneElement;\n',
+        'import React from "react"; const make = React.createElement.bind(React); void make;\n',
+        'import * as React from "react"; React.createElement.apply(React, ["div", null]);\n',
+        'import { jsx } from "react/jsx-runtime"; void jsx;\n',
+        'import { jsxs } from "react/jsx-runtime"; void jsxs;\n',
+        'import { useLocation as currentLocation } from "react-router-dom"; void currentLocation;\n',
+        'Function("return location")();\n',
+        "const proxy = new Proxy({}, {}); void proxy;\n",
+        'Reflect.get({}, "href");\n',
+        'Object.defineProperty({}, "href", {value: "/labs"});\n',
         "const go = window.open; class Holder { go = window.open; } void go; void Holder;\n",
         "const go = await window.open; void go;\n",
         "const { open: go = () => undefined } = window; void go;\n",
@@ -1386,6 +1400,10 @@ def _finite_boundary_fixture(
         'const nav: any = document["location"]; nav.assign("/labs");\n',
         '(document as any).location.assign("/labs");\n',
         'const root: any = document; root.location.assign("/labs");\n',
+        "const root = globalThis; void root;\n",
+        "const root = self; void root;\n",
+        "const root = top; void root;\n",
+        "const root = parent; void root;\n",
         'let root: any; root = document; root.location.assign("/labs");\n',
         "const store = { root: document }; void store;\n",
         "function capture(root: any = document) { return root; } void capture;\n",
@@ -1397,8 +1415,15 @@ def _finite_boundary_fixture(
         "declare const element: HTMLDivElement; function capture(value: any = element) { return value; } void capture;\n",
         "declare const element: HTMLDivElement; class Holder { value: any = element; } void Holder;\n",
         "declare const element: HTMLDivElement; const store = { element }; void store;\n",
+        "declare const element: HTMLDivElement; function consume(value: unknown) {} consume(element);\n",
+        "declare const element: HTMLDivElement; function expose() { return element; } void expose;\n",
+        "declare const element: HTMLDivElement; function* expose() { yield element; } void expose;\n",
+        "declare const element: HTMLDivElement; const { innerHTML } = element; void innerHTML;\n",
+        "declare const element: HTMLDivElement; declare const key: string; void element[key];\n",
+        "declare const element: HTMLDivElement; const erased: any = element; declare const key: string; void erased[key];\n",
         'const escaped = document.createElement("div") as any; escaped.innerHTML = "<a href=/labs>x</a>";\n',
         'const escaped = document.body as any; escaped.insertAdjacentHTML("beforeend", "<a href=/labs>x</a>");\n',
+        "const Widget = (_props: object) => <div />; const props = {}; export const Consumer = () => <Widget {...props} />;\n",
     ],
 )
 def test_finite_navigation_boundary_denies_acquisition_and_activation(tmp_path, consumer) -> None:
@@ -1412,14 +1437,14 @@ def test_finite_navigation_boundary_preserves_non_navigation_false_positive_cont
     _finite_boundary_fixture(
         tmp_path,
         """
-import React from "react";
 import { Outlet, useLocation, useParams, useSearchParams } from "react-router-dom";
 const service = { open: (_target: string) => undefined };
 const model = { location: { assign: (_target: string) => undefined } };
+const record = { innerHTML: "data" };
 const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
-service.open("/labs"); model.location.assign("/labs");
+service.open("/labs"); model.location.assign("/labs"); record.innerHTML = "safe";
 window.setTimeout(() => undefined, 1); document.getElementById("root");
-export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget {...{href: "/labs", to: "/labs", action: "/labs"}} />{React.createElement("div", {title: "/labs"})}{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
+export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget href="/labs" to="/labs" action="/labs" /><div title="/labs" />{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;
 """,
     )
 

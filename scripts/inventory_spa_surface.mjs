@@ -82,6 +82,13 @@ const DOM_NAV_MEMBERS = new Map([
 const SAFE_GLOBAL_MEMBERS = new Map([
   ["document", new Set(["activeElement", "addEventListener", "removeEventListener", "baseURI", "getElementById"])],
   ["window", new Set(["addEventListener", "removeEventListener", "setTimeout", "dispatchEvent", "requestAnimationFrame", "cancelAnimationFrame"])],
+  ["globalThis", new Set()],
+  ["self", new Set()],
+  ["top", new Set()],
+  ["parent", new Set()],
+]);
+const SAFE_DOM_LOCALS = new Map([
+  ["components/useDialogFocus.ts", new Set(["opener", "dialog", "target", "first", "last"])],
 ]);
 const INTRINSIC_TARGETS = new Map([
   ["a", new Set(["href", "xlinkHref"])], ["area", new Set(["href"])], ["iframe", new Set(["src", "srcDoc"])],
@@ -181,7 +188,52 @@ function inspectRouterDeclaration(file, node) {
     if (clause.isTypeOnly || item.isTypeOnly) continue;
     const imported = item.propertyName?.text || item.name.text;
     const allowed = fileName === APP ? APP_ROUTER : fileName === BOUNDARY ? BOUNDARY_ROUTER : READ_ONLY_ROUTER;
-    if (!allowed.has(imported) || ((fileName === APP || fileName === BOUNDARY) && item.name.text !== imported)) fail(file, item, "router-import");
+    if (!allowed.has(imported) || item.name.text !== imported) fail(file, item, "router-import");
+  }
+}
+function ambientGlobal(identifier, names) {
+  return ts.isIdentifier(identifier) && names.includes(identifier.text) &&
+    (!checker.getSymbolAtLocation(identifier) || libraryGlobal(identifier, names));
+}
+function inspectFiniteSyntax(file, node) {
+  if (ts.isJsxOpeningLikeElement(node) && node.attributes.properties.some(ts.isJsxSpreadAttribute)) {
+    fail(file, node, "jsx-attribute-spread");
+  }
+  if (ts.isImportDeclaration(node)) {
+    const module = node.moduleSpecifier.text;
+    if (module === "react/jsx-runtime" || module === "react/jsx-dev-runtime") {
+      fail(file, node, "react-jsx-runtime");
+    }
+    if (module === "react" && node.importClause && !node.importClause.isTypeOnly) {
+      const clause = node.importClause;
+      if (clause.name || (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings))) {
+        fail(file, node, "react-factory-acquisition");
+      }
+      if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+        for (const item of clause.namedBindings.elements) {
+          const imported = item.propertyName?.text || item.name.text;
+          if (!item.isTypeOnly && ["createElement", "cloneElement"].includes(imported)) {
+            fail(file, item, "react-factory-acquisition");
+          }
+        }
+      }
+    }
+  }
+  if (ambientGlobal(node, ["eval", "Function", "Proxy", "Reflect"])) {
+    fail(file, node, "dynamic-language-capability");
+  }
+  if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      ts.isIdentifier(unwrap(node.expression)) && libraryGlobal(unwrap(node.expression), ["Object"]) &&
+      memberName(node) === "defineProperty") {
+    fail(file, node, "dynamic-language-capability");
+  }
+  if (ts.isMetaProperty(node) && node.keywordToken === ts.SyntaxKind.ImportKeyword) {
+    fail(file, node, "import-meta");
+  }
+  if (ts.isCallExpression(node)) {
+    const expression = unwrap(node.expression);
+    if (expression.kind === ts.SyntaxKind.ImportKeyword) fail(file, node, "dynamic-import");
+    if (ts.isIdentifier(expression) && expression.text === "require") fail(file, node, "dynamic-require");
   }
 }
 function intrinsicTag(node) { return ts.isIdentifier(node) && node.text === node.text.toLowerCase() ? node.text : null; }
@@ -209,6 +261,22 @@ function isDomCapability(node) {
     return (type.types || []).some(visit) || (type.getBaseTypes?.() || []).some(visit);
   }
   return visit(checker.getTypeAtLocation(node));
+}
+function safeDomLocal(file, node) {
+  return ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
+    SAFE_DOM_LOCALS.get(relative(file.fileName))?.has(node.name.text);
+}
+function safeDomArgument(file, call, argument, index) {
+  if (relative(file.fileName) !== "main.tsx" || index !== 0) return false;
+  const expression = unwrap(call.expression);
+  const info = ts.isIdentifier(expression) ? importInfo(checker.getSymbolAtLocation(expression)) : null;
+  if (info?.module !== "react-dom/client" || info.name !== "createRoot") return false;
+  const source = unwrap(argument);
+  if (!ts.isCallExpression(source)) return false;
+  const receiver = unwrap(source.expression);
+  return (ts.isPropertyAccessExpression(receiver) || ts.isElementAccessExpression(receiver)) &&
+    ts.isIdentifier(unwrap(receiver.expression)) && libraryGlobal(unwrap(receiver.expression), ["document"]) &&
+    memberName(receiver) === "getElementById";
 }
 function intrinsicCandidates(node) {
   const direct = intrinsicTag(node);
@@ -274,7 +342,7 @@ function inspectReactFactory(file, node) {
 function inspectDom(file, node) {
   if (relative(file.fileName) === BOUNDARY) return;
   if (ts.isIdentifier(node) && libraryGlobal(node, ["location", "history", "open", "navigation"])) return fail(file, node, "global-navigation");
-  if (ts.isIdentifier(node) && libraryGlobal(node, ["document", "window"])) {
+  if (ts.isIdentifier(node) && libraryGlobal(node, [...SAFE_GLOBAL_MEMBERS.keys()])) {
     const parent = node.parent;
     const safe = ts.isPropertyAccessExpression(parent) && parent.expression === node &&
       SAFE_GLOBAL_MEMBERS.get(node.text)?.has(parent.name.text);
@@ -284,13 +352,11 @@ function inspectDom(file, node) {
     const target = checker.getTypeAtLocation(node);
     if (isDomCapability(node.expression) && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-cast");
   }
-  if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isPropertyDeclaration(node)) && node.initializer) {
-    const target = checker.getTypeAtLocation(node.name);
-    if (isDomCapability(node.initializer) && target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-alias");
+  if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isPropertyDeclaration(node)) && node.initializer && isDomCapability(node.initializer)) {
+    if (!safeDomLocal(file, node)) return fail(file, node, "dom-capability-alias");
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isDomCapability(node.right)) {
-    const target = checker.getTypeAtLocation(node.left);
-    if (target.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return fail(file, node, "dom-capability-assignment");
+    return fail(file, node, "dom-capability-assignment");
   }
   if (ts.isPropertyAssignment(node) && isDomCapability(node.initializer)) {
     return fail(file, node, "dom-capability-store");
@@ -301,10 +367,24 @@ function inspectDom(file, node) {
   if (ts.isArrayLiteralExpression(node)) {
     for (const item of node.elements) if (isDomCapability(item)) return fail(file, item, "dom-capability-store");
   }
+  if (ts.isCallExpression(node)) {
+    node.arguments.forEach((argument, index) => {
+      if (isDomCapability(argument) && !safeDomArgument(file, node, argument, index)) fail(file, argument, "dom-capability-argument");
+    });
+  }
+  if (ts.isReturnStatement(node) && node.expression && isDomCapability(node.expression)) {
+    return fail(file, node, "dom-capability-return");
+  }
+  if (ts.isYieldExpression(node) && node.expression && isDomCapability(node.expression)) {
+    return fail(file, node, "dom-capability-yield");
+  }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
     const base = unwrap(node.expression), name = memberName(node), names = typeNames(base);
+    const baseType = checker.getTypeAtLocation(base);
+    const erasedBase = Boolean(baseType.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown));
     const globalWindow = ts.isIdentifier(base) && libraryGlobal(base, ["window", "globalThis", "self", "top", "parent"]);
-    if (["innerHTML", "outerHTML", "insertAdjacentHTML"].includes(name)) return fail(file, node, "html-navigation-injection");
+    if (ts.isElementAccessExpression(node) && name === null && (isDomCapability(base) || erasedBase)) return fail(file, node, "computed-dom-member");
+    if (["innerHTML", "outerHTML", "insertAdjacentHTML"].includes(name) && (isDomCapability(base) || erasedBase)) return fail(file, node, "html-navigation-injection");
     if ((globalWindow || names.has("Window")) && (name === null || ["location", "history", "open", "navigation"].includes(name))) return fail(file, node, "window-navigation");
     if (names.has("Document") && (name === null || ["forms", "location", "write", "writeln"].includes(name))) return fail(file, node, "document-navigation");
     for (const [typeName, members] of DOM_NAV_MEMBERS) if (names.has(typeName) && (members === null || name === null || members.has(name))) return fail(file, node, "dom-navigation");
@@ -314,6 +394,7 @@ function inspectDom(file, node) {
     const initializer = ts.isVariableDeclaration(parent) ? parent.initializer : ts.isBinaryExpression(parent) ? parent.right : null;
     if (initializer) {
       const names = typeNames(initializer), key = propertyName(node.propertyName || node.name);
+      if (isDomCapability(initializer)) return fail(file, node, "dom-capability-destructure");
       if ((names.has("Window") && (key === null || ["location", "history", "open"].includes(key))) || [...DOM_NAV_MEMBERS].some(([typeName, members]) => names.has(typeName) && (members === null || key === null || members.has(key)))) fail(file, node, "destructured-navigation");
     }
   }
@@ -461,6 +542,7 @@ function inspectApp(file, node, appRoutes) {
 const appRoutes = [];
 for (const file of sourceFiles) {
   function visit(node) {
+    inspectFiniteSyntax(file, node);
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) inspectRouterDeclaration(file, node);
     if (ts.isJsxOpeningLikeElement(node)) inspectIntrinsic(file, node);
     if (ts.isCallExpression(node)) inspectReactFactory(file, node);

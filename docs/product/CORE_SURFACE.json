@@ -25617,6 +25617,7 @@
         ],
         "backlog": [
           "BL-P0-06",
+          "BL-P1-10",
           "BL-P1-12"
         ],
         "boundaries": [
@@ -25632,13 +25633,16 @@
         ],
         "by_file": {
           "docs/product/BACKLOG.md": [
+            "B1",
             "B2",
             "B6",
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
+            "F10",
             "F3",
             "F7",
             "J1",
@@ -25962,6 +25966,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
             "F1",
@@ -26339,7 +26344,7 @@
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
-        "frontend/src/coreRoutes.tsx": "ef63576878cd6b5345ce1460b921a0a0696c6f4a19f6dcf109b5cc750d2dfbe5",
+        "frontend/src/coreRoutes.tsx": "4ca8bb17336e2947aac674aa55275bff4633f5fbec1d14f4004c3a559f88ad32",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
         "frontend/src/realtime/client.ts": "ec59e07aae1569a8844daabb62f6bf9de761491e1c438b56ab88b9fe14a61ab8",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
@@ -27274,7 +27279,7 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "38722f76b4ab3eaf442308f8cfdae97b45b409fc1c5fda8d3572558af3c6f09b",
+      "spa_ast_helper_sha256": "a415d0e347ce9b7a66edec846759e34f6130870bc180a2a1f387cc55a2e0a230",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
@@ -52069,6 +52074,7 @@
         ],
         "backlog": [
           "BL-P0-06",
+          "BL-P1-10",
           "BL-P1-12"
         ],
         "boundaries": [
@@ -52084,13 +52090,16 @@
         ],
         "by_file": {
           "docs/product/BACKLOG.md": [
+            "B1",
             "B2",
             "B6",
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
+            "F10",
             "F3",
             "F7",
             "J1",
@@ -52414,6 +52423,7 @@
             "B8",
             "B9",
             "BL-P0-06",
+            "BL-P1-10",
             "BL-P1-12",
             "F0",
             "F1",
@@ -52791,7 +52801,7 @@
         "frontend/src/components/sessionScope.test.ts": "e8d4471891894db6137e5241f9f9b293d2ccceb6af8c60411aef814517c31479",
         "frontend/src/components/sessionScope.ts": "c1fd446387e4e49529e4d70b2ec6723267fcbb582ddd91e6b86b3883ae5ea06f",
         "frontend/src/components/useDialogFocus.ts": "032341e6f468429834e91c826ba13458bc069441d86bd12c8b1e88c0c7afcbb4",
-        "frontend/src/coreRoutes.tsx": "ef63576878cd6b5345ce1460b921a0a0696c6f4a19f6dcf109b5cc750d2dfbe5",
+        "frontend/src/coreRoutes.tsx": "4ca8bb17336e2947aac674aa55275bff4633f5fbec1d14f4004c3a559f88ad32",
         "frontend/src/main.tsx": "14f3319f2a56295c3654b9b140967b5fbdd169f5aa117cb427af0a2732e385b5",
         "frontend/src/realtime/client.ts": "ec59e07aae1569a8844daabb62f6bf9de761491e1c438b56ab88b9fe14a61ab8",
         "frontend/src/realtime/protocol.test.ts": "67c35f59665a320b3b6697b6cb68fd54185f01e290a63396c6bba3bf9fad6db0",
@@ -53726,7 +53736,7 @@
         "/operations",
         "/workspaces"
       ],
-      "spa_ast_helper_sha256": "38722f76b4ab3eaf442308f8cfdae97b45b409fc1c5fda8d3572558af3c6f09b",
+      "spa_ast_helper_sha256": "a415d0e347ce9b7a66edec846759e34f6130870bc180a2a1f387cc55a2e0a230",
       "spa_contract_sha256": {
         "app": "23ebf76bfb179e8ba8ca01f2583c4da37e5832af5d934d66ed8404c99f895959",
         "palette": "7a5b5675072584cc29d5592311a6b2c3ea1a0c9fa997c7908cc5b0c2918831bd",
