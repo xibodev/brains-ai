@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-09-01T22:00:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree actionable-backlog and lifecycle-reference rewrite; documentation, traceability, and targeted Docker gates verified; deployment not verified
--->
-
 # Brains Product Brief
 
 ## Identity
@@ -29,7 +23,6 @@ session history, and partial view of work. Operators lack one place to:
 - see which Workspaces and agent sessions are active;
 - assign and claim shared work without collisions;
 - preserve handoffs, checkpoints, messages, and reusable knowledge;
-- coordinate concurrent agents without collisions;
 - resolve asks and approval requests;
 - retain attributable operational and audit evidence.
 
@@ -60,12 +53,13 @@ Brains aims to provide:
    and fail closed where the contract requires a decision.
 5. **Truthful capabilities.** Missing, unsupported, experimental, and withdrawn behavior
    is not presented as normal availability.
-6. **Honest evidence.** Static code, test presence, local execution, isolated UAT, and
-   deployed observation are distinct evidence levels.
+6. **Honest evidence.** Static code, test presence, local execution, isolated
+   validation, and deployed observation are distinct evidence levels.
 7. **Recoverable operation.** SQLite state, backup, restore, health, readiness, and
    rollback have explicit contracts.
 
-Current HEAD implements parts of this promise. [FEATURE_CONTRACT.md](FEATURE_CONTRACT.md) distinguishes present, partial, and missing behavior.
+The [Feature Contract](FEATURE_CONTRACT.md) distinguishes advertised, partial, target,
+frozen, and withdrawn behavior.
 
 ## Current Advertised Product
 
@@ -93,7 +87,7 @@ persisted-data compatibility.
 | P3 | Reserved multi-operator member | Frozen future actor; not part of the supported local product. |
 | P4 | Service host operator | Control the local service, CLI wiring, credentials, state, and working roots. |
 | P5 | Human approver | Review asks and outward-action requests with sufficient context and attribution. |
-| P6 | Release/operations operator | Run gates, isolated UAT, backup, deploy, observe, and roll back. |
+| P6 | Release/operations operator | Run gates, validate in isolation, back up, observe, and roll back. |
 | P7 | AI agent session | Coordinate scoped work, preserve continuity, and request peer or human input. |
 
 P7 is a product actor, not a stronger authentication principal than the credential and
@@ -101,16 +95,9 @@ Session boundaries the implementation provides.
 
 ## Value
 
-Brains' defensible value is coordinated and governed operation:
-
-- one durable work and session plane across multiple agent tools;
-- fewer collisions through claims, tasks, handoffs, and presence;
-- visible human decision points;
-- a traceable path from product promise to acceptance evidence;
-- local-first operation with SQLite as the supported source of truth;
-- a deliberately local-first trust boundary.
-
-Brains does **not** promise universal token savings. Retrieval, routing, and coordination can add cost as well as remove repeated work. Value depends on task shape, model, repository size, and whether useful context is delivered at the right time.
+Brains' value is coordinated, human-governed, local-first operation across supported
+agent tools. It does **not** promise universal token savings: coordination and retrieval
+can add cost as well as avoid repeated work.
 
 ## Product boundaries
 
@@ -121,7 +108,8 @@ Brains does **not** promise universal token savings. Retrieval, routing, and coo
 - asks, approvals, handoffs, messages, tasks, claims, and shared knowledge;
 - CLI and MCP coordination surfaces;
 - SQLite storage;
-- backup, audit, observability, wiring, services, containers, and isolated harnesses;
+- backup, audit, observability, wiring, service definitions, and isolated validation
+  tools; native service lifecycle proof remains an explicit backlog requirement;
 
 ### Target-only or withdrawn
 
@@ -139,8 +127,8 @@ Brains does **not** promise universal token savings. Retrieval, routing, and coo
   optional SMTP copies, and external evidence-retention services.
 
 These concepts retain stable contract identifiers where needed for traceability, but
-their current implementations are frozen faulty or retired, are not schedulable
-backlog, and require an explicit replacement/graduation decision before re-entry.
+they are not advertised or schedulable core work. Re-entry requires an explicit
+replacement or thaw decision.
 
 ### Non-goals
 
@@ -190,8 +178,7 @@ Brains succeeds when the following can be demonstrated for one exact candidate:
    declared recovery contract.
 8. Withdrawn capabilities have no discovery or activation path in the supported
    installation.
-9. Code, tests, isolated UAT, documentation, backup, and rollback evidence all identify
-   the same candidate.
+9. Validation identifies the artifact and environment it actually exercised.
 10. The product outcome satisfies the feature and journey acceptance criteria, not
     merely a build or process check.
 

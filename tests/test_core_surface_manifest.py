@@ -190,7 +190,9 @@ def test_manifest_generation_requires_fresh_wheel_and_sdist(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("mode", ["normal", "all_opt_in"])
-def test_positive_manifest_rejects_rogue_package_and_documented_surface(mode: str) -> None:
+def test_positive_manifest_rejects_rogue_package_and_documented_surface(
+    mode: str,
+) -> None:
     expected = _manifest()
     actual = copy.deepcopy(expected)
     modes = actual["modes"]
@@ -261,6 +263,78 @@ def test_negative_doc_clause_does_not_exempt_mixed_positive_claim() -> None:
 
 
 @pytest.mark.parametrize(
+    "source",
+    (
+        "Use the legacy dashboard.\n",
+        "The frozen dashboard can be enabled.\n",
+        "The frozen dashboard enables operators.\n",
+        "The frozen dashboard is enabling access.\n",
+        "The legacy dashboard is supported.\n",
+        "The frozen dashboard is advertised.\n",
+    ),
+)
+def test_status_words_do_not_exempt_activation_instructions(source: str) -> None:
+    findings = check_core_surface._canonical_doc_advertisements({"public/guide.md": source})
+    assert any(finding.endswith("surface:dashboard") for finding in findings)
+
+
+def test_explicit_containment_without_activation_is_allowed() -> None:
+    assert not check_core_surface._canonical_doc_advertisements(
+        {
+            "public/guide.md": (
+                "The legacy dashboard is withdrawn and has no supported activation path.\n"
+            )
+        }
+    )
+
+
+def test_yaml_scan_reads_comments_but_not_configuration_values(tmp_path) -> None:
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        'description: "Operators can use the dashboard."\n'
+        "description: Operator's note # Operators can use the dashboard.\n",
+        encoding="utf-8",
+    )
+
+    sources = check_core_surface._public_surface_sources(tmp_path)
+    assert sources == {"compose.yml": "# Operators can use the dashboard."}
+    assert check_core_surface._canonical_doc_advertisements(sources) == [
+        "compose.yml:1:surface:dashboard"
+    ]
+
+
+@pytest.mark.parametrize("prefix", ("&copy ", "!!str "))
+def test_yaml_scan_ignores_comments_inside_tagged_or_anchored_quotes(
+    prefix: str,
+) -> None:
+    source = f'note: {prefix}"safe # Use the legacy dashboard"\n'
+    assert check_core_surface._yaml_comments(source) == ""
+
+
+def test_yaml_scan_ignores_block_scalar_content_and_resumes_after_dedent() -> None:
+    source = (
+        "run: |\n  # Use the legacy dashboard.\nnext: safe # Operators can use the dashboard.\n"
+    )
+    assert check_core_surface._yaml_comments(source) == ("# Operators can use the dashboard.")
+
+
+def test_yaml_scan_handles_multiline_and_escaped_quoted_scalars() -> None:
+    source = (
+        "single: 'operator''s # Use the legacy dashboard'\n"
+        'multi: "safe\n'
+        '  # Use the legacy dashboard"\n'
+        "next: safe # Operators can use the dashboard.\n"
+    )
+    assert check_core_surface._yaml_comments(source) == ("# Operators can use the dashboard.")
+
+
+def test_yaml_scan_fails_closed_on_invalid_yaml() -> None:
+    for source in ("note: 'unterminated\n", "items: [one\n"):
+        with pytest.raises(ValueError, match="invalid YAML"):
+            check_core_surface._yaml_comments(source)
+
+
+@pytest.mark.parametrize(
     ("source", "expected"),
     [
         (
@@ -286,16 +360,39 @@ def test_actionable_docs_syntax_is_never_exempted_by_boundary_prose(
     assert any(finding.endswith(expected) for finding in findings)
 
 
-def test_noncanonical_docs_do_not_define_product_advertisements(tmp_path) -> None:
+def test_all_public_docs_define_product_advertisements(tmp_path) -> None:
     for relative in check_core_surface.CANONICAL_PRODUCT_DOCS:
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# Canonical\n", encoding="utf-8")
-    history = tmp_path / "docs" / "history.md"
+    history = tmp_path / "public" / "history.md"
+    history.parent.mkdir(parents=True)
     history.write_text("Use the Labs dashboard.\n", encoding="utf-8")
 
     documented = check_core_surface._documented_ids(tmp_path)
-    assert documented["forbidden_advertisements"] == []
+    assert documented["forbidden_advertisements"] == [
+        "public/history.md:1:surface:dashboard",
+        "public/history.md:1:surface:labs",
+    ]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        ".github/ISSUE_TEMPLATE/feature.yml",
+        "examples/service.env.example",
+    ),
+)
+def test_activation_scan_includes_issue_forms_and_env_examples(tmp_path, relative: str) -> None:
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("Operators can enable the dashboard.\n", encoding="utf-8")
+
+    findings = check_core_surface._canonical_doc_advertisements(
+        check_core_surface._public_surface_sources(tmp_path)
+    )
+
+    assert findings == [f"{relative}:1:surface:dashboard"]
 
 
 def test_semantic_docs_rejection_survives_manifest_regeneration() -> None:
@@ -371,7 +468,12 @@ def test_positive_manifest_rejects_cli_contract_mutations() -> None:
     normal["cli_nodes"]["serve"]["parameters"].append({"name": "activator"})
 
     errors = check_core_surface.manifest_violations(actual, expected)
-    for section in ("cli_groups", "cli_callbacks", "cli_root.parameters", "cli_nodes.serve"):
+    for section in (
+        "cli_groups",
+        "cli_callbacks",
+        "cli_root.parameters",
+        "cli_nodes.serve",
+    ):
         assert any(section in error for error in errors)
 
 
@@ -528,7 +630,12 @@ def test_positive_manifest_rejects_navigation_and_wire_file_mutations() -> None:
     normal = actual["modes"]["normal"]
     normal["browser_redirects"].append("/rogue")
     normal["reachable_spa_navigation_sites"].append(
-        {"file": "frontend/src/Rogue.tsx", "kind": "link", "line": 1, "target": "/rogue"}
+        {
+            "file": "frontend/src/Rogue.tsx",
+            "kind": "link",
+            "line": 1,
+            "target": "/rogue",
+        }
     )
     adapter = next(iter(normal["wire"]["adapters"].values()))
     transport = next(iter(adapter["transports"].values()))
@@ -789,7 +896,9 @@ def test_ast_reachability_fails_closed_for_every_dynamic_activator(
         _synthetic_spa_sites(tmp_path, app_source)
 
 
-def test_ast_reachability_ignores_non_navigation_members_and_custom_attributes(tmp_path) -> None:
+def test_ast_reachability_ignores_non_navigation_members_and_custom_attributes(
+    tmp_path,
+) -> None:
     sites = _synthetic_spa_sites(
         tmp_path,
         'const service = { open: (_target: string) => {} }; service.open("/labs"); '
@@ -899,7 +1008,9 @@ def test_ast_reachability_fails_closed_on_conditional_or_unknown_alias_kill(
         _synthetic_spa_sites(tmp_path, app_source)
 
 
-def test_ast_reachability_records_dom_submit_activation_without_inventing_target(tmp_path) -> None:
+def test_ast_reachability_records_dom_submit_activation_without_inventing_target(
+    tmp_path,
+) -> None:
     with pytest.raises(RuntimeError, match="failed closed"):
         _synthetic_spa_sites(
             tmp_path,
@@ -965,7 +1076,9 @@ def test_ast_reachability_fails_closed_on_dynamic_create_element_props(
         _synthetic_spa_sites(tmp_path, app_source)
 
 
-def test_ast_reachability_rejects_react_factory_for_non_navigation_tag(tmp_path) -> None:
+def test_ast_reachability_rejects_react_factory_for_non_navigation_tag(
+    tmp_path,
+) -> None:
     with pytest.raises(RuntimeError, match="failed closed"):
         _synthetic_spa_sites(
             tmp_path,
@@ -973,7 +1086,9 @@ def test_ast_reachability_rejects_react_factory_for_non_navigation_tag(tmp_path)
         )
 
 
-def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(tmp_path) -> None:
+def test_ast_reachability_fails_closed_on_unknown_namespace_router_sink(
+    tmp_path,
+) -> None:
     source = tmp_path / "frontend/src"
     source.mkdir(parents=True)
     (tmp_path / "frontend/tsconfig.json").write_text(
@@ -1008,7 +1123,9 @@ def test_ast_reachability_fails_closed_on_compound_location_write(tmp_path) -> N
         check_core_surface._frontend_reachability(source)
 
 
-def test_ast_reachability_fails_closed_on_dynamic_history_state_target(tmp_path) -> None:
+def test_ast_reachability_fails_closed_on_dynamic_history_state_target(
+    tmp_path,
+) -> None:
     source = tmp_path / "frontend/src"
     source.mkdir(parents=True)
     (tmp_path / "frontend/tsconfig.json").write_text(
@@ -1196,8 +1313,16 @@ def test_wire_inventory_covers_every_adapter_transport_and_managed_file() -> Non
     normal = _manifest()["modes"]["normal"]
     adapters = normal["wire"]["adapters"]
     expected = {
-        "claude-code": (".claude.json", ".claude/CLAUDE.md", {"sse", "stdio", "streamable-http"}),
-        "codex": (".codex/config.toml", ".codex/AGENTS.md", {"stdio", "streamable-http"}),
+        "claude-code": (
+            ".claude.json",
+            ".claude/CLAUDE.md",
+            {"sse", "stdio", "streamable-http"},
+        ),
+        "codex": (
+            ".codex/config.toml",
+            ".codex/AGENTS.md",
+            {"stdio", "streamable-http"},
+        ),
         "copilot-cli": (
             ".copilot/mcp-config.json",
             ".copilot/copilot-instructions.md",
@@ -1541,7 +1666,9 @@ export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><butt
     )
 
 
-def test_finite_navigation_boundary_tracks_pinned_dom_navigation_api_scope(tmp_path) -> None:
+def test_finite_navigation_boundary_tracks_pinned_dom_navigation_api_scope(
+    tmp_path,
+) -> None:
     lib_dom = (
         check_core_surface.ROOT / "frontend/node_modules/typescript/lib/lib.dom.d.ts"
     ).read_text(encoding="utf-8")
