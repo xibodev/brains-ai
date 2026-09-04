@@ -118,7 +118,7 @@ promise that the current candidate produced them successfully.
 - **Then:** the failed dependency is explicit, repair or rollback is bounded,
   data integrity is verified, and critical journeys pass before service is
   declared ready.
-- **Evidence:** B5, B6, B8; J11; BL-P0-06..08.
+- **Evidence:** B5, B6, B8; J11; BL-P0-06.
 
 ## Cross-cutting acceptance rules
 
