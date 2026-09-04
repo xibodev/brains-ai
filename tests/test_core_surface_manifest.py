@@ -1420,6 +1420,7 @@ def _finite_boundary_fixture(
         'export const Consumer = () => <a href="/" {...{href: "/labs"}}>x</a>;\n',
         "export const Consumer = () => <form {...props} onSubmit={() => undefined} />;\n",
         'export const Consumer = () => <iframe src="/labs" />;\n',
+        'export const Consumer = () => <iframe srcDoc="<script>top.location=/labs</script>" />;\n',
         'export const Consumer = () => <object data="/labs" />;\n',
         'export const Consumer = () => <embed src="/labs" />;\n',
         'export const Consumer = () => <base href="/labs" />;\n',
@@ -1481,6 +1482,13 @@ def _finite_boundary_fixture(
         'const parser = new DOMParser(); parser.parseFromString("<a href=/labs>x</a>", "text/html");\n',
         'declare const parser: DOMParser; parser.parseFromString("<a href=/labs>x</a>", "text/html");\n',
         'window.dispatchEvent(new Event("open"));\n',
+        'declare const frame: HTMLIFrameElement; frame.srcdoc = "<script>top.location=/labs</script>";\n',
+        'declare const frame: HTMLIFrameElement; frame.src = "/labs";\n',
+        "declare const frame: HTMLIFrameElement; const markup = frame.srcdoc; void markup;\n",
+        'declare const frame: HTMLIFrameElement; frame["srcdoc"] = "<form action=/labs></form>";\n',
+        "declare const frame: HTMLIFrameElement; const child = frame.contentWindow; void child;\n",
+        "declare const frame: HTMLIFrameElement; const child = frame.contentDocument; void child;\n",
+        "declare const frame: HTMLIFrameElement; const child = frame.getSVGDocument(); void child;\n",
         "declare const element: any; element.click();\n",
         'declare const element: any; element.dispatchEvent(new Event("open"));\n',
         'declare const element: any; element.setAttribute("title", "x");\n',
@@ -1503,9 +1511,11 @@ import { useState } from "react"; export { useState };
 const service = { open: (_target: string) => undefined };
 const emitter = { dispatchEvent: (_event: string) => true };
 const model = { location: { assign: (_target: string) => undefined } };
+const frameModel = { srcdoc: "data", src: "data", contentWindow: "data", contentDocument: "data" };
 const record = { innerHTML: "data" };
 const Widget = (_props: {href?: string; to?: string; action?: string}) => <div />;
 service.open("/labs"); emitter.dispatchEvent("data"); model.location.assign("/labs"); record.innerHTML = "safe";
+frameModel.srcdoc = "safe"; frameModel.src = "safe"; void frameModel.contentWindow; void frameModel.contentDocument;
 window.setTimeout(() => undefined, 1); setInterval(() => undefined, 1);
 void Object.keys(record); void Object.values(record); void Object.entries(record); void Object.fromEntries([["x", 1]]);
 export const Consumer = () => <><Outlet /><form onSubmit={() => undefined}><button>Save</button><input /></form><Widget href="/labs" to="/labs" action="/labs" /><div title="/labs" />{String(useLocation())}{String(useParams())}{String(useSearchParams())}</>;

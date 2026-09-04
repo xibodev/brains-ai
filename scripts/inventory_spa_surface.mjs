@@ -84,6 +84,7 @@ const DOM_NAV_MEMBERS = new Map([
   ["HTMLInputElement", new Set(["formAction", "setAttribute", "setAttributeNS"])],
   ["HTMLAnchorElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
   ["HTMLAreaElement", new Set(["href", "click", "setAttribute", "setAttributeNS"])],
+  ["HTMLIFrameElement", new Set(["src", "srcdoc", "contentWindow", "contentDocument", "getSVGDocument"])],
 ]);
 const SAFE_GLOBAL_MEMBERS = new Map([
   ["document", new Set(["activeElement", "addEventListener", "removeEventListener", "baseURI"])],
