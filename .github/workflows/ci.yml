@@ -343,6 +343,21 @@ jobs:
           python -m pip install pytest
           python -m pytest -q tests/test_durable_mailbox_registration.py \
             -k windows_managed_binding_is_dpapi_protected_and_acl_verified
+      - name: Prove native Claude wakeup exchange and abrupt-exit recovery
+        if: runner.os == 'Windows' || runner.os == 'macOS'
+        shell: bash
+        run: >-
+          python scripts/probe_native_wakeup_recovery.py
+          --candidate "${{ github.sha }}"
+          --output native-wakeup-recovery.json
+      - name: Upload sanitized native wakeup evidence
+        if: always() && (runner.os == 'Windows' || runner.os == 'macOS')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-wakeup-${{ matrix.os }}-py${{ matrix.python }}-${{ github.sha }}
+          path: native-wakeup-recovery.json
+          if-no-files-found: error
+          retention-days: 7
 
   claude-wakeup-probe:
     name: pinned Claude wakeup probe
@@ -568,6 +583,7 @@ jobs:
       - privacy
       - docker-smoke
       - opencode-lifecycle-probe
+      - claude-wakeup-probe
       - brains-e2e
     if: always()
     runs-on: ubuntu-latest

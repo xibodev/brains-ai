@@ -99,13 +99,21 @@ Current workflow facts at HEAD:
   unit/integration suite); migration and frozen-baseline contract; SPA typecheck,
   production build and committed-bundle comparison; wheel/sdist build with shipped-data
   assertions; native Windows/macOS/Linux clean-home package, service-definition, and
-  reversible wire probes on both supported Python versions; the privacy scan; the
+  reversible wire probes on both supported Python versions; isolated native Windows and
+  macOS Claude-hook atomic-exchange, owner-bound recovery-state, and abrupt-exit recovery
+  probes; the pinned real-Claude generated-hook discovery probe; the privacy scan; the
   runtime image build and container health smoke; and the Playwright journey suite. The
   native probe does not mutate or certify the runner's service manager.
 - `.github/workflows/native-service-evidence.yml` is a manual, non-blocking scaffold for
   guarded manager-cycle evidence on disposable native runners. It does not certify a
   login/reboot boundary; that requires the checked probe's two-phase journey on a
   persistent disposable VM.
+- `scripts/probe_native_wakeup_recovery.py` creates a private temporary home and state
+  root per scenario, removes ambient Brains and client-home variables from each child,
+  and fails if any managed path escapes that root. On Windows and macOS it terminates a
+  child without unwinding at every durable install/removal transaction phase, verifies
+  the real platform exchange primitive and owner boundary, recovers in a new process,
+  and emits only a sanitized candidate/platform/count report.
 - The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
 - The reviewed positive core-surface manifest is generated independently for normal and all-opt-in startup. The package job and local quality runner install the lockfile-declared TypeScript parser, build a fresh wheel and sdist, and then supply that artifact directory explicitly to the gate; the checker never downloads dependencies and refuses to validate or rewrite the manifest without exactly one wheel and one sdist. Exact inventories cover the normalized `src/brains` and package-input source tree; normalized, regular-file-only wheel/sdist members; resolved Click commands/groups and normalized public command, option, and argument activation fields; advertised MCP names and callable contracts; HTTP operations; a pinned TypeScript-compiler import graph rooted at the real SPA entry; the exact `App.tsx` route grammar; the audited `coreRoutes.tsx` capability boundary; deny-at-source router, DOM, intrinsic, and React navigation checks in every other reachable module; separately retained dormant frontend source; supported configuration keys; every generated harness file and transport contract; package entry points/dependencies/extras; and canonical IDs and actionable canonical-doc command/path/surface claims. Semantic allowlists reject reachable unknown or frozen SPA modules and targets, modified route/navigation guards or analysis, noncanonical harness paths/transports/content, and newly advertised frozen documentation surfaces even if the manifest is regenerated. Missing, extra, stale, malformed, dynamically unresolved, or uninspectable source or artifact inventory fails closed; field-level, boundary-order, capability-provenance, and syntax-bypass mutation tests prove each discoverability family cannot silently expand.
 - The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
