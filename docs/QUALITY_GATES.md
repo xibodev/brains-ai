@@ -1,272 +1,64 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree Docker full-quality, packaged-browser, and real-CLI UAT runner execution; installed-service recovery and deployment not verified
--->
-
 # Brains Quality Gates
 
-## Delivery contract
+These gates define reproducible checks for the supported public product. They record
+commands and healthy outcomes, not dated observations or candidate-specific proof.
 
-Every change must preserve a visible chain:
+## Fast checks
 
-```text
-product promise
-  -> feature ID
-  -> acceptance criterion
-  -> persona and journey
-  -> code and data surface
-  -> automated contract
-  -> isolated UAT observation
-  -> acceptance decision
+Run the smallest relevant tests while developing, then run:
+
+```console
+python scripts/check_docs.py
+python scripts/check_traceability.py
 ```
 
-A build, test file, screenshot, branch, tag, or deployment process is never a substitute for the product outcome at the start of the chain.
+A healthy result exits zero and reports no documentation or traceability drift. The full
+repository gate owns generated core-surface validation with a fresh distribution build.
 
-## Evidence levels
+## Full repository gate
 
-| Level | Name | Meaning |
-|---|---|---|
-| E0 | Contract | A stable feature, journey, and acceptance criterion state the intended behavior. |
-| E1 | Static presence | Source, configuration, migration, or UI code for the behavior exists at an exact SHA. |
-| E2 | Automated contract present | A unit, integration, acceptance, or browser assertion exists at that SHA. It has not necessarily run or passed. |
-| E3 | Local execution | Named commands passed in a controlled local environment against the exact SHA. |
-| E4 | Isolated UAT | The exact candidate ran in an isolated environment with journey assertions, captured logs, and recovery checks. |
-| E5 | Operational observation | A named deployed environment was observed with health, readiness, rollback, and monitoring evidence. |
-
-Current canonical feature status uses only E1 and E2 unless a newer evidence record explicitly identifies the exact candidate and environment. Deployment is not verified by this documentation reset.
-
-## Required gates
-
-### 1. Planning gate
-
-- Name the product outcome being changed.
-- Identify affected `F*` or `B*` feature IDs.
-- Identify affected `AC-*`, Persona, and `J*` journey IDs.
-- State whether each affected capability is advertised, experimental,
-  target-only, or withdrawn.
-- Identify security, data, operations, and recovery implications.
-- Update [TRACEABILITY.md](product/TRACEABILITY.md) when a route, component, API, model, migration, CLI, MCP tool family, or test family changes.
-
-### 2. Code gate
-
-- Keep Brains product, package, namespace, CLI, MCP, state, and browser language consistent.
-- Do not bypass `require_api_key` or `require_console_auth` on protected `/v1/*` routes.
-- Do not add an execution, recurring, pattern, or tool-spawn path that evades required human control.
-- Do not add discovery, configuration, installation, or activation for a withdrawn
-  capability; persisted-data compatibility is not an activation contract.
-- Preserve SQLite as the default source of truth; generated Markdown views are optional projections.
-- Add migrations and rollback or compatibility behavior for persistent schema changes.
-- Keep failure behavior explicit and fail closed where the acceptance contract requires authorization or approval.
-
-### 3. Review gate
-
-Reviewers verify:
-
-- the feature and acceptance IDs are correct;
-- current and target behavior are not mixed;
-- authorization and Org/Workspace scope are applied to HTTP, WS, SSE, MCP, and background execution as applicable;
-- frontend client routes exist on the server;
-- data writes, events, audit, and retries have a durability contract;
-- logs and responses do not expose secrets;
-- operational instructions identify unverified or broken paths;
-- documentation contains no chronology, milestone diary, dated pass count, screenshot proof, or tag-based truth.
-
-### 4. Automated test gate
-
-The target hard gate includes:
-
-- documentation checker;
-- Python lint and format;
-- Python type checking;
-- targeted unit and integration tests;
-- Brains acceptance tests mapped to `AC-*`;
-- frontend typecheck and production build;
-- source-to-committed-SPA bundle comparison;
-- Playwright journey tests;
-- container start and health smoke;
-- route/client contract checks;
-- migration and backup/restore compatibility checks.
-
-Current workflow facts at HEAD:
-
-- Every job in `.github/workflows/ci.yml` is blocking for pushes and pull requests
-  targeting `staging` or `main`, and the same workflow is manually dispatchable. No
-  required gate carries `continue-on-error`, and the `quality gate` job fails when any
-  dependency failed, was cancelled, or was skipped.
-- The blocking jobs are: documentation and generated traceability contract; Ruff lint
-  and format; mypy; pytest (Python 3.11 and 3.12, acceptance subset then the full
-  unit/integration suite); migration and frozen-baseline contract; SPA typecheck,
-  production build and committed-bundle comparison; wheel/sdist build with shipped-data
-  assertions; the machine-readable Task Scheduler/launchd/systemd-user × Python
-  3.11/3.12 × four-adapter × Streamable HTTP clean-home package, service-definition,
-  and reversible wire matrix; isolated native Windows/macOS Claude-hook
-  atomic-exchange, owner-bound recovery-state, and abrupt-exit recovery probes; the
-  pinned real-Claude generated-hook discovery probe; the privacy scan; the
-  runtime image build and container health smoke; and the Playwright journey suite. The
-  native probe does not mutate or certify the runner's service manager.
-- Native installation evidence runs from a fresh virtual environment, verifies the
-  candidate equals checked-out `HEAD`, binds the exact wheel hash to installed
-  distribution bytes/metadata and the resolved `brains-ai` executable, provisions
-  OpenCode 1.18.25 before its wire cell, refuses stale output, and uploads only a
-  successful sanitized record. The emitted `provenance` object contains
-  `schema`, one `binding_sha256`, `source` commit/tree/Git-executable hashes,
-  `distribution` wheel payload plus installed RECORD/metadata/interpreter/executable
-  hashes, and hashed `runtime_tools`; it never emits their host paths. Child commands
-  run with a PATH rebuilt only from those explicit tool locations and the fresh venv.
-- `.github/workflows/native-service-evidence.yml` executes the same explicit matrix as
-  a manual, non-blocking guarded manager-cycle on disposable native runners. One
-  package job creates the candidate/tree/wheel/RECORD/METADATA/WHEEL provenance
-  manifest; every matrix row verifies its published digest before installation. Its
-  structured prepare record binds every transition to the installation provenance and
-  a random journey identifier covering candidate, manager, Python, adapter, and
-  transport. Cleanup always SHA-links that exact record and emits measured final
-  manager status, listener teardown, configuration hashes, managed-backup accounting,
-  initial-home restoration, and runtime-root removal. A completed boundary proof is a
-  prepare -> verify -> cleanup SHA-linked record triple; the verifier also requires the
-  verify record to preserve the exact prepared steps. The manual manager cycle does not certify
-  a reboot boundary; that requires the checked probe's two-phase journey on a
-  persistent disposable VM and a changed machine-observed boot marker. Login-only
-  attestation remains unsupported and is emitted as null rather than accepted from a
-  self-asserted input.
-- `scripts/probe_native_wakeup_recovery.py` requires a fresh private invocation path,
-  binds a clean checked-out candidate and source tree to the exact wheel, and runs from
-  a fresh virtual environment using explicit absolute Git and Python executables. It
-  verifies wheel and installed RECORD entries, exact METADATA/WHEEL bytes,
-  `direct_url.json`, module, launcher, and interpreter before each scenario. Windows or
-  macOS scenarios use a private synthetic home and state root with a controlled PATH,
-  capture the complete Claude client-home snapshot, and prove abrupt install/removal
-  rollback through the native exchange and owner boundary. Recovery must restore that
-  snapshot exactly and remove its recovery directory; only re-verified sanitized
-  success evidence is exposed for artifact upload.
-- The generated traceability checker derives SPA routes, API client calls, mounted server routes, SQLAlchemy entities, migrations, and stable-ID test markers from source, and fails on any orphan, unmatched, or duplicate surface. Intentional legacy, external, or dynamic exceptions are explicit allowlists that fail when they stop describing a real exception.
-- The reviewed positive core-surface manifest is generated independently for normal and all-opt-in startup. The package job and local quality runner install the lockfile-declared TypeScript parser, build a fresh wheel and sdist, and then supply that artifact directory explicitly to the gate; the checker never downloads dependencies and refuses to validate or rewrite the manifest without exactly one wheel and one sdist. Exact inventories cover the normalized `src/brains` and package-input source tree; normalized, regular-file-only wheel/sdist members; resolved Click commands/groups and normalized public command, option, and argument activation fields; advertised MCP names and callable contracts; HTTP operations; a pinned TypeScript-compiler import graph rooted at the real SPA entry; the exact `App.tsx` route grammar; the audited `coreRoutes.tsx` capability boundary; deny-at-source router, DOM, intrinsic, and React navigation checks in every other reachable module; separately retained dormant frontend source; supported configuration keys; every generated harness file and transport contract; package entry points/dependencies/extras; and canonical IDs and actionable canonical-doc command/path/surface claims. Semantic allowlists reject reachable unknown or frozen SPA modules and targets, modified route/navigation guards or analysis, noncanonical harness paths/transports/content, and newly advertised frozen documentation surfaces even if the manifest is regenerated. Missing, extra, stale, malformed, dynamically unresolved, or uninspectable source or artifact inventory fails closed; field-level, boundary-order, capability-provenance, and syntax-bypass mutation tests prove each discoverability family cannot silently expand.
-- The bundle gate rebuilds `frontend/src` into a scratch directory and compares it byte-for-byte with the committed `src/brains/web/spa`. It never writes to the tracked bundle, and CI additionally asserts the worktree is unchanged afterwards.
-- Failing jobs upload their diagnostics: pytest and migration JUnit XML plus coverage, the rebuilt SPA bundle, container logs, and the Playwright report and hub log.
-- A blocking gate is not an evidence claim. J1-J11 retain Playwright files; J2-J6 and
-  J10 now assert withdrawn containment/fail-closed behavior, while J1 and J7-J11 cover
-  Workspace-first advertised surfaces. Remaining withdrawn source modules stay
-  compatibility inventory and are not product activation evidence.
-
-### Docker-only gate commands
-
-Run the complete candidate quality gate in Docker:
-
-```text
-pwsh -File scripts/run_docker_quality.ps1
+```console
+python scripts/run_quality_gates.py
 ```
 
-The runner bakes source plus locked Python/Node dependencies into a disposable image,
-then runs without a network, host mount, Linux capabilities, or published port. It runs
-the documentation and traceability contracts, Ruff, mypy, acceptance and full pytest,
-SPA and E2E TypeScript checks, the committed-bundle comparison, distribution build,
-fresh source/wheel/sdist core-surface comparison, and shipped-data assertions.
+The runner owns the authoritative CI order. A healthy result means formatting, static
+analysis, unit and integration tests, frontend checks, distribution checks, and the
+generated core-surface manifest all pass. Do not copy a dated pass count into docs.
 
-Run browser UAT separately:
+## Isolation
 
-```text
-pwsh -File scripts/run_docker_e2e.ps1
-```
+Tests that can alter a service, database, state directory, client configuration, or
+listener must use disposable synthetic state. Run those tests in an isolated container
+or disposable VM. Never mount an operator's Brains state or client configuration and
+never bind the default Brains host ports.
 
-That runner uses a private internal Docker network, publishes no host port, stores state
-in tmpfs, passes only a synthetic manifest to Playwright, and tears down only artifacts
-it created. `scripts/run_quality_gates.py` remains a CI-command enumerator and
-compatibility fallback, not the isolated operator-machine path.
+Network access may be enabled while fetching build dependencies. The test runtime should
+use no host mounts or published ports unless the test validates a synthetic boundary.
 
-Run real coding-harness durable-mail UAT separately:
+## Native lifecycle probes
 
-```text
-pwsh -File scripts/run_docker_cli_uat.ps1
-```
+Platform service-manager behavior cannot be established by a Linux container. Use the
+repository's native lifecycle workflow on each supported operating system. The workflow
+must exercise the real installer and service manager, bind the installed artifact to the
+candidate package manifest, and emit machine-readable preparation, verification, and
+cleanup records.
 
-That runner builds pinned Claude, Copilot, OpenCode, and Codex CLIs. The default journey
-uses OpenCode and Claude; `-Tool` may select other pairs when their credentials are
-portable into Linux. Each selected CLI gets a separate tmpfs home and read-only
-credential-file mount, and runs the exact candidate's stdio MCP server against the same
-disposable SQLite volume while a separate `serve-all` container passes gateway/MCP
-health. The runner extracts each real native Session ID, resumes the same harness
-conversation, registers proof-bound mailboxes,
-delivers while recipients are offline, resumes through explicit successors, exchanges
-threaded replies, verifies the candidate worktree is unchanged, and removes its
-containers, networks, volume, and images. It publishes no host port and records only a
-sanitized machine report outside the repository.
+Preparation is not completion. A reboot-dependent check remains incomplete until a
+post-reboot verification record is bound to the same journey and machine-observed boot
+transition. Cleanup must restore the captured pre-test state and fail closed when that
+restoration cannot be proven.
 
-Candidate evidence must state the exact SHA, which gates ran, and on what platform. A local run is E3 evidence for the gates it actually executed and for nothing else.
+## Acceptance
 
-### 5. Isolated UAT gate
+Acceptance tests map stable `F*`, `B*`, `J*`, `O*`, and `AC-*` identifiers to observable
+user outcomes. Passing lower-level tests does not replace an end-to-end acceptance check
+when a change crosses CLI, MCP, browser, persistence, or service boundaries.
 
-UAT must:
+## Documentation
 
-- use an isolated HOME, state directory, database, ports, and credentials;
-- keep coding-harness execution outside the UI harness unless a supported governed
-  boundary is explicitly under test; never require a withdrawn Runtime path for
-  advertised-product acceptance;
-- run against a disposable or read-only source tree and fail if the candidate worktree changes;
-- stop and verify the complete process tree created by the harness;
-- identify the exact SHA and built artifact;
-- exercise J1-J11 as applicable without relying on old screenshots or seeded success claims;
-- include negative authorization, disconnect/reconnect, failure, recovery, backup, restore, and rollback cases;
-- preserve logs and machine-readable results outside the canonical documentation tree;
-- distinguish simulated external systems from real integrations.
+Public documentation states current supported behavior, target contracts, and unresolved
+evidence gaps separately. Record a command and its healthy result instead of a manual
+verification timestamp, commit hash, test count, screenshot pack, or delivery diary.
 
-No UAT result is implied by the presence of `sandbox/`, `sandbox/battle/`, or Playwright files.
-
-### 6. Acceptance gate
-
-Acceptance requires:
-
-- every in-scope AC has E3 or E4 evidence;
-- P0 backlog items affecting the candidate are closed or explicitly block promotion;
-- withdrawn surfaces have no discovery or activation path in the supported candidate;
-- experimental features satisfy the same automated and isolated-UAT gates as other
-  release candidates, plus their feedback, disable, rollback, and revision rules;
-- no unmatched frontend route remains;
-- no cross-Org authorization or realtime subscription escape is open;
-- backup and rollback have been rehearsed for the exact candidate;
-- documentation freshness and traceability checks pass;
-- the operator confirms the final product goal was met.
-
-## Definition of Done
-
-A change is done only when:
-
-1. Feature, Persona, Journey, and AC mappings are present.
-2. Code and data changes implement the stated contract.
-3. Failure and recovery behavior are implemented.
-4. Targeted automated tests pass.
-5. Required hard gates pass.
-6. Isolated UAT passes for user-visible or operational changes.
-7. Security and authorization implications are reviewed.
-8. Canonical and supporting docs describe current facts at the new verification point.
-9. Evidence identifies exact code and environment without becoming a repository diary.
-10. No runtime, package identity, or deployment claim is made beyond observed evidence.
-
-## Documentation rules
-
-- Canonical authorities are linked from the root README.
-- Every claim-bearing canonical and supporting document begins with `last_verified`, `verified_by`, and `verification_basis`.
-- `verification_basis` includes a full SHA and states whether deployment was verified.
-- Current facts, target contracts, and evidence gaps are visibly distinct.
-- Git history and external immutable artifacts hold chronology and run evidence.
-- Do not add changelogs, release notes, roadmaps, milestone diaries, saga reports, screenshot proof packs, or test-count ledgers to the current tree.
-- Update links whenever a document is renamed or removed.
-- Run `python scripts/check_docs.py` and `python scripts/check_traceability.py` before review.
-
-## Branch policy
-
-`staging` is the integration branch. Every delivery slice starts from current `staging`
-on one short-lived feature branch, carries its code/tests/docs/traceability contract,
-passes the slice's required gates, and merges back to `staging` for integrated
-validation.
-
-`main` receives only promotion of an exact integrated staging candidate. Promotion must
-identify the exact staging SHA/artifact and preserve that candidate without assembling
-new feature work in the promotion change. Documentation and acceptance decisions always
-name the exact candidate; neither branch name is evidence by itself.
-
-Until an explicit first release decision is recorded outside these current-state docs:
-
-- no tag defines product truth;
-- no tag or version implies readiness;
-- no release chronology is maintained in the repository;
-- acceptance is based on the quality chain above.
+The core and frozen backlogs contain actions only. Completed work is removed; Git history
+retains its disposition.

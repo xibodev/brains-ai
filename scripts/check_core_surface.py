@@ -17,6 +17,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, cast
 
+import yaml
+from yaml.tokens import ScalarToken
+
 try:
     from scripts import check_distribution as distribution_contract
 except ModuleNotFoundError:  # direct ``python scripts/check_core_surface.py``
@@ -94,7 +97,11 @@ CORE_FRONTEND_MODULES = frozenset(
     }
 )
 CORE_WIRE_ADAPTERS = {
-    "claude-code": (".claude.json", ".claude/CLAUDE.md", {"sse", "stdio", "streamable-http"}),
+    "claude-code": (
+        ".claude.json",
+        ".claude/CLAUDE.md",
+        {"sse", "stdio", "streamable-http"},
+    ),
     "codex": (".codex/config.toml", ".codex/AGENTS.md", {"stdio", "streamable-http"}),
     "copilot-cli": (
         ".copilot/mcp-config.json",
@@ -211,6 +218,18 @@ CANONICAL_PRODUCT_DOCS = (
     "docs/product/TRACEABILITY.md",
     "docs/product/BACKLOG.md",
 )
+PUBLIC_SURFACE_EXCLUDED_DIRS = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+    "node_modules",
+    "playwright-report",
+    "test-results",
+}
 WITHDRAWN_DOC_SURFACE_TERMS = frozenset(
     {
         "code graph",
@@ -240,8 +259,22 @@ DOC_NEGATIVE_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 DOC_POSITIVE_CONTEXT = re.compile(
-    r"\b(?:advertised|available|call|configure|enable|invoke|launch|navigate|open|"
+    r"\b(?:advertised|available|call|configure|enabl(?:e|ed|es|ing)|invoke|launch|navigate|open|"
     r"provides?|run|ships?|supported|use|visit)\b",
+    re.IGNORECASE,
+)
+DOC_ACTIONABLE_CONTEXT = re.compile(
+    r"\b(?:available|call|configure|enabl(?:e|ed|es|ing)|invoke|launch|navigate|open|provides?|"
+    r"run|ships?|use|visit)\b",
+    re.IGNORECASE,
+)
+DOC_STATUS_CONTEXT = re.compile(
+    r"\b(?:advertised|available|supported)\b",
+    re.IGNORECASE,
+)
+DOC_NEGATED_STATUS_CONTEXT = re.compile(
+    r"\b(?:(?:not|no)\s+(?:currently\s+)?(?:advertised|available|supported)|"
+    r"unadvertised|unavailable|unsupported)\b",
     re.IGNORECASE,
 )
 DOC_PATH = re.compile(r"(?<![:/A-Za-z0-9])/[A-Za-z0-9_{}][A-Za-z0-9_{}./:-]*")
@@ -254,6 +287,65 @@ def _doc_clauses(line: str) -> list[str]:
     """Split prose so a negative claim cannot exempt a separate positive claim."""
 
     return [clause.strip(" :-") for clause in DOC_CLAUSE_BOUNDARY.split(line) if clause.strip()]
+
+
+def _yaml_comments(source: str) -> str:
+    """Extract comments after masking all YAML scalar token spans."""
+    masked = list(source)
+    try:
+        list(yaml.compose_all(source))
+        tokens = yaml.scan(source)
+        for token in tokens:
+            if not isinstance(token, ScalarToken):
+                continue
+            for index in range(token.start_mark.index, token.end_mark.index):
+                if masked[index] not in {"\n", "\r"}:
+                    masked[index] = " "
+    except yaml.YAMLError as exc:
+        raise ValueError("invalid YAML while scanning public comments") from exc
+
+    comments: list[str] = []
+    for original, redacted in zip(source.splitlines(), "".join(masked).splitlines(), strict=True):
+        marker = redacted.find("#")
+        if marker >= 0 and (marker == 0 or redacted[marker - 1].isspace()):
+            comments.append(original[marker:])
+    return "\n".join(comments)
+
+
+def _public_surface_sources(root: Path) -> dict[str, str]:
+    """Return public prose/config examples that can advertise product activation."""
+    sources: dict[str, str] = {}
+    tracked = __import__("subprocess").run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if tracked.returncode == 0:
+        candidates = (root / relative for relative in tracked.stdout.split("\0") if relative)
+    else:
+        candidates = root.rglob("*")
+    for path in candidates:
+        if not path.is_file() or any(part in PUBLIC_SURFACE_EXCLUDED_DIRS for part in path.parts):
+            continue
+        relative = path.relative_to(root).as_posix()
+        lower = relative.lower()
+        included = (
+            path.suffix.lower() == ".md"
+            or path.suffix.lower() in {".yml", ".yaml"}
+            or lower.endswith(".env.example")
+        )
+        if not included:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        is_issue_form = lower.startswith(".github/issue_template/")
+        if path.suffix.lower() in {".yml", ".yaml"} and not is_issue_form:
+            source = _yaml_comments(source)
+        sources[relative] = source
+    return sources
 
 
 def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
@@ -305,7 +397,14 @@ def _canonical_doc_advertisements(canonical: dict[str, str]) -> list[str]:
             for clause in _doc_clauses(stripped):
                 negative = DOC_NEGATIVE_CONTEXT.search(clause) is not None
                 positive = DOC_POSITIVE_CONTEXT.search(clause) is not None
-                if negative or not positive:
+                actionable = DOC_ACTIONABLE_CONTEXT.search(clause) is not None
+                positive_status = DOC_STATUS_CONTEXT.search(clause) is not None
+                negated_status = DOC_NEGATED_STATUS_CONTEXT.search(clause) is not None
+                if (
+                    not positive
+                    or negative
+                    and not (actionable or positive_status and not negated_status)
+                ):
                     continue
                 for command in re.findall(r"\bbrains-ai\s+([a-z][a-z0-9-]*)", clause):
                     if command in withdrawn_commands:
@@ -391,6 +490,7 @@ def _environment_names() -> list[str]:
 
 def _documented_ids(root: Path = ROOT) -> dict[str, object]:
     canonical = {path: (root / path).read_text(encoding="utf-8") for path in CANONICAL_PRODUCT_DOCS}
+    public_surfaces = _public_surface_sources(root)
     feature = canonical["docs/product/FEATURE_CONTRACT.md"]
     journeys = canonical["docs/product/PERSONAS_AND_JOURNEYS.md"]
     backlog = canonical["docs/product/BACKLOG.md"]
@@ -407,12 +507,16 @@ def _documented_ids(root: Path = ROOT) -> dict[str, object]:
             path: sorted(set(stable_id.findall(source)))
             for path, source in sorted(canonical.items())
         },
-        "forbidden_advertisements": _canonical_doc_advertisements(canonical),
+        "forbidden_advertisements": _canonical_doc_advertisements(public_surfaces),
     }
 
 
 def _wire_inventory() -> dict[str, object]:
-    from brains.mcp.transport import MCP_MODE_SSE, MCP_MODE_STDIO, MCP_MODE_STREAMABLE_HTTP
+    from brains.mcp.transport import (
+        MCP_MODE_SSE,
+        MCP_MODE_STDIO,
+        MCP_MODE_STREAMABLE_HTTP,
+    )
     from brains.wire import (
         ADAPTERS,
         OPENCODE_SUPPORTED_VERSION,
@@ -959,7 +1063,12 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         "subscribed-topic",
         "messaging bridge",
     )
-    for name in ("ask_human", "inbox_wait", "file_help_request", "release_help_request"):
+    for name in (
+        "ask_human",
+        "inbox_wait",
+        "file_help_request",
+        "release_help_request",
+    ):
         contract = snapshot["mcp_contracts"].get(name, {})
         advertised = f"{contract.get('signature', '')} {contract.get('description', '')}".lower()
         if terms := sorted(term for term in forbidden_help_contract if term in advertised):
@@ -1061,13 +1170,20 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
     ):
         errors.append("wire guidance differs from the reviewed core guidance")
     expected_instruction = f"{MD_START}\n{wire_rule_body.rstrip()}\n{MD_END}\n"
-    for name, (mcp_path, instruction_path, expected_transports) in CORE_WIRE_ADAPTERS.items():
+    for name, (
+        mcp_path,
+        instruction_path,
+        expected_transports,
+    ) in CORE_WIRE_ADAPTERS.items():
         adapter = wire_adapters.get(name)
         if not isinstance(adapter, dict):
             continue
-        expected_format, expected_servers_key, expected_notification, expected_wakeup = (
-            CORE_WIRE_METADATA[name]
-        )
+        (
+            expected_format,
+            expected_servers_key,
+            expected_notification,
+            expected_wakeup,
+        ) = CORE_WIRE_METADATA[name]
         if (
             adapter.get("format") != expected_format
             or adapter.get("json_servers_key") != expected_servers_key

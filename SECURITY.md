@@ -1,95 +1,56 @@
-<!--
-last_verified: 2026-08-01T19:29:19.185-06:00
-verified_by: GitHub Copilot CLI
-verification_basis: HEAD 6eb071bba49a5e678fb6ee8a35a3b21199136374; static inspection of auth, realtime, execution, audit, storage, provider, bridge, and deployment source; deployment not verified
--->
-
 # Security Policy
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a security vulnerability.
+Do not open a public issue for a security vulnerability. Use
+[GitHub private vulnerability reporting](https://github.com/xibodev/brains-ai/security/advisories/new).
 
-Use GitHub private vulnerability reporting:
+Include the affected version or commit, entry point, required privileges, minimal
+reproduction, impact, and suggested containment. Redact credentials, personal data,
+private paths, hostnames, and repository secrets. If a real credential may have been
+exposed, revoke or rotate it before sharing diagnostic material.
 
-<https://github.com/xibodev/brains-ai/security/advisories/new>
+## Supported security boundary
 
-Include:
+Security reports are in scope when they affect the advertised Brains core, including:
 
-- affected commit SHA;
-- entry point and required privileges;
-- reproduction steps;
-- expected and actual behavior;
-- impact and suggested containment;
-- whether the finding involves live credentials or data.
+- authentication or authorization on the local browser, supported `/v1/*` endpoints,
+  realtime connections, or MCP transport;
+- Workspace isolation, mailbox ownership, credential handling, or configuration
+  redaction;
+- approval and governed-action integrity;
+- audit-chain integrity or attribution;
+- injection, path traversal, unsafe deserialization, unintended command execution, or
+  supply-chain behavior reachable from a supported surface;
+- SQLite migration, backup, restore, or repair behavior that risks disclosure or data
+  loss;
+- secret disclosure through errors, logs, browser state, backups, packages, or generated
+  client configuration.
 
-Do not include real secrets in the report.
+Code retained only for historical data compatibility is not a supported activation
+surface. A vulnerability is still reportable if supported code can reach it or if it
+weakens containment of a withdrawn capability.
 
-## Security scope
+## Operating safely
 
-In scope:
+- Keep HTTP and MCP listeners on loopback unless a separately reviewed boundary protects
+  them.
+- Protect the admin key, operator credentials, state directory, configuration, and
+  backups with operating-system access controls.
+- Use separate synthetic state and credentials for tests.
+- Review generated client configuration before installing it and remove obsolete
+  bindings when a client is retired.
+- Verify backups and restores in an isolated destination before relying on them.
+- Treat the action boundary as cooperative application enforcement, not universal
+  operating-system or network confinement.
+- Do not enable or expose retained, frozen, or withdrawn subsystems merely because code
+  or schema objects remain present.
 
-- authentication or authorization bypass on `/v1`, `/app`, `/dashboard`, `/admin`, WS, SSE, MCP, hooks, relay, or Runtime paths;
-- cross-Org or cross-Workspace access;
-- Runtime enrollment/token race or credential overreach;
-- action-gate bypass and pre-approval effects;
-- audit-chain integrity or missing governed-action records;
-- secret leakage through errors, traces, logs, models, config, browser state, backups, or wiring;
-- SSRF, injection, path traversal, unsafe deserialization, command execution, or supply-chain flaws;
-- migration, backup, restore, or foreign-key behavior that causes unauthorized access or data loss;
-- webhook forgery, replay, or bridge credential failure;
-- prompt-injection paths that cross the intended process, network, file, or approval boundary.
+The current product boundary and explicit limitations are documented in
+[Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md), and the
+[Product Brief](docs/product/PRODUCT_BRIEF.md). Deferred security work is listed in the
+[Frozen Backlog](docs/product/FROZEN_BACKLOG.md), not represented as implemented here.
 
-Reports against optional upstream providers are normally reported upstream unless Brains' adapter, configuration, or trust boundary creates the vulnerability.
-
-## Current security boundaries
-
-Current HEAD provides:
-
-- API-key enforcement for protected model routes;
-- key or signed-cookie authentication for native console routes;
-- authenticated WS/SSE and MCP SSE entry points;
-- per-trigger and relay credentials;
-- hash-only expiring enrollment tokens;
-- redaction helpers and bounded gateway error handling;
-- faithful explicit-model routing;
-- HMAC-chained audit records;
-- backup manifest and payload hash checks;
-- loopback defaults for primary processes.
-
-These are source-level capabilities, not deployment proof.
-
-## Known limitations
-
-- Accepted API/operator/daemon keys are not consistently bound to one operator with route-level RBAC.
-- Org roles are stored but not fully enforced.
-- WS topic authorization is missing.
-- Runtime daemon credentials are not Runtime-narrow.
-- The action gate uses selected PATH shims and is not a universal process/network boundary.
-- Optional recurring auto-spawn directly launches a process outside that gate.
-- Audit append is best-effort and is not transactional with the primary action.
-- SQLite foreign keys are not enabled in connection setup.
-- Postgres disk migrations are recorded rather than executed.
-- Browser chat is ephemeral; Session message and stop routes are absent.
-- Framework OpenAPI/docs routes are open on bound interfaces.
-- Query-string credentials remain accepted on some browser/WS paths and may be exposed by surrounding logs.
-- The box deployment scaffold is inconsistent and unverified.
-- The wa-web companion device can read and send all messages for the linked WhatsApp account; dedicated-chat handling is an application convention, not a permission boundary.
-
-See [Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md), and the [Backlog](docs/product/BACKLOG.md) for exact mappings.
-
-## Operator hardening
-
-- Keep gateway, dashboard, MCP, and sidecars on loopback or a reviewed private network.
-- Use distinct, scoped credentials for database, providers, relay, triggers, and bridges.
-- Treat all accepted operator and daemon keys as high authority under current HEAD.
-- Disable unused providers, bridges, public binds, recurring spawn, and framework docs at exposed ingress.
-- Mount secrets read-only and keep state/backups outside the repository.
-- Restrict Runtime working roots and external credentials.
-- Prefer a small MCP allowlist.
-- Verify backup restoration and rollback in isolation.
-- Do not claim hard outward-action enforcement until BL-P0-03 is complete.
-
-## Security acceptance
-
-A security-sensitive change is not accepted until it maps to Feature/Journey/AC IDs, includes negative authorization tests, exercises failure/recovery behavior, and passes the security portions of [QUALITY_GATES.md](docs/QUALITY_GATES.md).
+Security-sensitive changes should include negative authorization tests, failure and
+recovery behavior, and the relevant checks from
+[Quality Gates](docs/QUALITY_GATES.md).

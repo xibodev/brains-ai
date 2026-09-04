@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Personas and Journeys
 
 ## Human personas
@@ -46,7 +40,7 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 
 ### P6 - Release/operations operator
 
-- **Goal:** Establish candidate identity, run hard gates and isolated UAT, back up state, deploy safely, observe, and roll back.
+- **Goal:** Maintain the supported local installation, run quality gates, back up state, and recover safely.
 - **Expects:** Exact commands, readiness distinct from liveness, recoverable data, and no unsupported deployment claim.
 - **Risk:** Current deploy scaffolds are inconsistent and no deployment is verified.
 
@@ -65,18 +59,18 @@ verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the workt
 |---|---|---|---|
 | SA1 | Gateway process | Supported `/v1`, `/app`, and WS/SSE surfaces | Process-local config, counters, and live EventBus; shared durable state. |
 | SA2 | MCP process | Supported Streamable HTTP `/mcp` and stdio coordination tools; SSE is explicit legacy compatibility only | Shares SQLite/files; stdio relies on the local process boundary. |
-| SA3 | Agent harness | Uses Brains MCP/CLI from a Workspace | Harness execution and provider authority remain outside Brains unless a governed path explicitly proves otherwise. |
+| SA3 | Agent harness | Uses Brains MCP/CLI from a Workspace | Harness execution authority remains outside Brains unless a governed path explicitly proves otherwise. |
 | SA4 | GitHub | Frozen external integration | Source compatibility only; not an active evidence gap. |
 | SA5 | SQLite store | Durable coordination, identity, governance, audit, and recovery state | Supported source of truth; one-writer contention and opt-in FK enforcement are explicit. |
 | SA6 | Service supervisor | Owns the supported gateway and MCP child processes | PID identity alone is not protocol readiness. |
 | SA7 | In-process EventBus + durable event log | Realtime fan-out and replay for the supervised local gateway | Cross-process scale is frozen. |
-| SA8 | Withdrawn compatibility modules | Runtime execution, model gateway, automation, semantic/graph, bridges, alternate storage, and legacy HTML | Frozen source/data inventory only; no activation contract. |
+| SA8 | Withdrawn compatibility modules | Historical non-core surfaces | Frozen source/data inventory only; no activation contract. |
 
 ## Journey conventions
 
 - Journey IDs `J1` through `J11` are stable.
 - Acceptance criteria are defined in [FEATURE_CONTRACT.md](FEATURE_CONTRACT.md).
-- "Evidence gap" means current HEAD lacks E3/E4 proof or a required contract.
+- "Evidence gap" means a required behavior or validation remains unfinished.
 - A recovery path must return the user to a truthful state; retrying a hidden failure is not recovery.
 - A withdrawn journey retains its ID and target acceptance criteria for history and
   replacement evaluation, but exposes no supported action path.
@@ -118,9 +112,8 @@ supported next action and no withdrawn route exposure.
 
 **Acceptance IDs:** AC-F0-01, AC-F0-02, AC-F6-01, AC-F6-02, AC-F6-03, AC-F6-04, AC-F6-05.
 
-**Evidence gaps:** `j01-first-run.spec.ts` now asserts clean-state Workspace-first entry
-and fail-closed onboarding-route containment. Isolated-UAT E4 evidence for long-running
-first-run recovery remains open; multi-process scale is frozen.
+**Validation gap:** Long-running first-run recovery remains unverified; multi-process
+scale is frozen.
 
 ## J2 - Connect a machine
 
@@ -334,7 +327,7 @@ failed, stale presence.
 - Browser disconnects: backfill persisted events before live continuation.
 - Harness exits: terminal/dormant paths transactionally detach the current mailbox
   incarnation; lease expiry marks dormant without fabricating execution failure.
-- Successor Session: transfer eligible claims, tasks, subscriptions, and mailbox cursor
+- Successor Session: transfer eligible claims, tasks, and mailbox cursor
   continuity once after binding proof rather than duplicate ownership.
 
 **Success:** The operator or successor agent can reload and understand who owned which
@@ -343,18 +336,9 @@ false claim about process execution.
 
 **Acceptance IDs:** AC-F3-01, AC-F3-02, AC-F4-03, AC-F4-04, AC-F1-06.
 
-**Evidence:** E3 covers mailbox identity validation, proof-bound
-start/reuse/heartbeat/resume/successor transitions, cursor continuity, scope, and
-terminal detach. Isolated E4 covers real native-ID extraction and cross-harness offline
-mail/resume between OpenCode/Codex and OpenCode/Claude. For pinned OpenCode 1.18.25 it
-also executes the installed global plugin through first turn, abrupt process exit,
-lease expiry, same-ID restart, explicit nonzero Workspace conflict, retryable native
-deletion, revocation, and old-proof refusal. Every plugin installation path verifies the
-exact supported version before mutation; the hook uses an absolute Brains interpreter
-with a minimal state environment, and the probe proves a shadowed `PATH` executable and
-unrelated credentials are ignored. Other harnesses retain explicit manual lifecycle
-controls and make no automatic hook claim; multi-hour host idle/restart remains
-installation evidence work.
+**Validation gap:** Long-running host idle/restart behavior still requires native
+installation evidence. Other harnesses retain explicit manual lifecycle controls and
+make no automatic hook claim.
 
 ## J8 - Ask, approve, steer, chat, and stop
 
@@ -403,26 +387,9 @@ and represented no more strongly than its observed result.
 
 **Acceptance IDs:** AC-F3-04 through AC-F3-07, AC-B4-01 through AC-B4-04, AC-B7-01.
 
-**Evidence gaps:** Current E3 covers local offline acceptance, retries, read attribution,
-thread/reply/forward, explicit broadcast, cursor continuity, and cross-Workspace refusal.
-Container-only browser E4 covers selector, Inbox/Sent, explicit read, compose,
-reply/forward, agent deep links, reload, keyboard, responsive layout, unknown deep-link
-refusal, and accepted/read state. E3 also covers fixed body-free notification claims,
-mode restrictions, concurrent claim/settle, detach/read fallback, binding proof,
-consented candidate Claude Code stop-hook wiring, exact configuration restoration,
-cross-process conflict refusal, fixed-output protocol behavior, pull-only fallback for
-Copilot/Codex/OpenCode, bounded reclaim, and terminal uncertainty. An isolated pinned
-Claude binary verifies generated-config discovery and continuation; native-platform
-atomic exchange and owner-only recovery-state evidence remain BL-P1-12 work. SMTP and external
-notification adapters are frozen rather than active evidence gaps. Automatic native
-identity lifecycle, abrupt process exit, and the residual in-process governance boundary
-remain core concerns.
-
-Operations E3 additionally distinguishes malformed registrations/live attachments,
-aged unread delivery, notification fallback/failure, and SMTP backlog/failure without
-making detached unread mail an outage. J11 shows count-only readiness without embedded
-behavioral analytics; the projection contains no content, address, path, native Session
-ID, or native mailbox object ID.
+**Validation gaps:** Native-platform atomic exchange and owner-only recovery-state proof
+remain BL-P1-12 work. Automatic native identity lifecycle, abrupt process exit, and the
+residual in-process governance boundary remain core concerns.
 
 ## J9 - Configure local Brains operation
 
@@ -432,8 +399,8 @@ ID, or native mailbox object ID.
 are available through their authoritative secret store.
 
 **Lifecycle:** advertised for supported local service/MCP posture and approved writes.
-Email/SMTP and GitHub are frozen; provider gateway, messaging bridge, alternate-storage,
-telemetry, and legacy admin activation are withdrawn.
+Other integration, storage, telemetry, and legacy-administration surfaces have no
+supported activation contract.
 
 **Actions**
 
@@ -461,42 +428,16 @@ which processes need restart, and which source-level capabilities are withdrawn.
 activatable. Supported local service and MCP configuration remains redacted; GitHub
 operation and multi-process reload are frozen.
 
-## J10 - Manage Org, members, usage, and reusable guidance
+## J10 - Frozen multi-user and automation target
 
 **Primary personas:** P2, P3, P6
-**Entry:** Operations Access, Coordination, and knowledge/pattern surfaces.
-**Preconditions:** Active Org; authenticated operator; owner/admin privileges for protected changes.
 
-**Lifecycle:** frozen target history. Multi-user Org administration, automatic pattern
-intelligence, and related usage analysis are not supported local-product journeys.
+**Lifecycle:** frozen. There is no supported local-product entry, action, success, or
+activation path for multi-user administration or scheduled automation. Compatibility
+state does not make this a current product journey.
 
-**Actions**
-
-1. Update Org metadata.
-2. Add, role, or remove members.
-3. Inspect scoped usage.
-4. Create or approve Workspace knowledge and coordination patterns.
-5. Inspect offer/use/decline receipts where the workflow supports them.
-6. Verify managed Skills, Automation, and scheduled execution remain unavailable.
-
-**UX states:** no Org, unauthorized, member list, role edit, usage empty/data/error,
-knowledge empty/data/error, pattern proposed/approved/used, withdrawn.
-
-**Errors and recovery**
-
-- Unauthorized role change: deny with 403.
-- Unknown operator: explain the required operator creation path.
-- Duplicate knowledge/pattern: preserve the canonical entry and expose provenance.
-- Withdrawn automation request: fail closed without creating a run.
-
-**Success:** Administrative changes are role-authorized, usage is correctly scoped,
-reusable coordination guidance is attributable, and withdrawn automation remains
-non-activatable.
-
-**Acceptance IDs:** AC-F9-01 through AC-F9-05, AC-F10-01 through AC-F10-06, AC-B4-01, AC-B5-04.
-
-**Evidence gaps:** None for current core scope. Future work is tracked in
-[FROZEN_BACKLOG.md](FROZEN_BACKLOG.md); existing source tests are compatibility evidence only.
+**Acceptance IDs:** AC-F9-01 through AC-F9-05, AC-F10-01 through AC-F10-06,
+AC-B4-01, AC-B5-04.
 
 ## J11 - Cross-cutting trust, realtime, errors, accessibility, and hygiene
 
@@ -509,7 +450,7 @@ path.
 
 1. Navigate every declared modern SPA route.
 2. Authenticate once and preserve only intended session state.
-3. Exercise authorized and unauthorized reads, writes, WS topics, and SSE streams.
+3. Exercise authorized and unauthorized reads, writes, and scoped realtime subscriptions.
 4. Disconnect and reconnect realtime.
 5. Trigger validation, network, SQLite, and process failures.
 6. Use keyboard navigation and inspect focus, labels, contrast, and responsive layout.
@@ -531,21 +472,8 @@ path.
 
 **Acceptance IDs:** AC-F0-01 through AC-F0-05, AC-F3-01, AC-F3-07, AC-F9-03, AC-B8-01 through AC-B8-04, AC-B9-01 through AC-B9-03.
 
-**Evidence gaps:** None for the current browser scope. The J11 browser matrix contains
-exclusive loading, empty, error, and authorization/privacy states for Workspace list
-and detail, configuration, governance, operations, capability actions, mailbox access,
-messages, thread, composer Workspace and address-book sources, and source lookup. It
-also covers scope-hidden deep links, route-specific nested content, connection
-degradation, APG tab/combobox/modal keyboard behavior, and desktop/mobile actionability
-through viewport and overflow-ancestor intersection, center-point occlusion, and trial
-click checks after normal keyboard scrolling. With gradient backgrounds removed from the
-supported shell, rendered contrast is computed at both required widths for all visible
-text and displayed form values on every supported route and required state, including
-each visible interactive control in its normal, focus, and hover states.
-Realtime authorization, cursor replay, gap
-signalling and revocation are asserted at the API and unit level
-(`tests/test_realtime_scope.py`, `tests/test_frontend_realtime.py`) rather than through a
-browser disconnect/reconnect run. Multi-process realtime is frozen.
+**Validation gap:** Browser disconnect/reconnect behavior is not yet covered end to end.
+Multi-process realtime is frozen.
 
 ## Supporting capability acceptance mapping
 
@@ -555,11 +483,11 @@ screens. They require the following explicit system or operational validation:
 | Supporting feature | Acceptance criteria | Journey context | Required validation |
 |---|---|---|---|
 | B1 Gateway/routing | AC-B1-01 through AC-B1-04 | J9, J11 | Withdrawn-surface advertisement inventory and fail-closed direct-call tests; target protocol tests remain historical source evidence only. |
-| B2 Coordination/MCP | AC-B2-01 through AC-B2-04 | J5-J8, J10, J11 | Session/task/claim/handoff/message/checkpoint lifecycle plus authorization tests. |
+| B2 Coordination/MCP | AC-B2-01 through AC-B2-04 | J5-J8, J11 | Session/task/claim/handoff/message/checkpoint lifecycle plus authorization tests. |
 | B3 Context/retrieval | AC-B3-01 through AC-B3-04 | J6, J7, J11 | Workspace knowledge and bounded non-semantic lookup tests plus containment tests for semantic, graph, embedding, and freshness surfaces. |
-| B4 Governance/audit | AC-B4-01 through AC-B4-04 | J8, J10, J11 | Supported-path gate-bypass, transaction, and local tamper tests; multi-operator/concurrent-chain validation is frozen. |
-| B5 Storage/recovery | AC-B5-01 through AC-B5-05 | J5, J7, J10, J11 | SQLite fresh/upgrade parity, FK, backup, restore, compatibility, and recovery drills; alternate backend containment. |
+| B4 Governance/audit | AC-B4-01 through AC-B4-04 | J8, J11 | Supported-path gate-bypass, transaction, and local tamper tests; multi-operator/concurrent-chain validation is frozen. |
+| B5 Storage/recovery | AC-B5-01 through AC-B5-05 | J5, J7, J11 | SQLite fresh/upgrade parity, FK, backup, restore, compatibility, and recovery drills; alternate backend containment. |
 | B6 CLI/wiring/service | AC-B6-01 through AC-B6-04 | J1, J2, J9, J11 | Clean-host CLI, config-preservation, listener-aware service lifecycle, and removed-command checks. |
 | B7 Authenticated external events | AC-B7-01 through AC-B7-04 | J8, J9, J11 | Frozen target history; core validation covers containment only. |
-| B8 Observability/readiness | AC-B8-01 through AC-B8-04 | J7, J10, J11 | Local liveness/readiness separation, redaction, process/listener failure, and stale-presence tests. |
+| B8 Observability/readiness | AC-B8-01 through AC-B8-04 | J7, J11 | Local liveness/readiness separation, redaction, process/listener failure, and stale-presence tests. |
 | B9 Legacy surfaces | AC-B9-01 through AC-B9-03 | J9-J11 | Modern-route inventory plus retired legacy route/static/launch containment tests. |

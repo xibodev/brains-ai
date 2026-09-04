@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-09-01T22:00:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree experimental-lifecycle reference rewrite; documentation, traceability, and targeted Docker gates verified; deployment not verified
--->
-
 # Brains Feature Contract
 
 ## How to read this contract
@@ -14,14 +8,14 @@ does not by itself advertise a feature.
 | Lifecycle | Meaning |
 |---|---|
 | Advertised | Supported in the normal installation. Evidence level is stated separately. |
-| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, explicitly labelled in this contract; full UAT still applies. |
+| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, explicitly labelled in this contract. |
 | Target-only | Future product contract with no current product surface. |
 | Withdrawn | Known-faulty or retired implementation, unadvertised and non-activatable by contract. |
 | Source compatibility | Code or data retained solely to open or migrate existing stores; it is not registered, routed, advertised, or activatable. Presence is not availability. |
-| Missing | An advertised contract is absent from current HEAD. |
+| Missing | An advertised contract is absent from current source. |
 
 Evidence levels are defined in [QUALITY_GATES.md](../QUALITY_GATES.md). Source and test
-presence is at most E1/E2 unless exact-candidate execution evidence says otherwise.
+presence alone is not acceptance evidence; use the applicable quality gate.
 
 ## Product invariants
 
@@ -32,7 +26,7 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 3. Durable state commits before it is presented as recovered, delivered, or complete.
 4. Human-gated actions do not execute before an attributable matching decision.
 5. A durable event is not proof that Brains executed or delivered an external effect.
-6. Health, readiness, test presence, local execution, isolated UAT, and deployment are
+6. Health, readiness, tests, end-to-end validation, and deployment are
    different claims.
 7. Acceptance requires Persona, Journey, `AC-*`, implementation, and evidence mappings.
 8. The normal `/app` console is Workspace-first: Command Center, Workspaces,
@@ -40,7 +34,7 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 9. Withdrawn features have no supported flag, route, command, extra, tool allowlist, or
    direct-call activation. Remaining source/data is compatibility inventory only.
 10. Experimental labels state uncertainty; they do not authorize analytics or replace
-    automated and isolated end-to-end UAT.
+    automated and isolated end-to-end validation.
 
 ## Core Brains features
 
@@ -55,11 +49,11 @@ the shipped SPA route inventory.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | Advertised at E1/E2; `/app` starts at Command Center. |
-| AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
-| AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised at E1/E2; shared route boundaries label loading, empty, success, error, authorization, and not-found independently. |
+| AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | `/app` starts at Command Center. |
+| AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Workspace aliases and deep links exist; browser validation remains open. |
+| AC-F0-03 | API failures remain visible and distinct from empty data. | Shared route boundaries label loading, empty, success, error, authorization, and not-found independently. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
-| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised at E1/E2; unknown top-level, withdrawn, configuration-section, and Workspace URLs remain in place and render a non-disclosing not-found state. |
+| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Unknown top-level, withdrawn, configuration-section, and Workspace URLs remain in place and render a non-disclosing not-found state. |
 
 **Failure behavior:** Authentication failure leads to sign-in or a structured error.
 Unknown/unauthorized entities never silently select another entity. Unknown and
@@ -104,19 +98,19 @@ inventory, not an authentication identity or user path.
 **Promise:** Workspace-scoped coordination Sessions preserve lifecycle, events, asks,
 decisions, ownership, and resume context. Unsupported execution steering is refused.
 
-**Lifecycle:** advertised/partial for durable local coordination. Feedback intelligence,
-automatic pattern routing, ephemeral peer review, running-agent delivery, Runtime stop,
-and execution supervision are frozen or withdrawn; see [FROZEN_BACKLOG.md](FROZEN_BACKLOG.md).
+**Lifecycle:** advertised/partial for durable local coordination. Automated orchestration
+and execution supervision are frozen or withdrawn; see
+[FROZEN_BACKLOG.md](FROZEN_BACKLOG.md).
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Advertised at E1/E2/E3 for the supported single-gateway process and persisted replay paths. |
+| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Supported for the single-gateway process and persisted replay paths. |
 | AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised; terminal transitions cannot resurrect and atomically release task, claim, mailbox, and command ownership. |
 | AC-F3-03 | Session actions update linked Issue state/comments with attribution. | Withdrawn with Project/Issue execution; Workspace task/handoff attribution remains under B2. |
-| AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Advertised/partial; human routing is separate from authorization and complete publish E4 remains open. |
+| AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Human routing is separate from authorization; complete publish validation remains open. |
 | AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox communication remains a B2 capability. |
 | AC-F3-06 | Stop is authorized, durable, delivered to the Runtime, and reconciled. | Withdrawn with Runtime execution; coordination Session end is separate. |
-| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and supported-stream-authorized. | Advertised at E1/E2; closed subscription grammar, replay, and revalidation exist, browser reconnect E4 is open. |
+| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and supported-stream-authorized. | Closed subscription grammar, replay, and revalidation are implemented; browser reconnect remains an evidence gap. |
 
 **Failure behavior:** Reconnect uses scoped durable state. Unsupported process delivery
 or stop is refused rather than queued or reported as successful.
@@ -175,8 +169,8 @@ authorized Workspace; it does not expose execution-model onboarding.
 non-secret/encrypted writes with explicit reload or restart behavior.
 
 **Lifecycle:** advertised for the local service, MCP, SQLite, and harness posture.
-Gateway/provider, Runtime, automation, bridge, Postgres, telemetry, and legacy-admin
-activation are withdrawn. Email/SMTP and GitHub integration are frozen.
+Other integration, execution, storage, and legacy-administration surfaces are withdrawn
+or frozen and have no activation contract.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
@@ -190,8 +184,7 @@ activation are withdrawn. Email/SMTP and GitHub integration are frozen.
 **Promise:** Frozen target for authenticated GitHub events and human-approved public
 defect publication.
 
-**Lifecycle:** frozen/source compatibility. Signed ingress and persisted delivery
-identity do not create a supported integration or active evidence gap.
+**Lifecycle:** frozen/source compatibility. There is no supported integration path.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
@@ -204,8 +197,7 @@ identity do not create a supported integration or active evidence gap.
 
 **Promise:** Frozen target for multi-user Org membership, roles, and scoped usage.
 
-**Lifecycle:** frozen/source compatibility. Signed ingress code and persisted delivery
-identity do not create a supported integration or active evidence gap.
+**Lifecycle:** frozen/source compatibility. There is no supported multi-user path.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
@@ -234,13 +226,11 @@ generic webhooks, and scheduled/manual fire are non-activatable compatibility in
 
 ## Supporting Brains capabilities
 
-### B1 - Model gateway and faithful routing
+### B1 - External request routing
 
-**Promise:** Target contract for exact model intent and explicit policy routing.
+**Promise:** Target contract for exact request intent and explicit policy routing.
 
-**Lifecycle:** withdrawn. Model proxy routes, aliases, provider adapters, router,
-LiteLLM, catalog, usage routing, and the retired model-execution CLI are source
-compatibility only.
+**Lifecycle:** withdrawn. Retained source and data are compatibility inventory only.
 
 - AC-B1-01: explicit model IDs resolve faithfully or return model-not-found.
 - AC-B1-02: only explicit policy-routing requests may invoke classification.
@@ -253,15 +243,15 @@ compatibility only.
 decisions, knowledge, tool records, and checkpoints through stable scoped MCP/CLI/browser
 surfaces.
 
-**Lifecycle:** advertised/partial for the local coordination plane. Feedback intelligence,
-topic boards, pattern proposal/routing/use, and peer-review spawning are frozen.
+**Lifecycle:** advertised/partial for the local coordination plane. Automated guidance
+and peer orchestration are frozen.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
 - AC-B2-03: messages, handoffs, checkpoints, successors, and resume preserve continuity.
 - AC-B2-04: mutation tools authenticate, scope, and human-gate where required.
 
-Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
+Current source includes renewable PID-less leases, dormant expiry,
 successor transfer, concurrent retry dedupe, live-Session- and
 Workspace-bound atomic task/claim/handoff ownership, Workspace browser adapters, and
 durable mailbox identity/attachment plus address-based local delivery. Mailbox
@@ -276,55 +266,17 @@ idempotent operation IDs, and cursor continuity now use migration 150 rows. Agen
 operations require current attachment plus binding; operator-inbox reads require a
 browser/local human channel. A proof-bound, body-free local notification take/settle
 protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
-preserving pull fallback. SMTP rows and adapters are frozen compatibility inventory.
-Isolated UAT covers explicit real native-ID extraction, offline delivery, successor
-recovery, and threaded replies for OpenCode/Codex and OpenCode/Claude. OpenCode 1.18.25
-additionally has an owned dependency-free global plugin whose awaited `chat.message`
-hook attaches, renews, or recovers the authoritative native Session ID and Workspace.
-Delivered native delete events terminally revoke that proof-bound identity; missed
-idle/delete events converge through lease expiry and the next awaited turn. The adapter
-identity contract covers Copilot CLI, Claude Code, Codex, and OpenCode without guessing:
-it preserves the raw adapter label and reports native identity as resolved, unavailable,
-or ambiguous. Other harnesses keep explicit manual lifecycle controls rather than
-claiming an automatic hook. Copilot container credentials, real-provider review, and
-broad per-tool authorization remain open. The
-Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
-explicit read, participant-filtered threads, operator compose/reply/forward, delivery
-state, address-book selection, agent deep links, and responsive keyboard operation.
+preserving pull fallback. External notification adapters are frozen compatibility inventory.
+Current coordination surfaces implement proof-bound mailbox identity, one-current-
+incarnation attachment, durable local delivery, threaded read state, successor recovery,
+and non-enumerating conflict refusal. The supported OpenCode adapter attaches identity at
+its awaited turn boundary; other harnesses retain explicit manual lifecycle controls and
+pull fallback.
 
-Migrations 150 and 153 and the current control surfaces implement hash-bound mailbox identity,
-one-current-incarnation attachment and cursor, operator inbox provisioning, authorized
-phonebook/lookup, and non-enumerating conflict refusal. Managed binding operations create,
-rotate, recover, and revoke through supported CLI and MCP surfaces. A hash-only durable
-transition intent reconciles interruption between an owner-only file replacement and its
-conditional database mutation; POSIX mode enforcement and Windows DPAPI plus an explicit
-current-user DACL protect the file. Raw adapter provenance is stored on mailbox and
-attachment rows, while versioned hashes provide immediate old-key rejection and raw
-secrets never enter result, event, or intent shapes. Lease, terminal detach, successor, alias, and
-resume journeys preserve identity separately from activity, ownership, and reachability
-across idle, abrupt-exit, restart, Workspace movement, and live-conflict cases. The
-threaded message and per-recipient delivery/read rows are active for durable local mail.
-The supported OpenCode wire adapter invokes this lifecycle end to end. Every installation
-path requires the exact supported OpenCode version before configuration mutation. Its
-owned plugin invokes the absolute Brains interpreter/module command with only the
-explicit SQLite and state-directory environment, so `PATH` shadowing and unrelated
-credentials cannot cross the hook boundary. The checked disposable probe uses the
-pinned real binary and a local synthetic provider to prove autoload, first-turn
-attachment, renewal, killed-process expiry, same-ID recovery, explicit nonzero
-Workspace-conflict refusal, recoverable native deletion, revocation, old-proof
-rejection, and a body-, credential-, path-, and native-ID-free journal. Unsupported
-versions and unowned plugin paths fail closed without changing operator configuration.
-Notification attempt state is active through migration 151 and the CLI/MCP adapter
-protocol; the fixed nudge carries no mail metadata or content. With explicit consent,
-`wire --mailbox-wakeups` installs the Claude Code stop-hook adapter and reports
-`turn_boundary` only while its managed configuration is present. Its claim lease,
-three-attempt uncertainty bound, recursion guard, successor resolution, and exact
-configuration restoration preserve pull as authoritative recovery. Copilot CLI, Codex,
-and OpenCode remain pull-only notification adapters; OpenCode's separately proven
-plugin still attaches identity at the awaited turn boundary. Migration 152 preserves
-constrained SMTP consent/outbox rows for compatibility without advertising external
-delivery. Native-platform atomic-exchange and owner-only recovery-state acceptance
-remain BL-P1-12 work; real-provider SMTP is frozen.
+With explicit consent, `wire --mailbox-wakeups` installs the Claude Code stop-hook
+adapter. Its nudge contains no mail body or address, pull remains authoritative, and
+unwiring restores the prior configuration. Native-platform atomic exchange and
+owner-only recovery-state acceptance remain BL-P1-12 work.
 
 ### B3 - Workspace knowledge and repository lookup
 
@@ -373,7 +325,7 @@ commands or sockets.
 **Promise:** Supported SQLite state evolves consistently, applies its declared integrity
 policy, and can be backed up, verified, restored, and rolled back safely.
 
-**Lifecycle:** advertised/partial for SQLite. Postgres is withdrawn compatibility.
+**Lifecycle:** advertised/partial for SQLite. Alternate storage is withdrawn compatibility.
 
 - AC-B5-01: fresh and upgraded databases reach the same supported schema.
 - AC-B5-02: SQLite foreign keys and concurrency settings are explicit and verified.
@@ -383,14 +335,10 @@ policy, and can be backed up, verified, restored, and rolled back safely.
 
 Ordered checksummed migrations, WAL/busy timeout, manifest backup, isolated
 verification, schema-compatibility refusal, dry-run-first repair, and redacted recovery
-policy exist. Restore candidates are verified before target mutation, live restores
-capture a verified rollback point and recheck integrity afterward, and isolated drills
-produce audited evidence. FK default enforcement remains open. Brains does not run a
+policy exist. Restore input is checked before target mutation, live restores capture a
+rollback point and recheck integrity afterward, and isolated drills emit audit records.
+FK default enforcement remains open. Brains does not run a
 backup scheduler.
-
-Migration 150 has equivalent SQLite and PostgreSQL DDL so an existing compatibility
-store never records skipped work as applied. The supported product remains SQLite;
-the PostgreSQL delta is archive/store compatibility, not reactivation of that backend.
 
 ### B6 - CLI, wiring, and service management
 
@@ -418,16 +366,15 @@ process or compensating uninstall; native deregistration failure retains its def
 Windows uninstall stops the verified owned tree before deleting its task, macOS stop
 unloads the KeepAlive job, and Linux preserves the pre-existing linger policy.
 Brains-confined labels support isolated disposable-host validation, while actual native
-manager and login/reboot E4 remains active backlog work.
+manager and login/reboot validation remains active backlog work.
 
 ### B7 - Authenticated external events
 
-**Promise:** Advertised external events use explicit credentials, bounded scope,
-deduplication, privacy controls, and visible failure states.
+**Promise:** Frozen target: external events would require explicit credentials, bounded
+scope, deduplication, privacy controls, and visible failure states.
 
-**Lifecycle:** frozen/source compatibility. Signed GitHub ingress, public defect relay,
-generic triggers, Telegram, Slack, WhatsApp, and WhatsApp Web are not supported local
-product surfaces and create no active evidence gap.
+**Lifecycle:** frozen/source compatibility. External event and relay surfaces are not
+supported by the local product.
 
 - AC-B7-01: ingress and any future relay reject absent/invalid credentials.
 - AC-B7-02: delivery is idempotent where an external event ID exists.
@@ -451,9 +398,8 @@ Protected readiness reports each supported dependency independently with stable,
 secret-free reasons: SQLite migration and quick/full/FK checks, a retained HTTP control
 gateway identity/auth-boundary probe, an authenticated MCP
 initialize plus tools/list handshake, queue and durable-mail progress, and recovery
-policy backed by a verified candidate and audited isolated drill. `/health` remains
-liveness only. Frozen model-gateway/provider, SMTP, multi-process, Runtime/Postgres, and
-external-integration state does not degrade normal readiness.
+policy backed by configuration and recovery-drill records. `/health` remains liveness
+only. Frozen capabilities do not degrade normal readiness.
 
 ### B9 - Deleted legacy browser surfaces
 

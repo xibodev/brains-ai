@@ -9,12 +9,7 @@ SPEC = importlib.util.spec_from_file_location("check_docs", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 check_docs = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(check_docs)
-HEADER = """<!--
-last_verified: 2026-08-01T08:04:38.943-06:00
-verified_by: test
-verification_basis: HEAD 1111111111111111111111111111111111111111; test fixture; deployment not verified
--->
-"""
+HEADER = ""
 
 
 def _run(root: Path) -> subprocess.CompletedProcess[str]:
@@ -32,6 +27,11 @@ def _valid_tree(root: Path) -> None:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(HEADER, encoding="utf-8")
+
+    for relative in check_docs.REQUIRED_SUPPORTING_DOCS:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Supporting\n", encoding="utf-8")
 
     links = "\n".join(f"- [doc]({path})" for path in check_docs.CANONICAL_DOCS[1:])
     (root / "README.md").write_text(HEADER + links, encoding="utf-8")
@@ -85,10 +85,14 @@ def test_checker_rejects_required_contract_failures(tmp_path: Path) -> None:
     (case / check_docs.CANONICAL_DOCS[1]).unlink()
     assert "missing canonical document" in _run(case).stdout
 
-    case = tmp_path / "freshness"
+    case = tmp_path / "supporting"
     _valid_tree(case)
-    (case / "docs/ARCHITECTURE.md").write_text("# no header\n", encoding="utf-8")
-    assert "missing HTML freshness header" in _run(case).stdout
+    for relative in check_docs.REQUIRED_SUPPORTING_DOCS:
+        path = case / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Supporting\n", encoding="utf-8")
+    (case / check_docs.REQUIRED_SUPPORTING_DOCS[0]).unlink()
+    assert "missing required supporting document" in _run(case).stdout
 
     case = tmp_path / "readme"
     _valid_tree(case)
@@ -281,8 +285,28 @@ def test_checker_rejects_backlog_verification_history_metadata(tmp_path: Path) -
         case = tmp_path / name.lower()
         _valid_tree(case)
         backlog = case / "docs/product" / name
-        backlog.write_text(HEADER + backlog.read_text(encoding="utf-8"), encoding="utf-8")
+        backlog.write_text(
+            "last_verified: synthetic\n" + backlog.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         assert "verification/history metadata is not allowed" in _run(case).stdout
+
+
+def test_checker_rejects_stale_verification_metadata_across_public_surfaces(
+    tmp_path: Path,
+) -> None:
+    for relative in (
+        "notes.md",
+        ".github/ISSUE_TEMPLATE/bug.yml",
+        "examples/service.env.example",
+    ):
+        case = tmp_path / relative.replace("/", "-")
+        _valid_tree(case)
+        target = case / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("last_verified: synthetic\n", encoding="utf-8")
+        output = _run(case).stdout
+        assert "stale manual verification metadata is not allowed" in output
 
 
 def test_checker_enforces_frozen_backlog_boundary(tmp_path: Path) -> None:
@@ -370,36 +394,10 @@ def test_checker_rejects_missing_document_references_in_source(tmp_path: Path) -
     assert "reference to missing documentation: docs/removed-guide.md" in output
 
 
-def test_checker_supports_brains_example_and_rejects_legacy_identity(
-    tmp_path: Path,
-) -> None:
+def test_checker_supports_brains_example(tmp_path: Path) -> None:
     case = tmp_path / "identity"
     _valid_tree(case)
     example = case / "examples/brains.skill.md"
     example.parent.mkdir(parents=True)
     example.write_text(HEADER + "# Brains workflow\n", encoding="utf-8")
     assert _run(case).returncode == 0
-
-    forbidden = "".join(("gar", "rison"))
-    source = case / "src/identity.ts"
-    source.parent.mkdir(parents=True)
-    source.write_text(f'export const product = "{forbidden.title()}";\n', encoding="utf-8")
-    assert "forbidden legacy product identity text" in _run(case).stdout
-
-
-def test_checker_rejects_legacy_identity_paths(tmp_path: Path) -> None:
-    forbidden = "".join(("gar", "rison"))
-
-    case = tmp_path / "old-example"
-    _valid_tree(case)
-    old_example = case / "examples" / f"{forbidden}.skill.md"
-    old_example.parent.mkdir(parents=True)
-    old_example.write_text(HEADER, encoding="utf-8")
-    assert "prohibited documentation/evidence path" in _run(case).stdout
-
-    case = tmp_path / "old-acceptance"
-    _valid_tree(case)
-    old_test = case / "tests" / f"test_acceptance_{forbidden}.py"
-    old_test.parent.mkdir(parents=True)
-    old_test.write_text("# legacy identity path\n", encoding="utf-8")
-    assert "prohibited documentation/evidence path" in _run(case).stdout

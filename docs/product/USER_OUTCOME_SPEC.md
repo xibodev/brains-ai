@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-09-02T08:50:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree core/frozen rewrite and outcome-owner reconciliation; documentation and generated traceability contracts passed; focused pytest blocked by host temp-directory permissions; external-provider operation and deployment not verified
--->
-
 # Brains User Outcome Specification
 
 ## Purpose and boundary
@@ -23,8 +17,7 @@ excluded from this product specification.
 Each outcome retains its user goal, minimal path, code contract, evidence contract,
 and acceptance criteria. Unfinished core outcomes also identify core backlog items.
 
-Evidence names below are structured system identifiers and fields, not a
-promise that the current candidate produced them successfully.
+Validation names below identify observable contracts, not a record of a particular run.
 
 ## Core user outcomes
 
@@ -37,22 +30,22 @@ promise that the current candidate produced them successfully.
 | F4 | Withdrawn target: express and dispatch Projects and Issues. | No supported user path; verify Project, Issue, assignment, dispatch, and execution evidence surfaces are undiscoverable and non-activatable. | Frozen Project/Issue APIs, controls, UI, and tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | — | AC-F4-01..07; J5, J6, J7 |
 | F5 | Withdrawn target: assemble execution Pods. | No supported user path; verify Pod/Squad execution, roster, and dispatch surfaces are undiscoverable and non-activatable. | Frozen Pod/Squad source and rows are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | — | AC-F5-01..04; J4, J6 |
 | F6 | Withdrawn target: execution-model first-run onboarding. | No supported user path; a fresh install must start at Command Center and never redirect into execution onboarding. | Frozen onboarding route/state and composed F1/F2/F4 APIs are compatibility inventory only. | Clean-state route inventory and direct-call refusal without an execution flag. | — | AC-F6-01..05; J1 |
-| F7 | A user can inspect supported Brains configuration and change only settings with an approved write contract. | Operations -> Configuration -> inspect redacted local service, MCP, SQLite, and harness posture -> use only a supported write/restart path. | Operations Config; positive supported config summary; validated non-secret writes. Withdrawn gateway, provider, email, and bridge configuration is containment inventory. | Redacted effective state; attributable audit and explicit restart result; zero withdrawn activation controls. | — | AC-F7-01..04; J9 |
-| F8 | Frozen target: accept signed GitHub development events and relay approved public defects. | No supported user path; verify GitHub ingress and outbound relay surfaces are not advertised or activated. | Frozen GitHub webhook, delivery, and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | — | AC-F8-01..04; J6, J9 |
-| F9 | Frozen target: manage multi-user Orgs, membership, roles, and usage. | No supported user path; verify multi-user access and Org-management surfaces are not advertised or activated. | Frozen Org/member/usage APIs and identity controls are compatibility inventory only; Workspace scoping remains supported for the local operator. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | — | AC-F9-01..05; J10, J11 |
+| F7 | A user can inspect supported Brains configuration and change only settings with an approved write contract. | Operations -> Configuration -> inspect redacted local service, MCP, SQLite, and harness posture -> use only a supported write/restart path. | Operations Config; positive supported config summary; validated non-secret writes. Other configuration is containment inventory only. | Redacted effective state; attributable audit and explicit restart result; zero withdrawn activation controls. | — | AC-F7-01..04; J9 |
+| F8 | Frozen target: GitHub event intake and public defect relay. | No supported user path; confirm the capability remains unavailable. | Compatibility state does not authorize activation. | Public-surface absence and direct-call refusal. | — | AC-F8-01..04; J6, J9 |
+| F9 | Frozen target: multi-user organization administration. | No supported user path; confirm the capability remains unavailable. | Workspace scoping for one local operator remains supported; compatibility state does not authorize multi-user activation. | Public-surface absence and direct-call refusal. | — | AC-F9-01..05; J11 |
 | F10 | Withdrawn target: managed Skills, Autopilots, and scheduled execution. | No supported user path; verify Automation, recurring, generic webhook, and managed Skill surfaces are undiscoverable and non-activatable. | Frozen automation UI/APIs/CLI/MCP/tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and historical-row compatibility evidence. | — | AC-F10-01..06; J10 |
 
 ## Supporting user and operator outcomes
 
 | ID | User promise | Minimal path | Code contract | Expected evidence contract | Core backlog items | Acceptance anchors |
 |---|---|---|---|---|---|---|
-| B1 | Withdrawn target: model gateway and policy routing. | No supported user path; verify model proxy, provider, routing, and launcher surfaces are undiscoverable and non-activatable. | Frozen OpenAI/Anthropic facades, router, providers, and usage tables are compatibility inventory only. | Advertisement inventory, direct-call refusal, and no normal-readiness dependency. | — | AC-B1-01..04; J9, J11 |
-| B2 | A local human operator and agents can coordinate durable Workspace work across Sessions. | Start/register mailbox -> task/claim/address mail/handoff/help -> Inbox/Sent/thread/read -> checkpoint -> proof-bound resume/end. | Supported CLI/MCP coordination, mailbox identity/delivery/local-notification controls, a consented Claude Code stop hook, truthful pull fallback for every other harness, and the Coordination mailbox desk. | Session, task, claim, handoff, mailbox identity/attachment, direct/offline delivery, explicit broadcast, body-free local notification with bounded reclaim and uncertainty, exact hook-configuration restoration, pull fallback, thread/reply/forward, per-recipient read, browser selection/compose/deep-link, help, checkpoint, and resume transitions with valid ownership and references. | BL-P1-12 | AC-B2-01..04; J5-J8, J10 |
+| B1 | Withdrawn target: external request routing. | No supported user path; confirm the capability remains unavailable. | Compatibility state does not authorize activation. | Public-surface absence and direct-call refusal. | — | AC-B1-01..04; J9, J11 |
+| B2 | A local human operator and agents can coordinate durable Workspace work across Sessions. | Start/register mailbox -> task/claim/address mail/handoff/help -> Inbox/Sent/thread/read -> checkpoint -> proof-bound resume/end. | Supported CLI/MCP coordination, mailbox identity/delivery/local-notification controls, a consented Claude Code stop hook, truthful pull fallback for every other harness, and the Coordination mailbox desk. | Session, task, claim, handoff, mailbox identity/attachment, direct/offline delivery, explicit broadcast, body-free local notification with bounded reclaim and uncertainty, exact hook-configuration restoration, pull fallback, thread/reply/forward, per-recipient read, browser selection/compose/deep-link, help, checkpoint, and resume transitions with valid ownership and references. | BL-P1-12 | AC-B2-01..04; J5-J8 |
 | B3 | A user or agent can retrieve bounded Workspace knowledge and non-semantic repository matches. | Search knowledge or bounded repository text/symbols -> inspect source and ok/empty/limited/unavailable state. | Knowledge controls and stable local lookup. Semantic indexing, embeddings, graph, and external freshness are withdrawn. | Workspace scope, source reference, bounded result, explicit complete/partial/unavailable outcome, and response binding across Workspace switches. | — | AC-B3-01..04; J6, J7, J11 |
-| B4 | A human can retain authority over supported consequential actions and verify the decision trail. | Action requested -> review exact bounded context -> approve/reject -> execute/deny -> verify audit. | Supported governed actions, decisions, and local audit trail. | Request/resolution/execution correlation; actor/action; denial and failure evidence. | — | AC-B4-01..04; J8, J10, J11 |
-| B5 | An operator can evolve, back up, and restore supported SQLite data without losing integrity. | Initialize/upgrade -> inspect schema -> back up -> verify manifest -> restore/rollback. | SQLite storage, migrations, integrity, and backup/restore CLI/MCP. | Applied migration checksum/outcome; FK check; backup manifest/hash/schema; restore compatibility and result. | — | AC-B5-01..05; J10, J11 |
+| B4 | A human can retain authority over supported consequential actions and verify the decision trail. | Action requested -> review exact bounded context -> approve/reject -> execute/deny -> verify audit. | Supported governed actions, decisions, and local audit trail. | Request/resolution/execution correlation; actor/action; denial and failure evidence. | — | AC-B4-01..04; J8, J11 |
+| B5 | An operator can evolve, back up, and restore supported SQLite data without losing integrity. | Initialize/upgrade -> inspect schema -> back up -> verify manifest -> restore/rollback. | SQLite storage, migrations, integrity, and backup/restore CLI/MCP. | Applied migration checksum/outcome; FK check; backup manifest/hash/schema; restore compatibility and result. | — | AC-B5-01..05; J11 |
 | B6 | An operator can install, wire, start, inspect, and stop Brains consistently. | Install -> setup/wire -> start service -> inspect status/logs -> stop/unwire. | `brains-ai`, supported wire adapters, service renderers, and supervisor. | Exact executable/config/state identity; listener/protocol health; PID/log ownership; cleanup and rollback result. | BL-P0-06 | AC-B6-01..04; J1, J2, J9, J11 |
-| B7 | Frozen target: authenticated GitHub delivery and human-approved public defect relay. | No supported user path; verify ingress and relay surfaces are not advertised or activated. | Frozen GitHub and public-relay source is compatibility inventory only. | Advertisement inventory, direct-call refusal, and stable-store compatibility evidence. | Contained; no active core item. | AC-B7-01..04; J8, J9 |
+| B7 | Frozen target: GitHub delivery and public defect relay. | No supported user path; confirm the capability remains unavailable. | Compatibility state does not authorize activation. | Public-surface absence and direct-call refusal. | — | AC-B7-01..04; J8, J9 |
 | B8 | An operator can distinguish liveness from supported-product readiness and diagnose failures. | Probe -> inspect service, storage, queue, durable-mail, wiring, and recovery posture -> recover -> recheck. | `/health`, readiness, supervisor, queue diagnosis, and recovery policy. | Dependency-specific readiness fields; count-only mailbox registration/attachment/unread/local-notification classes including bounded reclaim and uncertainty; process role, listener/protocol state, queue health, and recovery result. | BL-P0-06, BL-P1-12 | AC-B8-01..04; J7, J11 |
 | B9 | A user encounters one deliberate modern browser contract while deleted HTML stays absent. | Enter `/app` -> authenticate -> use a supported route or receive explicit not-found behavior. | `/app` plus its `/admin/login` and `/admin/logout` cookie endpoints. | Source, route, command, wheel/sdist inventory, consistent local-operator/Workspace decision, and zero deleted-surface activation. | — | AC-B9-01..03; J9-J11 |
 
@@ -69,7 +62,7 @@ promise that the current candidate produced them successfully.
 ### O2 - Coordinate several AI specialists
 
 - **Given:** several live, authorized agent sessions in one or more Workspaces.
-- **When:** they use claims, tasks, direct mail, topics, peer help, and handoffs.
+- **When:** they use claims, tasks, direct mail, peer help, and handoffs.
 - **Then:** ownership and routing are explicit; each contribution remains attributable;
   stale or unavailable participants leave recoverable queue state.
 - **Evidence:** F0, F3; B2, B4, B8; J7, J8, J11; BL-P1-12.
@@ -78,9 +71,8 @@ promise that the current candidate produced them successfully.
 
 - **Given:** a reusable knowledge entry within a local Workspace.
 - **When:** the operator or agent retrieves and applies it to a matching task.
-- **Then:** its source remains visible, and no frozen pattern router, managed Skill,
-  or scheduler executes automatically.
-- **Evidence:** F3, F10; B2, B3, B8; J10, J11.
+- **Then:** its source remains visible and no withdrawn automation executes.
+- **Evidence:** F3, F10; B2, B3, B8; J11.
 
 ### O4 - Intervene in running or blocked work
 
@@ -112,8 +104,7 @@ promise that the current candidate produced them successfully.
 
 ### O7 - Diagnose and recover the product
 
-- **Given:** a failed child service, stale coordination handle, damaged SQLite state,
-  or incompatible candidate.
+- **Given:** a failed child service, stale coordination handle, or damaged SQLite state.
 - **When:** an operator checks readiness, logs, migrations and backup evidence.
 - **Then:** the failed dependency is explicit, repair or rollback is bounded,
   data integrity is verified, and critical journeys pass before service is
@@ -138,8 +129,8 @@ Every outcome above must satisfy:
    screenshots, fixtures or error messages.
 7. **Accessibility:** keyboard, focus, labels, contrast and responsive behavior
    are part of acceptance rather than visual polish.
-8. **Evidence level:** code/test presence is E1/E2 only; acceptance requires the
-   E3/E4 evidence defined in [QUALITY_GATES.md](../QUALITY_GATES.md).
+8. **Validation:** implementation, tests, and end-to-end checks must cover the changed
+   boundary as defined in [QUALITY_GATES.md](../QUALITY_GATES.md).
 
 ## Change rule
 

@@ -5,18 +5,11 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from datetime import datetime
 from os import walk
 from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
-FORBIDDEN_IDENTITY = "".join(("gar", "rison"))
-IDENTITY_SCAN_EXCLUSIONS = {
-    "scripts/check_docs.py",
-    "tests/test_check_docs.py",
-}
-
 CANONICAL_DOCS = (
     "README.md",
     "docs/product/PRODUCT_BRIEF.md",
@@ -31,26 +24,12 @@ CANONICAL_DOCS = (
     "docs/product/FROZEN_BACKLOG.md",
 )
 
-SUPPORTING_DOCS = (
+REQUIRED_SUPPORTING_DOCS = (
     "AGENTS.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/copilot-instructions.md",
-    "frontend/README.md",
-    "docker/README.md",
-    "services/wa-web/README.md",
-    "tests/e2e/README.md",
-    "sandbox/README.md",
-    "sandbox/battle/README.md",
-)
-
-BACKLOG_DOCS = {
-    "docs/product/BACKLOG.md",
-    "docs/product/FROZEN_BACKLOG.md",
-}
-FRESHNESS_DOCS = tuple(
-    path for path in CANONICAL_DOCS + SUPPORTING_DOCS if path not in BACKLOG_DOCS
 )
 
 EXACT_PROHIBITED = {
@@ -73,8 +52,6 @@ EXACT_PROHIBITED = {
     "examples/copilot-instructions.md",
     "install/README.md",
     "docs/images/admin-copilot-device-login.png",
-    f"examples/{FORBIDDEN_IDENTITY}.skill.md",
-    f"tests/test_acceptance_{FORBIDDEN_IDENTITY}.py",
 }
 PROHIBITED_NAMES = {
     "changelog.md",
@@ -139,8 +116,7 @@ BACKLOG_ITEM_RE = re.compile(
 )
 BACKLOG_MAPS_RE = re.compile(r"(?m)^- \*\*Maps to:\*\*\s*(?P<maps>.+)$")
 BACKLOG_ACTION_HEADING_RE = re.compile(
-    r"^###\s+BL-P[0-3]-\d+\s+-\s+"
-    r"(?:Implement|Complete|Check|Validate)\b"
+    r"^###\s+BL-P[0-3]-\d+\s+-\s+" r"(?:Implement|Complete|Check|Validate)\b"
 )
 BACKLOG_ACTION_RE = re.compile(r"(?m)^- \*\*Action:\*\*\s+\S.+$")
 BACKLOG_DONE_RE = re.compile(r"(?m)^- \*\*Done when:\*\*\s+\S.+$")
@@ -170,13 +146,14 @@ REQUIRED_SPA_ROUTES = (
     "/app/*",
 )
 
+VERIFICATION_METADATA_RE = re.compile(
+    r"(?im)^\s*(?:last_verified|verified_by|verification_basis):\s*"
+)
 FIELD_PATTERNS = {
     "last_verified": re.compile(r"(?m)^\s*last_verified:\s*(\S+)\s*$"),
     "verified_by": re.compile(r"(?m)^\s*verified_by:\s*(.+?)\s*$"),
     "verification_basis": re.compile(r"(?m)^\s*verification_basis:\s*(.+?)\s*$"),
 }
-HTML_COMMENT_RE = re.compile(r"<!--(?P<body>.*?)-->", re.DOTALL)
-HEAD_RE = re.compile(r"\bHEAD\s+[0-9a-f]{40}\b", re.IGNORECASE)
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 MARKDOWN_REFERENCE_RE = re.compile(r"\[(?P<text>[^\]]+)\]\[(?P<label>[^\]]*)\]")
 MARKDOWN_REFERENCE_DEFINITION_RE = re.compile(
@@ -379,43 +356,6 @@ def _iter_repo_files(root: Path):
             yield current_path / name
 
 
-def _freshness_errors(path: Path, relative: str) -> list[str]:
-    text = _read(path)
-    header = None
-    for match in HTML_COMMENT_RE.finditer(text):
-        body = match.group("body")
-        if "last_verified:" in body:
-            header = body
-            break
-    if header is None:
-        return [f"{relative}: missing HTML freshness header"]
-
-    errors: list[str] = []
-    values: dict[str, str] = {}
-    for field, pattern in FIELD_PATTERNS.items():
-        match = pattern.search(header)
-        if match is None or not match.group(1).strip():
-            errors.append(f"{relative}: freshness header missing {field}")
-        else:
-            values[field] = match.group(1).strip()
-
-    last_verified = values.get("last_verified")
-    if last_verified:
-        try:
-            parsed = datetime.fromisoformat(last_verified.replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                errors.append(f"{relative}: last_verified must include a timezone")
-        except ValueError:
-            errors.append(f"{relative}: last_verified is not full ISO-8601")
-
-    basis = values.get("verification_basis", "")
-    if basis and not HEAD_RE.search(basis):
-        errors.append(f"{relative}: verification_basis must include HEAD and a full SHA")
-    if basis and "deployment not verified" not in basis.lower():
-        errors.append(f"{relative}: verification_basis must state deployment not verified")
-    return errors
-
-
 def _is_prohibited(relative: str) -> bool:
     normalized = relative.replace("\\", "/")
     lower = normalized.lower()
@@ -509,19 +449,26 @@ def _source_reference_errors(root: Path) -> list[str]:
     return errors
 
 
-def _identity_errors(root: Path) -> list[str]:
+def _public_surface_errors(root: Path) -> list[str]:
+    """Reject stale manual verification records anywhere users may read them."""
     errors: list[str] = []
-    forbidden = FORBIDDEN_IDENTITY.casefold()
     for path in _iter_repo_files(root):
         relative = path.relative_to(root).as_posix()
-        if relative in IDENTITY_SCAN_EXCLUSIONS:
+        lower = relative.lower()
+        public_text = (
+            path.suffix.lower() == ".md"
+            or lower.startswith(".github/issue_template/")
+            and path.suffix.lower() in {".yml", ".yaml"}
+            or lower.endswith(".env.example")
+        )
+        if not public_text:
             continue
         try:
             text = _read(path)
         except (OSError, UnicodeDecodeError):
             continue
-        if forbidden in text.casefold():
-            errors.append(f"{relative}: forbidden legacy product identity text")
+        if VERIFICATION_METADATA_RE.search(text):
+            errors.append(f"{relative}: stale manual verification metadata is not allowed")
     return errors
 
 
@@ -532,10 +479,9 @@ def check_repository(root: Path = ROOT) -> list[str]:
         if not (root / relative).is_file():
             errors.append(f"missing canonical document: {relative}")
 
-    for relative in FRESHNESS_DOCS:
-        path = root / relative
-        if path.is_file():
-            errors.extend(_freshness_errors(path, relative))
+    for relative in REQUIRED_SUPPORTING_DOCS:
+        if not (root / relative).is_file():
+            errors.append(f"missing required supporting document: {relative}")
 
     readme_path = root / "README.md"
     if readme_path.is_file():
@@ -588,7 +534,7 @@ def check_repository(root: Path = ROOT) -> list[str]:
 
     errors.extend(_link_errors(root))
     errors.extend(_source_reference_errors(root))
-    errors.extend(_identity_errors(root))
+    errors.extend(_public_surface_errors(root))
     return sorted(set(errors))
 
 

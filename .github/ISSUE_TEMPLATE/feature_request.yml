@@ -1,39 +1,43 @@
-# last_verified: 2026-08-01T19:29:19.185-06:00
-# verified_by: GitHub Copilot CLI
-# verification_basis: HEAD 6eb071bba49a5e678fb6ee8a35a3b21199136374; static inspection against the current Brains feature and backlog contracts; deployment not verified
-
 name: Feature request
-description: Propose a new capability or a change to existing behaviour.
+description: Propose a change to the supported Brains product contract.
 title: "[feat] "
 labels: ["enhancement", "needs-discussion"]
 body:
   - type: markdown
     attributes:
       value: |
-        ## Read this first
-
-        Brains is the product and implementation identity.
-        Feature requests must start from the final product outcome:
-
-        - Read the [Product Brief](../../docs/product/PRODUCT_BRIEF.md), [Feature Contract](../../docs/product/FEATURE_CONTRACT.md),
-          [Journeys](../../docs/product/PERSONAS_AND_JOURNEYS.md), and [Current Backlog](../../docs/product/BACKLOG.md).
-        - Identify the affected `F*`/`B*`, Persona, `J*`, and `AC-*` IDs.
-        - Keep the canonical Brains package, CLI, namespace, MCP, state, and browser identity consistent.
-        - Open the issue and align on the contract before submitting a large implementation.
+        Start with the [Product Brief](../../docs/product/PRODUCT_BRIEF.md) and
+        [Feature Contract](../../docs/product/FEATURE_CONTRACT.md). The
+        [Core Backlog](../../docs/product/BACKLOG.md) contains schedulable work; the
+        [Frozen Backlog](../../docs/product/FROZEN_BACKLOG.md) is deferred and is not a
+        current product promise.
 
   - type: textarea
     id: problem
     attributes:
-      label: Problem statement
-      description: What pain point or limitation are you running into? Concrete is better than abstract.
+      label: Problem
+      description: Describe the user outcome or limitation without including private data.
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
-      description: How would you like Brains to behave? CLI surface, API contract, config shape, etc.
+      label: Proposed behavior
+      description: Describe the desired supported CLI, MCP, browser, API, or operational contract.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: product_status
+    attributes:
+      label: Product status
+      description: How does this relate to the current product boundary?
+      options:
+        - Change to an advertised core capability
+        - New capability not present in the current contract
+        - Request to reconsider a frozen or withdrawn capability
+        - Documentation or developer-experience change
     validations:
       required: true
 
@@ -41,37 +45,23 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
-      description: |
-        What workarounds exist today? Why are they insufficient? Could this live in a separate tool
-        rather than in Brains itself?
-    validations:
-      required: true
-
-  - type: textarea
-    id: scope
-    attributes:
-      label: Scope estimate
-      description: |
-        Approximate code surface this would touch (router? CLI? a single provider adapter? the dashboard?).
-        Estimate is helpful, not binding.
+      description: Explain current workarounds and why a separate tool is or is not sufficient.
 
   - type: textarea
     id: contract
     attributes:
       label: Contract mapping
-      description: List affected Feature, Persona, Journey, acceptance, and backlog IDs.
-      placeholder: "F3, P1/P5, J8, AC-F3-05/06, BL-P0-05"
-    validations:
-      required: true
+      description: List affected Feature, Persona, Journey, acceptance, or backlog IDs when known.
+      placeholder: "F3, B2, P1, J8, AC-F3-05"
 
   - type: checkboxes
     id: terms
     attributes:
       label: Pre-flight
       options:
-        - label: I reviewed the canonical product contract and current backlog.
+        - label: I reviewed the current product contract and both backlog boundaries.
           required: true
-        - label: I have searched existing issues and discussions.
+        - label: I searched existing issues and discussions.
           required: true
-        - label: I understand that acceptance requires the quality gates and evidence defined in `docs/QUALITY_GATES.md`.
+        - label: I removed secrets, personal data, private paths, and private infrastructure details.
           required: true

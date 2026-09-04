@@ -1,20 +1,20 @@
-<!--
-last_verified: 2026-09-01T22:00:00.000-06:00
-verified_by: Codex
-verification_basis: HEAD 4ecba6a23aa4e6e287f926f4ef3992072d750f8a plus the worktree actionable-backlog navigation rewrite; documentation, traceability, and targeted Docker gates verified; deployment not verified
--->
-
 # Brains
 
-Brains is a local-first operator control plane for coordinating AI coding agents through shared Workspaces, durable work, and human approvals.
+Brains is a local-first control plane for coordinating AI coding agents through shared
+Workspaces, durable work, local mailboxes, and human approvals.
 
-Current maturity: Brains is an alpha release for one local human operator coordinating multiple Workspaces and agent Sessions through one supervised local service. The normal product is the Workspace-first coordination, governance, operations, supported local configuration, and local-lookup surface. Frozen and withdrawn implementations are not product claims even where containment removal from current source remains open. Live deployment and external provider behavior are not certified by repository evidence.
+Brains is currently an alpha product for one local human operator. The supported core
+is Workspace-first coordination, governance, operations, bounded repository lookup,
+and local configuration. Deferred and withdrawn implementations are not supported
+product capabilities even when compatibility code or historical database tables remain.
 
-Brains is the canonical product and repository identity. It is distributed as `brains-ai`, uses the `brains` Python namespace, `brains_` MCP prefix, `~/.brains` state directory, `brains-spa` frontend package, and Brains browser identity.
+The project is distributed as `brains-ai`, uses the `brains` Python namespace, exposes
+MCP tools with the `brains_` prefix, stores state under `.brains`, and serves the Brains
+browser application from `/app`.
 
-## Install
+## Install and run
 
-Brains requires Python 3.11 or 3.12. Install the CLI in an isolated environment:
+Brains requires Python 3.11 or 3.12. Install it in an isolated environment:
 
 ```text
 python -m pip install --user pipx
@@ -22,23 +22,21 @@ python -m pipx ensurepath
 pipx install brains-ai
 ```
 
-Initialize Brains for the project you want it to coordinate and install the supervised
-user service:
+Initialize a Workspace and run Brains in the foreground:
 
 ```text
 cd <project>
-brains-ai setup --path . --service
+brains-ai setup --path .
+brains-ai serve-all
 ```
 
-The service starts without a terminal window, restarts on failure, and starts again at
-login. Verify it with `brains-ai service status`, then open
-`http://127.0.0.1:8787/app`. The setup command prints the generated admin-key location;
-reveal it only when needed with `brains-ai admin-key show --reveal`.
+Open `http://127.0.0.1:8787/app`. Keep the generated admin key private.
 
-Use `brains-ai serve-all` only when foreground logs are useful for diagnosis or
-development. Upgrade an existing isolated installation with `pipx upgrade brains-ai`.
+Native service installation commands are implemented, but clean-host lifecycle and
+persistence validation remains an open backlog item. See
+[Operations](docs/OPERATIONS.md) before relying on a background service.
 
-## Canonical documentation
+## Documentation
 
 - [Product brief](docs/product/PRODUCT_BRIEF.md)
 - [Feature contract](docs/product/FEATURE_CONTRACT.md)
@@ -48,13 +46,8 @@ development. Upgrade an existing isolated installation with `pipx upgrade brains
 - [Architecture](docs/ARCHITECTURE.md)
 - [Operations](docs/OPERATIONS.md)
 - [Quality gates](docs/QUALITY_GATES.md)
-- [Actionable backlog](docs/product/BACKLOG.md)
+- [Core backlog](docs/product/BACKLOG.md)
 - [Frozen backlog](docs/product/FROZEN_BACKLOG.md)
 
-## Repository guidance
-
-- [Contributing](CONTRIBUTING.md)
-- [Security](SECURITY.md)
-- [Agent instructions](AGENTS.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [MIT License](LICENSE)
+See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), the
+[Code of Conduct](CODE_OF_CONDUCT.md), and the [MIT License](LICENSE).

@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Architecture
 
 ## Product boundary
@@ -25,7 +19,7 @@ Architecture descriptions use four lifecycle states:
 | State | Architectural meaning |
 |---|---|
 | Advertised | Part of the supported normal-install topology. |
-| Experimental | Implemented behavior whose normal-use ergonomics or edge cases remain uncertain; full UAT still applies. |
+| Experimental | Implemented behavior whose normal-use ergonomics or edge cases remain uncertain; full validation still applies. |
 | Target-only | Stable future contract with no current product surface. |
 | Withdrawn | Frozen or retired implementation. Source/data may remain for compatibility, but there is no supported activation path. |
 
@@ -102,7 +96,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
 | Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
-| Advertised | Realtime | Closed topics, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
+| Advertised | Realtime | Closed scoped subscriptions, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
 | Advertised | Service operations | CLI, wiring, service renderers, supervisor, readiness | `src/brains/cli`, `src/brains/wire`, `src/brains/service` |
 | Withdrawn | Execution model | Runtimes, Personas, Pods, Projects, Issues, execution onboarding/Sessions | `src/brains/api`, `src/brains/daemon`, execution-model frontend screens |
@@ -128,17 +122,20 @@ Advertised durable families include:
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
 - event context, realtime replay rows, secure local settings, and migration state.
 
-Migration 150 reserves the durable-mailbox data boundary:
+Migration 150 reserves the durable-mailbox data boundary. Its active core rows cover:
 
 - agent/operator mailbox identity and unique, versioned hash-only reattachment binding;
 - one current ephemeral Session attachment plus detached history and a per-incarnation
   delivery cursor;
 - threads, messages, per-recipient local delivery/read attribution, and explicit
   direct/broadcast audience;
-- body-free notification attempts and per-operator SMTP consent/destination references;
-- one retryable SMTP outbox row per local delivery;
+- body-free local notification attempts;
 - non-destructive classification of legacy `mailbox_messages` and
   `tool_session_links` rows present when the migration runs as unverified.
+
+SMTP consent and outbox rows also exist in the migration corpus so newer historical
+stores can be opened. They are compatibility inventory, not an advertised delivery
+path.
 
 The migration itself creates no mailbox, infers no address or owner, copies no message
 body, and changes no existing row. The current control/API/CLI/MCP layer now creates one
@@ -174,8 +171,8 @@ default and authoritative recovery path. An explicitly declared, harness-compati
 attachment may create one idempotent attempt per delivery/incarnation. CLI/MCP adapters
 atomically claim it, receive only a constant body-free nudge, and settle the observed
 result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
-local delivery. With explicit consent, `wire --mailbox-wakeups` installs a managed
-candidate stop hook for Claude Code. At its turn boundary, an existing proof-bound
+local delivery. With explicit consent, `wire --mailbox-wakeups` installs a managed stop
+hook for Claude Code. At its turn boundary, an existing proof-bound
 attachment may emit the constant nudge and request one continuation; abandoned claims
 are lease-reclaimed and become uncertain after three attempts. Copilot CLI, Codex, and
 OpenCode remain pull-only because their notification continuation behavior has no
@@ -185,29 +182,22 @@ until the exchange and owner-only recovery state pass every supported native pla
 gate.
 Brains does not retain a generic live model-input channel.
 
-Migration 152 activates the reserved per-operator SMTP setting and outbox rows. The
-human-bound mailbox owner stores a destination as AES-GCM ciphertext behind a versioned
-reference, proves control through a short-lived emailed challenge, and receives only a
-masked hint on reads. Verification defaults to a constant content-free notification;
-full subject/body forwarding is a distinct explicit consent state. The local delivery
-transaction snapshots only destination reference and copy mode into one outbox row.
+Migration 152 preserves the reserved per-operator SMTP setting and outbox schema for
+historical-store compatibility. Core exposes no SMTP configuration, does not lease its
+outbox, and performs no external mail delivery.
 
-Historical notification and SMTP rows are retained for migration compatibility only;
-the core scheduler does not lease them or perform external delivery.
-
-Durable-mail readiness is a bootstrap-admin-only count projection over those
-authoritative rows. It
-checks active registration shape, live attachment consistency, unread age, body-free
-notification progress, and SMTP backlog/failure/uncertainty separately. A detached
+Durable-mail readiness is a bootstrap-admin-only count projection over active core
+rows. It checks registration shape, live attachment consistency, unread age, and
+body-free local notification progress. A detached
 active mailbox with unread mail remains healthy until the mail crosses the declared age
 threshold; offline acceptance is the feature, not an outage. Withdrawn Runtime lifecycle
 does not affect normal-product readiness, and the migration's explicit unverified legacy
 inventory is reported without being mistaken for a broken active registration.
 
 Operational readiness aggregates only current mailbox registration, attachment, unread,
-notification, and SMTP failure state. It is not behavioral analytics and makes no claim
+and local notification state. It is not behavioral analytics and makes no claim
 about adoption, task success, or product value. Ordinary feedback, automated contracts,
-and isolated end-to-end UAT drive engineering revision.
+and isolated validation drive engineering revision.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
@@ -240,29 +230,28 @@ launched a process.
 1. A harness starts or resumes a Session for one Workspace and tool identity. Supported
    adapters may atomically register the durable mailbox with a native Session ID and an
    adapter-owned binding file.
-2. The Session receives current ownership, handoff, task, message, knowledge, and
-   pattern context.
+2. The Session receives current ownership, handoff, task, message, and knowledge
+   context.
 3. Tool calls renew its lease while the harness remains active. A mailbox-bound Session
    must prove its native ID and binding; knowing only `ses_*` is insufficient.
 4. The Session can claim work, checkpoint, hand off, communicate, ask for help, and
    file human decisions.
 5. A clean end releases eligible ownership. An expired PID-less handle becomes dormant
    without being mislabeled as execution failure.
-6. An explicit successor can inherit eligible claims, in-progress tasks, topic
-   subscriptions, and mailbox attachment/cursor continuity once; mailbox inheritance
+6. An explicit successor can inherit eligible claims, in-progress tasks, and mailbox
+   attachment/cursor continuity once; mailbox inheritance
    requires the same binding proof and rolls back the whole transfer on failure.
 
-Isolated OpenCode/Codex and OpenCode/Claude journeys prove explicit native-ID extraction,
-offline mail, successor reattachment, and threaded replies. Automatic adapter extraction,
-abrupt process exit, and host restart remain open. Scheduler-driven lease expiry itself
-does not depend on an operator read.
+Adapter identity, offline mail, successor reattachment, and threaded replies use the
+same binding contract. Automatic adapter extraction, abrupt process exit, and host
+restart remain open. Scheduler-driven lease expiry itself does not depend on an
+operator read.
 
 ### Queue semantics
 
 - Tasks and Workspace claims use atomic ownership transitions.
 - Checkpoint and active-handoff exact retries are idempotent for sequential retry.
 - Direct mail is durable until read; an empty read is not consumption telemetry.
-- Topic posts are append-only. Subscription cursors are per Session and topic.
 - Peer help is asynchronous: file, claim, release, answer with evidence, cancel, or
   wait without making a client timeout expire the request.
 - Queue diagnosis is read-only. Apply mode may run only objectively safe expiry and
@@ -273,9 +262,11 @@ Running-agent chat delivery and Runtime process stop are withdrawn. Source-level
 
 ## Realtime
 
-WS and SSE use a closed server-resolved topic grammar. The server derives Org/Workspace
-scope, applies non-enumerating refusal, and revalidates identity and membership during
-the connection. Runtime credentials are not operator realtime principals.
+WS and SSE use a closed server-resolved subscription grammar for advertised collections.
+The server derives Org/Workspace scope, applies non-enumerating refusal, and revalidates
+identity and membership during the connection. Retained generic topic controls are not
+registered as normal CLI or MCP capabilities. Runtime credentials are not operator
+realtime principals.
 
 Durable events commit before notification and carry a monotonic `event_id`. Resume uses
 the highest applied cursor. Bounded replay reports an explicit reset when retention or
@@ -286,7 +277,7 @@ Current limitations are material:
 
 - live fan-out is gateway-process local;
 - not every publisher has a stable dedupe key, so some delivery is at-least-once;
-- retention and gap detection are install-wide rather than per topic;
+- retention and gap detection are install-wide rather than per subscription scope;
 - notification-only frames require another durable source for recovery.
 
 ## Human governance and audit
