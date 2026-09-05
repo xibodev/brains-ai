@@ -1220,7 +1220,7 @@ def main() -> int:
         if arguments.worker:
             return _worker(arguments)
         return _bootstrap(arguments)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - one bounded public report
         # A child is always captured by its parent and must not leak a traceback
         # containing temporary paths.  The public runner emits one bounded report.
         if arguments.child_action:
