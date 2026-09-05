@@ -1293,9 +1293,7 @@ def main() -> int:
             # other exception contributes just its class name; without either, a
             # child failure is invisible to the runner.
             child_detail = (
-                str(exc)[:200]
-                if isinstance(exc, RuntimeError) and str(exc)
-                else type(exc).__name__
+                str(exc)[:200] if isinstance(exc, RuntimeError) and str(exc) else type(exc).__name__
             )
             sys.stdout.write(json.dumps({"detail": child_detail}, sort_keys=True) + "\n")
             return 1
