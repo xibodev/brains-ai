@@ -262,6 +262,13 @@ def _make_private(path: Path) -> None:
     # PSModulePath. This probe is launched from PowerShell 7, which exports that
     # edition's path, so 5.1 cannot load its security module and reports nothing.
     environment["PSModulePath"] = str(system_root / "System32/WindowsPowerShell/v1.0/Modules")
+    # The worker runs with a deliberately stripped environment. PowerShell still
+    # needs somewhere to keep its module analysis cache, and with no per-user
+    # location it stalls rather than starting. Point it inside the private root
+    # so the isolation the probe is proving still holds.
+    cache_root = path if path.is_dir() else path.parent
+    for key in ("LOCALAPPDATA", "APPDATA", "TEMP", "TMP"):
+        environment.setdefault(key, str(cache_root))
     acl = subprocess.run(
         [
             str(powershell),
@@ -277,7 +284,9 @@ def _make_private(path: Path) -> None:
         check=True,
         capture_output=True,
         text=True,
-        timeout=10,
+        # A cold Windows PowerShell start on a busy runner routinely exceeds ten
+        # seconds; the previous budget turned a slow start into a hang.
+        timeout=90,
         env=environment,
     ).stdout
     acl_sids = tuple(sorted({line.strip() for line in acl.splitlines() if line.strip()}))
