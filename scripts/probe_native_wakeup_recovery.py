@@ -37,6 +37,15 @@ _CANDIDATE_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 PACKAGE_PROVENANCE_SCHEMA = "brains-native-wakeup-package-provenance/v1"
 RUNTIME_PROVENANCE_SCHEMA = "brains-native-wakeup-runtime-provenance/v1"
+# Mirrors brains.control.durable_mailbox.WINDOWS_OS_PRINCIPAL_SIDS. This probe
+# runs on the bootstrap interpreter, which has no Brains package to import from.
+_WINDOWS_OS_PRINCIPAL_SIDS = frozenset(
+    {
+        "S-1-3-4",  # OWNER RIGHTS
+        "S-1-5-18",  # LOCAL SYSTEM
+        "S-1-5-32-544",  # BUILTIN\\Administrators
+    }
+)
 _ISOLATED_ENV_KEYS = {
     "HOME",
     "USERPROFILE",
@@ -249,12 +258,17 @@ def _make_private(path: Path) -> None:
         timeout=10,
     )
     environment = {**os.environ, "BRAINS_NATIVE_WAKEUP_ACL_PATH": str(path)}
+    # Get-Acl lives in a Windows PowerShell 5.1 module found through
+    # PSModulePath. This probe is launched from PowerShell 7, which exports that
+    # edition's path, so 5.1 cannot load its security module and reports nothing.
+    environment["PSModulePath"] = str(system_root / "System32/WindowsPowerShell/v1.0/Modules")
     acl = subprocess.run(
         [
             str(powershell),
             "-NoProfile",
             "-NonInteractive",
             "-Command",
+            "$ErrorActionPreference = 'Stop'; "
             "$acl = Get-Acl -LiteralPath $env:BRAINS_NATIVE_WAKEUP_ACL_PATH; "
             "$acl.Access | ForEach-Object { "
             "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
@@ -267,7 +281,14 @@ def _make_private(path: Path) -> None:
         env=environment,
     ).stdout
     acl_sids = tuple(sorted({line.strip() for line in acl.splitlines() if line.strip()}))
-    if acl_sids != (sid,):
+    # An administrator-owned path keeps LOCAL SYSTEM, BUILTIN\Administrators and
+    # OWNER RIGHTS, all of which reach the file through OS semantics whatever the
+    # DACL says. Require the owner and reject any other principal. An empty
+    # result means the ACL was unreadable, not that nobody is granted access.
+    unexpected = tuple(
+        value for value in acl_sids if value != sid and value not in _WINDOWS_OS_PRINCIPAL_SIDS
+    )
+    if not acl_sids or sid not in acl_sids or unexpected:
         raise RuntimeError("private probe path ACL is not owner-only")
 
 

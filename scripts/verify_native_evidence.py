@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from native_evidence import SHA1_RE, canonical_sha256, file_sha256
+from native_evidence import SHA1_RE, canonical_sha256, expected_tool_filenames, file_sha256
 
 from brains.service.common import native_service_identity
 
@@ -168,7 +168,7 @@ def _verify_provenance(
         if (
             not isinstance(executable, str)
             or Path(executable).name != executable
-            or executable.casefold() not in {name.casefold(), f"{name.casefold()}.exe"}
+            or executable.casefold() not in expected_tool_filenames(name)
         ):
             raise VerificationFailure("tool identity differs")
         _sha(tool["sha256"], f"tool {name}")

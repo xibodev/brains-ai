@@ -396,6 +396,23 @@ def create_provenance(
     }
 
 
+def expected_tool_filenames(name: str) -> set[str]:
+    """Filenames a bare tool name may legitimately resolve to on this host.
+
+    A globally installed Node tool resolves to a shim rather than an executable
+    image: npm writes ``opencode.cmd``, and PATHEXT decides which suffix a bare
+    name resolves through.
+    """
+    names = {name.casefold(), f"{name.casefold()}.exe"}
+    if os.name == "nt":
+        names |= {
+            f"{name.casefold()}{extension.strip().casefold()}"
+            for extension in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+            if extension.strip()
+        }
+    return names
+
+
 def explicit_runtime_tools(
     raw_json: str,
     *,
@@ -416,16 +433,7 @@ def explicit_runtime_tools(
         if not supplied.is_absolute():
             raise ProvenanceFailure("native tool path is not absolute")
         executable = supplied.resolve(strict=True)
-        expected_names = {name.casefold(), f"{name.casefold()}.exe"}
-        if os.name == "nt":
-            # A globally installed Node tool resolves to a shim rather than an
-            # executable image: npm writes opencode.cmd, and PATHEXT is what
-            # decides which suffix a bare name resolves through.
-            expected_names |= {
-                f"{name.casefold()}{extension.strip().casefold()}"
-                for extension in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
-                if extension.strip()
-            }
+        expected_names = expected_tool_filenames(name)
         if not executable.is_file() or executable.name.casefold() not in expected_names:
             raise ProvenanceFailure("native tool executable identity differs")
         record[name] = {
