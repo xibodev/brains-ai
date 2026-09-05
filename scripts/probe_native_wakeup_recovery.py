@@ -871,17 +871,23 @@ def _run_child(
     ]
     if phase is not None:
         command.extend(["--phase", phase])
-    completed = subprocess.run(
-        command,
-        env=_isolated_environment(root, candidate, provenance_digest),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
+    # action, operation and phase are closed vocabularies checked by the parser,
+    # so naming them identifies a stuck step without quoting any host value.
+    step = f"{action}/{operation}" + (f"/{phase}" if phase else "")
+    try:
+        completed = subprocess.run(
+            command,
+            env=_isolated_environment(root, candidate, provenance_digest),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"isolated native wakeup probe child timed out at {step}") from exc
     if completed.returncode != expected:
         # Never relay child output: exception text can contain environment paths.
-        raise RuntimeError("isolated native wakeup probe child failed")
+        raise RuntimeError(f"isolated native wakeup probe child failed at {step}")
 
 
 def _write_public_result(output: Path, result: dict[str, object]) -> None:
