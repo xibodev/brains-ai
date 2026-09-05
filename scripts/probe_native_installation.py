@@ -454,11 +454,17 @@ def main() -> int:
             runtime_tool_json=os.environ.get("BRAINS_NATIVE_TOOL_PATHS", "{}"),
         )
     except Exception as exc:  # noqa: BLE001 - public artifact exposes type only
-        failure = {
+        failure: dict[str, Any] = {
             "schema": "brains.native-installation-evidence.v1",
             "passed": False,
             "error_type": type(exc).__name__,
         }
+        # ProvenanceFailure reasons are a fixed, curated set of strings that name
+        # the rejected contract and never interpolate a path or host value, so a
+        # failing host stays diagnosable. Any other exception still exposes only
+        # its type.
+        if isinstance(exc, ProvenanceFailure):
+            failure["reason"] = str(exc)
         with args.output.open("x", encoding="utf-8") as stream:
             stream.write(json.dumps(failure, sort_keys=True) + "\n")
         return 1
