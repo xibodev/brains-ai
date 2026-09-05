@@ -895,8 +895,12 @@ def _run_child(
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"isolated native wakeup probe child timed out at {step}") from exc
     if completed.returncode != expected:
-        # Never relay child output: exception text can contain environment paths.
-        raise RuntimeError(f"isolated native wakeup probe child failed at {step}")
+        # Relay only the child's curated reason, never its raw output: exception
+        # text can contain environment paths.
+        raise RuntimeError(
+            f"isolated native wakeup probe child failed at {step}: "
+            f"{_worker_failure_detail(completed.stdout)}"
+        )
 
 
 def _write_public_result(output: Path, result: dict[str, object]) -> None:
@@ -1284,6 +1288,11 @@ def main() -> int:
         # A child is always captured by its parent and must not leak a traceback
         # containing temporary paths.  The public runner emits one bounded report.
         if arguments.child_action:
+            # A child must not print a traceback, which can carry environment
+            # paths. Its curated RuntimeError text names a contract only, and
+            # without it a child failure is invisible to the runner.
+            if isinstance(exc, RuntimeError) and str(exc):
+                sys.stdout.write(json.dumps({"detail": str(exc)[:200]}, sort_keys=True) + "\n")
             return 1
         failure: dict[str, object] = {
             "ok": False,
