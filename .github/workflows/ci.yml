@@ -4,7 +4,8 @@ name: ci
 # integration or promotion branch (BL-P1-01). Every job below fails the workflow when it fails: there is no
 # `continue-on-error` on a required gate, and no gate reports success on a
 # command that did not run. The release workflow (release.yml) does NOT re-run
-# this — tag pushes are expected to be on commits that already passed ci.
+# this; instead its `qualify` job refuses to publish unless the aggregate
+# `quality gate` check below already succeeded for the exact tagged commit.
 #
 # Gate map (docs/QUALITY_GATES.md):
 #   docs        documentation contract + generated traceability contract
@@ -121,6 +122,11 @@ jobs:
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -128,6 +134,15 @@ jobs:
         run: uv python install ${{ matrix.python }}
       - name: Install project + dev extras
         run: uv sync --extra dev
+
+      # tests/test_core_surface_manifest.py drives the TypeScript AST parser
+      # through scripts/inventory_spa_surface.mjs. The full suite runs that file,
+      # so this job needs the same parser the docs job provisions; without it the
+      # manifest tests fail closed on a missing dependency rather than on a real
+      # surface defect.
+      - name: Install checked TypeScript parser
+        working-directory: frontend
+        run: npm ci --ignore-scripts
 
       # The AC-mapped acceptance contracts run first so a product-promise
       # regression is attributable without reading the whole suite log.
