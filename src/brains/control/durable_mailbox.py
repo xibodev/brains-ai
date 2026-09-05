@@ -394,7 +394,11 @@ def _windows_secure_binding_file(path: Path) -> None:
     # entries. The managed file needs no explicit access principal except its user.
     unexpected = windows_unexpected_acl_principals(acl_sids, sid)
     if sid not in acl_sids:
-        raise OSError("mailbox binding file ACL does not grant its owner")
+        granted = ", ".join(redact_sid(value) for value in acl_sids) or "none"
+        raise OSError(
+            f"mailbox binding file ACL does not grant its owner {redact_sid(sid)}; "
+            f"granted: {granted}"
+        )
     if unexpected:
         listed = ", ".join(redact_sid(value) for value in unexpected)
         raise OSError(f"mailbox binding file ACL contains an unexpected principal: {listed}")
