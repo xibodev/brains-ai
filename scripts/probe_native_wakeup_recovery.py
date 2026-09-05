@@ -1305,8 +1305,14 @@ def main() -> int:
             if isinstance(exc, RuntimeError) and str(exc):
                 child_detail = str(exc)[:200]
             elif isinstance(exc, OSError):
+                # A filesystem OSError always carries errno and its message
+                # quotes the filename. One raised by a Brains boundary carries
+                # neither, so that curated text is safe to report.
+                boundary = exc.errno is None and getattr(exc, "winerror", None) is None and str(exc)
                 child_detail = (
-                    f"OSError:errno={exc.errno}:winerror={getattr(exc, 'winerror', None)}"
+                    f"OSError: {str(exc)[:200]}"
+                    if boundary
+                    else f"OSError:errno={exc.errno}:winerror={getattr(exc, 'winerror', None)}"
                 )
             else:
                 child_detail = type(exc).__name__
