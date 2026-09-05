@@ -386,13 +386,35 @@ jobs:
       - name: Install the exact wheel into a fresh private environment
         id: native-environment
         shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.package.outputs.manifest-sha256 }}
         run: |
           set -euo pipefail
-          wheel_count="$(find "$RUNNER_TEMP/native-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          # RUNNER_TEMP is a drive-letter path on Windows that MSYS file tools
+          # cannot resolve, and sha256sum does not exist on macOS. Normalise the
+          # directory for bash and let Python own the digest so one script is
+          # correct on all three supported hosts.
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          wheel_count="$(find "$temp_dir/native-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
           test "$wheel_count" = 1
-          test "$(sha256sum "$RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" = "${{ needs.package.outputs.manifest-sha256 }}"
-          wheel="$(find "$RUNNER_TEMP/native-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
-          venv="$RUNNER_TEMP/brains-native-install-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+
+          dist = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-dist"
+          manifest = dist / "native-wakeup-package-provenance.json"
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_MANIFEST_SHA256"]
+          if digest != expected:
+              raise SystemExit("candidate package provenance does not match the built manifest")
+          PY
+          wheel="$(find "$temp_dir/native-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          venv="$temp_dir/brains-native-install-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
           test ! -e "$venv"
           python -m venv "$venv"
           if test -x "$venv/Scripts/python.exe"; then
@@ -411,10 +433,11 @@ jobs:
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
           echo "python=$probe_python" >> "$GITHUB_OUTPUT"
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
-          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$temp_dir/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
       - name: Probe exact package, native rendering, and selected wire adapter
+        id: native-installation
         shell: bash
         run: >-
           "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_installation.py
@@ -424,6 +447,17 @@ jobs:
           --git-executable "$BRAINS_NATIVE_PROBE_GIT"
           --tool "${{ matrix.adapter }}"
           --output "$RUNNER_TEMP/native-installation-evidence.json"
+      # The evidence file is never exported before it is verified. Echo only the
+      # bounded exception type so a failing host is diagnosable without
+      # publishing unverified evidence or any path.
+      - name: Report the bounded native installation failure type
+        if: failure() && steps.native-installation.outcome == 'failure'
+        shell: bash
+        run: >-
+          python -c "import json,os,pathlib;
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-installation-evidence.json';
+          data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {};
+          print('native installation error_type:', data.get('error_type', 'unavailable'))"
       - name: Verify private native installation evidence before export
         shell: bash
         run: >-
