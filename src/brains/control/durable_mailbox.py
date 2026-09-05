@@ -352,10 +352,14 @@ def redact_sid(value: str) -> str:
 def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     environment = dict(os.environ)
     environment["BRAINS_BINDING_ACL_PATH"] = str(path)
-    # Windows PowerShell 5.1 finds Get-Acl through its own module path. A caller
-    # launched from PowerShell 7 exports that edition's PSModulePath, which sends
-    # 5.1 looking in the wrong place and leaves the ACL unreadable.
-    environment.pop("PSModulePath", None)
+    # Get-Acl lives in a Windows PowerShell 5.1 module that is found through
+    # PSModulePath. A caller launched from PowerShell 7 exports that edition's
+    # path, so 5.1 cannot load its own security module. Point at the system
+    # module directory explicitly rather than inheriting either edition's value.
+    system_root = os.environ.get("SYSTEMROOT") or r"C:\Windows"
+    environment["PSModulePath"] = str(
+        Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "Modules"
+    )
     completed = subprocess.run(
         [
             _windows_system_tool("System32/WindowsPowerShell/v1.0/powershell.exe"),
