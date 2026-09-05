@@ -1111,6 +1111,38 @@ def _load_json(path: Path) -> dict[str, Any]:
     return data
 
 
+def _json_layout(path: Path) -> tuple[int | str | None, str]:
+    """Return the ``(indent, trailing)`` serialisation style of an existing file.
+
+    These client configs belong to the tool, not to Brains. Adding or removing
+    the managed entry must not reflow the rest of the document, so a rewrite
+    reuses the indentation and trailing newline the file already had. A new or
+    unreadable file gets the conventional two-space, newline-terminated form.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return 2, "\n"
+    if raw.strip() == "":
+        return 2, "\n"
+    trailing = "\n" if raw.endswith("\n") else ""
+    lines = raw.rstrip("\n").splitlines()
+    for line in lines[1:]:
+        stripped = line.lstrip(" \t")
+        if not stripped:
+            continue
+        prefix = line[: len(line) - len(stripped)]
+        # The first indented member fixes the document's indent unit; an
+        # unindented one means the object was serialised on a single line.
+        return (prefix or None), trailing
+    return None, trailing
+
+
+def _dump_json(data: dict[str, Any], layout: tuple[int | str | None, str]) -> str:
+    indent, trailing = layout
+    return json.dumps(data, indent=indent) + trailing
+
+
 def _wire_json(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool) -> dict[str, Any]:
     path = adapter.mcp_path(home)
     data, parse_error = _read_json(path)
@@ -1143,8 +1175,9 @@ def _wire_json(adapter: ToolAdapter, home: Path, ctx: WireContext, dry_run: bool
         result["preview"] = entry
         return result
     secure = ctx.transport != MCP_MODE_STDIO and bool(ctx.api_key)
+    layout = _json_layout(path)
     result["backup"] = _backup(path, secure=secure)
-    _write(path, json.dumps(data, indent=2) + "\n", secure=secure)
+    _write(path, _dump_json(data, layout), secure=secure)
     return result
 
 
@@ -1168,11 +1201,12 @@ def _unwire_json(adapter: ToolAdapter, home: Path, dry_run: bool) -> dict[str, A
     result["action"] = "remove"
     if dry_run:
         return result
+    layout = _json_layout(path)
     result["backup"] = _backup(path)
     managed_servers = cast("dict[str, Any]", servers)
     del managed_servers[SERVER_KEY]
     data[adapter.json_servers_key] = managed_servers
-    _write(path, json.dumps(data, indent=2) + "\n")
+    _write(path, _dump_json(data, layout), secure=False)
     return result
 
 

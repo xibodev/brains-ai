@@ -101,6 +101,30 @@ def test_absent_tool_is_skipped(tmp_path: Path) -> None:
     assert [t["tool"] for t in report["tools"]] == ["codex"]
 
 
+@pytest.mark.parametrize(
+    "original",
+    [
+        '{"mcpServers": {"other": {"command": "x"}}, "keep": true}\n',
+        '{"mcpServers": {"other": {"command": "x"}}, "keep": true}',
+        '{\n  "mcpServers": {\n    "other": {\n      "command": "x"\n    }\n  },\n  "keep": true\n}\n',
+        '{\n\t"mcpServers": {\n\t\t"other": {\n\t\t\t"command": "x"\n\t\t}\n\t},\n\t"keep": true\n}\n',
+    ],
+    ids=["compact-newline", "compact-no-newline", "two-space", "tab"],
+)
+def test_unwire_restores_the_client_config_byte_for_byte(home: Path, original: str) -> None:
+    """These files belong to the client, so a wire/unwire cycle must not reflow them."""
+    path = home / ".claude.json"
+    path.write_text(original, encoding="utf-8")
+
+    wire.wire(home, _sse_ctx(), tools=["claude-code"], rules=False)
+    wired = json.loads(path.read_text(encoding="utf-8"))
+    assert wired["mcpServers"]["brains"]["_brains_managed"] is True
+    assert wired["mcpServers"]["other"] == {"command": "x"}
+
+    wire.unwire(home, tools=["claude-code"])
+    assert path.read_bytes() == original.encode("utf-8")
+
+
 # --- SSE schemas ----------------------------------------------------------
 
 
