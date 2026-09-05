@@ -26,7 +26,7 @@ except ModuleNotFoundError:  # direct ``python scripts/check_core_surface.py``
     import check_distribution as distribution_contract  # type: ignore[no-redef]
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
+MANIFEST = ROOT / ".surface/core-surface.json"
 sys.path.insert(0, str(ROOT / "src"))
 
 HTTP_METHODS = {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"}
