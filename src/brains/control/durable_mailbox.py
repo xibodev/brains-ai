@@ -352,12 +352,17 @@ def redact_sid(value: str) -> str:
 def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     environment = dict(os.environ)
     environment["BRAINS_BINDING_ACL_PATH"] = str(path)
+    # Windows PowerShell 5.1 finds Get-Acl through its own module path. A caller
+    # launched from PowerShell 7 exports that edition's PSModulePath, which sends
+    # 5.1 looking in the wrong place and leaves the ACL unreadable.
+    environment.pop("PSModulePath", None)
     completed = subprocess.run(
         [
             _windows_system_tool("System32/WindowsPowerShell/v1.0/powershell.exe"),
             "-NoProfile",
             "-NonInteractive",
             "-Command",
+            "$ErrorActionPreference = 'Stop'; "
             "$acl = Get-Acl -LiteralPath $env:BRAINS_BINDING_ACL_PATH; "
             "$acl.Access | ForEach-Object { "
             "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
@@ -369,7 +374,17 @@ def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
         timeout=10,
         env=environment,
     )
-    return tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
+    sids = tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
+    if not sids:
+        # An owner-only boundary must never treat an unreadable ACL as an empty
+        # one: that would compare the owner against nothing and refuse, or worse,
+        # accept. Report the first diagnostic line and stop.
+        detail = next(
+            (line.strip() for line in (completed.stderr or "").splitlines() if line.strip()),
+            "no principals were reported",
+        )
+        raise OSError(f"mailbox binding file ACL could not be read: {detail[:200]}")
+    return sids
 
 
 def _windows_secure_binding_file(path: Path) -> None:
