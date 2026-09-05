@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
+from brains.service.common import ServiceSpec
+
 _NATIVE_EVIDENCE_PATH = Path(__file__).resolve().parents[1] / "scripts/native_evidence.py"
 _NATIVE_EVIDENCE_SPEC = importlib.util.spec_from_file_location(
     "brains_test_native_evidence", _NATIVE_EVIDENCE_PATH
@@ -288,18 +290,26 @@ def test_installation_definition_and_setup_evidence_rejects_false_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(native_installation.platform, "system", lambda: "Linux")
-    command = [
-        "/synthetic/python",
-        "-m",
-        "brains",
-        "serve-all",
-        "--gateway-host",
-        "127.0.0.1",
-        "--gateway-port",
-        "24001",
-        "--mcp-port",
-        "24002",
-    ]
+    # Build the command through ServiceSpec rather than by hand: the probe reads
+    # the rendered display string, and a hand-written fixture is free to disagree
+    # with what the renderer actually emits.
+    command = ServiceSpec(
+        program="/synthetic/python",
+        args=[
+            "-m",
+            "brains",
+            "serve-all",
+            "--gateway-host",
+            "127.0.0.1",
+            "--gateway-port",
+            "24001",
+            "--mcp-port",
+            "24002",
+        ],
+        gateway_port=24001,
+        mcp_port=24002,
+    ).command_line
+    assert isinstance(command, str)
     rendered = {
         "action": "would-install",
         "platform": "linux",
@@ -315,6 +325,39 @@ def test_installation_definition_and_setup_evidence_rejects_false_identity(
         rendered, gateway_port=24001, mcp_port=24002
     )
     assert evidence["autostart"] is evidence["restart_on_failure"] is True
+
+    # A service interpreter can live under a path containing a space, which the
+    # renderer quotes. That quoting must not be read as part of the arguments.
+    # The path stays POSIX so the check runs on the host executing this test.
+    quoted = dict(rendered)
+    quoted["command"] = ServiceSpec(
+        program="/opt/brains runtime/python",
+        args=[
+            "-m",
+            "brains",
+            "serve-all",
+            "--gateway-host",
+            "127.0.0.1",
+            "--gateway-port",
+            "24001",
+            "--mcp-port",
+            "24002",
+        ],
+        gateway_port=24001,
+        mcp_port=24002,
+    ).command_line
+    assert native_installation._manager_definition_evidence(
+        quoted, gateway_port=24001, mcp_port=24002
+    )["autostart"]
+
+    # A truncated argument list must still be rejected.
+    truncated = dict(rendered)
+    truncated["command"] = "/synthetic/python -m brains serve-all --gateway-host 127.0.0.1"
+    with pytest.raises(native_evidence.ProvenanceFailure):
+        native_installation._manager_definition_evidence(
+            truncated, gateway_port=24001, mcp_port=24002
+        )
+
     rendered["unit"] = "WantedBy=default.target\nRestart=no\n"
     with pytest.raises(native_evidence.ProvenanceFailure):
         native_installation._manager_definition_evidence(
