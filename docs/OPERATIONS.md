@@ -1,20 +1,14 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Operations
 
 ## Scope and proof boundary
 
 This document gives supported operating contracts and repeatable probes. Command
-presence is E1 evidence only. No installed service, external GitHub connection, backup
-drill, UAT environment, container, or deployment is verified here.
+presence is E1 evidence only. This runbook does not establish that an installed service,
+external connection, recovery drill, container, or deployment is operating.
 
 The supported product is Workspace-first coordination, human governance, SQLite
-operations, service/wiring posture, and signed GitHub ingress. The following are
-withdrawn even where current source still registers commands or flags:
+operations, and service/wiring posture. The following are withdrawn and absent from
+normal discovery and activation:
 
 - Runtime enrollment/execution, Personas, Pods, Projects, Issues, execution onboarding,
   execution Session supervision, running-agent chat, and Runtime process stop;
@@ -24,11 +18,11 @@ withdrawn even where current source still registers commands or flags:
 - semantic indexing/search, embeddings, code graph, and external freshness;
 - Postgres as an operating backend and OpenTelemetry export;
 - Telegram, Slack, WhatsApp, WhatsApp Web, and relay/bridge delivery;
-- legacy dashboard and admin HTML.
+- legacy dashboard and configuration HTML; `/admin/login` and `/admin/logout` remain
+  only for the supported SPA cookie lifecycle.
 
-Do not enable or operate those paths. No environment switch, pip extra, direct URL, or
-explicit tool allowlist makes a withdrawn capability supported. BL-P0-09 owns removal
-of the remaining discovery and activation surface.
+No environment switch, pip extra, direct URL, or explicit tool allowlist activates a
+withdrawn capability.
 
 ## Install and start
 
@@ -40,18 +34,22 @@ python -m pipx ensurepath
 pipx install brains-ai
 ```
 
-Initialize one Workspace and install the supervised user service:
+Initialize one Workspace and start Brains in the foreground:
 
 ```text
 cd <project>
-brains-ai setup --path . --service
+brains-ai setup --path .
+brains-ai serve-all
 ```
 
-The service runs without a terminal window, restarts on failure, and starts at login.
-Run `brains-ai service status`, then open `http://127.0.0.1:8787/app`. `setup` prints the
-generated admin-key location; use `brains-ai admin-key show --reveal` only when the key
-is needed. Never place it in a URL, log, issue, fixture, or repository. Use foreground
-`brains-ai serve-all` only for diagnosis or development.
+Open `http://127.0.0.1:8787/app` after the stack is ready. Keep the generated admin key out
+of URLs, logs, issues, fixtures, and repositories.
+
+Repository checks exercise exact-wheel installation, service-definition rendering,
+reversible wiring, and hermetic lifecycle behavior. An exact candidate is not qualified
+until the fail-closed aggregate accepts its required native and container results. Real
+native manager persistence and restoration across the supported host matrix remain
+open. Review the service section below before opting into `--service`.
 
 The supported installed executable is `brains-ai`. Helpers that invoke `brains` are
 obsolete.
@@ -63,29 +61,27 @@ This is a capability summary, not an exhaustive `--help` copy.
 | Family | Supported purpose |
 |---|---|
 | `setup`, `serve-all`, `serve`, `mcp`, `up` | Initialize or run the supported gateway/MCP stack. |
-| `wire`, `unwire` | Add, inspect, or remove only the Brains-owned MCP entry for a supported harness. |
+| `wire`, `unwire` | Add, inspect, or remove the Brains-owned MCP entry and explicitly consented supported mailbox wakeup hook. |
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
-| Session/state/task/claim/handoff/message/topic/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
+| Session/state/task/claim/handoff/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
 | `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
-| knowledge/pattern/tool commands | Maintain reusable coordination knowledge and tool posture. |
+| knowledge commands | Maintain reusable Workspace knowledge. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
-| `readiness`, `queue-health`, `recovery-policy` | Inspect supported operational posture. |
+| `readiness`, `queue-health`, `recovery-policy`, `recovery-drill` | Inspect supported operational posture and prove an isolated restore. |
 | `db migrations|migrate|diagnose|repair|fk-check` | Inspect or repair supported SQLite state. |
 | `backup`, `backup-inspect`, `db verify-backup`, `restore` | Create, verify, inspect, or restore manifest backups. |
-| Org/operator/credential commands | Manage explicit principals and access. |
 
-Commands for dashboard, daemon, model launching, recurring/jobs, generic webhooks,
-semantic/graph indexing, or feature-extra activation may still appear at HEAD. Treat
-them as withdrawal defects, not operating alternatives.
+Dashboard, daemon, model launching, recurring/jobs, generic webhook, semantic/graph,
+provider, feedback/pattern, and feature-extra commands are not registered by core.
 
 ## Process and port map
 
 | Process | Default bind/port | Supported surface |
 |---|---|---|
-| Gateway | `127.0.0.1:8787` | `/app`, protected native `/v1`, `/health`, WS/SSE, signed GitHub ingress |
-| MCP SSE | port `9877`; bind controlled by supported MCP settings | Authenticated `/sse` transport |
+| Gateway | `127.0.0.1:8787` | `/app`, protected core `/v1`, `/health`, WS/SSE |
+| MCP Streamable HTTP | port `9877`; bind controlled by supported MCP settings | Authenticated `/mcp` transport; `/sse` is explicit legacy compatibility only |
 
 `serve-all` supervises the gateway and MCP children. The retired dashboard port and
 WhatsApp Web sidecar are not part of the supported stack.
@@ -114,6 +110,18 @@ must assume a long-lived process keeps its loaded value until that process expli
 reloads or restarts. A write is not complete until its response states the required
 reload/restart behavior and the affected process passes its probe.
 
+The modern Config screen and `GET /v1/operator/configuration` expose only a positive,
+redacted manifest of local service, Streamable HTTP MCP, SQLite, and supported harness
+posture. `PUT /v1/operator/configuration` accepts only the advertised non-secret fields,
+requires bootstrap-admin authentication plus the revision returned by GET, and records
+the resolved operator in the audit trail. Every write returns `restart_required` because
+the gateway may have multiple workers and MCP is a separate process; changing only the
+handling process would not establish stack convergence. Values take effect after a
+supervised-stack restart. A validation or apply failure restores the prior runtime overlay. Frozen and
+withdrawn provider, email, bridge, gateway-preamble, alternate-storage, and telemetry
+fields are neither returned nor accepted by this surface. The deleted legacy browser
+has no alternate configuration writer.
+
 Supported secret rules:
 
 - environment values remain outside Git;
@@ -135,10 +143,9 @@ and available Org/Workspace scope.
 | `/health` | Open liveness only; never readiness. |
 | Native `/v1` | `require_api_key` plus route-specific Org/Workspace capability. |
 | `/app` | Signed browser cookie bound to the credential that minted it, or accepted header/key flow. |
-| WS/SSE | Principal plus server-derived topic authorization, revalidated during the connection. |
-| MCP SSE | Credential-store lookup and loopback Host policy by default. |
+| WS/SSE | Principal plus server-derived subscription authorization, revalidated during the connection. |
+| MCP Streamable HTTP `/mcp` | Credential-store lookup and loopback Host policy by default; SSE is explicit legacy compatibility only. |
 | MCP stdio | Local OS process boundary; inherits local state authority. |
-| GitHub ingress | Signature, delivery/event headers, exact repository binding, replay refusal. |
 
 Roles are `owner`, `admin`, and `member`. Route capability checks, not labels alone,
 provide authorization. A principal that may read an Org but lacks a capability receives
@@ -170,25 +177,55 @@ harness's native MCP schema. Wiring must:
 - make `unwire` remove only the Brains-owned entry;
 - select a transport the harness supports and readiness can probe.
 
+Mailbox wakeup hooks are separate, explicit consent:
+
+```text
+brains-ai wire --mailbox-wakeups
+```
+
+This installs the Brains-owned stop hook for Claude Code only. At its supported turn
+boundary it can request one more turn with a constant, body-free prompt. Copilot CLI,
+Codex, and OpenCode remain pull-only notification adapters. A hook
+conflict or MCP wiring failure leaves that adapter in pull mode. Claude settings changes
+are cross-process locked and use a recoverable atomic exchange that captures displaced
+bytes. Ambiguous concurrent edits remain preserved for recovery instead of being
+discarded. Native exchange and owner-only recovery behavior is limited to the platforms
+listed in the core backlog.
+
 Probe without changing configuration:
 
 ```text
 brains-ai wire --status
 ```
 
-The default wired guidance may recommend only normal-install capabilities: Workspace
-coordination, knowledge, and bounded non-semantic repository lookup. Semantic search,
-graph, execution, automation, and bridge guidance is a BL-P0-09/BL-P1-18 defect.
+The default wired guidance recommends only Workspace coordination, knowledge, and
+bounded substring/symbol repository lookup. Use `brains_search_repo` over MCP or
+`brains-ai search-repo QUERY --path WORKSPACE`; the authenticated Workspace Knowledge
+tab uses the same control. Results are root-relative line-numbered snippets. `ok` means
+matches were found, `empty` means the readable Workspace had no match, and `unavailable`
+means the query or Workspace root could not be used. `limited` means a directory, file,
+byte, result, traversal, or read boundary prevented a complete answer; returned matches
+are partial and an empty partial set is never represented as `no_matches`. Lookup is
+read-only and needs no preparation.
 
 ## Service operation
 
-Supported user-service renderers target Windows Task Scheduler, macOS launchd, and
-Linux systemd user services.
+User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd
+user services. Repository checks exercise renderer and hermetic backend behavior. Each
+release candidate separately requires the disposable native lifecycle and reboot-boundary
+evidence defined in [Quality gates](QUALITY_GATES.md).
 
 ```text
 brains-ai service status
 brains-ai service logs
 ```
+
+Every mutating service command exits non-zero when its structured result reports
+failure. `service install --label brains-serve-all-<suffix>` provides an explicitly
+Brains-owned identity for disposable native validation; subsequent commands accept the
+same `--label`. Labels outside that namespace are refused. The default remains
+`brains-serve-all`. Linux installation does not change the account's independent linger
+policy. Failed deregistration retains the native definition for diagnosis and retry.
 
 `brains-ai service install` preflights the requested loopback gateway port. An
 explicit unavailable port is refused. When no port is supplied and the default
@@ -204,8 +241,8 @@ when the window closes it exits with code 3, which the systemd unit excludes
 from restart (`RestartPreventExitStatus`) instead of relaunching forever.
 
 After startup, each owned child has a protocol-aware listener watchdog. Gateway must
-answer `/health`; MCP and any explicitly enabled dashboard child must complete a bounded
-HTTP response. A child that never becomes ready or stays alive after losing its listener
+answer `/health`; MCP must complete a bounded HTTP response. A child that never becomes
+ready or stays alive after losing its listener
 has its owned process tree terminated, allowing the supervisor's existing bounded
 restart loop to recover it. On Windows the tree is stopped with Task Scheduler-compatible
 `taskkill /T`; on POSIX each child uses its own process group.
@@ -222,15 +259,11 @@ verified owned process. An explicit busy gateway port is refused; when the defau
 is unavailable, installation may persist a bindable loopback fallback and must report
 the resulting console/MCP endpoints.
 
-Clean-host Windows restart/rollback remains an E4 requirement.
-
-`brains-ai setup --path . --service` or `brains-ai service install` is the supported
-way to avoid keeping a `serve-all` terminal open. Windows uses a hidden per-user Task
-Scheduler task whose action is the installed environment's verified `pythonw.exe`; the
-installer refuses a headed or missing launcher rather than leaving a persistent console.
-Supervisor and child output continues to rotate in the service log. macOS uses launchd
-and Linux uses a systemd user service. Inspect it with `brains-ai service status`. Do not
-run a second foreground `serve-all` against the same ports or state directory.
+Use `brains-ai setup --path . --service` or `brains-ai service install` only after
+reviewing the rendered definition and configuration backup. Inspect the result with
+`brains-ai service status`. Do not run a foreground `serve-all` against the same ports
+or state directory. Test install, restart, persistence, uninstall, and restoration only
+on a disposable native host. Treat successful proof for an earlier commit as stale.
 
 ## Coordination operation
 
@@ -250,9 +283,10 @@ Operational invariants:
 - end or detach the Session when the harness exits;
 - do not infer running-agent delivery from durable mail, events, or a command row.
 
-`inbox_wait` is the bounded wakeup primitive for direct mail, subscribed topics, and
-claimable peer help. A timeout means no wakeup during that wait, not that durable work
-expired. Empty mailbox reads do not count as adoption.
+`inbox_wait` is the bounded wakeup primitive for direct mail and claimable peer help. A
+timeout means no wakeup during that wait, not that durable work expired. Retained topic
+subscriptions may wake historical state but have no advertised activation commands.
+Empty mailbox reads do not count as adoption.
 
 Queue health:
 
@@ -268,26 +302,6 @@ other human-owned work.
 
 Running-agent message delivery and Runtime process stop are withdrawn. Use harness-native
 interaction outside Brains and record only what can be truthfully observed.
-
-## Experimental features and feedback
-
-Experimental is a support label for behavior whose normal-use ergonomics or edge cases
-remain uncertain. It is not a running field trial and does not enable embedded analytics.
-All release candidates still require automated contracts and isolated end-to-end UAT.
-
-The agent feedback inbox (BL-P1-15) is the ordinary feedback path. Humans triage reports,
-and engineers reproduce and revise behavior as appropriate. BL-P1-16's welcome and
-mailbox behavioral analytics surface is removed.
-
-Ephemeral peer review (BL-P1-20) is implemented but not admitted: normal help currently
-defaults to auto-launch and remote execution still overlaps withdrawn Runtime surfaces.
-Do not advertise it as experimental until both boundaries are corrected and its isolated
-UAT passes.
-
-Feedback reporting stores redacted Workspace-scoped records. Triage/promotion is human
-only and cannot edit the roadmap or authorize release. Ephemeral review uses a temporary
-tracked snapshot, bounded runtime/output, source-fingerprint checks, and no automatic
-merge or execution.
 
 ## Health and readiness
 
@@ -308,17 +322,21 @@ brains-ai readiness
 GET /v1/admin/readiness
 ```
 
-At HEAD, readiness reports bounded storage/migration, coordination queue, durable-mail,
-and recovery-policy checks. Durable mail separates invalid registration/live attachment,
-aged unread, stalled/failed notification, and SMTP retry/failure/uncertainty. A detached
+Readiness reports bounded SQLite migration and quick/full/FK integrity, the retained HTTP
+control gateway's liveness identity and protected-route auth boundary, authenticated MCP
+protocol, coordination queue, durable-mail, and verified recovery posture. The withdrawn
+model/provider gateway is not a readiness input. Durable
+mail separates invalid registration/live attachment and aged unread state. A detached
 mailbox with unread accepted mail is reported but is not degraded until the unread-age
 threshold is crossed. Runtime execution is withdrawn and does not affect normal-product
-readiness. The active backlog still requires child
-listener/protocol health, scheduler progress, registry freshness, installed package and
-migration/schema identity, and configured wire transport checks.
+readiness. Each supported dependency degrades independently.
+
+Acceptance uses real isolated state transitions rather than replacing component probes:
+schema loss, foreign-key violation, stale queue work, invalid durable-mail registration,
+and missing, stale, or incompatible recovery evidence each drive their own bounded result.
 
 No readiness field may return a secret or raw exception. A `ready` response still does
-not prove GitHub operation, browser journeys, backup/restore, ingress, or deployment.
+not prove GitHub operation, browser journeys, a live-store restore, ingress, or deployment.
 
 ## SQLite migrations and integrity
 
@@ -363,45 +381,29 @@ record per-recipient attribution. Successful send means local SQLite acceptance 
 it does not claim agent wakeup, live harness delivery, or SMTP copy.
 
 Migration `151_mail_notification_state` constrains attachment modes and the
-`queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. A
-harness integration that it has actually installed may explicitly register `immediate`
-for Claude Code/OpenCode or `turn_boundary` for Codex; Copilot CLI accepts only pull.
+`queued -> claimed -> delivered|failed` attempt lifecycle. Pull is the default. An
+installed Claude Code stop hook may explicitly register `turn_boundary`; Copilot CLI,
+Codex, and OpenCode remain pull-only through supported wiring.
 For a stronger mode, `mailbox notification-take` claims one attempt and returns only the
 fixed nudge `Brains mailbox: new mail is waiting. Pull your durable inbox.` plus bounded
 attempt metadata. It never returns subject, body, sender, recipient, or delivery
 identity. The adapter records what it observed with `notification-settle`; failure,
 detach, mode change, timeout, and prior inbox read leave local delivery intact.
 
-Current `wire` output reports `mailbox_notification_mode: pull` for all harnesses. The
-wiring command installs MCP/rules only, not a notification hook or plugin, so stronger
-modes must not be selected merely because a harness platform could support one. There is
-no Brains follower daemon or model-input injection in this slice. Use proof-bound
-`mailbox inbox` as the authoritative recovery path.
+Default `wire` output reports `mailbox_notification_mode: pull` for all harnesses.
+`--mailbox-wakeups` installs only the supported consented hooks and reports
+`turn_boundary` only after their managed configuration is present. A claim abandoned
+after output is reclaimed after its bounded lease; three unconfirmed attempts end in a
+stable `delivery_uncertain` state and pull fallback. The hook never receives or emits
+message content, addresses, credentials, binding paths, or notification identifiers.
+There is no Brains follower daemon or model-input injection. Use proof-bound `mailbox
+inbox` as the authoritative recovery path.
 
 The Coordination browser mailbox desk supports authorized human reads and operator
 compose/reply/forward; agent mailboxes remain read-only because agent send authority
-requires adapter-held proof. The notification take/settle protocol is available to
-explicit adapters. An operator may configure one external copy destination on their own
-operator mailbox from the same human-bound desk. The destination is encrypted and must
-answer a short-lived emailed challenge; status returns only a masked hint.
-
-Migration `152_mail_smtp_state` constrains destination/consent and outbox transitions.
-Verification enables `notification`, which sends a constant subject/body that says new
-mail is waiting and to reply inside Brains; it includes no sender, local subject/body,
-mailbox address, or delivery ID. `full_body` requires a separate confirmation and stores
-who consented and when. Destination/mode changes cancel `queued`/`retry` copies and are
-refused while a `sending` lease is live.
-
-The MCP scheduler drains a bounded batch each tick. It records an audit attempt before
-network I/O, uses one stable SMTP `Message-ID` per outbox row, retries only failures known
-before the SMTP send stage, and marks send-stage or expired-lease outcomes `uncertain`
-instead of retrying blindly. SMTP state never changes local acceptance/read state.
-`mailer_status` remains the probe for install-level SMTP configuration; mailbox-copy
-status is shown in Coordination. Test evidence uses synthetic SMTP only, so verify a real
-provider separately before operational reliance. There is no inbound email or reply
-parsing. Concrete notification hook/plugin installation also remains unavailable.
-Rollback uses the normal application/archive compatibility contract; do not drop these
-tables from a store that a newer build may have written.
+requires adapter-held proof. Historical SMTP destination and outbox rows remain only so
+newer SQLite stores can be opened and migrated. Core exposes no SMTP configuration and
+its scheduler performs no external delivery.
 
 Prefer Workspace archive when mailbox history must remain. The explicit destructive
 Workspace prune treats an agent mailbox as owned by its Workspace and removes that
@@ -436,6 +438,8 @@ brains-ai backup-inspect
 brains-ai db verify-backup <archive> [--expect-source <sqlite-file>]
 brains-ai restore
 brains-ai recovery-policy
+brains-ai recovery-drill [archive]
+brains-ai readiness
 ```
 
 A valid archive has a readable manifest, verified payload hash, compatible schema
@@ -443,7 +447,11 @@ history, source identity where available, and a successful isolated restore. A b
 verification additionally proves the archive still represents the current source at
 the instant of the probe.
 
-Restore is destructive and requires explicit confirmation. Before rollback:
+Restore is destructive and requires explicit confirmation. Run destructive restore and
+rollback tests only with synthetic data in an isolated destination. Restore validates the archive
+before changing the target. A live restore captures and verifies a rollback archive
+under the state database's `recovery` directory (or at an explicitly supplied path),
+then runs SQLite integrity and foreign-key checks after replacement. Before rollback:
 
 1. stop the owned service tree so writers are quiescent;
 2. capture and verify a fresh backup of the state being replaced;
@@ -454,7 +462,15 @@ Restore is destructive and requires explicit confirmation. Before rollback:
 
 The recovery policy declares scope, schedule, retention, encryption owner, offsite
 owner/location, RTO, RPO, and restore-drill expectation. Brains does not schedule
-backups itself. A complete policy is not evidence that a backup or drill occurred.
+backups itself. A configured policy is not proof that a backup or drill ran; use
+`recovery-drill` with disposable SQLite state to exercise restore and rollback behavior.
+
+`brains-ai readiness` reports SQLite migration and quick/full/FK checks, a real retained
+HTTP control-gateway identity/auth-boundary probe, an authenticated MCP initialize plus
+tools/list handshake, queue and durable-mail progress, and verified recovery posture
+independently. Stable reason codes identify the failed component without returning database
+paths, credentials, or raw exception messages. Model-gateway provider routing, Postgres,
+SMTP, and other frozen dependencies are not readiness inputs.
 
 ## Governance and audit
 
@@ -480,49 +496,14 @@ The execution boundary is in-process. It governs paths that use it; it does not 
 arbitrary commands or network calls made directly by an external coding-agent harness.
 Record such effects as external/unverified rather than governed.
 
-## GitHub operation
+## Validation isolation
 
-GitHub ingress requires:
+Run tests that can alter service managers, client configuration, state, databases, or
+ports only in a disposable environment with synthetic credentials and state. Do not
+mount or address another Brains installation. Verify teardown and configuration
+restoration before discarding the environment.
 
-- the configured webhook secret;
-- `X-Hub-Signature-256`;
-- delivery and event headers;
-- exact normalized repository-to-Org binding;
-- durable delivery-ID replay refusal.
-
-Repository names and secrets are not returned by redacted configuration posture. Live
-operation must be tested with a controlled disposable repository before it is claimed.
-
-BL-P1-19 does not yet provide public defect creation. When implemented, the operator
-must approve the exact title, body, and metadata after redaction, dedupe, and public
-issue search. No agent or background worker may upload local evidence automatically.
-
-## Isolated UAT
-
-UAT uses:
-
-- isolated HOME, `BRAINS_STATE_DIR`, SQLite database, ports, and credentials;
-- disposable or read-only source plus an unchanged-worktree assertion;
-- simulated external execution unless a named integration is the test subject;
-- exact candidate SHA/artifact identity;
-- complete process-tree and temporary-state teardown;
-- machine-readable evidence stored outside canonical docs.
-
-For the advertised product, UAT must exercise Workspace-first J1/J7-J11 behavior and
-containment of withdrawn J2-J6/F10 paths. Existing browser specs that still activate
-withdrawn source are test-debt inputs, not acceptance evidence.
-
-## Known gaps
-
-- BL-P0-09 withdrawal containment is not implemented.
-- Windows service listener recovery needs clean-host E4 after package upgrade.
-- Session end/detach and liveness renewal are not reliable across every harness.
-- Cross-process realtime live fan-out is absent.
-- Governed action confinement is cooperative and in-process.
-- Readiness lacks complete child, scheduler, registry, transport, and package/schema
-  convergence checks.
-- SQLite FK enforcement is not the default for unproven existing stores.
-- Exact-candidate backup/restore/rollback E4 is absent.
-- GitHub external operation and the public defect relay are not verified/implemented.
-- Dev Compose, shared-Postgres harnesses, UAT sidecars, and box deployment scaffolds
-  contain withdrawn or inconsistent topology and are not supported deployment paths.
+The [Core Backlog](product/BACKLOG.md) contains schedulable implementation TODOs and is
+currently empty. Candidate-specific validation follows [Quality gates](QUALITY_GATES.md).
+Deferred expansion and scale work remains in the
+[Frozen Backlog](product/FROZEN_BACKLOG.md) and is not a current product promise.

@@ -23,11 +23,13 @@ Two hard rules, learned the hard way, are encoded here:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import csv
 import getpass
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -37,11 +39,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
+from brains.mcp.transport import mcp_http_url
+
 # Logical identifiers, mapped to per-OS names by each backend.
 SERVICE_LABEL = "brains-serve-all"
 WINDOWS_TASK_NAME = "BrainsServeAll"
 LAUNCHD_LABEL = "com.brains.serve-all"
 SYSTEMD_UNIT = "brains-serve-all.service"
+_SERVICE_LABEL_RE = re.compile(r"^brains-serve-all(?:-[a-z0-9][a-z0-9-]{0,39})?$")
 
 DEFAULT_GATEWAY_HOST = "127.0.0.1"
 DEFAULT_GATEWAY_PORT = 8787
@@ -52,7 +57,7 @@ GATEWAY_FALLBACK_PORTS = range(8877, 8978)
 def _service_description(gateway_host: str, gateway_port: int, mcp_port: int) -> str:
     return (
         f"Brains control plane — supervises the gateway ({gateway_host}:{gateway_port}), "
-        f"the MCP SSE server ({gateway_host}:{mcp_port}), and opt-in experimental children. "
+        f"and the Streamable HTTP MCP server ({gateway_host}:{mcp_port}/mcp). "
         "Starts at login and restarts on failure."
     )
 
@@ -126,6 +131,7 @@ def read_service_config() -> dict[str, Any]:
         "gateway_host": DEFAULT_GATEWAY_HOST,
         "gateway_port": DEFAULT_GATEWAY_PORT,
         "mcp_port": DEFAULT_MCP_PORT,
+        "service_label": SERVICE_LABEL,
     }
     try:
         raw = json.loads(service_config_path().read_text(encoding="utf-8"))
@@ -139,7 +145,16 @@ def read_service_config() -> dict[str, Any]:
         mcp_port = _valid_port(raw.get("mcp_port"), "mcp_port")
     except ValueError:
         return defaults
-    return {"gateway_host": host, "gateway_port": gateway_port, "mcp_port": mcp_port}
+    try:
+        label = validate_service_label(str(raw.get("service_label") or SERVICE_LABEL))
+    except ValueError:
+        label = SERVICE_LABEL
+    return {
+        "gateway_host": host,
+        "gateway_port": gateway_port,
+        "mcp_port": mcp_port,
+        "service_label": label,
+    }
 
 
 def write_service_config(spec: ServiceSpec) -> Path:
@@ -150,6 +165,7 @@ def write_service_config(spec: ServiceSpec) -> Path:
         "gateway_host": spec.gateway_host,
         "gateway_port": spec.gateway_port,
         "mcp_port": spec.mcp_port,
+        "service_label": spec.label,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return path
@@ -160,7 +176,7 @@ def listener_status(
     gateway_port: int | None = None,
     mcp_port: int | None = None,
 ) -> dict[str, Any]:
-    """Bounded probes for the configured supervised listeners."""
+    """Bounded listener and protocol probes for the supervised service."""
     configured = read_service_config()
     resolved_host = host or str(configured["gateway_host"])
     resolved_gateway_port = gateway_port or int(configured["gateway_port"])
@@ -172,15 +188,153 @@ def listener_status(
                 listeners[name] = True
         except OSError:
             listeners[name] = False
+    mcp_protocol = (
+        mcp_protocol_status(resolved_host, resolved_mcp_port)
+        if listeners["mcp"]
+        else {
+            "ready": False,
+            "stage": "connect",
+            "reason": "listener-unavailable",
+        }
+    )
     return {
         "listeners": listeners,
-        "serving": all(listeners.values()),
+        "mcp_protocol": mcp_protocol,
+        "serving": bool(listeners["gateway"] and mcp_protocol["ready"]),
         "endpoints": {
             "gateway": f"http://{resolved_host}:{resolved_gateway_port}",
             "console": f"http://{resolved_host}:{resolved_gateway_port}/app",
-            "mcp": f"http://{resolved_host}:{resolved_mcp_port}/sse",
+            "mcp": mcp_http_url(resolved_host, resolved_mcp_port),
         },
     }
+
+
+def _exception_status_code(exc: BaseException) -> int | None:
+    """Find an HTTP status on an exception tree without exposing its body."""
+
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+        direct = getattr(current, "status_code", None)
+        if isinstance(direct, int):
+            return direct
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple | list):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+    return None
+
+
+def _is_connection_failure(exc: BaseException) -> bool:
+    """Recognize transport failures even when an SDK wraps them in a group."""
+    import httpx
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError)):
+            return True
+        nested = getattr(current, "exceptions", ())
+        if isinstance(nested, tuple | list):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+    return False
+
+
+async def _mcp_protocol_handshake(url: str, api_key: str | None, timeout: float) -> dict[str, Any]:
+    """Initialize MCP and list tools, returning only bounded non-secret facts."""
+
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    stage = "connect"
+    try:
+        async with (
+            httpx.AsyncClient(headers=headers, timeout=timeout, trust_env=False) as client,
+            streamable_http_client(url, http_client=client) as streams,
+        ):
+            read_stream, write_stream, _ = streams
+            async with ClientSession(read_stream, write_stream) as session:
+                stage = "initialize"
+                await session.initialize()
+                stage = "tools-list"
+                tools = await session.list_tools()
+                names = {tool.name for tool in tools.tools}
+                if "brains_start_session" not in names:
+                    return {
+                        "ready": False,
+                        "stage": stage,
+                        "reason": "core-tool-missing",
+                    }
+                return {
+                    "ready": True,
+                    "stage": "ready",
+                    "reason": "initialize-and-tools-list-succeeded",
+                    "tool_count": len(names),
+                }
+    except Exception as exc:  # noqa: BLE001 - converted to bounded readiness state
+        status_code = _exception_status_code(exc)
+        if status_code in {401, 403}:
+            failed_stage = "authentication"
+            reason = "credential-rejected"
+        elif _is_connection_failure(exc):
+            failed_stage = "connect"
+            reason = "connection-failed"
+        elif status_code is not None:
+            failed_stage = "protocol"
+            reason = "http-protocol-rejected"
+        elif stage == "connect":
+            failed_stage = "connect"
+            reason = "connection-failed"
+        else:
+            failed_stage = stage
+            reason = f"{stage}-failed"
+        report: dict[str, Any] = {
+            "ready": False,
+            "stage": failed_stage,
+            "reason": reason,
+            "error_type": type(exc).__name__,
+        }
+        if status_code is not None:
+            report["status_code"] = status_code
+        return report
+
+
+def mcp_protocol_status(
+    host: str = DEFAULT_GATEWAY_HOST,
+    port: int = DEFAULT_MCP_PORT,
+    *,
+    timeout: float = 3.0,
+) -> dict[str, Any]:
+    """Perform an authenticated Streamable HTTP initialize + tools/list probe.
+
+    The report never includes the credential, exception text, or response body.
+    Missing credentials fail before any request unless the operator explicitly
+    configured unauthenticated API access.
+    """
+
+    from brains.api.admin_key import read_persisted_key
+    from brains.config import settings
+
+    api_key = settings.api_key or read_persisted_key()
+    if not api_key and not settings.allow_unauthenticated_api:
+        return {
+            "ready": False,
+            "stage": "authentication",
+            "reason": "credential-unavailable",
+        }
+    return asyncio.run(_mcp_protocol_handshake(mcp_http_url(host, port), api_key, timeout))
 
 
 def _valid_port(value: object, name: str) -> int:
@@ -244,6 +398,33 @@ def current_user() -> str:
     return name
 
 
+def validate_service_label(label: str) -> str:
+    """Validate a logical Brains-owned service label.
+
+    Custom identities are deliberately confined to the Brains namespace so a
+    caller cannot make install/uninstall target an arbitrary native service.
+    """
+    if not _SERVICE_LABEL_RE.fullmatch(label):
+        raise ValueError(
+            "service label must be 'brains-serve-all' or "
+            "'brains-serve-all-<lowercase letters, digits, hyphens>'"
+        )
+    return label
+
+
+def native_service_identity(platform: str, label: str = SERVICE_LABEL) -> str:
+    """Map a validated logical label to the platform-native identity."""
+    resolved = validate_service_label(label)
+    suffix = resolved.removeprefix(SERVICE_LABEL).removeprefix("-")
+    if platform == "windows":
+        return WINDOWS_TASK_NAME if not suffix else f"{WINDOWS_TASK_NAME}-{suffix}"
+    if platform == "macos":
+        return LAUNCHD_LABEL if not suffix else f"{LAUNCHD_LABEL}.{suffix}"
+    if platform == "linux":
+        return SYSTEMD_UNIT if not suffix else f"{SERVICE_LABEL}-{suffix}.service"
+    raise ValueError(f"unsupported service platform {platform!r}")
+
+
 @dataclass
 class ServiceSpec:
     """Everything a backend needs to render + register the service.
@@ -264,6 +445,7 @@ class ServiceSpec:
     mcp_port: int = DEFAULT_MCP_PORT
 
     def __post_init__(self) -> None:
+        self.label = validate_service_label(self.label)
         self.gateway_port = _valid_port(self.gateway_port, "gateway_port")
         self.mcp_port = _valid_port(self.mcp_port, "mcp_port")
         if self.gateway_port == self.mcp_port:
@@ -285,6 +467,7 @@ def _quote(token: str) -> str:
 def default_spec(
     executable: str | None = None,
     *,
+    label: str = SERVICE_LABEL,
     gateway_host: str = DEFAULT_GATEWAY_HOST,
     gateway_port: int | None = None,
     mcp_port: int | None = None,
@@ -332,6 +515,7 @@ def default_spec(
         gateway_port=resolved_gateway_port,
         mcp_port=resolved_mcp_port,
         description=description,
+        label=label,
     )
 
 
@@ -370,7 +554,7 @@ def read_pidfile(path: Path | None = None) -> int | None:
     Legacy int-only accessor, kept for existing callers (the Windows/macOS
     ``stop()`` tree-kill paths). Prefer :func:`read_pidfile_record` +
     :func:`verify_pid` for anything that reports or acts on *whether the
-    service is actually running* — a bare PID number proves nothing (BL-P1-09).
+    service is actually running* — a bare PID number proves nothing.
     """
     record = read_pidfile_record(path)
     if record is None:
@@ -380,7 +564,7 @@ def read_pidfile(path: Path | None = None) -> int | None:
 
 
 # --------------------------------------------------------------------------- #
-# PID identity — BL-P1-09
+# PID identity
 #
 # A PID file historically held nothing but a bare integer: no proof the
 # number still names *our* process rather than an unrelated one the OS
@@ -595,7 +779,7 @@ def read_pidfile_record(path: Path | None = None) -> dict[str, Any] | None:
     """Read a PID-identity file, tolerating the legacy plain-integer format.
 
     Returns ``None`` when the file is absent or unreadable. A legacy file
-    (a bare integer, written by a build predating BL-P1-09) is returned as
+    (a bare integer, written before structured identity records) is returned as
     ``{"format": "legacy", "pid": <int>, "exe": None, ...}`` so callers can
     still recover the PID, while :func:`verify_pid` treats it as
     unverifiable rather than confidently running.

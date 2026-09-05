@@ -12,10 +12,6 @@ Independent gates:
 - ``BRAINS_MCP_EXPERIMENTAL=1``  — experimental MCP tools (semantic/graph
   retrieval, session chat delivery) and Autopilot *scheduled auto-fire*.
   Manual fire stays ungated.
-- ``BRAINS_LEGACY_SURFACES=1``   — the retired legacy browser surfaces
-  (``/dashboard`` app + gateway-mounted ``/admin`` HTML pages). The JSON
-  APIs under ``/admin/api/*`` stay available either way; only human-facing
-  HTML retires.
 - ``BRAINS_UI_LABS=1`` — unfinished execution-model screens in the modern
   console (Personas, Pods, Projects, Issues, Sessions, Runtimes, Automation,
   and onboarding). They stay routable only behind this explicit UI opt-in.
@@ -29,7 +25,6 @@ from __future__ import annotations
 import os
 
 EXPERIMENTAL_ENV = "BRAINS_MCP_EXPERIMENTAL"
-LEGACY_SURFACES_ENV = "BRAINS_LEGACY_SURFACES"
 GATEWAY_ENV = "BRAINS_EXPERIMENTAL_GATEWAY"
 UI_LABS_ENV = "BRAINS_UI_LABS"
 
@@ -55,12 +50,12 @@ EXPERIMENTAL_MCP_TOOLS: frozenset[str] = frozenset(
 #: are surfaced verbatim in refusals so an operator never has to guess.
 EXPERIMENTAL_TOOL_REASONS: dict[str, str] = {
     "search_semantic": "embeddings need a configured local model; matches are empty without one",
-    "graph_build": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_query": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_neighbors": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_path": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_subsystems": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
-    "graph_export": "code graph is Python-focused; build identity/freshness contract open (BL-P2-04)",
+    "graph_build": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_query": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_neighbors": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_path": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_subsystems": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
+    "graph_export": "code graph is withdrawn; remaining discovery and activation are containment work (BL-P0-09)",
     "session_message": (
         "no shipped agent CLI is launched with an input channel; delivery to "
         "copilot/claude/codex is a durable refusal (AC-F3-05)"
@@ -80,12 +75,6 @@ def experimental_enabled() -> bool:
     """True when ``BRAINS_MCP_EXPERIMENTAL`` opts this process into the
     experimental MCP tool surface and scheduled Autopilot auto-fire."""
     return _env_flag(EXPERIMENTAL_ENV)
-
-
-def legacy_surfaces_enabled() -> bool:
-    """True when ``BRAINS_LEGACY_SURFACES`` opts this process back into the
-    retired legacy browser surfaces (dashboard child, gateway /admin HTML)."""
-    return _env_flag(LEGACY_SURFACES_ENV)
 
 
 def gateway_experimental_enabled() -> bool:
@@ -118,9 +107,6 @@ EXPERIMENTAL_GATES: dict[str, str] = {
     EXPERIMENTAL_ENV: (
         "experimental MCP tools (semantic/graph retrieval, session chat "
         "delivery), Autopilot scheduled auto-fire, and their CLI equivalents"
-    ),
-    LEGACY_SURFACES_ENV: (
-        "retired legacy browser surfaces (dashboard child process, gateway /admin HTML pages)"
     ),
     GATEWAY_ENV: (
         "the model-serving surface: OpenAI/Anthropic-compatible proxy routes "

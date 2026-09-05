@@ -1,35 +1,31 @@
 import argparse
 import logging
 import os
-import re
 import sys
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from brains.capabilities import CORE_MCP_TOOLS
 from brains.config import settings
-from brains.control.recurring import (
-    RecurringFireAlreadyClaimed,
-    fire_recurring_task,
-    is_valid_schedule,
-    list_recurring_tasks,
-)
-from brains.experimental import (
-    EXPERIMENTAL_ENV,
-    EXPERIMENTAL_MCP_TOOLS,
-    experimental_enabled,
-)
 from brains.mcp import tools
 from brains.mcp.sse_auth import (
     ALLOW_PUBLIC_ENV,
     MCPAuthMiddleware,
     host_allowlist_for,
     resolve_bind_host,
+)
+from brains.mcp.transport import (
+    MCP_LEGACY_SSE_PATH,
+    MCP_MODE_SSE,
+    MCP_MODE_STDIO,
+    MCP_MODE_STREAMABLE_HTTP,
+    MCP_STREAMABLE_HTTP_PATH,
 )
 
 
@@ -58,7 +54,7 @@ def _build_mcp_transport_security() -> TransportSecuritySettings | None:
 log = logging.getLogger("brains-mcp-server")
 
 
-TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
+_IMPLEMENTED_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "plan_request": tools.plan_request,
     "ask_human": tools.ask_human,
     "get_context_pack": tools.get_context_pack,
@@ -78,6 +74,12 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "explain_route": tools.explain_route,
     "get_state": tools.get_state_tool,
     "mailbox_register": tools.mailbox_register_tool,
+    "mailbox_native_id": tools.mailbox_native_id_tool,
+    "mailbox_managed_create": tools.mailbox_managed_create_tool,
+    "mailbox_managed_rotate": tools.mailbox_managed_rotate_tool,
+    "mailbox_managed_recover": tools.mailbox_managed_recover_tool,
+    "mailbox_managed_revoke": tools.mailbox_managed_revoke_tool,
+    "mailbox_binding_reconcile": tools.mailbox_binding_reconcile_tool,
     "mailbox_phonebook": tools.mailbox_phonebook_tool,
     "mailbox_lookup": tools.mailbox_lookup_tool,
     "mailbox_send": tools.mailbox_send_tool,
@@ -189,7 +191,19 @@ TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "learn_propose": tools.learn_propose_tool,
 }
 
-mcp = FastMCP("Brains v2", transport_security=_build_mcp_transport_security())
+# The implementation corpus is intentionally larger than the shipped product:
+# old SQLite stores still need their readers and migrations. MCP is an activation
+# boundary, so only the explicit core allowlist is registered or directly callable.
+TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
+    name: handler for name, handler in _IMPLEMENTED_TOOL_REGISTRY.items() if name in CORE_MCP_TOOLS
+}
+
+mcp = FastMCP(
+    "Brains v2",
+    streamable_http_path=MCP_STREAMABLE_HTTP_PATH,
+    sse_path=MCP_LEGACY_SSE_PATH,
+    transport_security=_build_mcp_transport_security(),
+)
 
 # Namespace prefix for every MCP tool. MUST stay within Anthropic's tool-name
 # rule ^[a-zA-Z0-9_-]+$ — an underscore, NOT a dot. A dotted name (the old
@@ -202,14 +216,20 @@ TOOL_PREFIX = "brains_"
 
 # The MCP tool surface is configurable so a client only pays the context cost
 # of the tools it needs. The lean core keeps the normal coordination contract.
-#   BRAINS_MCP_TOOLS unset | "full" | "all"  -> all tools (back-compat default)
-#   BRAINS_MCP_TOOLS = "lean"                 -> the curated core set below
+#   BRAINS_MCP_TOOLS unset | "full" | "all"  -> shipped core tools
+#   BRAINS_MCP_TOOLS = "lean"                 -> a smaller shipped core set
 #   BRAINS_MCP_TOOLS = "a,b,c"                -> an explicit allowlist
 # Tools are always *callable* via call_tool(); this only scopes what is advertised.
 LEAN_TOOLS = frozenset(
     {
         "start_session",
         "mailbox_register",
+        "mailbox_native_id",
+        "mailbox_managed_create",
+        "mailbox_managed_rotate",
+        "mailbox_managed_recover",
+        "mailbox_managed_revoke",
+        "mailbox_binding_reconcile",
         "mailbox_phonebook",
         "mailbox_lookup",
         "mailbox_send",
@@ -231,34 +251,17 @@ LEAN_TOOLS = frozenset(
         "list_handoffs",
         "knowledge_add",
         "knowledge_search",
-        "search_semantic",
-        "orient",
         "file_decision_request",
         "file_help_request",
         "get_help_request",
         "wait_help_request",
         "cancel_help_request",
         "release_help_request",
-        "feedback_report",
-        "feedback_enrich",
-        "feedback_get",
-        "feedback_list",
         "resolve_decision",
         "route_decision",
         "escalate_decision",
         "claim_workspace",
-        "read_messages",
         "inbox_wait",
-        "send_message",
-        "list_live_agents",
-        "topic_post",
-        "topic_read",
-        "topic_list",
-        "topic_subscribe",
-        "topic_unsubscribe",
-        "topic_subscriptions",
-        "plan_request",
-        "get_context_pack",
     }
 )
 
@@ -272,11 +275,6 @@ def _resolve_active_tools() -> list[str]:
     else:
         wanted = {x.strip() for x in raw.split(",") if x.strip()}
         selected = [n for n in TOOL_REGISTRY if n in wanted]
-    # Experimental gate: the normal install neither advertises nor executes
-    # the experimental tools, whatever selection mode named them. An explicit
-    # allowlist is not an opt-in — only BRAINS_MCP_EXPERIMENTAL=1 is.
-    if not experimental_enabled():
-        selected = [n for n in selected if n not in EXPERIMENTAL_MCP_TOOLS]
     return selected
 
 
@@ -306,99 +304,7 @@ def call_tool(tool_name: str, **kwargs):
     # these out of the advertised surface, but a direct dispatch (tests,
     # internal callers, a future transport that bypasses registration) must
     # refuse exactly as loudly.
-    if tool_name in EXPERIMENTAL_MCP_TOOLS and not experimental_enabled():
-        from brains.experimental import EXPERIMENTAL_TOOL_REASONS
-
-        reason = EXPERIMENTAL_TOOL_REASONS.get(tool_name, "not yet mature")
-        raise ValueError(
-            f"'{tool_name}' is experimental and disabled: {reason}. "
-            f"Set {EXPERIMENTAL_ENV}=1 to enable it."
-        )
     return fn(**kwargs)
-
-
-def _parse_last_fired(raw: str | None) -> datetime | None:
-    if not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed
-
-
-_EVERY_PATTERN = re.compile(r"^every:(\d+)([smhd])$", re.IGNORECASE)
-_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-
-
-def _is_due(cron_expr: str, last_fired: datetime | None, now: datetime) -> bool:
-    """Determine whether a recurring task should fire at ``now``.
-
-    Supported expressions (:func:`brains.control.recurring.is_valid_schedule`
-    is the canonical grammar check this mirrors):
-    - ``manual`` (never auto-fires)
-    - ``hourly`` (fires when an hour has elapsed since the last firing)
-    - ``daily`` (fires on a new UTC calendar date)
-    - ``every:<N><s|m|h|d>`` (fires after N units have elapsed)
-
-    Anything unrecognized - including a ``manual`` schedule or a real cron
-    string, which this engine does not support - is treated as never-due.
-    """
-    expr = (cron_expr or "").strip().lower()
-    if not is_valid_schedule(expr) or expr == "manual":
-        return False
-    every_match = _EVERY_PATTERN.match(expr)
-    if last_fired is None:
-        return True
-    if expr == "hourly":
-        return now - last_fired >= timedelta(hours=1)
-    if expr == "daily":
-        return now.date() > last_fired.date()
-    assert every_match is not None  # narrowed above
-    count = int(every_match.group(1))
-    unit = every_match.group(2).lower()
-    return now - last_fired >= timedelta(seconds=count * _UNIT_SECONDS[unit])
-
-
-#: Runtime rows online-but-silent for longer than this are swept ``offline``
-#: by the scheduler tick (BL-P1-13's periodic owner for BL-P0-XX's
-#: ``sweep_stale``). Six heartbeats' worth of silence by default (heartbeat
-#: defaults to 15s), overridable so an install with a slower/faster daemon
-#: heartbeat can tune the window without a code change.
-DEFAULT_RUNTIME_STALE_TTL_SECONDS = 90
-
-
-def _runtime_stale_ttl_seconds() -> int:
-    raw = os.environ.get("BRAINS_RUNTIME_STALE_TTL_SECONDS")
-    if not raw:
-        return DEFAULT_RUNTIME_STALE_TTL_SECONDS
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return DEFAULT_RUNTIME_STALE_TTL_SECONDS
-
-
-def _sweep_stale_runtimes() -> int:
-    """Flip online Runtimes silent past the TTL to ``offline``.
-
-    ``brains.control.runtimes.sweep_stale`` existed with no periodic caller —
-    a Runtime that stopped heartbeating (crashed daemon, network partition,
-    unplugged machine) stayed ``online`` forever unless an operator happened
-    to read it. This tick is that owner. Never breaks the scheduler loop: a
-    failed sweep is logged and retried on the next tick.
-    """
-    try:
-        from brains.control.runtimes import sweep_stale
-
-        flipped = sweep_stale(ttl_seconds=_runtime_stale_ttl_seconds())
-    except Exception as exc:  # noqa: BLE001 - maintenance never gates a fire
-        log.error("scheduler: runtime staleness sweep failed: %s", exc)
-        return 0
-    if flipped:
-        log.info("scheduler: swept %d stale runtime(s) offline", len(flipped))
-    return len(flipped)
 
 
 def _sweep_governed_actions() -> int:
@@ -433,80 +339,17 @@ def _sweep_stale_sessions() -> int:
     return len(dormant)
 
 
-def _dispatch_help_reviews() -> int:
-    try:
-        from brains.control.help_execution import dispatch_due_help_reviews
-
-        scheduled = dispatch_due_help_reviews()
-    except Exception as exc:  # noqa: BLE001 - maintenance must not break scheduler
-        log.error("scheduler: ephemeral help review dispatch failed: %s", exc)
-        return 0
-    return len(scheduled)
-
-
-def _process_mailbox_smtp() -> int:
-    """Drain a bounded SMTP-copy batch without breaking scheduler maintenance."""
-    try:
-        from brains.control.durable_smtp import process_smtp_outbox
-        from brains.control.secure_settings import delete_orphaned_mailbox_smtp_settings
-
-        delete_orphaned_mailbox_smtp_settings()
-        claimed = int(process_smtp_outbox(limit=10).get("claimed", 0))
-    except Exception as exc:  # noqa: BLE001 - SMTP outage never breaks coordination
-        log.error("scheduler: mailbox SMTP outbox failed: %s", exc)
-        return 0
-    return claimed
-
-
 def _scheduler_tick(now: datetime | None = None) -> list[dict]:
-    """Evaluate every enabled recurring task and fire those that are due.
+    """Run only core lease and governance maintenance.
 
-    Governed-action maintenance and the Runtime staleness sweep both run
-    first, in the same tick: the expiry rules for stale
-    ``pending``/``authorized``/``requested`` governed-action rows, and for
-    Runtimes that stopped heartbeating, both need a periodic owner, and this
-    loop is the one process that is always running where they matter. Neither
-    sweep can settle a live/online row out from under itself — the governed
-    sweep judges only an expired attempt lease, and the runtime sweep judges
-    only silence past the heartbeat TTL.
-
-    Scheduled auto-fire is experimental (limited grammar, cooperative gate,
-    no end-to-end journey evidence), so the fire loop runs only when
-    ``BRAINS_MCP_EXPERIMENTAL=1``. The sweeps are maintenance, not
-    automation, and always run. Manual fire is unaffected.
-
-    Returns a list of ``{name, task_code}`` entries describing each firing so
-    callers (and tests) can verify scheduler behavior without sleeping.
+    ``now`` remains accepted for compatibility with deterministic tests. Frozen
+    Runtime, recurring, ephemeral-review and SMTP workers have no scheduler
+    activation path.
     """
-    now = now or datetime.now(UTC)
+    del now
     _sweep_governed_actions()
-    _sweep_stale_runtimes()
     _sweep_stale_sessions()
-    _dispatch_help_reviews()
-    _process_mailbox_smtp()
-    if not experimental_enabled():
-        return []
-    fired: list[dict] = []
-    for definition in list_recurring_tasks(enabled=True):
-        name = definition.get("name")
-        if not name:
-            continue
-        last_fired = _parse_last_fired(definition.get("last_fired_at"))
-        if not _is_due(definition.get("cron_expr", "manual"), last_fired, now):
-            continue
-        try:
-            result = fire_recurring_task(
-                name,
-                source="schedule",
-                expected_last_fired_at=last_fired,
-            )
-        except RecurringFireAlreadyClaimed:
-            continue
-        except Exception as exc:  # noqa: BLE001 - never break the loop
-            log.error("scheduler: failed to fire %s: %s", name, exc)
-            continue
-        fired.append({"name": name, "task_code": result["task"]["code"]})
-    return fired
+    return []
 
 
 def _scheduler_loop(interval_seconds: int = 60):
@@ -522,11 +365,26 @@ def _scheduler_loop(interval_seconds: int = 60):
         time.sleep(interval_seconds)
 
 
-def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int = 60):
+def _build_http_app(mode: str, host: str):
+    """Build the authenticated ASGI application for an HTTP MCP transport."""
+    if mode == MCP_MODE_STREAMABLE_HTTP:
+        inner_app = mcp.streamable_http_app()
+    elif mode == MCP_MODE_SSE:
+        inner_app = mcp.sse_app()
+    else:
+        raise ValueError(f"unsupported HTTP MCP mode: {mode}")
+    return MCPAuthMiddleware(inner_app, allowed_hosts=host_allowlist_for(host))
+
+
+def run_mcp_server(
+    mode: str = MCP_MODE_STREAMABLE_HTTP,
+    port: int = 9877,
+    scheduler_interval: int = 60,
+):
     from brains.api.admin_key import ensure_admin_key
 
     # Both transports need the persisted key to decrypt local secure settings.
-    ensure_admin_key(print_banner=mode == "sse")
+    ensure_admin_key(print_banner=mode != MCP_MODE_STDIO)
     # Make sure the admin operator row exists before any tool can be
     # invoked over either transport. Idempotent and cheap.
     from brains.control.durable_mailbox import ensure_operator_mailboxes
@@ -535,49 +393,56 @@ def run_mcp_server(mode: str = "sse", port: int = 9877, scheduler_interval: int 
     ensure_admin_operator()
     ensure_operator_mailboxes()
 
-    if mode == "sse":
-        # Load the persisted admin key into settings so the SSE auth
+    if mode in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE}:
+        # Load the persisted admin key into settings so HTTP auth
         # middleware's _valid_keys() can resolve it — parity with the
         # gateway's lifespan (brains.main:lifespan). Without this, every
-        # authenticated SSE request 500s with "API key not configured".
+        # authenticated MCP request 500s with "API key not configured".
         sched_thread = threading.Thread(
-            target=_scheduler_loop, args=(scheduler_interval,), daemon=True, name="brains-scheduler"
+            target=_scheduler_loop,
+            args=(scheduler_interval,),
+            daemon=True,
+            name="brains-scheduler",
         )
         sched_thread.start()
         import uvicorn
 
         host = resolve_bind_host()
-        sse_app = mcp.sse_app()
-        guarded_app = MCPAuthMiddleware(sse_app, allowed_hosts=host_allowlist_for(host))
-        print(f"Brains MCP server running on http://{host}:{port}/sse", file=sys.stderr)
+        guarded_app = _build_http_app(mode, host)
+        path = MCP_STREAMABLE_HTTP_PATH if mode == MCP_MODE_STREAMABLE_HTTP else MCP_LEGACY_SSE_PATH
+        compatibility = " (legacy compatibility)" if mode == MCP_MODE_SSE else ""
+        print(
+            f"Brains MCP server running via {mode}{compatibility} on http://{host}:{port}{path}",
+            file=sys.stderr,
+        )
         print(f"Scheduler active (every {scheduler_interval}s)", file=sys.stderr)
-        if experimental_enabled():
-            print("Autopilot auto-fire: enabled (experimental)", file=sys.stderr)
-        else:
-            print(
-                f"Autopilot auto-fire: disabled (experimental; set {EXPERIMENTAL_ENV}=1 to enable)",
-                file=sys.stderr,
-            )
         if settings.allow_unauthenticated_api:
             print(
-                "MCP SSE auth: DISABLED (settings.allow_unauthenticated_api=True)",
+                "MCP HTTP auth: DISABLED (settings.allow_unauthenticated_api=True)",
                 file=sys.stderr,
             )
         else:
             print(
-                "MCP SSE auth: required (Authorization: Bearer <api-key>)",
+                "MCP HTTP auth: required (Authorization: Bearer <api-key>)",
                 file=sys.stderr,
             )
         os.environ["UVICORN_PORT"] = str(port)
         os.environ["UVICORN_HOST"] = host
         uvicorn.run(guarded_app, host=host, port=port, log_level="info")
-    else:
+    elif mode == MCP_MODE_STDIO:
         mcp.run(transport="stdio")
+    else:
+        raise ValueError(f"unsupported MCP mode: {mode}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog="brains-mcp-server")
-    parser.add_argument("--mode", choices=["sse", "stdio"], default="sse")
+    parser.add_argument(
+        "--mode",
+        choices=[MCP_MODE_STREAMABLE_HTTP, MCP_MODE_STDIO, MCP_MODE_SSE],
+        default=MCP_MODE_STREAMABLE_HTTP,
+        help="MCP transport; sse is retained only for explicit legacy compatibility",
+    )
     parser.add_argument("--port", type=int, default=9877)
     parser.add_argument("--scheduler-interval", type=int, default=60)
     args = parser.parse_args()

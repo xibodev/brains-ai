@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Architecture
 
 ## Product boundary
@@ -25,13 +19,13 @@ Architecture descriptions use four lifecycle states:
 | State | Architectural meaning |
 |---|---|
 | Advertised | Part of the supported normal-install topology. |
-| Experimental | Implemented behavior whose normal-use ergonomics or edge cases remain uncertain; full UAT still applies. |
+| Experimental | Implemented behavior whose normal-use ergonomics or edge cases remain uncertain; full validation still applies. |
 | Target-only | Stable future contract with no current product surface. |
 | Withdrawn | Frozen or retired implementation. Source/data may remain for compatibility, but there is no supported activation path. |
 
-At HEAD, BL-P0-09 remains open: routes, commands, tools, flags, extras, tables, and
-modules for withdrawn features still exist. The architecture records that mismatch; it
-does not turn source presence into product availability.
+The shipped composition is defined by `brains.capabilities` and checked from generated
+CLI, MCP, OpenAPI, browser, package-extra, example, and wire inventories. Historical
+modules and tables may remain importable only to open and migrate existing SQLite data.
 
 ## Supported topology
 
@@ -43,7 +37,7 @@ Gateway process                         MCP process
   - /app Workspace-first SPA              - coordination tools
   - protected native API                  - local or authenticated transport
   - WS/SSE realtime                       - bounded maintenance
-  - signed GitHub ingress                       |
+  - protected core API                         |
       |                                          |
       +------------------+-----------------------+
                          v
@@ -58,7 +52,8 @@ Gateway process                         MCP process
 ```
 
 `brains-ai serve-all` supervises the supported gateway and MCP children. The default
-gateway is loopback on port `8787`; the MCP SSE source default is port `9877`. The
+gateway is loopback on port `8787`; MCP defaults to authenticated Streamable HTTP at
+`http://127.0.0.1:9877/mcp`. Legacy SSE at `/sse` is explicit compatibility only. The
 children share durable state but not Python memory.
 
 The normal browser surface is `/app`:
@@ -71,7 +66,7 @@ The normal browser surface is `/app`:
 - Act, which launches named typed capabilities rather than shell or arbitrary MCP.
 
 The retired dashboard/admin HTML process and execution-model screens are not part of
-this topology even though source routes and assets remain pending containment.
+this topology. Only the sign-in and sign-out cookie endpoints remain under `/admin`.
 
 ## Process boundaries
 
@@ -88,8 +83,9 @@ The supported processes have separate memory and one shared SQLite store.
   and protocol response. The supervisor independently probes each owned child's HTTP
   listener and restarts its process tree when the process survives listener loss.
 - `GET /health` proves only process liveness and bounded inventory. Protected readiness
-  is a separate contract and remains incomplete for child protocol health, scheduler
-  progress, registry freshness, and cross-process failure.
+  separately proves the retained HTTP control gateway's identity/auth boundary, SQLite
+  migration/integrity, authenticated MCP protocol, queue/mailbox progress, and verified
+  recovery posture. It never probes the withdrawn model/provider gateway.
 
 ## Component map
 
@@ -98,24 +94,20 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Application composition | Gateway app, protected routes, SPA, startup state | `src/brains/main.py` |
 | Advertised | Identity and authorization | Credential resolution, principals, Org/Workspace capability checks | `src/brains/authz` |
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
-| Advertised | Coordination controls | Sessions, tasks, claims, handoffs, messages, topics, peer help, knowledge, patterns, checkpoints | `src/brains/control`, `src/brains/mcp` |
+| Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
-| Advertised | Realtime | Closed topics, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
+| Advertised | Realtime | Closed scoped subscriptions, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
 | Advertised | Service operations | CLI, wiring, service renderers, supervisor, readiness | `src/brains/cli`, `src/brains/wire`, `src/brains/service` |
-| Advertised | GitHub ingress | Signature, repository scope, delivery identity, replay refusal | `src/brains/api/webhooks.py` |
-| Advertised | Agent feedback inbox | Redacted ordinary feedback and human-only triage/promotion | `src/brains/control` |
-| Admission candidate | Ephemeral peer review | Fenced disposable tracked snapshot; not field-active until default activation and worker transport are corrected | `src/brains/control`, Runtime compatibility endpoints |
 | Withdrawn | Execution model | Runtimes, Personas, Pods, Projects, Issues, execution onboarding/Sessions | `src/brains/api`, `src/brains/daemon`, execution-model frontend screens |
 | Withdrawn | Automation | Managed Skills, recurring definitions, generic triggers, scheduled auto-fire | `src/brains/control`, `src/brains/mcp`, Automation frontend |
 | Withdrawn | Model edge | OpenAI/Anthropic facades, router, providers, LiteLLM, tool launcher | `src/brains/api`, `src/brains/router`, `src/brains/providers` |
 | Withdrawn | Advanced context | Semantic indexing/search, embeddings, graph, external freshness | `src/brains/context` |
 | Withdrawn | Alternate services | Postgres, OpenTelemetry export, messaging bridges, WhatsApp Web | storage adapters, observability, bridges, `services/wa-web` |
-| Withdrawn | Legacy browser | Dashboard and legacy admin HTML/static assets | `src/brains/dashboard`, `src/brains/admin` |
+| Deleted | Legacy browser | No dashboard/admin browser implementation or static assets remain; only `/admin/login` and `/admin/logout` support the modern SPA cookie lifecycle | `brains.admin.routes`, `brains.web.spa` |
 
-Withdrawn modules retain their previous authorization and validation checks while they
-remain mounted. Those checks limit current source risk; they do not define a supported
-feature or permission to activate it.
+Withdrawn modules are not mounted, registered, packaged as optional extras, or linked
+from the browser. Their internal checks are compatibility defense, not activation.
 
 ## Durable state
 
@@ -124,26 +116,26 @@ projection, never authority.
 
 Advertised durable families include:
 
-- operators, credentials, Orgs, members, Workspaces, aliases, and memberships;
+- local operator identity, Workspaces, aliases, and compatibility scope rows;
 - coordination Sessions and events;
-- tasks, claims, handoffs, legacy Session-addressed mailbox rows, topics, peer help,
-  checkpoints, snapshots, and knowledge;
+- tasks, claims, handoffs, durable mailbox rows, peer help, checkpoints, snapshots, and knowledge;
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
-- feedback, event context, adoption events, and ephemeral-review attempt metadata;
-- realtime replay rows, integration delivery identity, usage attribution, secure local
-  settings, and migration state.
+- event context, realtime replay rows, secure local settings, and migration state.
 
-Migration 150 reserves the durable-mailbox data boundary:
+Migration 150 reserves the durable-mailbox data boundary. Its active core rows cover:
 
 - agent/operator mailbox identity and unique, versioned hash-only reattachment binding;
 - one current ephemeral Session attachment plus detached history and a per-incarnation
   delivery cursor;
 - threads, messages, per-recipient local delivery/read attribution, and explicit
   direct/broadcast audience;
-- body-free notification attempts and per-operator SMTP consent/destination references;
-- one retryable SMTP outbox row per local delivery;
+- body-free local notification attempts;
 - non-destructive classification of legacy `mailbox_messages` and
   `tool_session_links` rows present when the migration runs as unverified.
+
+SMTP consent and outbox rows also exist in the migration corpus so newer historical
+stores can be opened. They are compatibility inventory, not an advertised delivery
+path.
 
 The migration itself creates no mailbox, infers no address or owner, copies no message
 body, and changes no existing row. The current control/API/CLI/MCP layer now creates one
@@ -179,44 +171,39 @@ default and authoritative recovery path. An explicitly declared, harness-compati
 attachment may create one idempotent attempt per delivery/incarnation. CLI/MCP adapters
 atomically claim it, receive only a constant body-free nudge, and settle the observed
 result. Reads, mode changes, and detach close stale attempts; no attempt outcome changes
-local delivery. Brains does not retain a generic live model-input channel, and current
-`wire` installs no notification hook/plugin, so this protocol is not evidence that an
-external running model was awakened. Concrete harness integration remains a later slice.
+local delivery. With explicit consent, `wire --mailbox-wakeups` installs a managed stop
+hook for Claude Code. At its turn boundary, an existing proof-bound
+attachment may emit the constant nudge and request one continuation; abandoned claims
+are lease-reclaimed and become uncertain after three attempts. Copilot CLI, Codex, and
+OpenCode remain pull-only because their notification continuation behavior has no
+equivalent real-binary proof. Claude settings mutation is cross-process locked and uses
+a recoverable atomic exchange that preserves displaced bytes. Each release candidate
+must pass the native exchange and owner-only recovery probes on every supported native
+platform before publication.
+Brains does not retain a generic live model-input channel.
 
-Migration 152 activates the reserved per-operator SMTP setting and outbox rows. The
-human-bound mailbox owner stores a destination as AES-GCM ciphertext behind a versioned
-reference, proves control through a short-lived emailed challenge, and receives only a
-masked hint on reads. Verification defaults to a constant content-free notification;
-full subject/body forwarding is a distinct explicit consent state. The local delivery
-transaction snapshots only destination reference and copy mode into one outbox row.
+Migration 152 preserves the reserved per-operator SMTP setting and outbox schema for
+historical-store compatibility. Core exposes no SMTP configuration, does not lease its
+outbox, and performs no external mail delivery.
 
-The scheduler leases that row after commit. A required audit attempt precedes SMTP I/O,
-and the outbox ID supplies a stable RFC Message-ID. Known pre-send failures back off and
-retry; any send-stage exception, lost outcome audit, or expired send lease is terminally
-uncertain so Brains does not knowingly duplicate an external copy. Mode/destination
-changes fence live sends and cancel work that has not started. Neither SMTP outcome nor
-configuration changes modify the local message/delivery/read record. No destination or
-mail content enters audit/event metadata, and no inbound email path exists. Synthetic
-SMTP evidence does not certify a real provider.
-
-Durable-mail readiness is a bootstrap-admin-only count projection over those
-authoritative rows. It
-checks active registration shape, live attachment consistency, unread age, body-free
-notification progress, and SMTP backlog/failure/uncertainty separately. A detached
+Durable-mail readiness is a bootstrap-admin-only count projection over active core
+rows. It checks registration shape, live attachment consistency, unread age, and
+body-free local notification progress. A detached
 active mailbox with unread mail remains healthy until the mail crosses the declared age
 threshold; offline acceptance is the feature, not an outage. Withdrawn Runtime lifecycle
 does not affect normal-product readiness, and the migration's explicit unverified legacy
 inventory is reported without being mistaken for a broken active registration.
 
 Operational readiness aggregates only current mailbox registration, attachment, unread,
-notification, and SMTP failure state. It is not behavioral analytics and makes no claim
+and local notification state. It is not behavioral analytics and makes no claim
 about adoption, task success, or product value. Ordinary feedback, automated contracts,
-and isolated end-to-end UAT drive engineering revision.
+and isolated validation drive engineering revision.
 
 The schema also contains withdrawn Runtime, Persona, Project, Issue, Pod, Skill,
 recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alternate
-backend state. BL-P0-09 decides what must remain to open an existing store. New product
-work must not depend on those rows merely because they exist.
+backend state. Those rows remain only where required to open or migrate an existing
+store; they do not register or activate a product capability. New product work must not
+depend on them merely because they exist.
 
 ### Schema evolution
 
@@ -243,29 +230,28 @@ launched a process.
 1. A harness starts or resumes a Session for one Workspace and tool identity. Supported
    adapters may atomically register the durable mailbox with a native Session ID and an
    adapter-owned binding file.
-2. The Session receives current ownership, handoff, task, message, knowledge, and
-   pattern context.
+2. The Session receives current ownership, handoff, task, message, and knowledge
+   context.
 3. Tool calls renew its lease while the harness remains active. A mailbox-bound Session
    must prove its native ID and binding; knowing only `ses_*` is insufficient.
 4. The Session can claim work, checkpoint, hand off, communicate, ask for help, and
    file human decisions.
 5. A clean end releases eligible ownership. An expired PID-less handle becomes dormant
    without being mislabeled as execution failure.
-6. An explicit successor can inherit eligible claims, in-progress tasks, topic
-   subscriptions, and mailbox attachment/cursor continuity once; mailbox inheritance
+6. An explicit successor can inherit eligible claims, in-progress tasks, and mailbox
+   attachment/cursor continuity once; mailbox inheritance
    requires the same binding proof and rolls back the whole transfer on failure.
 
-Isolated OpenCode/Codex and OpenCode/Claude journeys prove explicit native-ID extraction,
-offline mail, successor reattachment, and threaded replies. Automatic adapter extraction,
-abrupt process exit, and host restart remain open. Scheduler-driven lease expiry itself
-does not depend on an operator read.
+Adapter identity, offline mail, successor reattachment, and threaded replies use the
+same binding contract. Automatic adapter extraction, abrupt process exit, and host
+restart remain open. Scheduler-driven lease expiry itself does not depend on an
+operator read.
 
 ### Queue semantics
 
 - Tasks and Workspace claims use atomic ownership transitions.
 - Checkpoint and active-handoff exact retries are idempotent for sequential retry.
 - Direct mail is durable until read; an empty read is not consumption telemetry.
-- Topic posts are append-only. Subscription cursors are per Session and topic.
 - Peer help is asynchronous: file, claim, release, answer with evidence, cancel, or
   wait without making a client timeout expire the request.
 - Queue diagnosis is read-only. Apply mode may run only objectively safe expiry and
@@ -276,9 +262,11 @@ Running-agent chat delivery and Runtime process stop are withdrawn. Source-level
 
 ## Realtime
 
-WS and SSE use a closed server-resolved topic grammar. The server derives Org/Workspace
-scope, applies non-enumerating refusal, and revalidates identity and membership during
-the connection. Runtime credentials are not operator realtime principals.
+WS and SSE use a closed server-resolved subscription grammar for advertised collections.
+The server derives Org/Workspace scope, applies non-enumerating refusal, and revalidates
+identity and membership during the connection. Retained generic topic controls are not
+registered as normal CLI or MCP capabilities. Runtime credentials are not operator
+realtime principals.
 
 Durable events commit before notification and carry a monotonic `event_id`. Resume uses
 the highest applied cursor. Bounded replay reports an explicit reset when retention or
@@ -289,7 +277,7 @@ Current limitations are material:
 
 - live fan-out is gateway-process local;
 - not every publisher has a stable dedupe key, so some delivery is at-least-once;
-- retention and gap detection are install-wide rather than per topic;
+- retention and gap detection are install-wide rather than per subscription scope;
 - notification-only frames require another durable source for recovery.
 
 ## Human governance and audit
@@ -309,46 +297,21 @@ mutation, insertion, deletion, truncation, missing/forged heads, and count diver
 under the stated key model. A stolen audit key can forge history; an in-process action
 gate cannot contain an external harness that bypasses it. Both limits remain explicit.
 
-## Experimental features
-
-The experimental label records uncertainty in normal-use behavior. It does not start a
-field trial or create a telemetry requirement. BL-P1-15 is the advertised ordinary
-feedback path; the mis-scoped BL-P1-16 analytics projection is removed.
-
-Ephemeral peer review is an implemented admission candidate, not a supported experiment,
-until normal peer help defaults to existing peers and its worker transport is separated
-from withdrawn Runtime execution.
-
-Each experimental feature needs a user promise, full UAT, truthful activation, a feedback
-path, disable/rollback behavior, and revision/withdrawal criteria. None may silently
-widen normal-product readiness or authority.
-
-Ephemeral peer review may reuse narrowly scoped Runtime compatibility endpoints while
-BL-P0-09 separates them from withdrawn Runtime execution. The reviewer receives a
-temporary Git-tracked snapshot rather than the registered source path; bounded output
-is accepted only if the source fingerprint remains unchanged. This is not a universal
-network-confinement claim.
-
 ## External boundary
 
-Signed GitHub ingress is the only advertised external integration. It requires the
-expected signature, delivery/event identity, exact repository-to-Org binding, and
-durable replay refusal. Live GitHub operation remains unverified.
-
-BL-P1-19 proposes a separate outbound path: local defect evidence is redacted,
-clustered, deduplicated, compared with public issues, and presented as an exact payload.
-A human must choose discard, link existing, create, or comment. The effect then uses the
-governed GitHub path. No background upload or automatic issue creation is allowed.
-
-Generic webhooks, relay, email-to-agent behavior, Telegram, Slack, WhatsApp, and
-WhatsApp Web are not part of this boundary.
+Core has no external integration boundary. GitHub linkage, generic webhooks, public
+relay, SMTP copies, model gateways, telemetry exporters, and messaging bridges are not
+mounted or packaged as normal-install capabilities.
 
 ## Recovery boundary
 
 SQLite backup uses the online backup API so committed WAL content is included. Manifest
 archives identify format, schema, payload hash, and source identity. Verification
 restores into isolation and checks manifest claims. Destructive restore requires an
-explicit operator action and refuses schema history the current build cannot express.
+explicit operator action, refuses incompatible candidates before target mutation,
+captures a verified rollback point, and verifies SQLite integrity after replacement. An
+isolated recovery drill then applies that rollback archive to a second disposable target
+and compares its logical schema and row state with the captured pre-replacement state.
 
 Integrity repair is dry-run by default. Apply mode requires a current verified backup,
 holds the write fence across diagnosis and mutation, performs only deterministic
@@ -356,7 +319,8 @@ repairs unless deletion is explicitly authorized, and rolls back as a unit on fa
 
 Brains declares recovery schedule, retention, encryption ownership, offsite ownership,
 RTO, RPO, and restore-drill expectation, but it does not run a backup scheduler. A
-complete declaration is not evidence that a drill occurred.
+complete declaration or manually entered drill date is not evidence that a drill
+occurred; only the audited disposable restore probe establishes that state.
 
 ## Deployment shapes
 
@@ -371,14 +335,10 @@ No deployment is established by this document.
 
 ## Current limitations
 
-1. BL-P0-09 has not yet removed every withdrawn discovery and activation path.
-2. Presence can remain stale when a harness does not end/detach or renew correctly.
+1. Presence can remain stale when a harness does not end/detach or renew correctly.
 3. Cross-process realtime is durable on replay but not live fan-out.
 4. The action boundary is cooperative and in-process, not universal process/network
    confinement.
-5. Child listener/protocol readiness, scheduler progress, and registry/package/schema
-   convergence are incomplete.
-6. SQLite foreign-key enforcement is opt-in until existing stores are proven clean.
-7. Recovery mechanics exist, but exact-candidate backup/restore/rollback E4 is absent.
-8. Legacy and withdrawn source increases import, packaging, and security surface until
-   separately reviewed removal.
+5. SQLite foreign-key enforcement is opt-in until existing stores are proven clean.
+6. Legacy and withdrawn source that remains for data compatibility still requires
+   separately reviewed deletion where compatibility no longer needs it.

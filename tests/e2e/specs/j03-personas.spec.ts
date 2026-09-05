@@ -24,8 +24,8 @@ test('J3 withdrawn Persona routes fail closed and no enable switch is offered', 
   ]) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(page).toHaveURL(/\/app\/command-center$/);
-    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page).toHaveURL(route);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   }
 
   consoleGuard.assertClean();

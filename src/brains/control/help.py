@@ -194,15 +194,9 @@ def _claimable_request_query(
             HelpRequestConstraint,
             HelpRequestConstraint.request_code == HelpRequest.code,
         )
-        .outerjoin(
-            HelpRequestExecution,
-            HelpRequestExecution.request_code == HelpRequest.code,
-        )
         .filter(
             HelpRequest.status == "open",
             or_(*targets),
-            (HelpRequestExecution.request_code.is_(None))
-            | ((HelpRequestExecution.mode == "auto") & (HelpRequestExecution.status == "queued")),
         )
     )
     if visible_workspace_ids is not None:
@@ -254,18 +248,12 @@ def _resolved_execution_mode(
     to_workspace: str | None,
     to_session_id: str | None,
 ) -> str:
-    mode = (requested or "auto").strip().lower()
-    if mode not in EXECUTION_MODES:
-        raise ValueError(f"execution_mode must be one of {sorted(EXECUTION_MODES)}")
-    tool = _execution_tool(required_tool)
-    eligible = bool(tool and to_workspace and not to_session_id)
-    if mode == "ephemeral" and not eligible:
+    del required_tool, to_workspace, to_session_id
+    mode = (requested or "existing").strip().lower()
+    if mode != "existing":
         raise ValueError(
-            "ephemeral help requires a Workspace target and exact required_tool "
-            f"in {sorted(EPHEMERAL_REVIEW_TOOLS)}"
+            "automatic and ephemeral peer execution is withdrawn; execution_mode must be 'existing'"
         )
-    if mode == "auto" and not eligible:
-        return "existing"
     return mode
 
 
@@ -746,7 +734,6 @@ def release_help_request(
             raise ValueError(f"help request {code} is {row.status}, not claimed")
         if row.claimed_by_session_id != session_id:
             raise ValueError(f"help request claimed by another session: {code}")
-        execution = session.get(HelpRequestExecution, code)
         updated = (
             session.query(HelpRequest)
             .filter(
@@ -768,14 +755,6 @@ def release_help_request(
         if not updated:
             session.refresh(row)
             raise ValueError(f"help request {code} changed state before release")
-        if execution is not None and execution.mode == "auto":
-            execution.status = "queued"
-            execution.review_session_id = None
-            execution.runtime_id = None
-            execution.launch_after = now
-            execution.lease_expires_at = None
-            execution.updated_at = now
-            execution.error_code = None
         session.commit()
         session.refresh(row)
         result = _row_to_dict(session, row)
@@ -787,10 +766,6 @@ def release_help_request(
         session_id=session_id,
         metadata={"code": code, "retry_timeout_ms": retry_timeout_ms},
     )
-    if result.get("execution_mode") == "auto":
-        from brains.control.help_execution import schedule_help_review
-
-        schedule_help_review(code)
     return result
 
 

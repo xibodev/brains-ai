@@ -11,6 +11,7 @@ brains.db-*
 build
 dist
 .pytest_cache
+.tmp
 .mypy_cache
 .ruff_cache
 **/.tsbuild
@@ -38,3 +39,4 @@ reports
 htmlcov
 .coverage*
 *.log
+*.tar

@@ -278,7 +278,7 @@ def test_pull_mode_and_detached_mail_never_fabricate_a_notification(tmp_path) ->
     workspace = tmp_path / "pull-fallback"
     sender = _agent(workspace)
     pull_recipient = _agent(workspace, tool="codex")
-    detached = _notified_agent(workspace, tool="claude", mode="immediate")
+    detached = _notified_agent(workspace, tool="claude", mode="turn_boundary")
     end_session(detached["session"]["session_id"], "offline")
 
     sent = send_mailbox_message(
@@ -966,16 +966,6 @@ def test_browser_mailbox_selector_reports_truthful_open_and_send_capabilities(
     )
 
     assert list_browser_mailboxes()[0]["can_send"] is True
-
-    coordination = client.get("/v1/operator/coordination")
-    assert coordination.status_code == 200, coordination.text
-    projected = next(
-        row
-        for row in coordination.json()["live_agents"]
-        if row["session_id"] == agent["session"]["session_id"]
-    )
-    assert projected["mailbox_address"] == agent["mailbox"]["address"]
-    assert projected["mailbox_deep_link"] == agent_row["deep_link"]
 
     api_principal = principal_for_operator_slug("admin")
     assert api_principal is not None

@@ -1,5 +1,4 @@
-import { NavLink, useNavigate } from "react-router-dom";
-import { useOperator } from "../store/OperatorContext";
+import { CoreNavLink, useCoreNavigation } from "../coreRoutes";
 
 interface Item {
   to: string;
@@ -16,11 +15,10 @@ const NAVIGATION: Item[] = [
 ];
 
 export function Sidebar() {
-  const navigate = useNavigate();
-  const { catalog } = useOperator();
+  const navigation = useCoreNavigation();
 
   const renderItem = (it: Item) => (
-    <NavLink
+    <CoreNavLink
       key={it.to}
       to={it.to}
       className={({ isActive }) => `control-nav-item ${isActive ? "active" : ""}`}
@@ -28,7 +26,7 @@ export function Sidebar() {
     >
       <span className="control-nav-glyph" aria-hidden>{it.glyph}</span>
       <span>{it.label}</span>
-    </NavLink>
+    </CoreNavLink>
   );
 
   return (
@@ -43,20 +41,15 @@ export function Sidebar() {
         <div className="control-section-label">Operate</div>
         <nav className="control-nav">{NAVIGATION.map(renderItem)}</nav>
         <div className="control-sidebar-bottom">
-          <button className="control-act-button" onClick={() => navigate("/act")}>
+          <button className="control-act-button" onClick={() => navigation.open("/act")}>
             <span>Act</span><kbd>Ctrl K</kbd>
           </button>
-          <div className="control-labs-note">
-            <strong>Labs {catalog?.labs_enabled ? "on" : "off"}.</strong>
-            <span>Execution-model screens stay outside the normal operator surface.</span>
-            {catalog?.labs_enabled && <NavLink to="/labs">Open Labs</NavLink>}
-          </div>
         </div>
       </aside>
       <nav className="control-mobile-nav">
         {NAVIGATION.map(renderItem)}
       </nav>
-      <button className="control-mobile-act" onClick={() => navigate("/act")}>Act</button>
+      <button className="control-mobile-act" onClick={() => navigation.open("/act")}>Act</button>
     </>
   );
 }

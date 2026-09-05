@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
+import { api } from "../api/client";
 import type {
   MailboxAccess,
   MailboxAddress,
   MailMessage,
-  MailboxSmtpStatus,
   MailThread,
   OperatorWorkspace,
 } from "../api/types";
 import { relativeTime } from "./format";
 import { OperatorState, OperatorStatus } from "./OperatorPrimitives";
 import { useToast } from "./Toast";
+import { classifyAsyncError, type AsyncErrorKind } from "../store/useAsync";
 
 type Folder = "inbox" | "sent";
+const FOLDERS: Folder[] = ["inbox", "sent"];
 type ComposeMode = { kind: "compose" | "reply" | "forward"; source?: MailMessage };
 
 function operationId(): string {
@@ -37,19 +38,15 @@ export function MailboxWorkspace() {
   const [accessError, setAccessError] = useState<string | null>(null);
   const [messageError, setMessageError] = useState<string | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
-  const [smtp, setSmtp] = useState<MailboxSmtpStatus | null>(null);
-  const [smtpLoading, setSmtpLoading] = useState(false);
-  const [smtpDestination, setSmtpDestination] = useState("");
-  const [smtpCode, setSmtpCode] = useState("");
-  const [smtpBusy, setSmtpBusy] = useState(false);
-  const [smtpError, setSmtpError] = useState<string | null>(null);
+  const [accessErrorKind, setAccessErrorKind] = useState<AsyncErrorKind>(null);
+  const [messageErrorKind, setMessageErrorKind] = useState<AsyncErrorKind>(null);
+  const [threadErrorKind, setThreadErrorKind] = useState<AsyncErrorKind>(null);
   const messageRequest = useRef(0);
   const threadRequest = useRef(0);
   const selectedAddressRef = useRef("");
 
   const selectedMailbox = mailboxes.find((row) => row.address === selectedAddress);
   const canSend = selectedMailbox?.can_send === true;
-  const canConfigureSmtp = selectedMailbox?.kind === "operator";
 
   const refreshAccess = async () => {
     const next = await api.operatorMailboxAccess();
@@ -66,6 +63,8 @@ export function MailboxWorkspace() {
     }
     setLoadingMessages(true);
     setMessageError(null);
+    setMessageErrorKind(null);
+    setMessages([]);
     try {
       const result = nextFolder === "inbox"
         ? await api.operatorMailboxInbox(address, true)
@@ -74,7 +73,8 @@ export function MailboxWorkspace() {
     } catch (error) {
       if (request === messageRequest.current) {
         setMessages([]);
-        setMessageError(formatApiError(`Load ${nextFolder}`, error));
+        setMessageError(`${nextFolder} messages unavailable`);
+        setMessageErrorKind(classifyAsyncError(error));
       }
     } finally {
       if (request === messageRequest.current) setLoadingMessages(false);
@@ -85,6 +85,8 @@ export function MailboxWorkspace() {
     const request = ++threadRequest.current;
     setLoadingThread(true);
     setThreadError(null);
+    setThreadErrorKind(null);
+    setThread(null);
     try {
       const next = await api.operatorMailboxThread(threadId, address);
       if (request !== threadRequest.current) return null;
@@ -93,7 +95,8 @@ export function MailboxWorkspace() {
     } catch (error) {
       if (request !== threadRequest.current) return null;
       setThread(null);
-      setThreadError(formatApiError("Open thread", error));
+      setThreadError("Thread unavailable");
+      setThreadErrorKind(classifyAsyncError(error));
       throw error;
     } finally {
       if (request === threadRequest.current) setLoadingThread(false);
@@ -104,6 +107,8 @@ export function MailboxWorkspace() {
     let cancelled = false;
     setLoadingAccess(true);
     setAccessError(null);
+    setAccessErrorKind(null);
+    setMailboxes([]);
     api.operatorMailboxAccess()
       .then((nextMailboxes) => {
         if (cancelled) return;
@@ -115,16 +120,23 @@ export function MailboxWorkspace() {
         if (requested && !requestedMailbox) {
           setSelectedAddress("");
           setAccessError("Mailbox unavailable");
+          setAccessErrorKind("not_found");
           return;
         }
         const selected = requestedMailbox
           ?? nextMailboxes.find((row) => row.can_send)
           ?? nextMailboxes[0];
         selectedAddressRef.current = selected?.address ?? "";
+        setLoadingMessages(Boolean(selected));
         setSelectedAddress(selected?.address ?? "");
       })
       .catch((error: unknown) => {
-        if (!cancelled) setAccessError(formatApiError("Load mailboxes", error));
+        if (!cancelled) {
+          selectedAddressRef.current = "";
+          setSelectedAddress("");
+          setAccessError("Mailbox access unavailable");
+          setAccessErrorKind(classifyAsyncError(error));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingAccess(false);
@@ -142,53 +154,18 @@ export function MailboxWorkspace() {
     }
   }, [selectedAddress, folder]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setSmtp(null);
-    setSmtpDestination("");
-    setSmtpCode("");
-    setSmtpError(null);
-    if (!selectedAddress || !canConfigureSmtp) return () => { cancelled = true; };
-    setSmtpLoading(true);
-    api.operatorMailboxSmtpStatus(selectedAddress)
-      .then((next) => {
-        if (!cancelled) setSmtp(next);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setSmtpError(formatApiError("Load email copy", error));
-      })
-      .finally(() => {
-        if (!cancelled) setSmtpLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [selectedAddress, canConfigureSmtp]);
-
-  const updateSmtp = async (action: () => Promise<MailboxSmtpStatus>, message: string) => {
-    const address = selectedAddress;
-    setSmtpBusy(true);
-    setSmtpError(null);
-    try {
-      const next = await action();
-      if (selectedAddressRef.current !== address) return;
-      setSmtp(next);
-      toast(next.superseded ? "A newer destination request replaced this one" : message);
-    } catch (error) {
-      if (selectedAddressRef.current === address) {
-        setSmtpError(formatApiError("Update email copy", error));
-      }
-    } finally {
-      if (selectedAddressRef.current === address) setSmtpBusy(false);
-    }
-  };
-
   const chooseMailbox = (address: string) => {
     messageRequest.current += 1;
     threadRequest.current += 1;
     selectedAddressRef.current = address;
     setMessages([]);
-    setLoadingMessages(false);
+    setLoadingMessages(Boolean(address));
+    setMessageError(null);
+    setMessageErrorKind(null);
     setThread(null);
     setLoadingThread(false);
+    setThreadError(null);
+    setThreadErrorKind(null);
     setCompose(null);
     setSelectedAddress(address);
     const next = new URLSearchParams(searchParams);
@@ -218,6 +195,7 @@ export function MailboxWorkspace() {
     const address = selectedAddress;
     setLoadingThread(true);
     setThreadError(null);
+    setThreadErrorKind(null);
     try {
       const next = await api.operatorMailboxReadThread(thread.thread_id, address);
       if (request === threadRequest.current) {
@@ -227,7 +205,8 @@ export function MailboxWorkspace() {
       }
     } catch (error) {
       if (request === threadRequest.current) {
-        setThreadError(formatApiError("Mark thread read", error));
+        setThreadError("Thread update unavailable");
+        setThreadErrorKind(classifyAsyncError(error));
       }
     } finally {
       if (request === threadRequest.current) setLoadingThread(false);
@@ -240,6 +219,7 @@ export function MailboxWorkspace() {
     const request = ++messageRequest.current;
     setLoadingMessages(true);
     setMessageError(null);
+    setMessageErrorKind(null);
     try {
       await api.operatorMailboxReadInbox(address);
       if (request !== messageRequest.current || selectedAddressRef.current !== address) return;
@@ -257,7 +237,8 @@ export function MailboxWorkspace() {
       toast("Inbox marked read");
     } catch (error) {
       if (request === messageRequest.current) {
-        setMessageError(formatApiError("Mark inbox read", error));
+        setMessageError("Inbox update unavailable");
+        setMessageErrorKind(classifyAsyncError(error));
       }
     } finally {
       if (request === messageRequest.current) setLoadingMessages(false);
@@ -269,6 +250,23 @@ export function MailboxWorkspace() {
     .reverse()
     .filter((message, index, rows) => rows.findIndex((row) => row.thread_id === message.thread_id) === index);
   const hasUnread = (selectedMailbox?.unread_count ?? 0) > 0;
+  const chooseFolder = (nextFolder: Folder) => {
+    messageRequest.current += 1;
+    threadRequest.current += 1;
+    setMessages([]);
+    setLoadingMessages(Boolean(selectedAddress));
+    setMessageError(null);
+    setMessageErrorKind(null);
+    setThread(null);
+    setLoadingThread(false);
+    setThreadError(null);
+    setThreadErrorKind(null);
+    setCompose(null);
+    setFolder(nextFolder);
+    const params = new URLSearchParams(searchParams);
+    params.delete("thread");
+    setSearchParams(params, { replace: true });
+  };
 
   return (
     <section className="operator-mailroom" aria-labelledby="mailroom-title">
@@ -292,10 +290,7 @@ export function MailboxWorkspace() {
           )}
         </div>
       </header>
-      <OperatorState loading={loadingAccess} error={accessError} />
-      {!loadingAccess && !accessError && mailboxes.length === 0 && (
-        <OperatorState loading={false} empty emptyTitle="No mailbox available" emptyBody="Register an agent mailbox or sign in as a provisioned operator." />
-      )}
+      <OperatorState loading={loadingAccess} error={accessError} kind={accessErrorKind} empty={!loadingAccess && !accessError && mailboxes.length === 0} boundary="mail-access" emptyTitle="No mailbox available" emptyBody="Register an agent mailbox or sign in as a provisioned operator." />
       {!loadingAccess && !accessError && mailboxes.length > 0 && (
         <div className="operator-mail-grid">
           <aside className="operator-mail-rail" aria-label="Mailbox selector">
@@ -316,103 +311,6 @@ export function MailboxWorkspace() {
                 {canSend ? "Compose, reply, and forward as this operator." : "Read-only browser inspection. Agent sends require adapter proof."}
               </small>
             </div>
-            {canConfigureSmtp && (
-              <div className="operator-mail-smtp" aria-label="External email copy">
-                <strong>External email copy</strong>
-                <small>One-way only. Local Brains mail stays authoritative.</small>
-                {smtp?.destination_hint && <code>{smtp.destination_hint}</code>}
-                <OperatorState loading={smtpLoading || (smtpBusy && !smtp)} error={smtpError} />
-                {!smtpLoading && smtp?.destination_state === "verified" ? (
-                  <>
-                    <label className="operator-field">
-                      <span>Copy content</span>
-                      <select
-                        value={smtp.copy_mode}
-                        disabled={smtpBusy}
-                        onChange={(event) => {
-                          const mode = event.target.value as "disabled" | "notification" | "full_body";
-                          const consent = mode !== "full_body" || window.confirm(
-                            "Full-body copies send mailbox subject and body outside Brains. Continue?",
-                          );
-                          if (!consent) return;
-                          void updateSmtp(
-                            () => api.operatorMailboxSmtpMode(selectedAddress, mode, mode === "full_body"),
-                            mode === "full_body" ? "Full-body copies enabled" : "Email copy preference updated",
-                          );
-                        }}
-                      >
-                        <option value="notification">Notification only</option>
-                        <option value="disabled">Disabled</option>
-                        <option value="full_body">Full body (opt in)</option>
-                      </select>
-                    </label>
-                    <button
-                      className="operator-button quiet"
-                      disabled={smtpBusy}
-                      onClick={() => void updateSmtp(
-                        () => api.operatorMailboxSmtpClear(selectedAddress),
-                        "Email destination removed",
-                      )}
-                    >
-                      Remove destination
-                    </button>
-                  </>
-                ) : !smtpLoading && smtp?.destination_state === "pending" ? (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void updateSmtp(
-                        () => api.operatorMailboxSmtpVerify(selectedAddress, smtpCode),
-                        "Email destination verified",
-                      );
-                    }}
-                  >
-                    <label className="operator-field">
-                      <span>6-digit code</span>
-                      <input
-                        value={smtpCode}
-                        inputMode="numeric"
-                        pattern="[0-9]{6}"
-                        maxLength={6}
-                        disabled={smtpBusy}
-                        onChange={(event) => setSmtpCode(event.target.value)}
-                      />
-                    </label>
-                    <button className="operator-button quiet" disabled={smtpBusy || smtpCode.length !== 6}>
-                      Verify destination
-                    </button>
-                  </form>
-                ) : !smtpLoading ? (
-                  <form
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void updateSmtp(
-                        () => api.operatorMailboxSmtpDestination(selectedAddress, smtpDestination),
-                        "Verification email sent",
-                      );
-                    }}
-                  >
-                    <label className="operator-field">
-                      <span>Email address</span>
-                      <input
-                        type="email"
-                        value={smtpDestination}
-                        disabled={smtpBusy}
-                        onChange={(event) => setSmtpDestination(event.target.value)}
-                      />
-                    </label>
-                    <button className="operator-button quiet" disabled={smtpBusy || !smtpDestination}>
-                      Send verification
-                    </button>
-                  </form>
-                ) : null}
-                {smtp && (
-                  <small>
-                    Queue: {smtp.outbox.open} open / {smtp.outbox.failed} failed / {smtp.outbox.uncertain} uncertain
-                  </small>
-                )}
-              </div>
-            )}
             <div className="operator-mail-addresses" aria-label="Openable addresses">
               {mailboxes.map((mailbox) => (
                 <button
@@ -435,24 +333,31 @@ export function MailboxWorkspace() {
           <section className="operator-mail-list" aria-labelledby="mail-list-title">
             <header>
               <div className="operator-mail-tabs" role="tablist" aria-label="Mailbox folders">
-                {(["inbox", "sent"] as const).map((name) => (
+                {FOLDERS.map((name, index) => (
                   <button
                     key={name}
+                    id={`mail-folder-tab-${name}`}
                     role="tab"
                     aria-selected={folder === name}
+                    aria-controls={`mail-folder-panel-${name}`}
+                    tabIndex={folder === name ? 0 : -1}
                     className={folder === name ? "active" : ""}
-                    onClick={() => {
-                      messageRequest.current += 1;
-                      threadRequest.current += 1;
-                      setMessages([]);
-                      setLoadingMessages(false);
-                      setThread(null);
-                      setLoadingThread(false);
-                      setCompose(null);
-                      setFolder(name);
-                      const params = new URLSearchParams(searchParams);
-                      params.delete("thread");
-                      setSearchParams(params, { replace: true });
+                    onClick={() => chooseFolder(name)}
+                    onKeyDown={(event) => {
+                      const direction = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                      const requested = event.key === "Home"
+                        ? 0
+                        : event.key === "End"
+                          ? FOLDERS.length - 1
+                          : direction
+                            ? (index + direction + FOLDERS.length) % FOLDERS.length
+                            : -1;
+                      if (requested < 0) return;
+                      event.preventDefault();
+                      chooseFolder(FOLDERS[requested]);
+                      event.currentTarget.parentElement
+                        ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[requested]
+                        ?.focus();
                     }}
                   >
                     {name === "inbox" ? `Inbox${selectedMailbox?.unread_count ? ` ${selectedMailbox.unread_count}` : ""}` : "Sent"}
@@ -467,13 +372,20 @@ export function MailboxWorkspace() {
                 Mark inbox read
               </button>
             </header>
-            <h3 id="mail-list-title" className="operator-visually-hidden">{folder} messages</h3>
-            <OperatorState loading={loadingMessages} error={messageError} />
-            {!loadingMessages && !messageError && conversationRows.length === 0 && (
-              <OperatorState loading={false} empty emptyTitle={`No ${folder} mail`} emptyBody={folder === "inbox" ? "Accepted mail will remain here across agent restarts." : "Messages sent from this mailbox will appear here."} />
-            )}
-            {!loadingMessages && !messageError && (
-              <div className="operator-mail-conversations">
+            {FOLDERS.filter((name) => name !== folder).map((name) => (
+              <div
+                key={name}
+                id={`mail-folder-panel-${name}`}
+                role="tabpanel"
+                aria-labelledby={`mail-folder-tab-${name}`}
+                hidden
+              />
+            ))}
+            <div id={`mail-folder-panel-${folder}`} role="tabpanel" aria-labelledby={`mail-folder-tab-${folder}`}>
+              <h3 id="mail-list-title" className="operator-visually-hidden">{folder} messages</h3>
+              <OperatorState loading={loadingMessages} error={messageError} kind={messageErrorKind} empty={!loadingMessages && !messageError && conversationRows.length === 0} boundary="mail-messages" emptyTitle={`No ${folder} mail`} emptyBody={folder === "inbox" ? "Accepted mail will remain here across agent restarts." : "Messages sent from this mailbox will appear here."} />
+              {!loadingMessages && !messageError && conversationRows.length > 0 && (
+                <div className="operator-mail-conversations">
                 {conversationRows.map((message) => (
                   <button
                     key={message.message_id}
@@ -489,8 +401,9 @@ export function MailboxWorkspace() {
                     <time>{relativeTime(message.created_at)}</time>
                   </button>
                 ))}
-              </div>
-            )}
+                </div>
+              )}
+            </div>
           </section>
 
           <section className="operator-mail-detail" aria-live="polite">
@@ -520,6 +433,7 @@ export function MailboxWorkspace() {
                 canSend={canSend}
                 loading={loadingThread}
                 error={threadError}
+                errorKind={threadErrorKind}
                 onMarkRead={() => void markThreadRead()}
                 onReply={(source) => setCompose({ kind: "reply", source })}
                 onForward={(source) => setCompose({ kind: "forward", source })}
@@ -538,6 +452,7 @@ function ThreadView({
   canSend,
   loading,
   error,
+  errorKind,
   onMarkRead,
   onReply,
   onForward,
@@ -547,18 +462,20 @@ function ThreadView({
   canSend: boolean;
   loading: boolean;
   error: string | null;
+  errorKind: AsyncErrorKind;
   onMarkRead: () => void;
   onReply: (message: MailMessage) => void;
   onForward: (message: MailMessage) => void;
 }) {
-  if (loading || error) return <OperatorState loading={loading} error={error} />;
-  if (!thread) {
-    return <OperatorState loading={false} empty emptyTitle="Select a conversation" emptyBody="Opening a thread does not mark it read. Read attribution is always explicit." />;
+  if (loading || error) return <OperatorState loading={loading} error={error} kind={errorKind} boundary="mail-thread" />;
+  if (!thread || thread.messages.length === 0) {
+    return <OperatorState loading={false} empty boundary="mail-thread" emptyTitle={thread ? "Empty conversation" : "Select a conversation"} emptyBody={thread ? "No messages are visible in this conversation." : "Opening a thread does not mark it read. Read attribution is always explicit."} />;
   }
   const unread = thread.messages.some((message) =>
     message.sender !== address && message.deliveries.some((delivery) => delivery.recipient === address && delivery.state === "accepted"));
   return (
     <div className="operator-mail-thread">
+      <OperatorState loading={false} boundary="mail-thread" />
       <header>
         <div>
           <small>{thread.origin_workspace}</small>
@@ -622,6 +539,7 @@ function MailComposer({
   const [workspace, setWorkspace] = useState(mode.source?.origin_workspace ?? "");
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(mode.kind !== "reply");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [workspaceErrorKind, setWorkspaceErrorKind] = useState<AsyncErrorKind>(null);
   const [subject, setSubject] = useState(
     mode.kind === "reply"
       ? `Re: ${mode.source?.subject.replace(/^Re:\s*/i, "") ?? ""}`
@@ -634,6 +552,7 @@ function MailComposer({
   const [recipients, setRecipients] = useState<string[]>([]);
   const [loadingBook, setLoadingBook] = useState(false);
   const [bookError, setBookError] = useState<string | null>(null);
+  const [bookErrorKind, setBookErrorKind] = useState<AsyncErrorKind>(null);
   const [sending, setSending] = useState(false);
   const [idempotencyKey] = useState(operationId);
 
@@ -642,6 +561,8 @@ function MailComposer({
     let cancelled = false;
     setLoadingWorkspaces(true);
     setWorkspaceError(null);
+    setWorkspaceErrorKind(null);
+    setWorkspaces([]);
     api.operatorWorkspaces()
       .then((rows) => {
         if (!cancelled) {
@@ -650,7 +571,10 @@ function MailComposer({
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setWorkspaceError(formatApiError("Load workspaces", error));
+        if (!cancelled) {
+          setWorkspaceError("Workspace list unavailable");
+          setWorkspaceErrorKind(classifyAsyncError(error));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingWorkspaces(false);
@@ -665,6 +589,8 @@ function MailComposer({
     let cancelled = false;
     setLoadingBook(true);
     setBookError(null);
+    setBookErrorKind(null);
+    setAddressBook([]);
     api.operatorMailboxPhonebook(workspace)
       .then((rows) => {
         if (!cancelled) {
@@ -673,7 +599,10 @@ function MailComposer({
         }
       })
       .catch((error: unknown) => {
-        if (!cancelled) setBookError(formatApiError("Load address book", error));
+        if (!cancelled) {
+          setBookError("Address book unavailable");
+          setBookErrorKind(classifyAsyncError(error));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoadingBook(false);
@@ -715,8 +644,8 @@ function MailComposer({
       } catch {
         toast("Mail accepted locally; refresh the mailbox to recover the updated view");
       }
-    } catch (error) {
-      toast(formatApiError("Send mail", error));
+    } catch {
+      toast("Mail could not be sent. Retry after checking authorization and local service status.");
     } finally {
       setSending(false);
     }
@@ -748,7 +677,7 @@ function MailComposer({
           {workspaces.map((row) => <option key={row.slug} value={row.slug}>{row.name || row.slug}</option>)}
         </select>
       </label>
-      <OperatorState loading={loadingWorkspaces} error={workspaceError} />
+      {mode.kind !== "reply" && <OperatorState loading={loadingWorkspaces} error={workspaceError} kind={workspaceErrorKind} empty={!loadingWorkspaces && !workspaceError && workspaces.length === 0} boundary="mail-compose-workspaces" emptyTitle="No origin Workspace" emptyBody="No visible Workspace is available for this message." />}
       <div className="operator-mail-from"><span>From</span><code>{sender}</code></div>
       {mode.kind === "reply" ? (
         <div className="operator-mail-reply-to">
@@ -762,8 +691,8 @@ function MailComposer({
       ) : (
         <fieldset className="operator-address-book">
           <legend>Recipients</legend>
-          <OperatorState loading={loadingBook} error={bookError} />
-          {!loadingBook && !bookError && addressBook.map((address) => (
+          <OperatorState loading={loadingBook} error={bookError} kind={bookErrorKind} empty={!loadingBook && !bookError && addressBook.length === 0} boundary="mail-address-book" emptyTitle="No authorized recipients" emptyBody="No recipient is visible in this Workspace." />
+          {!loadingBook && !bookError && addressBook.length > 0 && addressBook.map((address) => (
             <label key={address.address}>
               <input
                 type="checkbox"
@@ -776,7 +705,6 @@ function MailComposer({
               <span><strong>{address.kind === "operator" ? address.owner_operator : address.tool}</strong><small>{address.address}</small></span>
             </label>
           ))}
-          {!loadingBook && !bookError && addressBook.length === 0 && <p className="operator-muted">No authorized recipients in this workspace.</p>}
         </fieldset>
       )}
       <label className="operator-field"><span>Subject</span><input autoFocus value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={256} /></label>

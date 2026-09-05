@@ -121,11 +121,11 @@ def test_documented_spa_route_that_no_longer_exists_fails(tmp_path: Path) -> Non
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/labs/automation" element={<Automation />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
         "",
     )
     errors = _errors(root)
-    _assert_reports(errors, "documents route /app/labs/automation, which is not declared")
+    _assert_reports(errors, "documents route /app/command-center, which is not declared")
 
 
 def test_duplicate_spa_route_fails(tmp_path: Path) -> None:
@@ -145,44 +145,12 @@ def test_route_parameter_no_component_reads_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route path="/labs/automation" element={<Automation />} />',
-        '<Route path="/labs/automation/:tab" element={<Automation />} />',
+        '<Route path="/workspaces/:slug" element={<Workspaces />} />',
+        '<Route path="/workspaces/:slug/:tab" element={<Workspaces />} />',
     )
     _assert_reports(
         _errors(root),
-        "route /app/labs/automation/:tab declares :tab, which Automation never reads",
-    )
-
-
-def test_route_parameter_that_became_consumed_must_leave_the_allowlist(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "frontend/src/screens/Personas.tsx",
-        "export function Personas()",
-        "function _useSlug() {\n"
-        "  const { slug } = useParams();\n"
-        "  return slug;\n"
-        "}\n\nexport function Personas()",
-    )
-    _assert_reports(
-        _errors(root),
-        "route /app/labs/personas/:slug now consumes :slug; remove it from UNCONSUMED_ROUTE_PARAMS",
-    )
-
-
-def test_unconsumed_parameter_without_a_documented_gap_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "docs/product/TRACEABILITY.md",
-        "| `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | `:id` remains unconsumed by the legacy screen. |",
-        "| `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | None. |",
-    )
-    _assert_reports(
-        _errors(root),
-        "route /app/labs/sessions/:id has an unconsumed :id that docs/product/TRACEABILITY.md "
-        "does not record as a gap",
+        "route /app/workspaces/:slug/:tab declares :tab, which Workspaces never reads",
     )
 
 
@@ -191,8 +159,8 @@ def test_redirect_to_an_undeclared_route_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/App.tsx",
-        '<Route index element={<Navigate to="/command-center" replace />} />',
-        '<Route index element={<Navigate to="/dashboard" replace />} />',
+        '<Route path="/command-center" element={<CommandCenter />} />',
+        '<Route path="/command-center" element={<Navigate to="/dashboard" replace />} />',
     )
     _assert_reports(_errors(root), "redirects to /app/dashboard, which is not declared")
 
@@ -224,25 +192,10 @@ def test_route_component_module_that_does_not_exist_fails(tmp_path: Path) -> Non
 
 def test_check_docs_route_list_drift_fails(tmp_path: Path) -> None:
     root = _fixture_root(tmp_path)
-    _edit(root, "scripts/check_docs.py", '    "/app/labs/automation",\n', "")
+    _edit(root, "scripts/check_docs.py", '    "/app/command-center",\n', "")
     _assert_reports(
         _errors(root),
-        "declared route /app/labs/automation is missing from check_docs REQUIRED_SPA_ROUTES",
-    )
-
-
-def test_stale_unconsumed_parameter_allowlist_entry_fails() -> None:
-    routes = (checker.SpaRoute(path="/app/inbox", component="Inbox", redirect_to=None),)
-    errors = checker.check_spa_routes(
-        routes,
-        {"/app/inbox": "| `/app/inbox` | `Inbox` |"},
-        ("/app/inbox",),
-        {"Inbox": "./screens/Inbox"},
-        {},
-    )
-    _assert_reports(
-        errors,
-        "UNCONSUMED_ROUTE_PARAMS lists undeclared route /app/labs/sessions/:id",
+        "declared route /app/command-center is missing from check_docs REQUIRED_SPA_ROUTES",
     )
 
 
@@ -256,9 +209,9 @@ def test_client_call_without_a_server_route_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/api/client.ts",
-        'listOrgs: () => request<unknown>("/orgs")',
+        'readiness: () => request<ReadinessReport>("/admin/readiness")',
         'listReports: () => request<unknown>("/reports"),\n'
-        '  listOrgs: () => request<unknown>("/orgs")',
+        '  readiness: () => request<ReadinessReport>("/admin/readiness")',
     )
     _assert_reports(_errors(root), "client: GET /v1/reports has no mounted server route")
 
@@ -268,9 +221,9 @@ def test_client_call_with_a_non_literal_path_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/api/client.ts",
-        'listOrgs: () => request<unknown>("/orgs")',
+        'readiness: () => request<ReadinessReport>("/admin/readiness")',
         "listDynamic: (target: string) => request<unknown>(target),\n"
-        '  listOrgs: () => request<unknown>("/orgs")',
+        '  readiness: () => request<ReadinessReport>("/admin/readiness")',
     )
     _assert_reports(
         _errors(root),
@@ -289,10 +242,10 @@ def test_client_call_with_the_wrong_method_fails(tmp_path: Path) -> None:
     _edit(
         root,
         "frontend/src/api/client.ts",
-        "getOrg: (org: string | number) => request<Org>(`/orgs/${org}`)",
-        'getOrg: (org: string | number) =>\n    request<Org>(`/orgs/${org}`, { method: "PUT" })',
+        'readiness: () => request<ReadinessReport>("/admin/readiness")',
+        'readiness: () =>\n    request<ReadinessReport>("/admin/readiness", { method: "PUT" })',
     )
-    _assert_reports(_errors(root), "client: PUT /v1/orgs/{} has no mounted server route")
+    _assert_reports(_errors(root), "client: PUT /v1/admin/readiness has no mounted server route")
 
 
 def test_client_paths_match_parameterised_server_routes() -> None:
@@ -306,7 +259,7 @@ def test_client_paths_match_parameterised_server_routes() -> None:
 
 def test_client_query_string_helper_is_not_part_of_the_path(tmp_path: Path) -> None:
     inventory = checker.collect_client_calls(_fixture_root(tmp_path))
-    assert checker.ClientCall(method="GET", path="/v1/issues") in inventory.calls
+    assert checker.ClientCall(method="GET", path="/v1/operator/mailboxes/inbox") in inventory.calls
     assert not any("qs(" in call.path for call in inventory.calls)
 
 
@@ -343,17 +296,6 @@ def test_family_missing_from_the_document_fails() -> None:
         checker.check_server_families(routes, ("Health",)),
         "maps to family 'Relay', which docs/product/TRACEABILITY.md does not list",
     )
-
-
-def test_removed_family_row_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "docs/product/TRACEABILITY.md",
-        "| Relay | `POST /relay/reply`, `/relay/triage` | relay bearer or 503 when unset | B7 |\n",
-        "",
-    )
-    _assert_reports(_errors(root), "maps to family 'Relay', which docs/product/TRACEABILITY.md")
 
 
 def test_copilot_alias_to_an_unmounted_route_fails() -> None:

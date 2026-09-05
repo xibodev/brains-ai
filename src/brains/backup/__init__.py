@@ -4,22 +4,18 @@ This module is the implementation of the Phase 6 (README) /
 Phase 3 (roadmap) hardening bullet *"backup + restore tooling for
 the brain DB"*. The contract is intentionally pragmatic:
 
-* **SQLite backend (default)** — use the stdlib :mod:`sqlite3` online
+* **SQLite backend** — use the stdlib :mod:`sqlite3` online
   backup API. The connection stays open while the backup runs so
   concurrent writers do not corrupt the dump. The resulting file is
   bundled into a gzip+tar archive together with a JSON manifest.
-* **Postgres backend** — shell out to ``pg_dump`` if it is on PATH.
-  We do **not** bundle pg_dump itself (it ships with Postgres) so
-  the function raises :class:`BackupToolUnavailable` if it is
-  missing rather than silently producing a useless dump.
+Historical Postgres archive readers remain source compatibility only. Public backup
+and restore entry points fail closed for every non-SQLite runtime or target.
 
 Archive layout::
 
     <out>.tar.gz
     ├── manifest.json    # see _Manifest for the schema
     └── brains.sqlite    # raw SQLite copy
-        OR
-    └── brains.sql       # pg_dump --format=plain output
 
 The manifest captures the brains version, backend, schema versions,
 and a sha256 of the DB blob so the restore path can refuse to
@@ -35,9 +31,9 @@ Manifest compatibility
 direction only:
 
 * this build **reads** ``1`` and ``2``. A ``1`` archive written by an older
-  build inspects and restores normally here; its source-identity fields are
-  absent, so verification reports them as unverifiable instead of passing
-  them.
+  build remains inspectable; its source-identity fields are absent, so
+  verification and destructive restore fail closed instead of treating it as
+  a proven recovery candidate.
 * this build **writes** ``2``. A ``2`` archive therefore requires *this build
   or later* to inspect, verify, or restore: an older build reads
   ``manifest_version`` as ``1`` semantics and has no reader contract for it.
@@ -65,10 +61,9 @@ whole capture-verify-mutate-commit window, and every backup step run under that
 window re-proves the lock is genuinely held before and after it acts. See
 :meth:`SourceWriteLock.assert_held`.
 
-Restore is deliberately destructive — it overwrites the target DB
-file (SQLite) or runs ``psql -f`` to replay the dump (Postgres) —
-so it lives behind a separate CLI verb (``brains restore``) and an
-explicit ``--yes`` flag in the operator-facing surface.
+Restore is deliberately destructive — it overwrites the target SQLite DB file — so it
+lives behind a separate CLI verb (``brains restore``) and an explicit ``--yes`` flag
+in the operator-facing surface.
 
 Both verbs are recorded in two phases by their CLI/MCP callers via
 :func:`brains.audit.required_effect`: ``admin.backup_created.attempted`` /
@@ -237,9 +232,12 @@ class RestoreResult:
 
     archive_path: str
     backend: str
-    restored_to: str  # SQLite file path OR sanitized Postgres URL
+    restored_to: str  # SQLite file path
     data_size_bytes: int
     data_sha256: str
+    candidate_verified: bool = False
+    rollback_archive_path: str | None = None
+    post_restore_verified: bool = False
 
 
 @dataclass(frozen=True)
@@ -406,14 +404,19 @@ def schema_compatibility(manifest_versions: list[str]) -> dict[str, Any]:
 
 def _assert_schema_compatible(manifest: _Manifest) -> dict[str, Any]:
     compatibility = schema_compatibility(list(manifest.schema_versions))
-    if compatibility["unknown_migrations"]:
+    _assert_compatibility_result(compatibility)
+    return compatibility
+
+
+def _assert_compatibility_result(compatibility: dict[str, Any]) -> None:
+    unknown = compatibility["unknown_migrations"]
+    if unknown:
         raise SchemaIncompatible(
             "this archive was taken from a store that had applied migrations this build "
-            f"does not ship ({', '.join(compatibility['unknown_migrations'])}); restoring "
-            "it would leave a schema no installed migration can account for. Restore it "
-            "with the Brains build that wrote it."
+            f"does not ship ({', '.join(unknown)}); restoring it would leave a schema no "
+            "installed migration can account for. Restore it with the Brains build that "
+            "wrote it."
         )
-    return compatibility
 
 
 def _write_manifest(target_dir: Path, manifest: _Manifest) -> Path:
@@ -556,6 +559,29 @@ def _sqlite_foreign_key_violations(conn: sqlite3.Connection) -> int:
     return len(conn.execute("PRAGMA foreign_key_check").fetchall())
 
 
+def _sqlite_schema_versions(conn: sqlite3.Connection) -> list[str]:
+    """Applied migration IDs recorded inside one isolated SQLite image.
+
+    Reading the ledger from the image, rather than through the configured
+    runtime engine, binds ``manifest.schema_versions`` to the blob whose hash
+    was just checked. Historical ledgers have no ``status`` column; their rows
+    all represented applied migrations.
+    """
+    present = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_versions'"
+    ).fetchone()
+    if present is None:
+        return []
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info('schema_versions')").fetchall()
+    }
+    where = "WHERE status IS NULL OR status = 'applied'" if "status" in columns else ""
+    rows = conn.execute(
+        f"SELECT version, applied_at FROM schema_versions {where}"  # noqa: S608 - fixed SQL
+    ).fetchall()
+    return [str(row[0]) for row in sorted(rows, key=lambda row: (str(row[1]), str(row[0])))]
+
+
 def _sqlite_data_version(conn: sqlite3.Connection) -> int | None:
     """``PRAGMA data_version`` — diagnostic only.
 
@@ -582,6 +608,7 @@ def _sqlite_snapshot(path: Path) -> dict[str, Any]:
             "identity": _sqlite_identity(conn),
             "schema_objects": objects,
             "schema_fingerprint": _schema_fingerprint(objects),
+            "schema_versions": _sqlite_schema_versions(conn),
             "table_row_counts": _sqlite_table_row_counts(conn),
             "integrity_check": [
                 str(row[0]) for row in conn.execute("PRAGMA integrity_check").fetchall()
@@ -651,7 +678,12 @@ def _sqlite_source_state(path: Path, work_dir: Path) -> dict[str, Any]:
 # --------------------------------------------------------------------- SQLite
 
 
-def _backup_sqlite(out_path: Path, *, source_lock: SourceWriteLock | None = None) -> BackupResult:
+def _backup_sqlite(
+    out_path: Path,
+    *,
+    source_lock: SourceWriteLock | None = None,
+    source_path: Path | None = None,
+) -> BackupResult:
     """Capture the SQLite source into a verified archive.
 
     When ``source_lock`` is given, the source is the locked database rather
@@ -660,9 +692,14 @@ def _backup_sqlite(out_path: Path, *, source_lock: SourceWriteLock | None = None
     is derived from it. That is what makes the archive's claim to be the
     source's exact state true rather than hopeful.
     """
+    if source_lock is not None and source_path is not None:
+        raise BackupError("source_lock and source_path are mutually exclusive")
     if source_lock is not None:
         source_lock.assert_held("before capturing the backup image")
         src_path = source_lock.path
+        db_url = f"sqlite:///{src_path}"
+    elif source_path is not None:
+        src_path = source_path
         db_url = f"sqlite:///{src_path}"
     else:
         db_url = _current_db_url()
@@ -758,10 +795,7 @@ def _restore_sqlite(archive_path: Path, *, target_url: str | None) -> RestoreRes
     with tarfile.open(archive_path, "r:gz") as tar:
         manifest = _read_manifest(tar)
         if manifest.backend != "sqlite":
-            raise ManifestMismatch(
-                f"Archive backend {manifest.backend!r} is not 'sqlite'. "
-                "Use --backend postgres or restore into a Postgres install."
-            )
+            raise ManifestMismatch(f"Archive backend {manifest.backend!r} is not 'sqlite'.")
         _assert_schema_compatible(manifest)
         try:
             data_member = tar.getmember(manifest.data_file)
@@ -914,8 +948,7 @@ def create_backup(
 ) -> BackupResult:
     """Create a backup archive of the current brains DB.
 
-    Dispatches on ``subsystems.storage.backend``. The output file is a
-    ``.tar.gz`` regardless of backend; the caller picks the path.
+    SQLite is the only shipped runtime backend. The output is ``.tar.gz``.
 
     ``source_lock`` is passed by the repair workflow, which holds the SQLite
     write lock across capture, verification, and mutation. When it is given
@@ -928,36 +961,84 @@ def create_backup(
     target = Path(out_path)
     if backend == "sqlite":
         return _backup_sqlite(target, source_lock=source_lock)
-    if source_lock is not None:
-        raise UnsupportedBackend(
-            f"a quiesced source lock only applies to the sqlite backend (got {backend!r})"
-        )
-    if backend == "postgres":
-        return _backup_postgres(target)
-    raise UnsupportedBackend(f"Cannot back up backend {backend!r}")
+    raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
 
 
 def restore_backup(
     archive_path: str | Path,
     *,
     target_url: str | None = None,
+    rollback_path: str | Path | None = None,
 ) -> RestoreResult:
     """Restore a brains DB from an archive.
 
-    ``target_url`` overrides the current ``settings.db_url`` so the
-    operator can restore into a staging DB without flipping config.
-    For SQLite it must be a ``sqlite:///`` URL; for Postgres it must
-    be a libpq URL.
+    ``target_url`` may select another SQLite file. Non-SQLite targets fail
+    closed even when a historical Postgres driver happens to be installed.
     """
     backend = _current_backend()
     archive = Path(archive_path).expanduser().resolve()
     if not archive.exists():
         raise BackupError(f"Archive not found: {archive}")
-    if backend == "sqlite":
-        return _restore_sqlite(archive, target_url=target_url)
-    if backend == "postgres":
-        return _restore_postgres(archive, target_url=target_url)
-    raise UnsupportedBackend(f"Cannot restore backend {backend!r}")
+    if backend != "sqlite":
+        raise UnsupportedBackend(f"Runtime backend {backend!r} is withdrawn; SQLite is required")
+    if target_url is not None and not target_url.startswith("sqlite:"):
+        raise UnsupportedBackend("Restore targets must use SQLite")
+    # Prove the archive's bytes and manifest claims before interpreting an
+    # otherwise intact candidate as merely too new for this build. A manifest
+    # that only *claims* a future ledger fails the blob-ledger comparison and
+    # remains a ManifestMismatch rather than being mistaken for a newer store.
+    verification = verify_backup(archive, require_schema_compatible=False)
+    if not verification.ok:
+        raise ManifestMismatch(
+            "restore candidate failed isolated verification; the target was not modified"
+        )
+    _assert_compatibility_result(verification.checks["schema_compatibility"])
+
+    rollback_archive: str | None = None
+    destination = _resolve_sqlite_path(target_url or _current_db_url())
+    if destination.is_file():
+        if rollback_path is None:
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            rollback_path = (
+                destination.parent / "recovery" / f"{destination.name}.{stamp}.rollback.tar.gz"
+            )
+        resolved_rollback = Path(rollback_path).expanduser().resolve()
+        if resolved_rollback in {archive, destination.expanduser().resolve()}:
+            raise BackupError(
+                "rollback archive conflicts with recovery inputs; the target was not modified"
+            )
+        rollback = _backup_sqlite(Path(rollback_path), source_path=destination)
+        rollback_verification = verify_backup(
+            rollback.archive_path, expected_source_path=destination
+        )
+        if not rollback_verification.ok:
+            raise BackupError(
+                "pre-restore rollback point failed verification; the target was not modified"
+            )
+        rollback_archive = rollback.archive_path
+
+    restored = _restore_sqlite(archive, target_url=target_url)
+    post = _sqlite_snapshot(destination)
+    expected_fk_violations = verification.checks["manifest_foreign_key_violations"]
+    post_ok = tuple(post["integrity_check"]) == ("ok",) and (
+        post["foreign_key_violations"] == expected_fk_violations
+    )
+    if not post_ok:
+        if rollback_archive is not None:
+            _restore_sqlite(Path(rollback_archive), target_url=target_url)
+        raise BackupError(
+            "restored database failed integrity verification; the rollback point was restored"
+        )
+    return RestoreResult(
+        archive_path=restored.archive_path,
+        backend=restored.backend,
+        restored_to=restored.restored_to,
+        data_size_bytes=restored.data_size_bytes,
+        data_sha256=restored.data_sha256,
+        candidate_verified=True,
+        rollback_archive_path=rollback_archive,
+        post_restore_verified=True,
+    )
 
 
 def inspect_archive(archive_path: str | Path) -> dict[str, Any]:
@@ -1011,6 +1092,7 @@ def verify_backup(
     *,
     expected_source_path: str | Path | None = None,
     source_lock: SourceWriteLock | None = None,
+    require_schema_compatible: bool = True,
 ) -> BackupVerification:
     """Restore an archive into an isolated temporary directory and verify it.
 
@@ -1033,6 +1115,12 @@ def verify_backup(
     write lock the caller is holding, defaults ``expected_source_path`` to it,
     and re-proves the lock before and after the binding, so the freshness
     verdict cannot go stale between this call and the mutation that follows.
+
+    ``require_schema_compatible=False`` is reserved for restore's error
+    precedence: it verifies every compatibility-independent archive claim
+    first, after which restore reports an otherwise intact newer store as
+    :class:`SchemaIncompatible`. Normal callers retain compatibility as part
+    of the verdict.
     """
     archive = Path(archive_path).expanduser().resolve()
     if not archive.exists():
@@ -1065,7 +1153,7 @@ def verify_backup(
         checks["blob_sha256_matches"] = True
         compatibility = schema_compatibility(list(manifest.schema_versions))
         checks["schema_compatibility"] = compatibility
-        if compatibility["unknown_migrations"]:
+        if require_schema_compatible and compatibility["unknown_migrations"]:
             failures.append(
                 "archive records migrations this build does not ship: "
                 + ", ".join(compatibility["unknown_migrations"])
@@ -1101,7 +1189,20 @@ def verify_backup(
                 + "; ".join(restored["integrity_check"])
             )
 
+        checks["manifest_schema_versions"] = list(manifest.schema_versions)
+        checks["restored_schema_versions"] = list(restored["schema_versions"])
+        checks["schema_versions_match"] = restored["schema_versions"] == manifest.schema_versions
+        if not checks["schema_versions_match"]:
+            failures.append("restored schema history does not match the manifest")
+
+        checks["manifest_foreign_key_violations"] = manifest.foreign_key_violations
         checks["foreign_key_violations"] = restored["foreign_key_violations"]
+        checks["foreign_key_violations_match"] = (
+            manifest.foreign_key_violations is not None
+            and restored["foreign_key_violations"] == manifest.foreign_key_violations
+        )
+        if not checks["foreign_key_violations_match"]:
+            failures.append("restored foreign-key violation count does not match the manifest")
         checks["restored_table_count"] = len(restored["table_row_counts"])
 
         if manifest.schema_fingerprint:

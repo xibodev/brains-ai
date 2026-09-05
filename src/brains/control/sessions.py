@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import platform
+import threading
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -67,6 +70,59 @@ WORKSPACE_PROJECT_MARKERS: tuple[str, ...] = (
 
 STALE_SESSION_TTL_SECONDS = 30 * 60
 DORMANT_SESSION_STATE = "dormant"
+_START_LOCKS: dict[str, threading.Lock] = {}
+_START_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _coordination_start_lock(workspace_path: str, tool: str, operator: str | None):
+    """Serialize reusable-handle discovery and creation on one local host."""
+    identity = f"{workspace_identity(workspace_path)}\0{tool}\0{operator or ''}"
+    key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    with _START_LOCKS_GUARD:
+        process_lock = _START_LOCKS.setdefault(key, threading.Lock())
+    with process_lock:
+        from brains.api.admin_key import state_dir
+
+        lock_dir = state_dir() / "locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = lock_dir / f"coordination-start-{key}.lock"
+        with lock_path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                while True:
+                    try:
+                        msvcrt.locking(  # type: ignore[attr-defined]
+                            handle.fileno(),
+                            msvcrt.LK_NBLCK,  # type: ignore[attr-defined]
+                            1,
+                        )
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(  # type: ignore[attr-defined]
+                        handle.fileno(),
+                        msvcrt.LK_UNLCK,  # type: ignore[attr-defined]
+                        1,
+                    )
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _fallback_machine_id() -> str:
@@ -376,6 +432,15 @@ def _release_session_ownership(session, session_id: str) -> None:
     )
 
 
+def _lock_workspace_lifecycle(session, workspace_id: int) -> Workspace | None:
+    """Serialize Workspace-scoped coordination mutations across processes."""
+    query = session.query(Workspace).filter(Workspace.id == workspace_id)
+    if session.get_bind().dialect.name == "postgresql":
+        return query.with_for_update().one_or_none()
+    session.execute(update(Workspace).where(Workspace.id == workspace_id).values(id=Workspace.id))
+    return query.one_or_none()
+
+
 def _supersede_coordination_handle(
     session,
     predecessor: AgentSession,
@@ -540,27 +605,8 @@ def _aware(value: datetime | None) -> datetime | None:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def _post_end_activity(row: AgentSession) -> bool:
-    activity = _aware(row.last_activity_at)
-    ended = _aware(row.ended_at)
-    return bool(activity and ended and activity > ended + timedelta(seconds=1))
-
-
-def _recent_activity(row: AgentSession, now: datetime | None = None) -> bool:
-    activity = _aware(row.last_activity_at or row.started_at)
-    current = now or utc_now()
-    return bool(activity and activity >= current - timedelta(seconds=SESSION_LIVE_TTL_SECONDS))
-
-
 def _terminal_or_ended(row: AgentSession) -> bool:
-    if row.ended_at is None:
-        return bool(
-            getattr(row, "state", None) in _TERMINAL_SESSION_STATES and not _recent_activity(row)
-        )
-    terminal = True
-    # Field-report recovery: demonstrable post-end activity invalidates a stale
-    # terminal flag. An ordinary end event at the same timestamp does not.
-    return bool(terminal and not (_post_end_activity(row) and _recent_activity(row)))
+    return bool(row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES)
 
 
 def live_replacement_session_ids(
@@ -648,9 +694,6 @@ def require_live_session(
                 )
             if renew_lease:
                 renew_session_lease(session, row)
-        if row.ended_at is not None or row.state in _TERMINAL_SESSION_STATES:
-            row.ended_at = None
-            row.state = "running"
         return row
     replacements = live_replacement_session_ids(session, row.workspace_id)
     reason = (row.summary or "").strip()
@@ -829,7 +872,7 @@ def list_workspaces(*, org_id: int | None = None, include_archived: bool = False
         ]
 
 
-def start_session(
+def _start_session(
     workspace_path: str,
     tool: str = "codex",
     pid: int | None = None,
@@ -1138,6 +1181,41 @@ def start_session(
         record_agent_mailbox_registration(mailbox, session_id, workspace.id)
         result["mailbox"] = mailbox
     return result
+
+
+def start_session(
+    workspace_path: str,
+    tool: str = "codex",
+    pid: int | None = None,
+    metadata: dict[str, Any] | None = None,
+    operator: str | None = None,
+    predecessor_session_id: str | None = None,
+    reuse_existing: bool = False,
+    auto_link_predecessor: bool = False,
+    lease_session: bool = True,
+    native_tool_session_id: str | None = None,
+    mailbox_binding_secret: str | None = None,
+    mailbox_notification_mode: str | None = None,
+) -> dict:
+    """Open or reuse a Session with cross-thread/process registration serialization."""
+    from brains.control.operators import resolve_current_operator
+
+    resolved_operator = str(resolve_current_operator(operator=operator)["slug"])
+    with _coordination_start_lock(workspace_path, tool, resolved_operator):
+        return _start_session(
+            workspace_path,
+            tool=tool,
+            pid=pid,
+            metadata=metadata,
+            operator=resolved_operator,
+            predecessor_session_id=predecessor_session_id,
+            reuse_existing=reuse_existing,
+            auto_link_predecessor=auto_link_predecessor,
+            lease_session=lease_session,
+            native_tool_session_id=native_tool_session_id,
+            mailbox_binding_secret=mailbox_binding_secret,
+            mailbox_notification_mode=mailbox_notification_mode,
+        )
 
 
 def _register_session_mailbox_in_transaction(
@@ -1644,15 +1722,23 @@ def set_session_state(session_id: str, state: str, *, summary: str | None = None
         row = _lock_session_lifecycle(session, session_id)
         if row is None:
             raise AgentSessionNotFoundError(f"unknown session: {session_id}")
-        row.state = state
-        if summary is not None:
-            row.summary = summary
-        if state in _TERMINAL_SESSION_STATES and row.ended_at is None:
-            row.ended_at = utc_now()
+        already_terminal = _terminal_or_ended(row)
+        if already_terminal:
+            if state not in _TERMINAL_SESSION_STATES:
+                raise ValueError(f"session already ended: {session_id}")
+            if row.state != state:
+                raise ValueError(f"session {session_id} is already terminal with state {row.state}")
+        else:
+            row.state = state
+            if summary is not None:
+                row.summary = summary
+            if state in _TERMINAL_SESSION_STATES:
+                row.ended_at = utc_now()
         if state in _TERMINAL_SESSION_STATES:
             from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
 
             detach_session_mailbox_in_transaction(session, row.id, reason=state)
+            _release_session_ownership(session, row.id)
         session.commit()
         session.refresh(row)
         result = _agent_session_to_dict(row)
@@ -1765,6 +1851,7 @@ def end_session(session_id: str, summary: str = "") -> dict:
         from brains.control.durable_mailbox import detach_session_mailbox_in_transaction
 
         detach_session_mailbox_in_transaction(session, row.id, reason="session_ended")
+        _release_session_ownership(session, row.id)
         session.commit()
         workspace_id = row.workspace_id
     append_event(

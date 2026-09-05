@@ -1,5 +1,5 @@
-"""Tests for the bootstrap-admin operational health surface (B8, BL-P1-09,
-BL-P1-12): ``GET /v1/admin/readiness``, ``GET /v1/admin/queue-health``,
+"""Tests for the bootstrap-admin operational health surface (B8):
+``GET /v1/admin/readiness``, ``GET /v1/admin/queue-health``,
 ``POST /v1/admin/queue-health/repair``, and ``GET /v1/admin/recovery-policy``.
 
 These are protected, distinct from the open liveness-only ``GET /health``:
@@ -102,6 +102,9 @@ def test_readiness_reports_overall_status_and_every_component(client, auth_heade
     assert body["status"] in ("ready", "degraded")
     assert set(body["components"]) == {
         "storage",
+        "sqlite_integrity",
+        "gateway_protocol",
+        "mcp_protocol",
         "queue",
         "durable_mail",
         "recovery_policy",
@@ -125,6 +128,20 @@ def test_readiness_never_leaks_a_raw_exception_message(client, auth_headers, mon
     assert body["components"]["storage"]["detail"] == {"error": "RuntimeError"}
 
 
+def test_recovery_api_reports_candidate_reason_without_its_path(
+    client, auth_headers, tmp_path, monkeypatch
+):
+    from brains.config import settings
+
+    candidate = tmp_path / "private-candidate-name.tar.gz"
+    monkeypatch.setattr(settings, "backup_candidate_path", str(candidate), raising=False)
+    response = client.get("/v1/admin/recovery-policy", headers=auth_headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["candidate"]["reason"] == "candidate-unavailable"
+    assert str(candidate) not in response.text
+
+
 def test_readiness_degrades_when_migration_status_is_unhealthy(client, auth_headers, monkeypatch):
     import brains.storage.migrations as migrations_module
 
@@ -140,7 +157,7 @@ def test_readiness_degrades_when_migration_status_is_unhealthy(client, auth_head
 
 def test_readiness_degrades_by_default_when_recovery_policy_is_unconfigured(client, auth_headers):
     """A fresh install with no BRAINS_BACKUP_* configured must never claim
-    "ready" for recovery — see BL-P1-09."""
+    "ready" for recovery."""
     from brains.config import settings
 
     original = settings.backup_scope
@@ -216,4 +233,5 @@ def test_recovery_policy_endpoint_returns_policy_and_compatibility(client, auth_
     body = client.get("/v1/admin/recovery-policy", headers=auth_headers).json()
     assert "ready" in body
     assert "policy" in body and "compatibility" in body
+    assert "candidate" in body and "last_drill" in body
     assert "missing_fields" in body["policy"]

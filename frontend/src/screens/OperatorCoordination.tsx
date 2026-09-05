@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { actHref, useCoreNavigation, workspaceHref } from "../coreRoutes";
 import type { OperatorTask } from "../api/types";
 import { relativeTime } from "../components/format";
 import { MailboxWorkspace } from "../components/MailboxWorkspace";
@@ -16,32 +16,32 @@ import { useAsync } from "../store/useAsync";
 const FILTERS = ["all", "available", "in_progress", "blocked"] as const;
 
 export function OperatorCoordination() {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
   const state = useAsync(() => api.operatorCoordination(), []);
   const data = state.data;
+  const empty = Boolean(data && !data.tasks.length && !data.claims.length && !data.handoffs.length && !data.knowledge.length && !data.signals.length);
   const tasks = data?.tasks.filter((task) => filter === "all" || task.status === filter) ?? [];
 
   const openAct = (capability: string) =>
-    navigate(`/act?capability=${encodeURIComponent(capability)}`);
+    navigation.open(actHref({ capability }));
 
   return (
     <div className="operator-page" data-testid="coordination">
       <OperatorPageHead
         eyebrow="Shared work plane"
         title="Coordination"
-        lede="Global queues for tasks, ownership, handoffs, messages, topics, and shared learning, always traceable back to a workspace."
+        lede="Global queues for tasks, ownership, handoffs, durable mail, and shared knowledge, always traceable back to a workspace."
         actions={
           <>
-            <button className="operator-button" onClick={() => openAct("topic.post")}>Post topic</button>
             <button className="operator-button primary" onClick={() => openAct("task.create")}>Create task</button>
           </>
         }
       />
-      <OperatorState loading={state.loading} error={state.error} />
-      {data && (
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="coordination" emptyTitle="No coordination state" emptyBody="No tasks, claims, handoffs, knowledge, or signals are currently visible." />
+      {!state.loading && !state.error && <MailboxWorkspace />}
+      {data && !empty && (
         <>
-          <MailboxWorkspace />
           <div className="operator-filterbar">
             <div className="operator-filter-chips">
               {FILTERS.map((name) => (
@@ -55,7 +55,7 @@ export function OperatorCoordination() {
 
           <div className="operator-claim-strip">
             {data.claims.slice(0, 4).map((claim) => (
-              <button key={`${claim.workspace}-${claim.session_id}`} onClick={() => navigate(`/workspaces/${claim.workspace}`)}>
+              <button key={`${claim.workspace}-${claim.session_id}`} onClick={() => navigation.open(workspaceHref(claim.workspace))}>
                 <strong>{claim.workspace} / {claim.scope}</strong>
                 <small>{claim.session_id.slice(0, 12)} / expires {relativeTime(claim.expires_at)}</small>
               </button>
@@ -77,7 +77,7 @@ export function OperatorCoordination() {
               <OperatorCard kicker="Handoffs" title="Ready for pickup" action={<OperatorStatus tone={data.handoffs.some((row) => row.status === "active") ? "warning" : "ready"}>{data.handoffs.filter((row) => row.status === "active").length}</OperatorStatus>}>
                 <div className="operator-work-list">
                   {data.handoffs.filter((row) => row.status === "active").slice(0, 4).map((handoff) => (
-                    <button className="operator-work-item" key={String(handoff.handoff_id || handoff.id)} onClick={() => navigate(`/workspaces/${handoff.workspace}`)}>
+                    <button className="operator-work-item" key={String(handoff.handoff_id || handoff.id)} onClick={() => navigation.open(handoff.workspace ? workspaceHref(handoff.workspace) : "/workspaces")}>
                       <strong>{handoff.title || "Untitled handoff"}</strong>
                       <small>{handoff.workspace} / {relativeTime(handoff.set_at || handoff.created_at)}</small>
                     </button>
@@ -86,18 +86,15 @@ export function OperatorCoordination() {
                 </div>
               </OperatorCard>
 
-              <OperatorCard kicker="Comms" title="Boards and presence">
+              <OperatorCard kicker="Coordination" title="Current ownership">
                 <OperatorMiniList rows={[
-                  { label: "Active topics", value: data.topics.length },
-                  { label: "Recent topic posts", value: data.topic_posts.length },
-                  { label: "Live agents", value: data.live_agents.length },
                   { label: "Workspace claims", value: data.claims.length },
+                  { label: "Active handoffs", value: data.handoffs.filter((row) => row.status === "active").length },
                 ]} />
               </OperatorCard>
 
               <OperatorCard kicker="Learning" title="Review queue">
                 <OperatorMiniList rows={[
-                  { label: "Pattern proposals", value: data.patterns.filter((row) => row.status === "proposed").length },
                   { label: "Knowledge blockers", value: data.knowledge.filter((row) => row.type === "blocker" && row.status === "active").length },
                   { label: "Workarounds", value: data.knowledge.filter((row) => row.type === "workaround").length },
                   { label: "Advisory signals", value: data.signals.reduce((total, row) => total + row.count, 0) },

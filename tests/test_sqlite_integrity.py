@@ -22,7 +22,13 @@ import brains.audit as audit_module
 import brains.storage.db as db_module
 import brains.storage.migrations as migrations_module
 from brains.audit import _reset_key_cache
-from brains.backup import BackupError, create_backup, inspect_archive, verify_backup
+from brains.backup import (
+    BackupError,
+    create_backup,
+    inspect_archive,
+    restore_backup,
+    verify_backup,
+)
 from brains.config import settings
 from brains.storage import integrity
 from brains.storage.integrity import (
@@ -1105,6 +1111,55 @@ def test_diagnose_reports_every_documented_invariant(isolated_db):
     assert report.ok is False
 
 
+@pytest.mark.parametrize("claimed_delta", [-1, 1])
+def test_verify_backup_rejects_fewer_or_more_foreign_key_anomalies_than_manifest(
+    isolated_db, claimed_delta
+):
+    """A dirty rollback image is valid only when its anomaly claim is exact."""
+    _seed_anomalies(isolated_db)
+    archive = isolated_db.parent / f"foreign-keys-{claimed_delta}.tar.gz"
+    create_backup(archive)
+
+    def misstate_foreign_keys(payload: dict) -> None:
+        actual = payload["foreign_key_violations"]
+        assert isinstance(actual, int) and actual > 0
+        payload["foreign_key_violations"] = actual + claimed_delta
+
+    rebuilt = _rebuild_archive_with_manifest(
+        archive,
+        isolated_db.parent / f"foreign-keys-{claimed_delta}",
+        misstate_foreign_keys,
+        name=f"foreign-keys-{claimed_delta}-rebuilt.tar.gz",
+    )
+
+    verification = verify_backup(rebuilt)
+    assert verification.ok is False
+    assert verification.checks["foreign_key_violations_match"] is False
+    assert any("violation count" in failure for failure in verification.failures)
+
+
+def test_older_writer_v2_manifest_with_declared_anomalies_roundtrips(isolated_db):
+    """No new manifest field is required to restore an existing v2 archive."""
+    _seed_anomalies(isolated_db)
+    before = _snapshot(isolated_db)
+    archive = isolated_db.parent / "older-writer.tar.gz"
+    create_backup(archive)
+
+    rebuilt = _rebuild_archive_with_manifest(
+        archive,
+        isolated_db.parent / "older-writer",
+        lambda payload: payload.update(brains_version="1.2.0"),
+        name="older-writer-v2.tar.gz",
+    )
+    verification = verify_backup(rebuilt)
+    assert verification.ok is True, verification.failures
+
+    restored_path = isolated_db.parent / "older-writer-restored.sqlite"
+    restored = restore_backup(rebuilt, target_url=f"sqlite:///{restored_path}")
+    assert restored.post_restore_verified is True
+    assert _snapshot(restored_path) == before
+
+
 def test_diagnosis_is_deterministic(isolated_db):
     _seed_anomalies(isolated_db)
     first = diagnose_database(isolated_db, now=FIXED_NOW).to_dict()
@@ -1290,6 +1345,72 @@ def test_apply_repairs_deterministically_and_clears_foreign_key_violations(isola
     assert remaining == {"session.ended_state_ambiguous"}
 
 
+def test_successful_repair_archive_restores_the_exact_pre_repair_state(isolated_db):
+    """The safety archive is usable and contains the state repair changed.
+
+    Restore goes to a separate path through the public backup API. This proves
+    both halves of the recovery promise: the archive recreates the original
+    data and anomalies, and doing so cannot roll back the repaired live store.
+    """
+    _seed_anomalies(isolated_db)
+    archive = isolated_db.parent / "restorable-pre-repair.tar.gz"
+
+    repaired = repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+    assert repaired["applied"] is True
+    assert repaired["backup"]["ok"] is True
+
+    live_after_repair = _snapshot(isolated_db)
+    live_report = diagnose_database(isolated_db, now=FIXED_NOW)
+    assert live_report.foreign_key_violations == 0
+    assert {finding.code for finding in live_report.findings} == {"session.ended_state_ambiguous"}
+
+    restored_path = isolated_db.parent / "restored-pre-repair.sqlite"
+    restored = restore_backup(archive, target_url=f"sqlite:///{restored_path}")
+    assert Path(restored.restored_to).resolve() == restored_path.resolve()
+
+    conn = _connect(restored_path)
+    try:
+        states = dict(conn.execute("SELECT id, state FROM agent_sessions").fetchall())
+        assert states["ses-reaped"] == "running"
+        assert states["ses-ended"] == "running"
+        assert states["ses-completed-open"] == "completed"
+        assert (
+            conn.execute(
+                "SELECT ended_at FROM agent_sessions WHERE id='ses-completed-open'"
+            ).fetchone()[0]
+            is None
+        )
+        assert (
+            conn.execute("SELECT org_id FROM workspaces WHERE slug='ws-orgless'").fetchone()[0]
+            is None
+        )
+        assert conn.execute("SELECT COUNT(*) FROM workspace_claims").fetchone()[0] == 2
+        assert (
+            conn.execute("SELECT session_id FROM events WHERE kind='agent_stdout'").fetchone()[0]
+            == "ses-gone"
+        )
+        assert conn.execute("SELECT set_by_session_id FROM handoffs").fetchone()[0] == "ses-gone"
+        assert conn.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        conn.close()
+
+    restored_codes = {
+        finding.code for finding in diagnose_database(restored_path, now=FIXED_NOW).findings
+    }
+    assert {
+        "session.ended_without_terminal_state",
+        "session.ended_state_ambiguous",
+        "session.terminal_without_ended_at",
+        "workspace.missing_org",
+        "claim.expired",
+        "claim.session_ended",
+        "foreign_key.orphaned_reference",
+    } <= restored_codes
+
+    # Restoring the safety archive elsewhere must not alter the repaired live DB.
+    assert _snapshot(isolated_db) == live_after_repair
+
+
 def test_apply_is_idempotent(isolated_db):
     _seed_anomalies(isolated_db)
     repair_database(
@@ -1330,23 +1451,147 @@ def test_repair_rolls_back_every_action_when_one_fails(isolated_db):
     assert all(action.applied_rows is None for action in actions)
 
 
-def test_repair_refuses_a_structurally_corrupt_database(isolated_db, monkeypatch):
+def test_repair_refuses_a_genuinely_corrupt_database_before_backup_or_mutation(isolated_db):
+    """Exercise SQLite's real integrity checker rather than mocking its verdict.
+
+    The deliberately corrupted table is independent of the product schema, so
+    migration readiness, foreign-key inspection, and product diagnosis can
+    still run. Its first b-tree cell pointer is then moved beyond the page,
+    which makes ``PRAGMA integrity_check`` report structural corruption while
+    leaving the rest of the database readable enough to reach repair's
+    preflight refusal.
+    """
     _seed_anomalies(isolated_db)
+    conn = _connect(isolated_db)
+    try:
+        conn.execute("PRAGMA journal_mode=DELETE")
+        conn.execute("CREATE TABLE corrupt_me (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
+        conn.execute("INSERT INTO corrupt_me (payload) VALUES ('must survive unchanged')")
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        root_page = int(
+            conn.execute(
+                "SELECT rootpage FROM sqlite_master WHERE type='table' AND name='corrupt_me'"
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+
+    # A table-leaf page header is 8 bytes; the first two-byte cell pointer
+    # follows it. 0xffff cannot point inside any supported SQLite page.
+    page_offset = (root_page - 1) * page_size
+    with isolated_db.open("r+b") as handle:
+        handle.seek(page_offset + 8)
+        handle.write(b"\xff\xff")
+        handle.flush()
+
+    before = isolated_db.read_bytes()
+    archive = isolated_db.parent / "corrupt.tar.gz"
+
+    with pytest.raises(integrity.DatabaseCorruptError):
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert isolated_db.read_bytes() == before
+    assert not archive.exists()
+
+
+def test_repair_refuses_integrity_check_corruption_rows_before_backup(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "reported-corrupt.tar.gz"
     monkeypatch.setattr(
         integrity,
         "integrity_check",
-        lambda conn: ("*** in database main ***", "page 3 is never used"),
+        lambda _conn: ("*** in database main *** page 7 is never used",),
     )
-    before = _snapshot(isolated_db)
 
-    with pytest.raises(integrity.DatabaseCorruptError):
-        repair_database(
-            isolated_db,
-            apply=True,
-            backup_to=isolated_db.parent / "corrupt.tar.gz",
-            now=FIXED_NOW,
-        )
-    assert _snapshot(isolated_db) == before
+    with pytest.raises(integrity.DatabaseCorruptError, match="integrity_check is not ok"):
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert not archive.exists()
+
+
+def test_repair_normalizes_raised_malformed_page_error_before_backup(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "raised-corrupt.tar.gz"
+    malformed = sqlite3.DatabaseError("database disk image is malformed")
+
+    def raise_malformed(_conn):
+        raise malformed
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_malformed)
+
+    with pytest.raises(integrity.DatabaseCorruptError, match="could not complete") as caught:
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert caught.value.__cause__ is malformed
+    assert not archive.exists()
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    [
+        sqlite3.SQLITE_CORRUPT,
+        sqlite3.SQLITE_NOTADB,
+        sqlite3.SQLITE_CORRUPT | (1 << 8),
+    ],
+)
+def test_repair_preflight_normalizes_explicit_corruption_codes(monkeypatch, error_code):
+    corrupt = sqlite3.DatabaseError("integrity scan stopped")
+    corrupt.sqlite_errorcode = error_code
+
+    def raise_corrupt(_conn):
+        raise corrupt
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_corrupt)
+
+    with pytest.raises(integrity.DatabaseCorruptError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value.__cause__ is corrupt
+
+
+def test_repair_preflight_uses_canonical_message_without_error_code(monkeypatch):
+    corrupt = sqlite3.DatabaseError("database disk image is malformed")
+
+    def raise_corrupt(_conn):
+        raise corrupt
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_corrupt)
+
+    with pytest.raises(integrity.DatabaseCorruptError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value.__cause__ is corrupt
+
+
+def test_repair_preflight_explicit_noncorrupt_code_outranks_corruption_text(monkeypatch):
+    busy = sqlite3.DatabaseError("database disk image is malformed")
+    busy.sqlite_errorcode = sqlite3.SQLITE_BUSY
+
+    def raise_busy(_conn):
+        raise busy
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_busy)
+
+    with pytest.raises(sqlite3.DatabaseError) as caught:
+        integrity._repair_preflight_integrity_check(object())
+
+    assert caught.value is busy
+    assert not isinstance(caught.value, integrity.DatabaseCorruptError)
+
+
+def test_repair_does_not_normalize_unrelated_database_error(isolated_db, monkeypatch):
+    archive = isolated_db.parent / "unrelated-error.tar.gz"
+    unrelated = sqlite3.OperationalError("database is locked")
+
+    def raise_unrelated(_conn):
+        raise unrelated
+
+    monkeypatch.setattr(integrity, "integrity_check", raise_unrelated)
+
+    with pytest.raises(sqlite3.OperationalError, match="database is locked") as caught:
+        repair_database(isolated_db, apply=True, backup_to=archive, now=FIXED_NOW)
+
+    assert caught.value is unrelated
+    assert not isinstance(caught.value, integrity.DatabaseCorruptError)
+    assert not archive.exists()
 
 
 def test_required_orphans_need_an_operator_unless_delete_orphans_is_requested(isolated_db):

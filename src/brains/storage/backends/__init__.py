@@ -16,8 +16,6 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-from brains.extras import require_extra
-
 _SUPPORTED = ("sqlite", "postgres")
 _PSYCOPG_DRIVER = "postgresql+psycopg"
 
@@ -49,20 +47,14 @@ def _coerce_postgres_url(raw_url: str) -> str:
 def resolve_db_url(settings_obj: Any) -> str:
     """Return the SQLAlchemy URL for the configured backend.
 
-    For SQLite the URL passes through unchanged. For Postgres we enforce
-    the extra (raising :class:`brains.extras.ExtraNotInstalledError` if
-    missing) and coerce the URL onto the ``postgresql+psycopg`` driver.
-
-    ``brains.config._enforce_subsystem_extras`` already calls
-    :func:`brains.extras.require_extra` at startup, but we re-check here
-    so direct callers (tests, scripts) can't bypass the gate.
+    SQLite URLs pass through unchanged. Historical Postgres values are
+    rejected here so direct callers cannot bypass the runtime boundary.
     """
     backend = settings_obj.subsystems.storage.backend
     if backend not in _SUPPORTED:
         raise ValueError(f"Unsupported storage backend {backend!r}. Supported: {_SUPPORTED}.")
     if backend == "postgres":
-        require_extra("postgres", "subsystems.storage (backend=postgres)")
-        return _coerce_postgres_url(settings_obj.db_url)
+        raise ValueError("Postgres runtime storage is withdrawn; SQLite is required")
     return settings_obj.db_url
 
 

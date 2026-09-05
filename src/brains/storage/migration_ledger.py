@@ -27,6 +27,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from sqlalchemy import Table, inspect, text
@@ -207,6 +208,79 @@ def read_ledger(engine: Engine) -> dict[str, LedgerRow]:
     )
     with engine.connect() as conn:
         rows = conn.execute(text(f"SELECT {columns} FROM {LEDGER_TABLE}")).mappings().all()
+    return {
+        str(row["version"]): LedgerRow(
+            version=str(row["version"]),
+            description=row["description"],
+            applied_at=row["applied_at"],
+            migration_order=row["migration_order"],
+            checksum=row["checksum"],
+            checksum_origin=row["checksum_origin"],
+            backend=row["backend"],
+            status=row["status"],
+            outcome_detail=row["outcome_detail"],
+            started_at=row["started_at"],
+            completed_at=row["completed_at"],
+            duration_ms=row["duration_ms"],
+            attempts=row["attempts"],
+            error=row["error"],
+            runner_version=row["runner_version"],
+        )
+        for row in rows
+    }
+
+
+def inspect_ledger(engine: Engine) -> dict[str, LedgerRow]:
+    """Read the ledger as it exists, without creating or upgrading it.
+
+    Diagnostics must be safe before first boot and against a legacy store.  A
+    missing database or ledger therefore reads as an empty ledger, while a
+    pre-checksum ledger is projected into :class:`LedgerRow` with ``NULL`` for
+    columns that did not exist yet.  Unlike :func:`ensure_ledger`, this helper
+    executes no DDL or DML.
+    """
+    if engine.dialect.name == "sqlite":
+        database = engine.url.database
+        if database and database != ":memory:":
+            if database.startswith("file:"):
+                mode = str(engine.url.query.get("mode", ""))
+                if mode == "memory" or database == "file::memory:":
+                    database = ":memory:"
+                else:
+                    database = database.removeprefix("file:").split("?", 1)[0]
+            if (
+                database not in (":memory:", "file::memory:")
+                and not Path(database).expanduser().exists()
+            ):
+                return {}
+
+    inspector = inspect(engine)
+    if not inspector.has_table(LEDGER_TABLE):
+        return {}
+    existing = {column["name"] for column in inspector.get_columns(LEDGER_TABLE)}
+    if "version" not in existing:
+        raise LedgerError(f"the {LEDGER_TABLE} ledger has no version column")
+
+    columns = (
+        "version",
+        "description",
+        "applied_at",
+        "migration_order",
+        "checksum",
+        "checksum_origin",
+        "backend",
+        "status",
+        "outcome_detail",
+        "started_at",
+        "completed_at",
+        "duration_ms",
+        "attempts",
+        "error",
+        "runner_version",
+    )
+    projection = ", ".join(name if name in existing else f"NULL AS {name}" for name in columns)
+    with engine.connect() as conn:
+        rows = conn.execute(text(f"SELECT {projection} FROM {LEDGER_TABLE}")).mappings().all()
     return {
         str(row["version"]): LedgerRow(
             version=str(row["version"]),

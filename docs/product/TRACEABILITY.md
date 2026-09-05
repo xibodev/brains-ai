@@ -1,242 +1,133 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Traceability
 
-## Traceability rule
+This map connects public product contracts to their implementation and acceptance
+surfaces. It is deliberately compact: source and tests are the live evidence, while the
+backlog lists only unfinished actions.
 
-Every product claim must connect:
+## Core outcomes
 
-```text
-feature -> persona -> journey/AC -> user action -> UI -> machine interface
-        -> control/service -> durable state -> automated evidence -> evidence gap
-```
+| Contract | Lifecycle/source | Acceptance family |
+|---|---|---|
+| F0 Console foundation and coherent product state | Workspace services and authenticated application surfaces | `AC-F0-*` |
+| F1 Connect a machine and register Runtimes | withdrawn compatibility source | `AC-F1-*` |
+| F2 Personas and capability binding | withdrawn compatibility source | `AC-F2-*` |
+| F3 Coordination Sessions, events, and human control | Session, event, decision, mailbox, and realtime services | `AC-F3-*` |
+| F4 Projects, Issues, assignment, and dispatch | withdrawn compatibility source | `AC-F4-*` |
+| F5 Pods | withdrawn compatibility source | `AC-F5-01..04` |
+| F6 First-run execution onboarding | withdrawn compatibility source | `AC-F6-*` |
+| F7 Supported configuration truth | supported configuration summary and validated writes | `AC-F7-*` |
+| F8 GitHub linkage | frozen target and compatibility source | `AC-F8-*` |
+| F9 Orgs, members, roles, and usage | frozen target; local Workspace scope remains supported | `AC-F9-*` |
+| F10 Autopilots and managed Skills | withdrawn compatibility source | `AC-F10-*` |
 
-Test names and source files below show E1/E2 presence only. They do not assert that a command passed, a browser journey completed, or a deployment exists.
+## Boundary outcomes
 
-The user-centered outcome and evidence view of this matrix is
-[USER_OUTCOME_SPEC.md](USER_OUTCOME_SPEC.md).
+| Contract | Enforced boundary | Acceptance family |
+|---|---|---|
+| B1 External request routing | withdrawn compatibility source | `AC-B1-*` |
+| B2 Coordination plane and MCP | supported local coordination | `AC-B2-*` |
+| B3 Workspace knowledge and repository lookup | supported bounded, non-semantic lookup | `AC-B3-*` |
+| B4 Human governance and audit | supported governed actions and local audit | `AC-B4-*` |
+| B5 SQLite storage, migrations, backup, and recovery | supported SQLite lifecycle | `AC-B5-*` |
+| B6 CLI, wiring, and service management | supported foreground lifecycle and wiring; native manager qualification open | `AC-B6-*` |
+| B7 Authenticated external events | frozen target and compatibility source | `AC-B7-*` |
+| B8 Observability, health, and readiness | supported local operations | `AC-B8-*` |
+| B9 Deleted legacy browser surfaces | supported modern application; legacy surfaces absent | `AC-B9-*` |
 
-## Core feature matrix
+The detailed acceptance identifiers live in `FEATURE_CONTRACT.md`: `AC-F0-`,
+`AC-F1-`, `AC-F2-`, `AC-F3-`, `AC-F4-`, `AC-F5-`, `AC-F6-`, `AC-F7-`, `AC-F8-`,
+`AC-F9-`, `AC-F10-`, `AC-B1-`, `AC-B2-`, `AC-B3-`, `AC-B4-`, `AC-B5-`, `AC-B6-`,
+`AC-B7-`, `AC-B8-`, and `AC-B9-`.
 
-| Feature | Personas | Journeys and ACs | User action | SPA route/component | API / WS | Control/service | Data / migration | Test/evidence presence and gap |
-|---|---|---|---|---|---|---|---|---|
-| F0 Console foundation | P1, P2, P3 | J1, J11; AC-F0-01..05 | Sign in, inspect Command Center, enter a Workspace, launch a typed action | `/app/command-center`, `/app/workspaces*`, `/app/act`; `AppShell`, `OperatorProvider`, `CommandCenter`, `Workspaces`, `Act` | `/admin/login`; `/v1/operator/overview`; Workspace projections; capability catalog | authz plus Workspace/task/claim/handoff controls | operators, Orgs, Workspaces, coordination rows | Advertised. `test_operator_console_api.py` and `j11-console-clean.spec.ts` exist; exact-candidate browser evidence remains pending. |
-| F1 Connect machine | P1, P4 | J2; AC-F1-01..06 | Withdrawn target; no supported action | Current source still declares `/app/labs/runtimes*`, `ConnectMachineModal`, and `Runtimes` | Enrollment, register, heartbeat, status, and assignment routes remain mounted | frozen enrollment, Runtime, and daemon controls | `registered_tools`, `runtimes`, `enrolment_tokens`; 122 | Withdrawn/source compatibility. BL-P0-09 must remove discovery and activation while preserving needed store compatibility. |
-| F2 Personas | P1, P2, P7 | J3; AC-F2-01..06 | Withdrawn target; no supported action | Current source still declares `/app/labs/personas*` and `Personas` | Persona CRUD, Sessions, Spawn, and Skill attachment remain mounted | frozen Persona, assignment, Runtime, and Skill controls | `personas`, `agent_sessions`, `persona_skills`; 120/121/138 | Withdrawn/source compatibility. Existing backend/browser tests prove code presence only; BL-P0-09 owns containment. |
-| F3 Coordination Sessions and HITL | P1, P4, P5, P7 | J7, J8, J11; AC-F3-01..07 | Coordinate durable work, route/resolve decisions, report friction, checkpoint/resume/end | `/app/governance`, `/app/coordination`, `/app/workspaces/:slug`; withdrawn execution Session UI remains in source | operator feedback/governance/coordination; approval route/escalate/resolve; typed event scope; `/v1/ws`; `/v1/events` | leased coordination Session lifecycle, event taxonomy/scope, mailbox/successor continuity, feedback, decisions, realtime | `agent_sessions`, `events`, `event_contexts`, continuity/routing/feedback rows; 121/123/132/133/142-149 | Advertised coordination and ordinary BL-P1-15 feedback. BL-P1-16 analytics is removed; BL-P1-20 remains an experimental admission blocker. Running-agent message/stop and execution supervision are withdrawn; cross-harness E4 remains open. |
-| F4 Projects and Issues | P1, P3, P7 | J5, J6, J7; AC-F4-01..07 | Withdrawn target; no supported action | Current source still declares `/app/labs/projects*`, `/app/labs/issues*`, `Projects`, `Issues`, and `Board` | Project, Issue, assignment, comment, and dispatch APIs remain mounted | frozen project/issue/session evidence controls | Project, Issue, Session, and usage rows | Withdrawn/source compatibility. BL-P0-09 owns discovery/activation removal and historical-row compatibility. |
-| F5 Pods | P1, P2, P3, P7 | J4, J6; AC-F5-01..04 | Withdrawn target; no supported action | Current source still declares `/app/labs/pods*` and `Pods` | Pod APIs remain mounted | frozen Pod, assignment, and Issue evidence controls | `squads`, `squad_members`, `pod_profiles`, `pod_members`; 104/110/134 | Withdrawn/source compatibility. Legacy rows may remain only where persisted-data compatibility requires them. |
-| F6 Onboarding | P1, P2 | J1; AC-F6-01..05 | Withdrawn execution-model target; normal first run opens Command Center | Current source still declares `/app/labs/onboarding`, `Onboarding`, and `Stepper` | Onboarding attempt APIs and composed execution APIs remain mounted | frozen onboarding plus F1/F2/F4 controls | `onboarding_attempts`, `onboarding_steps`; 135 | Withdrawn/source compatibility. BL-P0-09 must replace old browser expectations with Workspace-first clean-state entry. |
-| F7 Config | P1, P2, P6 | J9; AC-F7-01..04 | Inspect supported config; edit only approved encrypted/non-secret settings | `/app/operations/config/:section`; `Config` | supported config summaries/writes plus withdrawn provider/bridge fields still in source | config loader, encrypted secure settings, mailer | `secure_settings`; 141 | Advertised/partial. Redaction/write tests exist; multi-process restart and removal of withdrawn activation controls remain open. |
-| F8 GitHub linkage | P1, P2, P6 | J6: AC-F8-01..02; J9: AC-F8-03..04 | Configure scope, accept signed delivery, deduplicate and link locally | `/app/operations/config/integrations`; `Config` | public `/hooks/github`; protected compatibility alias; config and delivery APIs | GitHub scope/signature and delivery controls | historical Issue links, `integration_deliveries`; 137 | Advertised/partial. External E4 is absent; BL-P1-19 owns the separate human-approved public defect relay. |
-| F9 Org, members, usage | P2, P3, P6 | J10, J11; AC-F9-01..05 | Manage Org/members/roles and inspect scoped usage | `/app/operations/access/:section`; `Settings`, `OrgContext` | Org/member CRUD and scoped usage | Orgs, memberships, usage | identity and usage tables; 050/060/090-092/120/129/130/131/136 | Advertised/partial. API deny matrix exists; browser-session E4 remains absent. |
-| F10 Automation | P2, P3, P6, P7 | J10; AC-F10-01..06 | Withdrawn target; no supported action | Current source still declares `/app/labs/automation` and attachment screens | Autopilot/Skill, recurring, job, and generic webhook APIs remain mounted | frozen recurring, Skill, and governed-spawn controls | recurring, Skills, governed actions, webhook rows; 104/110/111/112/125/126/138 | Withdrawn/source compatibility. Existing tests are not an activation contract; BL-P0-09 owns containment. |
+## Personas and journeys
 
-## Supporting capability matrix
-
-| Feature | Personas | Journeys and ACs | User/system action | Surface | Control/service | Data | Test/evidence presence and gap |
-|---|---|---|---|---|---|---|---|
-| B1 Gateway/routing | P1, P4, P7 | J9, J11; AC-B1-01..04 | Withdrawn target; no supported model-proxy action | Model routes, Config fields, and bare Copilot aliases remain in source | frozen router, classifier, provider registry/policy | `traces`, `route_decisions`, `usage_ledger` | Withdrawn/source compatibility. Existing protocol tests prove code presence only; BL-P0-09 must remove discovery and activation. |
-| B2 Coordination/MCP | P1, P3, P7 | J5-J8, J10; AC-B2-01..04 | Start/end, task/claim/handoff/message, fixed notification claim/settle, verified one-way SMTP copy, feedback, topic, help, checkpoint/resume | MCP SSE/stdio, CLI, `/app/coordination`, `/app/workspaces*`, `/app/act` | feedback inbox, Session leases/successors, durable address delivery/read/thread controls, proof-bound body-free notification protocol, encrypted human-bound SMTP destination/consent and retry outbox, browser mailbox desk, interest-scoped topics, fenced ephemeral review, typed coordination adapters | coordination, feedback, knowledge, tasks/claims/mailbox/thread/message/delivery/notification/SMTP/topics/successors/leases/review executions; 139/140/142-152 | Advertised with ordinary BL-P1-15 feedback; BL-P1-20 remains an experimental admission blocker. Local mailbox E3, synthetic SMTP, browser mailbox E4, and real OpenCode/Codex plus OpenCode/Claude offline-mail/successor/reply UAT exist. Automatic native-ID extraction, concrete hook/plugin installation, abrupt-exit recovery, Copilot container credentials, and real-provider SMTP/review remain incomplete. |
-| B3 Context/retrieval | P1, P7 | J6, J7, J11; AC-B3-01..04 | Search Workspace knowledge and bounded repository text/symbols | supported knowledge/local lookup plus semantic/graph MCP/CLI source awaiting containment | knowledge controls and bounded search; frozen `context/*` semantic/graph code | knowledge plus compatibility sources/artifacts/chunks/graph/freshness/memories | Advertised only for knowledge and non-semantic lookup. Semantic, embedding, graph, and external freshness implementations are withdrawn under BL-P0-09/BL-P2-04. |
-| B4 Governance/audit | P5, P6, P7 | J8, J10, J11; AC-B4-01..04 | Request, route/escalate, resolve approval, execute supported action, verify audit | `/app/governance`, typed HTTP, MCP/CLI governance families | human-bound approval routing, canonical governed-action contract, decisions, audit | approvals, `approval_routing`, `governed_actions`, `audit_log`, `audit_chain_head`; 070, 126-128, 145 | Advertised/partial. The boundary remains in-process; external harness effects are explicitly outside it. |
-| B5 Storage/recovery | P6 | J10, J11; AC-B5-01..05 | Initialize, migrate, back up, verify, diagnose, repair, restore SQLite | `/app/operations` read posture; CLI/MCP mutation contracts | SQLite storage, migrations, integrity, backup, encrypted settings | frozen baseline + numbered deltas, checksummed ledger, `secure_settings`, manifest-2 archives; 141 | Advertised/partial for SQLite. Browser destructive actions and E4 recovery drill remain absent; alternate backend code is withdrawn compatibility. |
-| B6 CLI/wiring/service | P1, P4, P6 | J1, J2, J9, J11; AC-B6-01..04 | Install, setup, serve, wire, manage service | `brains-ai`; PyPI; Copilot/Claude/Codex/OpenCode wire adapters; `/app/operations` posture | verified windowless Windows launcher, exact-interpreter verifier, persisted endpoints/probes, native MCP renderers, supervisor bind preflight and per-child listener watchdog | package metadata, agent config, service endpoint config, PID state | Advertised/partial. E3 covers windowless-launcher refusal, config preservation, startup timeout, and alive-but-unserving process-tree recovery; clean-host Windows login/restart E4 remains open. |
-| B7 Authenticated external events | P2, P5, P6 | J8, J9; AC-B7-01..04 | Accept signed GitHub delivery; later approve exact public defect payload | `/hooks/github` and Config; generic triggers, relay, bridges, and wa-web remain source containment debt | GitHub scope/signature/delivery controls; planned governed defect relay | `integration_deliveries` plus withdrawn trigger/bridge compatibility rows | Advertised only for GitHub ingress. BL-P1-19 is active outbound-relay work; other webhooks/bridges are withdrawn. |
-| B8 Observability/readiness | P4, P6 | J7, J11; AC-B8-01..04 | Probe liveness/readiness, inspect durable-mail failure posture, diagnose queues and stale presence | `/app/operations`, `/health`, protected admin/operator projections, logs | health, count-only durable-mail readiness, queue diagnosis/repair, recovery policy, supervisor | typed operational events, durable mailbox lifecycle rows, usage, process log files, compatibility traces | Advertised/partial. `/health` is liveness only; mail readiness and child listener-loss recovery have E3 evidence. BL-P1-16 behavioral analytics is removed. Deep child protocol, scheduler, registry, and cross-process failure coverage remain open. |
-| B9 Legacy surfaces | P1, P2, P6 | J9-J11; AC-B9-01..03 | Use `/app`; verify retired HTML is unreachable | `/dashboard*`, legacy `/admin*`, templates, and static assets remain in source | retired dashboard/admin apps plus shared `authz` | shared compatibility DB/config | Withdrawn. Authentication consistency is source evidence, not support; BL-P0-09/BL-P2-01 require zero launch, route, and static exposure. |
+`P1`, `P2`, `P3`, `P4`, `P5`, `P6`, and `P7` describe the actors. `J1`, `J2`, `J3`,
+`J4`, `J5`, `J6`, `J7`, `J8`, `J9`, `J10`, and `J11` are stable journey contracts;
+withdrawn or frozen journeys validate containment rather than a supported action path.
+The authoritative narratives and their feature mappings live in
+`PERSONAS_AND_JOURNEYS.md`.
 
 ## Modern SPA route inventory
 
-All routes are declared in `frontend/src/App.tsx` and served under the `/app` basename.
-In the normal install contract, `labs_enabled` is false, so Labs and legacy
-execution-model deep links fail closed to `/app/command-center`.
+The supported single-page application owns these routes:
 
-| Route | Component/behavior | Feature/journey | Current gap |
-|---|---|---|---|
-| `/app` | Redirect to `/app/command-center` | F0, J1, J11 | The normal console starts from cross-Workspace durable state, not onboarding or an entity list. |
-| `/app/command-center` | `CommandCenter` | F0, F3, B2, B8, J11 | Readiness and audit posture are install-admin-only. |
-| `/app/workspaces` | `Workspaces` portfolio and first visible control room | F0, F3, B2, J5-J8 | Workspace import has no typed HTTP contract and is disabled. |
-| `/app/workspaces/:slug` | `Workspaces` | F0, F3, B2, J5-J8 | `:slug` is consumed; unauthorized and unknown Workspaces are both 404. |
-| `/app/coordination` | `OperatorCoordination`, `MailboxWorkspace` | F3, B2, J5-J8 | Task, claim, handoff, mail, topics, knowledge, and patterns remain Workspace-attributable. The mailbox desk is human-bound; agent mailboxes are browser read-only without adapter proof. |
-| `/app/governance` | `Governance` | F3, B4, J8, J11 | Resolution and audit verification are native; audit-chain detail is install-admin-only. |
-| `/app/operations` | `Operations` | F7, F9, B5, B6, B8, J9-J11 | Host mutations, logs, backup, and restore remain disabled pending typed contracts. |
-| `/app/operations/config` | Redirect to `/app/operations/config/general` | F7, J9 | None beyond section contract. |
-| `/app/operations/config/:section` | `Config` | F7, F8, B8, J9 | Only approved settings are writable; process-reload state remains explicit. |
-| `/app/operations/access` | Redirect to `/app/operations/access/org` | F9, J10 | None beyond section contract. |
-| `/app/operations/access/:section` | `Settings` | F9, J10 | Org role enforcement remains a server capability check, not a visual-only gate. |
-| `/app/act` | `Act` typed capability launcher | F0, F3, B2, B4-B6, J11 | No generic shell or MCP-call endpoint; missing adapters are labeled and disabled. |
-| `/app/labs` | `LabsHome` behind `LabsGate` | F1-F6, F10 | Withdrawn route remains in source; in normal install `LabsGate` redirects to Command Center and no supported enable switch is exposed in navigation. |
-| `/app/labs/onboarding` | `Onboarding` behind `LabsGate` | F6, J1 | Withdrawn execution-model route; no supported activation. |
-| `/app/labs/sessions` | `Sessions` behind `LabsGate` | F3, J7, J8 | Withdrawn execution-supervision route; Workspace coordination remains on normal surfaces. |
-| `/app/labs/sessions/:id` | `Sessions` behind `LabsGate` | F3, J7 | `:id` remains unconsumed by the legacy screen. |
-| `/app/labs/personas` | `Personas` behind `LabsGate` | F2, J3 | Withdrawn route; no supported activation. |
-| `/app/labs/personas/:slug` | `Personas` behind `LabsGate` | F2, J3 | Withdrawn route; `:slug` is also unconsumed by retained source. |
-| `/app/labs/pods` | `Pods` behind `LabsGate` | F5, J4 | Withdrawn route; no supported activation. |
-| `/app/labs/pods/:slug` | `Pods` behind `LabsGate` | F5, J4 | Withdrawn route still declared in source. |
-| `/app/labs/projects` | `Projects` behind `LabsGate` | F4, J5 | Withdrawn route; no supported activation. |
-| `/app/labs/projects/:code` | `Projects` behind `LabsGate` | F4, J5, F10 | Withdrawn route still declared in source. |
-| `/app/labs/issues` | `Issues` behind `LabsGate` | F4, J6 | Withdrawn route; no supported activation. |
-| `/app/labs/issues/:code` | `Issues` behind `LabsGate` | F4, J6 | Withdrawn route still declared in source. |
-| `/app/labs/automation` | `Automation` behind `LabsGate` | F10, J10 | Withdrawn route; no supported activation. |
-| `/app/labs/runtimes` | `Runtimes` behind `LabsGate` | F1, J2 | Withdrawn route; no supported activation. |
-| `/app/labs/runtimes/:slug` | `Runtimes` behind `LabsGate` | F1, J2 | Withdrawn route; `:slug` is also unconsumed by retained source. |
-| `/app/inbox` | Redirect to `/app/governance` | F3, J8 | Compatibility redirect; Inbox is no longer primary navigation. |
-| `/app/sessions` | Redirect to `/app/labs/sessions` | F3, J7 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/sessions/:id` | Parameter-preserving redirect to Labs | F3, J7 | Withdrawn compatibility source only. |
-| `/app/personas` | Redirect to `/app/labs/personas` | F2, J3 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/personas/:slug` | Parameter-preserving redirect to Labs | F2, J3 | Withdrawn compatibility source only. |
-| `/app/pods` | Redirect to `/app/labs/pods` | F5, J4 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/pods/:slug` | Parameter-preserving redirect to Labs | F5, J4 | Withdrawn compatibility source only. |
-| `/app/projects` | Redirect to `/app/labs/projects` | F4, J5 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/projects/:code` | Parameter-preserving redirect to Labs | F4, J5 | Withdrawn compatibility source only. |
-| `/app/issues` | Redirect to `/app/labs/issues` | F4, J6 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/issues/:code` | Parameter-preserving redirect to Labs | F4, J6 | Withdrawn compatibility source only. |
-| `/app/automation` | Redirect to `/app/labs/automation` | F10, J10 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/runtimes` | Redirect to `/app/labs/runtimes` | F1, J2 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/runtimes/:slug` | Parameter-preserving redirect to Labs | F1, J2 | Withdrawn compatibility source only. |
-| `/app/onboarding` | Redirect to `/app/labs/onboarding` | F6, J1 | Withdrawn redirect remains in source, but normal install still fails closed to Command Center through `LabsGate`. |
-| `/app/config` | Redirect to `/app/operations/config/general` | F7, J9 | Compatibility only. |
-| `/app/config/:section` | Parameter-preserving redirect to Operations | F7, J9 | Compatibility only. |
-| `/app/settings` | Redirect to `/app/operations/access/org` | F9, J10 | Compatibility only. |
-| `/app/settings/:section` | Parameter-preserving redirect to Operations | F9, J10 | Compatibility only. |
-| `/app/*` | Redirect to Command Center | F0, J11 | Unknown top-level URLs recover to the canonical start; entity not-found behavior remains inside parameterized routes. |
+| Route | Contract |
+|---|---|
+| `/app` | Command Center |
+| `/app/command-center` | Command Center |
+| `/app/workspaces` | Workspace portfolio |
+| `/app/workspaces/:slug` | Workspace control room |
+| `/app/coordination` | Coordination and mailboxes |
+| `/app/governance` | Asks, decisions, and audit |
+| `/app/operations` | Operational health |
+| `/app/operations/config` | Supported configuration |
+| `/app/operations/config/:section` | Supported configuration section |
+| `/app/act` | Typed governed actions |
+| `/app/inbox` | Retired alias fails closed |
+| `/app/config` | Retired alias fails closed |
+| `/app/*` | Unknown routes fail closed |
+
+Route registration, frontend navigation, and generated distribution assets must agree.
+The core-surface manifest and browser tests enforce that agreement.
 
 ## Native API and realtime family inventory
 
-All native product routers are mounted on the gateway process. Router prefixes make the listed paths `/v1/*` unless noted.
-
-This is a source inventory, not an advertisement list. Rows marked **withdrawn** remain
-mounted at HEAD only as BL-P0-09 containment debt and have no supported activation
-contract.
+The protected API and realtime registrations under `src/brains/api/` define the current
+native service boundary. Authentication, authorization, and reconnect tests bind those
+families to F0, F3, B2, B4, and B8.
 
 | Family | Principal routes | Auth boundary | Feature mapping |
 |---|---|---|---|
 | Health | `GET /health` | open | B8 |
-| Model gateway | withdrawn: models, chat/completions, responses, messages, count_tokens | `require_api_key`; still mounted pending containment | B1 |
-| Copilot aliases | withdrawn: `/models`, `/chat/completions`, `/completions`, `/responses` | downstream gateway auth; still rewritten pending containment | B1 |
-| Identity/authorization | credential store, principal resolution, capability policy, FastAPI gates (`src/brains/authz`) | not a route family; every native route resolves through it | F1, F9, B2, B9 |
-| Operator console | `/v1/operator/*` overview, Workspace control rooms, coordination, governance, operations, capabilities, scoped mutations, mailbox access/registration/phonebook/lookup/send/broadcast/reply/forward/Inbox/Sent/thread/read and mailbox SMTP status/destination/verify/mode, audit verification | resolved operator principal plus per-Workspace `org.read`/`org.write`; mailbox access and SMTP configuration are human-channel-only and mailbox-owner-bound; agent mailbox operations additionally require the current caller-owned Session and binding header; registration may declare a bounded adapter notification mode, while take/settle remains CLI/MCP-only; raw API credentials are send-only to operator inboxes while browser/local human channels may read owned human mail; install operations/global approvals require bootstrap admin | F0, F3, F7, F9, B2, B4-B6, B8 |
-| Orgs/members | Org CRUD, member list/add/remove, onboarding aliases | principal + `org.read`/`org.write`/`org.admin`/`org.owner` | F0, F6, F9 |
-| Pods | withdrawn: Org Pod list/create; Pod get/dispatch-plan/add member/remove member/set leader/archive | still mounted with prior principal/scope checks pending containment | F5 |
-| Onboarding | withdrawn: `GET /v1/onboarding/state`; attempt start; step record; abandon | still mounted with prior operator checks pending containment | F6 |
-| Autopilots/Skills | withdrawn: Org list/create; enable/fire; Skill list/create | still mounted with prior principal/scope checks pending containment | F10 |
-| Personas | withdrawn: Org list/create; get/patch/archive; sessions/spawn | still mounted with prior principal/scope checks pending containment | F2 |
-| Projects | withdrawn: Org list/create; get/patch/archive; board | still mounted with prior principal/scope checks pending containment | F4 |
-| Issues | withdrawn: list/create/get/patch/cancel; sessions; evidence; dispatch-plan; assign; transition; comments; dispatch | still mounted with prior principal/scope checks pending containment | F4 |
-| GitHub | public `POST /hooks/github`; protected `POST /v1/integrations/github/webhook` compatibility alias | public ingress requires HMAC-SHA256, delivery/event headers and exact repository-to-Org binding; `/v1` alias additionally requires an operator principal | F8 |
-| Inbox/coordination | asks, handoffs, approvals, usage, config summary/test, Sessions, Session `message`/`stop`/`commands` | principal + Workspace/Org scope; approval resolution adds separation of duty; usage/config are bootstrap-admin only; Session control refuses Runtime credentials and answers `404` for another Org or a `private` Workspace | F3, F7, F9 |
-| Operational health | `GET /v1/admin/readiness`; `GET /v1/admin/queue-health`; `POST /v1/admin/queue-health/repair`; `GET /v1/admin/recovery-policy` | bootstrap-admin only (`principal.is_bootstrap_admin`, same in-handler gate as `/v1/config/summary` and `/v1/usage`) | B5, B6, B8 |
-| Runtimes | withdrawn except BL-P1-20 compatibility: register, heartbeat, list/get/patch/offline, enroll, assignments, ephemeral help-review list/claim/complete, Session/event ingest, Session-command poll/claim/ack/release, Session reconcile | Runtime execution/enrollment is withdrawn; current checks remain source safety while BL-P0-09 separates any BL-P1-20 worker compatibility | F1, F3, B2 |
-| Realtime | `WS /v1/ws`, `GET /v1/events` | principal from key/cookie, then server-derived topic authorization re-checked per message and on a timer; Runtime credentials refused | F0, F3, J11 |
-| Trigger webhooks | withdrawn: `POST /hooks/{slug}` | per-trigger bearer; still mounted pending containment | F10, B7 |
-| Relay | `POST /relay/reply`, `/relay/triage` | relay bearer or 503 when unset | B7 |
-| Modern browser | `/app`, `/app/{path}`, assets, favicon | SPA index/fallback auth; favicon open | F0-F10 |
-| Legacy static | withdrawn: `/static/brains/*` packaged dashboard and admin assets | still open at HEAD pending BL-P0-09/BL-P2-01 removal | B9 |
-| Admin | withdrawn HTML: `/admin*`, `/admin/api/*` | still mounted with prior auth pending containment; supported operations must move through `/app` or typed APIs | F7, B9 |
-| Framework defaults | `/docs`, `/redoc`, `/openapi.json` | open at HEAD | B8, B9 |
-
-## Client/server mismatches and missing contracts
-
-| ID | Client or product expectation | Current server fact | Affected IDs |
-|---|---|---|---|
-| UM-01 | `POST /v1/sessions/{id}/message` | Route/source exists, but running-agent delivery is withdrawn. Durable mailbox/topic communication is the advertised path; BL-P0-09 must remove any UI or guidance that implies this command reaches a shipped CLI. | F3, J8, AC-F3-05 |
-| UM-02 | `POST /v1/sessions/{id}/stop` | Route/source exists, but Runtime process stop is withdrawn. Coordination Session end/dormancy is separate; BL-P0-09 owns containment. | F3, J8, AC-F3-06 |
-| UM-03 | Chat should steer a running agent and survive reload. | Withdrawn. `session_commands` source persistence is compatibility inventory and must not be presented as an unavailable-but-activatable steering feature. | F3, J8, AC-F3-05 |
-| UM-04 | Deep entity routes select the route entity. | Workspace deep links are advertised. Execution-model entity routes are withdrawn; any remaining param behavior is source inventory until their routes are removed. | F0, J3-J7, AC-F0-05 |
-| UM-05 | Pod CRUD and Persona team semantics. | Withdrawn. Existing membership/routing code and tests do not create a supported user path. | F5, J4 |
-| UM-06 | Fresh-state onboarding completes the north-star loop. | Withdrawn. The advertised fresh-state outcome is Command Center/Workspace-first entry, not execution-model onboarding. | F6, J1 |
-| UM-07 | Modern Config edits supported state. | Advertised only for approved service/email/secret writes with explicit reload semantics. Provider, bridge, alternate-storage, telemetry, and legacy-admin activation controls are withdrawn containment debt. | F7, J9 |
-| UM-08 | GitHub webhook validates GitHub events. | Resolved at E1/E2/E3: the public route requires HMAC-SHA256, delivery/event headers, an exact configured repository-to-Org binding, and durable replay refusal; external E4 operation remains open. | F8, J9 |
-| UM-09 | Roles restrict native API access. | Resolved: `owner`/`admin`/`member` are enforced per route against one resolved Org, including the Org-scoped `GET /v1/orgs/{org}/usage`; the residual gap is browser-session E4 evidence for AC-F9-05. | F9, J10, J11 |
-| UM-10 | Skills affect Persona or Project execution. | Withdrawn. Skill attachment/context code and migration 138 remain compatibility inventory; reusable advertised guidance is Workspace knowledge and coordination patterns. | F10, J10 |
-| UM-11 | Scheduled execution uses the same approval gate. | Withdrawn. No scheduled auto-fire is a supported path, regardless of source-level governed-action integration. | F10, B4, J10 |
-| UM-12 | Readiness indicates candidate operability. | Partly resolved: `/health` remains liveness-only; protected readiness reports bounded storage/migration, queue, durable-mail, and recovery posture while excluding withdrawn Runtime state. BL-P1-09 must add child protocol/listener, scheduler, registry, package/schema, and supported-transport checks. | B8, J11 |
-
-## MCP and CLI surface mapping
-
-| Capability | MCP families | CLI families | Feature mapping |
-|---|---|---|---|
-| Plan/retrieve | advertised bounded repo search and knowledge; semantic, graph, embedding, and freshness tools remain mounted pending containment | advertised plan/repo search; docs index, orient, graph, and external freshness commands are withdrawn | B3 |
-| Session/state | advertised start/heartbeat/end, state, event, snapshot, checkpoint/resume, mailbox register/phonebook/lookup/send/broadcast/reply/forward/inbox/sent/thread/notification-take/notification-settle; execution message/stop commands are withdrawn | advertised coordination Session/state/event/snapshot and matching mailbox families, including body-free notification claim/settle; execution message/stop commands are withdrawn | B2, F3 |
-| Work coordination | tasks, claims, handoffs, messages, feedback report/enrich/get/list, help lifecycle, presence, topic lifecycle | task, claim, handoff, message, feedback/help/topic lifecycle commands | B2, F3, F4 |
-| Knowledge/patterns/tools | knowledge, learn, coordination patterns, tool registry | learn, pattern, tool, views commands | B2, B3 |
-| Automation/webhooks | recurring and generic webhook tools remain mounted pending containment | recurring and jobs commands are withdrawn | F10, B7 |
-| Governance/recovery | human feedback triage/promotion, decision route/escalate/resolve, audit, governed actions, backup/restore | feedback and decision lifecycle, audit/governed/backup/restore families | F3, B4, B5 |
-| Runtime/operations | supported MCP server transport; Runtime APIs remain mounted pending containment | setup, serve/up, wire, service; `run`, daemon, and withdrawn-feature activation commands are containment debt | F1, B6, B8 |
-
-Current MCP naming is `brains_*`; internal legacy dotted names are not the public
-documentation contract. Supported defaults must exclude withdrawn tools regardless of
-full/lean/allowlist source modes; BL-P0-09 closes the current mismatch.
+| Admin | `/admin/login`, `/admin/logout` | sign-in bootstrap and cookie lifecycle only | B9 |
+| Identity/authorization | credential store, principal resolution, capability policy, FastAPI gates (`src/brains/authz`) | every native route resolves through it | F1, F9, B2, B9 |
+| Operator console | `/v1/operator/*` | resolved local operator plus per-Workspace capability checks; install-wide operations require bootstrap admin | F0, F3, F7, F9, B2-B6, B8 |
+| Orgs/members | compatibility route family | not supported for local-product activation | F0, F6, F9 |
+| Inbox/coordination | asks, handoffs, approvals, usage, configuration summary, Sessions, and mailbox operations | principal plus Workspace scope; install-wide views require bootstrap admin | F3, F7, F9 |
+| Operational health | `GET /v1/admin/readiness`, `GET /v1/admin/queue-health`, `POST /v1/admin/queue-health/repair`, `GET /v1/admin/recovery-policy` | bootstrap admin | B5, B6, B8 |
+| Realtime | `WS /v1/ws`, `GET /v1/events` | principal plus server-derived scoped subscription authorization | F0, F3, J11 |
+| Modern browser | `/app`, `/app/{path}`, assets, favicon | authenticated application shell; favicon open | F0-F10 |
 
 ## Data and migration mapping
 
-| Domain | Principal tables/state | Migration coverage | Known gap |
-|---|---|---|---|
-| Identity/scope | `operators`, `orgs`, `org_members`, `workspaces`, `workspace_aliases`, `workspace_memberships`, `api_credentials` | 050, 060, 101, 120, 129, 130, 131, 148 | Every accepted credential is one hashed row bound to a principal; `130` backfills the previously implicit default-Org membership for pre-existing operators and deliberately excludes `daemon-*` operators, which keep authenticating, see nothing, and are reported by `brains-ai credentials doctor`; `131` records each credential's provenance so a rotated admin key or a deleted operator key file revokes exactly the credential it superseded. `148` makes normalized paths aliases of a durable Workspace and converges linked Git worktrees only inside one Org; archived duplicate history remains attributable. |
-| Coordination, durable mail, and withdrawn execution compatibility | `registered_tools`, `agent_sessions`, `events`, durable mailbox/thread/message/delivery/notification/SMTP/legacy-inventory rows, plus withdrawn `runtimes`, `enrolment_tokens`, `personas`, `projects`, `issues`, `issue_comments`, `skills`, attachment, and `session_commands` rows | 100, 120-125, 133, 138, 150-152 | Coordination Session/tool/event rows remain advertised. Mailbox identity, delivery/read/thread UI, fixed-nudge notification state, and per-operator encrypted verified SMTP settings plus leased retry/uncertain outbox are implemented. `wire` remains pull-only because no hook/plugin is installed; external harness wakeup and real-provider SMTP remain open. Migration 150 inventories legacy rows, 151 constrains notification transitions, and 152 constrains SMTP consent/outbox state. Runtime/Persona/Project/Issue/Skill/execution-command rows are compatibility inventory; source behavior and historical attribution do not authorize activation. BL-P0-09 must preserve only the data needed to open existing stores. |
-| Realtime | `realtime_events` | 132 | Session, Issue, approval and Runtime *state* events commit before they are announced, carry a monotonic `event_id` clients resume from, are idempotent for a publisher that supplies a `dedupe_key` (the unique key is enforced by the store; the Session command publisher supplies one derived from the command id and state, so a retried mutation is delivered once logically; the Session lifecycle, Issue, approval and Runtime publishers do not, so their delivery is at-least-once), and record the Org/Workspace the topic resolved to so delivery is filtered on the event's own scope; a replay cursor advances with delivery (ack, then frames, then `replay_complete`) rather than with the store and a batch that read only part of a connection's topics hands over no cursor at all (`covers_connection: false`, `cursor: null`, a reporting-only `batch_cursor`) so the live frames queued below it are still recovered on the next resume, a catch-up batch is written whole ahead of the live frames it overlapped and one publish commits and announces in a single critical section so announcement order matches id order, retention is by row count, and a cursor older than the oldest retained row is answered with an explicit reset. Transcript chunks, the chat echo and `runtime.heartbeat` stay notification-only; the chat echo is a live mirror whose durable counterpart is the `session_commands` row the console backfills over REST, retention and gap detection are install-wide rather than per topic, and live fan-out is per gateway process. |
-| Governance | approval/routing, feedback reports/enrichments/promotions, typed `event_contexts`, coordination queues, `help_request_executions`, governed actions and audit chain | 010, 030, 040, 070, 126-128, 139, 140, 142-149 | Feedback promotion is exactly-once and audit-correlated; event category/scope provenance is stored per row and unresolved extension scope is explicit; approval routing never resolves; comms retains async help, fenced read-only ephemeral review, and Session continuity. |
-| Encrypted local config | `secure_settings` | 141, 152 | AES-256-GCM ciphertext with Scrypt admin-key derivation, environment precedence, protected redacted APIs, re-key-before-admin-key-rotation, and mailbox-scoped SMTP destinations excluded from generic configuration projection. |
-| Teams/automation compatibility | `squads`, `squad_members`, `pod_profiles`, `pod_members`, recurring and generic webhook tables | 104, 110-112, 134 | Withdrawn. Rows remain only to preserve historical references and schema compatibility until separately reviewed removal; no Pod, managed-Skill, recurring, or generic-trigger activation is supported. |
-| Onboarding compatibility | `onboarding_attempts`, `onboarding_steps` | 135 | Withdrawn execution-model state. Existing attempts are historical compatibility data, not a resumable current first-run path. |
-| Knowledge and retrieval compatibility | knowledge plus sources, artifacts, chunks, chunks_meta, graph nodes/edges | 020, 080, 102, 103 | Workspace knowledge remains advertised. Semantic/embedding/graph/freshness artifacts are withdrawn compatibility data; stable local lookup requires none of them. |
-| Usage and routing compatibility | usage ledger and attributions plus withdrawn traces, route decisions, memories, and freshness | 090-092, 136 | Scoped usage remains advertised where attribution is explicit. Model-routing and semantic-freshness rows are compatibility inventory and must not drive normal-product readiness. |
-| Integrations | `integration_deliveries` plus withdrawn `webhook_triggers` and `webhook_deliveries` | 110-112, 137 | Signed GitHub delivery identity/dedupe remains advertised. Generic triggers, relay, approval bridges, and companion delivery are withdrawn compatibility; BL-P1-19 requires a new exact-payload governed contract rather than reactivating them. |
-| File state | admin/operator/audit keys, `secrets.env`, runtime overlay, daemon config, OAuth cache, exec transcripts, service PID/log | not SQL-migrated | PID identity/liveness, multi-process reload, ownership, backup scope, and retention need explicit policy. |
+| Domain | Current source | Migration coverage |
+|---|---|---|
+| SQLite schema | schema and migration modules under `src/brains/` | 010, 020, 030, 040, 050, 060, 070, 080, 090-092, 100-104, 110-112, 120-131, 133-153 |
+| Realtime event log | durable event migration | 132 |
 
-Fresh and legacy SQLite stores reach the current schema through one ordered, checksummed
-migration contract: the frozen baseline followed by numbered deltas, recorded with
-order, checksum, origin, backend, status, attempts, timings, and error. `create_all` is
-not on the startup path. Alternate-backend baseline and migration code remains at HEAD
-only as withdrawn compatibility inventory; BL-P0-09 must define what is required to
-inspect or migrate existing stores without advertising Postgres support.
+The source migrations, not this summary, define the schema and transition details.
 
 ## Browser and backend evidence inventory
 
-| Journey | Browser file at HEAD | Backend/static evidence | Gap |
-|---|---|---|---|
-| J1 | `j01-first-run.spec.ts` | Sign-in and Workspace registration controls | Workspace-first entry plus withdrawn onboarding fail-closed is asserted; long-run E4 recovery evidence remains open. |
-| J2 | `j02-connect-machine.spec.ts` | F1 enrollment/Runtime/daemon source tests | Withdrawn journey now asserts containment only: no discovery and direct Runtime URLs fail closed to Command Center. |
-| J3 | `j03-personas.spec.ts` | F2 Persona and Skill-attachment source tests | Withdrawn journey now asserts containment only: no discovery and direct Persona URLs fail closed. |
-| J4 | `j04-pods.spec.ts` | F5 Pod roster/routing source tests | Withdrawn journey now asserts containment only: no discovery and direct Pod URLs fail closed. |
-| J5 | `j05-project-workspace.spec.ts` | Project plus Workspace scope source tests | Browser evidence keeps advertised Workspace control-room routing while asserting withdrawn Project fail-closed behavior. |
-| J6 | `j06-issues.spec.ts` | F4 Issue/dispatch source tests | Withdrawn journey now asserts containment only: no Issue activation controls and direct Issue URLs fail closed. |
-| J7 | `j07-sessions.spec.ts` | F3 coordination source tests | Browser coverage now exercises durable task/handoff coordination on Act, Coordination, and Workspace surfaces. |
-| J8 | `j08-governance-session-control.spec.ts` | approval/ask/gate plus durable mailbox authorization/delivery/SMTP tests | Browser coverage asserts one-time governance resolution, fail-closed legacy session-control navigation, and container-only mailbox selector/read/compose/reply/forward/SMTP-status/reload/responsive journeys. |
-| J9 | `j09-config-settings.spec.ts` | F7/F8 configuration and access source tests | Browser coverage targets advertised Operations config/access sections without Labs activation. |
-| J10 | `j10-automation.spec.ts` | F9 plus withdrawn F10/recurring/webhook/Skill source tests | Withdrawn automation journey now asserts containment only while keeping advertised Access surface checks. |
-| J11 | `j11-console-clean.spec.ts` | auth, error, WS, privacy tests | Blocking CI; accessibility, route-contract depth, and multi-process realtime evidence remain incomplete. |
+| Journey | Browser specification |
+|---|---|
+| J1 | `j01-first-run.spec.ts` |
+| J2 | `j02-connect-machine.spec.ts` |
+| J3 | `j03-personas.spec.ts` |
+| J4 | `j04-pods.spec.ts` |
+| J5 | `j05-project-workspace.spec.ts` |
+| J6 | `j06-issues.spec.ts` |
+| J7 | `j07-sessions.spec.ts` |
+| J8 | `j08-governance-session-control.spec.ts` |
+| J9 | `j09-config-settings.spec.ts` |
+| J10 | `j10-automation.spec.ts` |
+| J11 | `j11-console-clean.spec.ts`, `j11-operator-web-hardening.spec.ts` |
 
-The backend acceptance module contains active F0-F10 tests and no live `xfail` decorators at this HEAD. Test presence is E2 only and is not evidence that the tests passed.
+Backend acceptance covers the same contracts through registered API, CLI, and MCP
+surfaces. Tests and the generated core-surface manifest are the live evidence inventory.
 
-## Platform capability inventory
+## Current source, target contract, and evidence gaps
 
-| Capability | Principal code | Product value | Canonical owner | Current limitation |
-|---|---|---|---|---|
-| Modern SPA | `frontend`, `brains.web.spa` | Advertised Workspace-first operator experience plus withdrawn screens awaiting removal | F0-F10 | Bundle provenance is checked; BL-P0-09 must remove Labs/entity-first/legacy exposure. |
-| Gateway/providers | `api/openai.py`, `api/anthropic.py`, `router`, `providers` | Withdrawn compatibility code | B1 | No product activation; BL-P0-09 owns route/help/config removal. |
-| Native product API | `api/orgs,runtimes,personas,projects,issues,coordination,ws`, `authz`, `events` | Advertised Org/Workspace coordination plus withdrawn execution endpoints | F0-F10 | RBAC and durable realtime exist; mounted withdrawn families remain containment debt. |
-| Runtime execution | `daemon`, `control/assignments`, `exec`, `authz/credentials` | Withdrawn compatibility code | F1, F3, F4 | No enrollment, assignment, process-control, or activation claim. |
-| Coordination/MCP | `control`, `mcp` | Multi-agent continuity and collision avoidance | B2 | Advertised surface with ordinary BL-P1-15 feedback; BL-P1-16 analytics is removed and BL-P1-20 remains an admission blocker. Withdrawn tools must be removed from defaults. |
-| Retrieval/graph | `context` | Advertised knowledge/local lookup plus withdrawn semantic/graph code | B3 | Semantic, graph, embedding, and external freshness are not activatable product capabilities. |
-| Governance/audit | `govern`, decisions, audit; withdrawn exec/bridge integrations remain | Human authority and evidence | B4 | In-process cooperative boundary; external harness effects remain outside it. |
-| Storage/recovery | `storage`, `backup` | Supported SQLite state and recovery plus alternate-backend compatibility | B5 | E4 recovery and default FK enforcement remain open; Postgres is withdrawn. |
-| CLI/wiring/service | `cli`, `wire`, `service`, supervisor | Install, wire Copilot/Claude/Codex/OpenCode, and operate Brains | B6 | Browser host mutation contracts remain absent. |
-| Integrations | GitHub webhook plus withdrawn generic webhooks, bridges, and `services/wa-web` | Signed GitHub linkage; future exact human-approved defect relay | B7, F8 | External GitHub E4 absent; every non-GitHub integration is withdrawn. |
-| Observability | health, readiness, typed events, logs; withdrawn OTEL code remains | Diagnose supported operation | B8 | Child protocol/listener, scheduler, registry, and cross-process checks remain open. |
-| Legacy web | dashboard/admin/templates | Withdrawn compatibility code | B9 | BL-P0-09/BL-P2-01 require zero route, launch, and static exposure. |
-| Containers/ingress/CI | Dockerfiles, compose, deploy, workflows | Reproducible candidate and operations | B5, B6, B8 | Every CI job is blocking, the runtime image constrains the MCP SDK to its supported major version, and its healthcheck covers gateway, dashboard, and MCP; deploy scaffold consistency and candidate-specific hosted evidence remain separate concerns. |
+- Current source is what the registered routes, commands, tools, schema, frontend, and
+  generated core-surface manifest expose now.
+- Target contract is the behavior stated in `FEATURE_CONTRACT.md`; it does not become a
+  current claim until implementation and acceptance evidence agree.
+- Persistent native service lifecycle qualification, native Claude recovery
+  qualification, exact-candidate aggregation across source, wheel, sdist, and OCI image
+  manifest digests, and publication reuse of those exact qualified artifacts are
+  unfinished implementation actions in `BACKLOG.md`. Container and hermetic tests do
+  not establish native persistence or platform-specific recovery guarantees.
+- Deferred ideas remain in `FROZEN_BACKLOG.md` and are not current product promises.
 
-## Explicit traceability gaps
-
-1. No E3/E4 evidence is embedded in canonical docs; run evidence belongs outside this tree.
-2. J1-J11 retain dedicated browser specs, and J2-J6 plus J10 now assert withdrawn containment rather than activation while preserving stable IDs.
-3. Running-agent message and stop routes remain matched in source (UM-01..03), but both capabilities are withdrawn and must disappear from advertised UI/CLI/MCP guidance.
-4. Native HTTP authorization satisfies F9's enforcement criteria at E2, including Org-scoped usage (`GET /v1/orgs/{org}/usage`); the open part is browser-session E4 evidence for AC-F9-05. Realtime topics are server-derived and persist-before-publish; the residual gap is per-process live fan-out (BL-P0-02).
-5. Frontend routes and route parameters, API client calls, mounted server routes and their families, SQLAlchemy entities, the migration corpus, journey specs, acceptance tests, and `AC-*` references are generated from source by `scripts/check_traceability.py` and fail the gate on drift. What is still hand-written is the prose in these tables - gap statements, control/service columns, and the MCP/CLI family mapping - so those can still drift without failing a check.
-6. No exact candidate has verified GitHub, backup/restore, or deployment operation. Provider, bridge, and Postgres operation are withdrawn rather than evidence gaps for the advertised product.
+Run `python scripts/check_traceability.py` for mapping drift. The full quality runner
+builds the distribution and checks the generated core-surface manifest.

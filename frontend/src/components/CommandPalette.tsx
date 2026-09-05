@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useCoreNavigation } from "../coreRoutes";
 import { useOperator } from "../store/OperatorContext";
+import { useDialogFocus } from "./useDialogFocus";
 
 interface Cmd {
   label: string;
@@ -20,22 +21,33 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const { catalog } = useOperator();
+  const close = useCallback(() => setOpen(false), []);
+  const dialogRef = useDialogFocus<HTMLDivElement>(open, close);
 
   useEffect(() => {
+    const reset = () => {
+      setQuery("");
+      setActive(0);
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen((o) => !o);
-        setQuery("");
-        setActive(0);
-      } else if (e.key === "Escape") {
-        setOpen(false);
+        reset();
       }
     };
+    const onOpen = () => {
+      setOpen(true);
+      reset();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("brains:open-command-palette", onOpen);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("brains:open-command-palette", onOpen);
+    };
   }, []);
 
   const commands = [
@@ -54,15 +66,22 @@ export function CommandPalette() {
   if (!open) return null;
 
   const go = (to: string) => {
-    navigate(to);
+    navigation.open(to);
     setOpen(false);
   };
 
   return (
-    <div className="palette-scrim" onClick={() => setOpen(false)}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+    <div className="palette-scrim" onClick={close}>
+      <div ref={dialogRef} className="palette" role="dialog" aria-modal="true" aria-label="Command palette" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <input
-          autoFocus
+          data-initial-focus
+          role="combobox"
+          aria-label="Find a view or typed action"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-expanded="true"
+          aria-controls="command-palette-results"
+          aria-activedescendant={results[active] ? `command-palette-option-${active}` : undefined}
           placeholder="Find a view or typed action"
           value={query}
           onChange={(e) => {
@@ -75,11 +94,15 @@ export function CommandPalette() {
             else if (e.key === "Enter" && results[active]) go(results[active].to);
           }}
         />
-        <div className="results">
+        <div id="command-palette-results" className="results" role="listbox" aria-label="Available commands">
           {results.map((c, i) => (
             <button
               key={c.to}
+              id={`command-palette-option-${i}`}
               className={i === active ? "active" : ""}
+              role="option"
+              tabIndex={-1}
+              aria-selected={i === active}
               onMouseEnter={() => setActive(i)}
               onClick={() => go(c.to)}
             >

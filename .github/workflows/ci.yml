@@ -4,9 +4,10 @@ name: ci
 # integration or promotion branch (BL-P1-01). Every job below fails the workflow when it fails: there is no
 # `continue-on-error` on a required gate, and no gate reports success on a
 # command that did not run. The release workflow (release.yml) does NOT re-run
-# this — tag pushes are expected to be on commits that already passed ci.
+# this; instead its `qualify` job refuses to publish unless the aggregate
+# `quality gate` check below already succeeded for the exact tagged commit.
 #
-# Gate map (docs/QUALITY_GATES.md §4):
+# Gate map (docs/QUALITY_GATES.md):
 #   docs        documentation contract + generated traceability contract
 #   lint        ruff check + ruff format
 #   typecheck   mypy
@@ -14,6 +15,8 @@ name: ci
 #   migrations  migration contract + frozen-baseline rendering contract
 #   spa         SPA typecheck, production build, committed-bundle comparison
 #   package     wheel + sdist build and shipped-data assertions
+#   native      exact-package installation and native recovery probes
+#   harness     isolated Claude and OpenCode lifecycle probes
 #   privacy     personal-identifier and product-vocabulary scan
 #   docker      runtime image build + container health smoke
 #   e2e         Playwright journey suite against an ephemeral hub
@@ -42,6 +45,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -50,17 +58,26 @@ jobs:
       - name: Install project + dev extras
         run: uv sync --extra dev
 
+      - name: Install checked TypeScript parser
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
       - name: Documentation contract
         run: uv run python scripts/check_docs.py
 
       # Derives SPA routes, API client calls, mounted server routes, entities,
       # migrations and stable-ID test markers from source and fails on any
-      # orphan or unmatched surface (BL-P1-10).
+      # orphan or unmatched surface.
       - name: Generated traceability contract
         run: uv run python scripts/check_traceability.py
 
       - name: Contract self-tests
-        run: uv run pytest -q tests/test_check_docs.py tests/test_check_traceability.py
+        run: >-
+          uv run python -m pytest -q
+          tests/test_check_docs.py
+          tests/test_check_traceability.py
+          tests/test_core_surface_manifest.py
+          tests/test_distribution_contract.py
 
   lint:
     name: ruff lint + format
@@ -105,6 +122,11 @@ jobs:
         python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
@@ -113,16 +135,25 @@ jobs:
       - name: Install project + dev extras
         run: uv sync --extra dev
 
+      # tests/test_core_surface_manifest.py drives the TypeScript AST parser
+      # through scripts/inventory_spa_surface.mjs. The full suite runs that file,
+      # so this job needs the same parser the docs job provisions; without it the
+      # manifest tests fail closed on a missing dependency rather than on a real
+      # surface defect.
+      - name: Install checked TypeScript parser
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
       # The AC-mapped acceptance contracts run first so a product-promise
       # regression is attributable without reading the whole suite log.
       - name: Brains acceptance tests
         run: >
-          uv run pytest -q -m acceptance
+          uv run python -m pytest -q -m acceptance
           --junitxml=reports/acceptance-${{ matrix.python }}.xml
 
       - name: Unit + integration tests
         run: >
-          uv run pytest -q --maxfail=20
+          uv run python -m pytest -q --maxfail=20
           --junitxml=reports/pytest-${{ matrix.python }}.xml
           --cov=brains
           --cov-report=xml:coverage.xml
@@ -169,7 +200,7 @@ jobs:
       # the ledger can be wrong is detected rather than absorbed.
       - name: Migration and baseline contract
         run: >
-          uv run pytest -q
+          uv run python -m pytest -q
           tests/test_migration_contract.py
           tests/test_baseline_schema_generation.py
           tests/test_consolidation_migration.py
@@ -265,13 +296,44 @@ jobs:
     name: build wheel + sdist
     needs: [docs, lint, typecheck, test, migrations, spa]
     runs-on: ubuntu-latest
+    outputs:
+      manifest-sha256: ${{ steps.package-provenance.outputs.manifest-sha256 }}
+      artifact-id: ${{ steps.package-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package-artifact.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install checked TypeScript parser
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+      - name: Install project + dev extras
+        run: uv sync --extra dev
       - name: Build distribution
         run: uv build
+      - name: Bind native evidence to source tree and exact wheel
+        id: package-provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          test -n "$wheel"
+          git_executable="$(realpath "$(command -v git)")"
+          uv run python scripts/probe_native_wakeup_recovery.py \
+            --prepare-package \
+            --candidate "$GITHUB_SHA" \
+            --git-executable "$git_executable" \
+            --wheel "$wheel" \
+            --package-manifest dist/native-wakeup-package-provenance.json
+          echo "manifest-sha256=$(sha256sum dist/native-wakeup-package-provenance.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Core surface boundary from fresh artifacts
+        run: uv run python scripts/check_core_surface.py --dist dist
       - name: Show artifacts
         run: ls -la dist
 
@@ -282,10 +344,353 @@ jobs:
         run: python scripts/check_distribution.py
 
       - uses: actions/upload-artifact@v4
+        id: package-artifact
         with:
           name: dist
           path: dist/
           retention-days: 7
+
+  native-installation-probe:
+    name: native package/wire probe (${{ matrix.host.manager }}, py${{ matrix.python }}, ${{ matrix.adapter }})
+    needs: [package]
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - os: windows-2022
+            manager: task-scheduler
+          - os: macos-14
+            manager: launchd
+          - os: ubuntu-24.04
+            manager: systemd-user
+        python: ["3.11", "3.12"]
+        adapter: [copilot-cli, claude-code, codex, opencode]
+        transport: [streamable-http]
+    runs-on: ${{ matrix.host.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        if: matrix.adapter == 'opencode'
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ runner.temp }}/native-dist
+      - name: Provision pinned supported OpenCode
+        if: matrix.adapter == 'opencode'
+        run: npm install --global opencode-ai@1.18.25
+      - name: Install the exact wheel into a fresh private environment
+        id: native-environment
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.package.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          # RUNNER_TEMP is a drive-letter path on Windows that MSYS file tools
+          # cannot resolve, and sha256sum does not exist on macOS. Normalise the
+          # directory for bash and let Python own the digest so one script is
+          # correct on all three supported hosts.
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          wheel_count="$(find "$temp_dir/native-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          test "$wheel_count" = 1
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+
+          dist = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-dist"
+          manifest = dist / "native-wakeup-package-provenance.json"
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_MANIFEST_SHA256"]
+          if digest != expected:
+              raise SystemExit("candidate package provenance does not match the built manifest")
+          PY
+          wheel="$(find "$temp_dir/native-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          venv="$temp_dir/brains-native-install-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          test ! -e "$venv"
+          python -m venv "$venv"
+          if test -x "$venv/Scripts/python.exe"; then
+            probe_python="$venv/Scripts/python.exe"
+          else
+            probe_python="$venv/bin/python"
+          fi
+          "$probe_python" -m pip install "$wheel"
+          git_executable="$("$probe_python" -c 'import shutil; value=shutil.which("git"); assert value; print(value)')"
+          if test "${{ matrix.adapter }}" = opencode; then
+            export BRAINS_REQUIRED_NATIVE_TOOLS=node,opencode
+          else
+            export BRAINS_REQUIRED_NATIVE_TOOLS=
+          fi
+          tool_paths="$("$probe_python" -c 'import json,os,shutil; names=[n for n in os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(",") if n]; values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
+          echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
+          # Later bash steps consume the normalised path, but the pwsh steps
+          # cannot resolve an MSYS one, so publish the native form as the output.
+          if command -v cygpath >/dev/null 2>&1; then
+            echo "python=$(cygpath -w "$probe_python")" >> "$GITHUB_OUTPUT"
+          else
+            echo "python=$probe_python" >> "$GITHUB_OUTPUT"
+          fi
+          echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$temp_dir/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+      - name: Probe exact package, native rendering, and selected wire adapter
+        id: native-installation
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_installation.py
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --package-manifest "$BRAINS_NATIVE_PACKAGE_MANIFEST"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --tool "${{ matrix.adapter }}"
+          --output "$RUNNER_TEMP/native-installation-evidence.json"
+      # The evidence file is never exported before it is verified. Echo only the
+      # bounded exception type, the curated provenance message and the porcelain
+      # status, so a failing host is diagnosable without publishing unverified
+      # evidence. ProvenanceFailure messages are fixed strings and carry no path.
+      - name: Report the bounded native installation failure type
+        if: failure() && steps.native-installation.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          python -c "import json,os,pathlib;
+          path=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-installation-evidence.json';
+          data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {};
+          print('native installation error_type:', data.get('error_type', 'unavailable'));
+          print('native installation reason   :', data.get('reason', 'unavailable'))"
+          echo "--- git status --porcelain=v1 --untracked-files=all ---"
+          git status --porcelain=v1 --untracked-files=all | head -n 40
+          echo "--- provenance stage ---"
+          "$BRAINS_NATIVE_PROBE_PYTHON" - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from native_evidence import ProvenanceFailure, package_provenance, source_provenance
+
+          repo = pathlib.Path.cwd()
+          git = pathlib.Path(os.environ["BRAINS_NATIVE_PROBE_GIT"])
+          wheel = pathlib.Path(os.environ["BRAINS_NATIVE_PROBE_WHEEL"])
+          manifest = pathlib.Path(os.environ["BRAINS_NATIVE_PACKAGE_MANIFEST"])
+          try:
+              source = source_provenance(repo, os.environ["GITHUB_SHA"], git)
+          except ProvenanceFailure as exc:
+              print("source_provenance failed:", exc)
+              raise SystemExit(0)
+          print("source_provenance ok")
+          try:
+              package_provenance(manifest, source=source, wheel_path=wheel)
+          except ProvenanceFailure as exc:
+              print("package_provenance failed:", exc)
+              raise SystemExit(0)
+          print("package_provenance ok; failure is in distribution_provenance or later")
+          PY
+      # The first probe call runs the installed console script and requires JSON
+      # on stdout. When that parse fails the probe discards the output, so repeat
+      # the call under the probe's own closed PATH and seeded home and echo what
+      # the executable actually produced.
+      - name: Report the installed executable output
+        if: failure() && steps.native-installation.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          "$BRAINS_NATIVE_PROBE_PYTHON" - "${{ matrix.adapter }}" <<'PY'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          import probe_native_installation as probe
+          from native_evidence import explicit_runtime_tools
+
+          tool = sys.argv[1]
+          required = ("node", "opencode") if tool == "opencode" else ()
+          _tools, controlled = explicit_runtime_tools(
+              os.environ.get("BRAINS_NATIVE_TOOL_PATHS", "{}"),
+              required=required,
+              prepend_paths=(Path(sys.executable).parent,),
+          )
+          os.environ["PATH"] = controlled
+          name = "brains-ai.exe" if os.name == "nt" else "brains-ai"
+          executable = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin") / name
+
+          with tempfile.TemporaryDirectory(prefix="brains-native-diag-") as raw:
+              root = Path(raw)
+              home, state, workspace = root / "home", root / "state", root / "workspace"
+              for path in (home, state, workspace):
+                  path.mkdir(mode=0o700)
+              env = os.environ.copy()
+              env.update(
+                  {
+                      "HOME": str(home),
+                      "USERPROFILE": str(home),
+                      "BRAINS_STATE_DIR": str(state),
+                      "BRAINS_API_KEY": "synthetic-native-probe-key",
+                      "BRAINS_MCP_BEARER_TOKEN": "synthetic-native-probe-key",
+                  }
+              )
+              probe._seed(probe._config_path(home, tool), tool)
+              # Mirror the probe's own call sequence: a single call in isolation
+              # can succeed where the sequence fails.
+              calls = [
+                  ("setup", ("setup", "--path", str(workspace), "--no-wire", "--json")),
+                  (
+                      "service install",
+                      (
+                          "service", "install", "--dry-run",
+                          "--gateway-port", "24998", "--mcp-port", "24999",
+                      ),
+                  ),
+                  (
+                      "wire",
+                      (
+                          "wire", "--tool", tool, "--force", "--no-rules",
+                          "--transport", "streamable-http", "--port", "24999",
+                      ),
+                  ),
+                  ("wire --status", ("wire", "--status")),
+                  ("unwire", ("unwire", "--tool", tool, "--no-rules")),
+              ]
+              for label, args in calls:
+                  done = subprocess.run(
+                      [str(executable), *args],
+                      check=False, capture_output=True, env=env, text=True, timeout=120,
+                  )
+                  ok = done.returncode == 0 and done.stdout.strip().startswith("{")
+                  print(f"--- {label}: returncode={done.returncode} json={ok} ---")
+                  if not ok:
+                      print(f"--- {label}: stdout repr (first 300 chars) ---")
+                      print(repr(done.stdout[:300]))
+                      # A rich traceback puts the exception line last.
+                      print(f"--- {label}: stderr tail (last 2500 chars) ---")
+                      print(done.stderr[-2500:])
+
+              if os.name == "nt":
+                  from brains.control import durable_mailbox as mailbox
+
+                  def redact(value: str) -> str:
+                      parts = value.split("-")
+                      if len(parts) <= 5:
+                          return value
+                      return "-".join([*parts[:4], "x", parts[-1]])
+
+                  target = probe._config_path(home, tool)
+                  print("--- windows owner-only boundary ---")
+                  print("expected sid:", redact(mailbox._windows_current_user_sid()))
+                  try:
+                      mailbox._windows_secure_binding_file(target)
+                  except OSError as exc:
+                      print("harden error:", exc)
+                  print("acl sids    :", [redact(s) for s in mailbox._windows_binding_acl_sids(target)])
+          PY
+      - name: Verify private native installation evidence before export
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/verify_native_evidence.py
+          --kind installation
+          --candidate "$GITHUB_SHA"
+          --manager "${{ matrix.host.manager }}"
+          --python "${{ matrix.python }}"
+          --adapter "${{ matrix.adapter }}"
+          --input "$RUNNER_TEMP/native-installation-evidence.json"
+      - name: Upload sanitized native installation evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-install-${{ matrix.host.manager }}-py${{ matrix.python }}-${{ matrix.adapter }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-installation-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Prove Windows managed-binding DPAPI and owner-only DACL
+        # The boundary is adapter-independent, so prove it on every Windows leg
+        # using the environment the candidate wheel was installed into. The bare
+        # runner interpreter cannot import the project's dependencies.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $python = '${{ steps.native-environment.outputs.python }}'
+          & $python -m pip install pytest
+          if ($LASTEXITCODE -ne 0) { throw 'pytest installation failed' }
+          & $python -m pytest -q tests/test_durable_mailbox_registration.py `
+            -k windows_managed_binding_is_dpapi_protected_and_acl_verified
+          if ($LASTEXITCODE -ne 0) { throw 'Windows managed-binding proof failed' }
+      - name: Prove native Claude wakeup exchange and abrupt-exit recovery
+        id: native-wakeup
+        if: matrix.adapter == 'claude-code' && (runner.os == 'Windows' || runner.os == 'macOS')
+        shell: pwsh
+        run: |
+          $bootstrap = if ($IsWindows) {
+            Join-Path $env:pythonLocation 'python.exe'
+          } else {
+            Join-Path $env:pythonLocation 'bin/python'
+          }
+          $wheel = (Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/native-dist" -Filter '*.whl' | Select-Object -First 1).FullName
+          if (-not $wheel) { throw 'native candidate wheel is absent' }
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application | Select-Object -First 1).Source).Path
+          $invocation = Join-Path $env:RUNNER_TEMP ("brains-native-wakeup-" + [guid]::NewGuid())
+          if (Test-Path -LiteralPath $invocation) { throw 'native evidence path already exists' }
+          "NATIVE_WAKEUP_INVOCATION=$invocation" >> $env:GITHUB_ENV
+          & $bootstrap scripts/probe_native_wakeup_recovery.py `
+            --candidate "${{ github.sha }}" `
+            --git-executable $git `
+            --wheel $wheel `
+            --package-manifest "$env:RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" `
+            --invocation-path $invocation
+          if ($LASTEXITCODE -ne 0) { throw 'native wakeup recovery proof failed' }
+      - name: Verify successful native wakeup evidence for publication
+        id: native-wakeup-evidence
+        if: success() && matrix.adapter == 'claude-code' && (runner.os == 'Windows' || runner.os == 'macOS')
+        shell: pwsh
+        run: |
+          $bootstrap = if ($IsWindows) {
+            Join-Path $env:pythonLocation 'python.exe'
+          } else {
+            Join-Path $env:pythonLocation 'bin/python'
+          }
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application | Select-Object -First 1).Source).Path
+          $wheel = (Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/native-dist" -Filter '*.whl' | Select-Object -First 1).FullName
+          $result = Join-Path $env:NATIVE_WAKEUP_INVOCATION 'native-wakeup-recovery.json'
+          & $bootstrap scripts/probe_native_wakeup_recovery.py `
+            --verify-result `
+            --candidate "${{ github.sha }}" `
+            --git-executable $git `
+            --wheel $wheel `
+            --package-manifest "$env:RUNNER_TEMP/native-dist/native-wakeup-package-provenance.json" `
+            --result $result
+          if ($LASTEXITCODE -ne 0) { throw 'native wakeup evidence attestation failed' }
+          $evidence = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+          "evidence_path=$result" >> $env:GITHUB_OUTPUT
+          "evidence_digest=$($evidence.provenance_digest)" >> $env:GITHUB_OUTPUT
+      - name: Upload sanitized native wakeup evidence
+        if: success() && matrix.adapter == 'claude-code' && (runner.os == 'Windows' || runner.os == 'macOS')
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-wakeup-${{ matrix.host.manager }}-py${{ matrix.python }}-${{ github.sha }}
+          path: ${{ steps.native-wakeup-evidence.outputs.evidence_path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  claude-wakeup-probe:
+    name: pinned Claude wakeup probe
+    needs: [docs, lint, typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove generated Claude hook discovery and continuation
+        shell: pwsh
+        run: ./scripts/run_docker_claude_wakeup_probe.ps1
 
   privacy:
     name: privacy gate
@@ -365,6 +770,16 @@ jobs:
       - name: Teardown
         if: always()
         run: docker rm -f brains-smoke || true
+
+  opencode-lifecycle-probe:
+    name: pinned OpenCode lifecycle probe
+    needs: [docs, lint, typecheck]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove plugin autoload and proof-bound restart lifecycle
+        shell: pwsh
+        run: ./scripts/run_docker_opencode_lifecycle_probe.ps1
 
   brains-e2e:
     name: Brains E2E (Playwright)
@@ -487,8 +902,11 @@ jobs:
       - migrations
       - spa
       - package
+      - native-installation-probe
+      - claude-wakeup-probe
       - privacy
       - docker-smoke
+      - opencode-lifecycle-probe
       - brains-e2e
     if: always()
     runs-on: ubuntu-latest

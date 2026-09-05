@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains Feature Contract
 
 ## How to read this contract
@@ -14,25 +8,25 @@ does not by itself advertise a feature.
 | Lifecycle | Meaning |
 |---|---|
 | Advertised | Supported in the normal installation. Evidence level is stated separately. |
-| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, listed in [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md); full UAT still applies. |
+| Experimental | Implemented behavior with unresolved normal-use ergonomics or edge cases, explicitly labelled in this contract. |
 | Target-only | Future product contract with no current product surface. |
 | Withdrawn | Known-faulty or retired implementation, unadvertised and non-activatable by contract. |
-| Source compatibility | Code or data remains temporarily for existing stores or until BL-P0-09 removes exposure. Presence is not availability. |
-| Missing | An advertised contract is absent from current HEAD. |
+| Source compatibility | Code or data retained solely to open or migrate existing stores; it is not registered, routed, advertised, or activatable. Presence is not availability. |
+| Missing | An advertised contract is absent from current source. |
 
 Evidence levels are defined in [QUALITY_GATES.md](../QUALITY_GATES.md). Source and test
-presence is at most E1/E2 unless exact-candidate execution evidence says otherwise.
+presence alone is not acceptance evidence; use the applicable quality gate.
 
 ## Product invariants
 
 1. Brains is the canonical product, repository, package, namespace, CLI, MCP, state,
    and browser identity.
-2. Every protected operation resolves one principal and applies explicit Org/Workspace
-   authorization.
+2. Every protected operation resolves the local operator principal and applies explicit
+   Workspace scope; retained Org policy is compatibility defense, not a multi-user claim.
 3. Durable state commits before it is presented as recovered, delivered, or complete.
 4. Human-gated actions do not execute before an attributable matching decision.
 5. A durable event is not proof that Brains executed or delivered an external effect.
-6. Health, readiness, test presence, local execution, isolated UAT, and deployment are
+6. Health, readiness, tests, end-to-end validation, and deployment are
    different claims.
 7. Acceptance requires Persona, Journey, `AC-*`, implementation, and evidence mappings.
 8. The normal `/app` console is Workspace-first: Command Center, Workspaces,
@@ -40,7 +34,7 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 9. Withdrawn features have no supported flag, route, command, extra, tool allowlist, or
    direct-call activation. Remaining source/data is compatibility inventory only.
 10. Experimental labels state uncertainty; they do not authorize analytics or replace
-    automated and isolated end-to-end UAT.
+    automated and isolated end-to-end validation.
 
 ## Core Brains features
 
@@ -50,19 +44,20 @@ presence is at most E1/E2 unless exact-candidate execution evidence says otherwi
 stable supported surfaces, receive actionable errors, and launch only typed, truthfully
 available actions.
 
-**Lifecycle:** advertised/partial. Execution-model screens and redirects still present
-in source are BL-P0-09 containment debt.
+**Lifecycle:** advertised/partial. Execution-model screens and redirects are absent from
+the shipped SPA route inventory.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | Advertised at E1/E2; `/app` starts at Command Center. |
-| AC-F0-02 | Active Org/Workspace scope persists and every scoped screen applies it consistently. | Advertised/partial; Workspace aliases and deep links exist, while browser E4 remains open. |
-| AC-F0-03 | API failures remain visible and distinct from empty data. | Advertised/partial; some screens still collapse failures into empty state. |
+| AC-F0-01 | `/app` provides a stable authenticated shell and valid product start surface. | `/app` starts at Command Center. |
+| AC-F0-02 | Active Workspace scope persists and every scoped screen applies it consistently. | Workspace aliases and deep links exist; browser validation remains open. |
+| AC-F0-03 | API failures remain visible and distinct from empty data. | Shared route boundaries label loading, empty, success, error, authorization, and not-found independently. |
 | AC-F0-04 | Persona Spawn creates an attributable execution Session. | Withdrawn target criterion; no supported Spawn path. |
-| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Advertised for Workspaces; withdrawn entity routes await removal. |
+| AC-F0-05 | Supported deep routes select the named entity or return non-disclosing not-found. | Unknown top-level, withdrawn, configuration-section, and Workspace URLs remain in place and render a non-disclosing not-found state. |
 
 **Failure behavior:** Authentication failure leads to sign-in or a structured error.
-Unknown/unauthorized entities never silently select another entity.
+Unknown/unauthorized entities never silently select another entity. Unknown and
+withdrawn browser URLs never redirect into a different supported view.
 
 ### F1 - Connect a machine and register Runtimes
 
@@ -103,20 +98,19 @@ inventory, not an authentication identity or user path.
 **Promise:** Workspace-scoped coordination Sessions preserve lifecycle, events, asks,
 decisions, ownership, and resume context. Unsupported execution steering is refused.
 
-**Lifecycle:** advertised/partial. BL-P1-15 provides ordinary feedback. BL-P1-16's
-analytics interpretation is removed. BL-P1-20 is an implemented candidate blocked from admission
-until activation and worker transport are independently bounded. Running-agent
-delivery, Runtime stop, and execution supervision are withdrawn.
+**Lifecycle:** advertised/partial for durable local coordination. Automated orchestration
+and execution supervision are frozen or withdrawn; see
+[FROZEN_BACKLOG.md](FROZEN_BACKLOG.md).
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Advertised at E1/E2/E3 for persisted event/replay paths; cross-process live fan-out remains open. |
-| AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised/partial; renewable PID-less leases and dormant transition exist, cross-harness end/detach E4 is open. |
+| AC-F3-01 | Session events are durable and backfilled before realtime continuation. | Supported for the single-gateway process and persisted replay paths. |
+| AC-F3-02 | Coordination Session state supports active, dormant, blocked, completed, and failed truthfully. | Advertised; terminal transitions cannot resurrect and atomically release task, claim, mailbox, and command ownership. |
 | AC-F3-03 | Session actions update linked Issue state/comments with attribution. | Withdrawn with Project/Issue execution; Workspace task/handoff attribution remains under B2. |
-| AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Advertised/partial; human routing is separate from authorization and complete publish E4 remains open. |
-| AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox/topics remain B2 capabilities. |
+| AC-F3-04 | Asks and approvals appear in Governance and resolve once with context. | Human routing is separate from authorization; complete publish validation remains open. |
+| AC-F3-05 | Chat is durable, authorized, delivered to the running agent, and recoverable. | Running-agent delivery withdrawn; durable mailbox communication remains a B2 capability. |
 | AC-F3-06 | Stop is authorized, durable, delivered to the Runtime, and reconciled. | Withdrawn with Runtime execution; coordination Session end is separate. |
-| AC-F3-07 | Realtime subscriptions are principal-, Org-, Workspace-, and entity-authorized. | Advertised at E1/E2; closed topics, replay, and revalidation exist, browser reconnect E4 is open. |
+| AC-F3-07 | Realtime subscriptions are local-principal-, Workspace-, and supported-stream-authorized. | Closed subscription grammar, replay, and revalidation are implemented; browser reconnect remains an evidence gap. |
 
 **Failure behavior:** Reconnect uses scoped durable state. Unsupported process delivery
 or stop is refused rather than queued or reported as successful.
@@ -167,54 +161,51 @@ authorized Workspace; it does not expose execution-model onboarding.
 | AC-F6-02 | Execution onboarding composes Org, machine, Persona, work, and dispatch. | Withdrawn/source compatibility. |
 | AC-F6-03 | Every execution-onboarding step has complete UX/recovery states. | Withdrawn target criterion. |
 | AC-F6-04 | Completion lands on attributable execution or a clear blocker. | Withdrawn target criterion. |
-| AC-F6-05 | Clean-state browser evidence proves the flow without seeded success. | Current need is containment plus Workspace-first J1 evidence. |
+| AC-F6-05 | Clean-state browser evidence proves the flow without seeded success. | The withdrawn flow has no discovery or activation surface; Workspace-first J1 evidence remains open. |
 
 ### F7 - Supported configuration truth
 
 **Promise:** Operations presents redacted effective state and permits only approved
 non-secret/encrypted writes with explicit reload or restart behavior.
 
-**Lifecycle:** advertised/partial for service, MCP, email, secrets, and GitHub posture.
-Gateway/provider, Runtime, automation, bridge, Postgres, telemetry, and legacy-admin
-activation are withdrawn.
+**Lifecycle:** advertised for the local service, MCP, SQLite, and harness posture.
+Other integration, execution, storage, and legacy-administration surfaces are withdrawn
+or frozen and have no activation contract.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial; external GitHub E4 is absent and provider probes are withdrawn. |
-| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised/partial; withdrawn fields still require BL-P0-09 containment. |
-| AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised at E1/E2 for current typed writes; browser E4 remains open. |
-| AC-F7-04 | Multi-process reload/restart semantics are documented and verified before writes are promised. | Advertised/partial; handling-process reload exists for some settings, full convergence requires restart/probe. |
+| AC-F7-01 | Supported connectivity probes return bounded success/failure without leaking secrets. | Advertised/partial for local service/MCP probes; external integration probes are frozen or withdrawn. |
+| AC-F7-02 | Effective supported service/MCP/integration/secret state is truthful and redacted. | Advertised. The positive local service/MCP/SQLite/harness manifest omits secrets, filesystem locations, and frozen or withdrawn fields, and no legacy writer remains. |
+| AC-F7-03 | UI distinguishes read-only information from approved writes. | Advertised. The modern Config screen labels effective read-only fields and the three approved non-secret writes. |
+| AC-F7-04 | Single-service reload/restart semantics are documented and verified before writes are promised. | Advertised. Every supported write is saved atomically and explicitly requires supervised-stack restart because workers and MCP do not share process memory. Failed apply restores the previous overlay. |
 
 ### F8 - GitHub linkage
 
-**Promise:** Authenticated GitHub events are accepted only when signature, delivery
-identity, and repository scope satisfy the configured contract. Outbound public defect
-creation additionally requires approval of the exact payload.
+**Promise:** Frozen target for authenticated GitHub events and human-approved public
+defect publication.
 
-**Lifecycle:** advertised/partial for signed ingress. BL-P1-19 is active implementation
-work, not yet an experiment or available outbound feature.
+**Lifecycle:** frozen/source compatibility. There is no supported integration path.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F8-01 | A pull-request reference can link to attributable Brains work. | Present at E1/E2/E3 for historical Issue linkage; Workspace-first destination needs BL-P1-19/containment design. |
-| AC-F8-02 | A verified merged event updates linked state idempotently. | Present at E1/E2/E3 in source; external operation unverified. |
-| AC-F8-03 | Webhook authentication validates GitHub signature and exact repository scope. | Present at E1/E2/E3 in source. |
-| AC-F8-04 | Configuration/failure state is visible without credentials or repository disclosure. | Present at E1/E2/E3 in redacted posture; browser/external E4 absent. |
+| AC-F8-01 | A pull-request reference can link to attributable Brains work. | Frozen target; historical Issue linkage remains compatibility inventory. |
+| AC-F8-02 | A verified merged event updates linked state idempotently. | Frozen/source compatibility. |
+| AC-F8-03 | Webhook authentication validates GitHub signature and exact repository scope. | Frozen source retains defensive validation. |
+| AC-F8-04 | Configuration/failure state is visible without credentials or repository disclosure. | Frozen/source compatibility. |
 
 ### F9 - Orgs, members, roles, and usage
 
-**Promise:** Org owners administer membership and roles; operators see only authorized
-Org/Workspace state and explicitly scoped usage.
+**Promise:** Frozen target for multi-user Org membership, roles, and scoped usage.
 
-**Lifecycle:** advertised/partial.
+**Lifecycle:** frozen/source compatibility. There is no supported multi-user path.
 
 | Acceptance criterion | Target contract | Current disposition |
 |---|---|---|
-| AC-F9-01 | Org create/read/update and active-Org switching are durable. | Advertised at E1/E2. |
-| AC-F9-02 | Owners/admins manage members without role escalation or last-owner loss. | Advertised at E1/E2/E3 for API paths. |
-| AC-F9-03 | HTTP reads/writes enforce principal plus Org/Workspace scope. | Advertised at E1/E2/E3 for covered routes; withdrawn routes remain containment debt. |
-| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Advertised/partial; Org-scoped SQL attribution exists. |
-| AC-F9-05 | Two-user/two-Org denial covers native APIs and browser sessions. | Partial; API/cookie tests exist, browser E4 is absent. |
+| AC-F9-01 | Org create/read/update and active-Org switching are durable. | Frozen/source compatibility. |
+| AC-F9-02 | Owners/admins manage members without role escalation or last-owner loss. | Frozen source retains defensive checks. |
+| AC-F9-03 | HTTP reads/writes enforce principal plus Org/Workspace scope. | Supported paths retain defensive scope checks; multi-user tenancy is frozen. |
+| AC-F9-04 | Usage totals identify scope and exclude unauthorized/unattributed data. | Frozen/source compatibility. |
+| AC-F9-05 | Two-user/two-Org denial covers native APIs and browser sessions. | Frozen target; not an active evidence gap. |
 
 ### F10 - Autopilots and managed Skills
 
@@ -235,12 +226,11 @@ generic webhooks, and scheduled/manual fire are non-activatable compatibility in
 
 ## Supporting Brains capabilities
 
-### B1 - Model gateway and faithful routing
+### B1 - External request routing
 
-**Promise:** Target contract for exact model intent and explicit policy routing.
+**Promise:** Target contract for exact request intent and explicit policy routing.
 
-**Lifecycle:** withdrawn. Model proxy routes, aliases, provider adapters, router,
-LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility only.
+**Lifecycle:** withdrawn. Retained source and data are compatibility inventory only.
 
 - AC-B1-01: explicit model IDs resolve faithfully or return model-not-found.
 - AC-B1-02: only explicit policy-routing requests may invoke classification.
@@ -250,20 +240,20 @@ LiteLLM, catalog, usage routing, and `brains-ai run` are source compatibility on
 ### B2 - Coordination plane and MCP
 
 **Promise:** Agents share coordination Sessions, tasks, claims, handoffs, messages,
-topics, peer help, decisions, knowledge, patterns, tool records, and checkpoints through
-stable scoped MCP/CLI/browser surfaces.
+decisions, knowledge, tool records, and checkpoints through stable scoped MCP/CLI/browser
+surfaces.
 
-**Lifecycle:** advertised/partial, with BL-P1-15 as the ordinary feedback path and
-BL-P1-20 blocked from experimental admission.
+**Lifecycle:** advertised/partial for the local coordination plane. Automated guidance
+and peer orchestration are frozen.
 
 - AC-B2-01: Session start returns current context, presence, and ownership signals.
 - AC-B2-02: claims/task transitions are atomic and expire or release predictably.
 - AC-B2-03: messages, handoffs, checkpoints, successors, and resume preserve continuity.
 - AC-B2-04: mutation tools authenticate, scope, and human-gate where required.
 
-Current E1/E2/E3 source includes renewable PID-less leases, dormant expiry,
-successor transfer, interest-scoped topics, asynchronous peer help, sequential retry
-dedupe, Workspace browser adapters, feedback reporting, fenced ephemeral review, and
+Current source includes renewable PID-less leases, dormant expiry,
+successor transfer, concurrent retry dedupe, live-Session- and
+Workspace-bound atomic task/claim/handoff ownership, Workspace browser adapters, and
 durable mailbox identity/attachment plus address-based local delivery. Mailbox
 registration validates supported canonical
 tools and native IDs, stores only a unique versioned binding hash, provisions operator
@@ -274,54 +264,52 @@ address. Direct/offline delivery, explicit Workspace broadcast, Inbox/Sent,
 per-recipient read state, filtered thread timelines, reply/forward provenance,
 idempotent operation IDs, and cursor continuity now use migration 150 rows. Agent
 operations require current attachment plus binding; operator-inbox reads require a
-browser/local human channel. A proof-bound, body-free notification take/settle protocol
-now records idempotent `queued -> claimed -> delivered|failed` attempts while preserving
-pull fallback. Per-operator one-way SMTP copy now uses encrypted verified destinations,
-notification-only default content, explicit full-body consent, a leased retry outbox,
-and conservative uncertain outcomes. Isolated UAT covers explicit real native-ID
-extraction, offline delivery, successor recovery, and threaded replies for
-OpenCode/Codex and OpenCode/Claude. Automatic extraction, concrete hook/plugin
-installation, abrupt-exit recovery, Copilot container credentials, real-provider review,
-and broad per-tool authorization remain open. The
-Coordination browser mailbox desk now exposes authorized mailbox selection, Inbox/Sent,
-explicit read, participant-filtered threads, operator compose/reply/forward, delivery
-state, address-book selection, agent deep links, and responsive keyboard operation.
+browser/local human channel. A proof-bound, body-free local notification take/settle
+protocol records idempotent `queued -> claimed -> delivered|failed` attempts while
+preserving pull fallback. External notification adapters are frozen compatibility inventory.
+Current coordination surfaces implement proof-bound mailbox identity, one-current-
+incarnation attachment, durable local delivery, threaded read state, successor recovery,
+and non-enumerating conflict refusal. The supported OpenCode adapter attaches identity at
+its awaited turn boundary; other harnesses retain explicit manual lifecycle controls and
+pull fallback.
 
-Migration 150 and the current control/adapters implement the BL-P1-12/BL-P1-14 identity
-foundation: hash-bound mailbox identity, one-current-incarnation attachment and cursor,
-operator inbox provisioning, authorized phonebook/lookup, and non-enumerating conflict
-refusal. The threaded message and per-recipient delivery/read rows are now active for
-durable local mail. Notification attempt state is active through migration 151 and the
-CLI/MCP adapter protocol; the fixed nudge carries no mail metadata or content, and `wire`
-truthfully reports pull until it installs a stronger adapter. Migration 152 activates
-and constrains per-operator SMTP consent/outbox rows; destination ciphertext is
-mailbox-bound and excluded from generic configuration projection, local delivery is
-authoritative, and only pre-send failures retry. Concrete external harness wakeup,
-real-provider SMTP, binding rotation/recovery, and abrupt-exit/host-restart acceptance
-remain missing until later slices land.
+With explicit consent, `wire --mailbox-wakeups` installs the Claude Code stop-hook
+adapter. Its nudge contains no mail body or address, pull remains authoritative, and
+unwiring restores the prior configuration. A required isolated-container probe is
+defined for generated-hook discovery and continuation. Native-platform atomic exchange,
+owner-only recovery behavior, and exact-candidate binding are recurring release gates.
 
 ### B3 - Workspace knowledge and repository lookup
 
 **Promise:** Agents retrieve bounded, attributable Workspace knowledge and repository
 matches without treating generated context as authority.
 
-**Lifecycle:** advertised for knowledge and non-semantic text/symbol lookup. Semantic
-indexing/search, embeddings, graph, and external freshness are withdrawn.
+**Lifecycle:** advertised for knowledge and bounded, read-only text/symbol lookup.
+Semantic indexing/search, embeddings, graph, and external freshness are withdrawn.
 
-- AC-B3-01: any approved indexing is bounded, ignore-aware, and content-hash based.
-- AC-B3-02: semantic search reports unavailable dependencies and never fabricates matches.
+- AC-B3-01: supported local lookup is bounded, ignore-aware, deterministic, and read-only.
+- AC-B3-02: lookup distinguishes matches, a complete no-match, a limited/incomplete
+  scan, and an unavailable Workspace root without fabricating results or disclosing
+  absolute result paths.
 - AC-B3-03: graph queries identify language/indexing limits.
 - AC-B3-04: external freshness checks apply allowlists and SSRF protection.
 
-AC-B3-02 through AC-B3-04 remain target/containment criteria for withdrawn code.
-BL-P1-18 owns normal-install local lookup and truthful unavailable-versus-empty results.
+AC-B3-03 and AC-B3-04 remain target/containment criteria for withdrawn code. The
+supported lookup scans a deterministic bounded set of eligible source files, skips
+links and generated/private state, returns root-relative line-numbered snippets, and
+uses one `ok|empty|limited|unavailable` reason envelope across CLI, MCP, and the
+authenticated Workspace browser. Caps and traversal/read failures produce `limited`
+with explicit incomplete reasons, never a complete no-match. It never registers,
+indexes, embeds, imports, or writes the source.
 
 ### B4 - Human governance and audit
 
 **Promise:** Human decisions precede governed consequential actions, and the resulting
 record is attributable and tamper-evident without overstating external harness effects.
 
-**Lifecycle:** advertised/partial.
+**Lifecycle:** advertised for supported local governed actions. The supported product has
+one local human operator; retained Org/member rows and defensive checks do not advertise
+multi-user tenancy, and broader external-action enforcement is frozen.
 
 - AC-B4-01: approval-required actions fail closed until a matching decision exists.
 - AC-B4-02: every advertised governed execution path shares the declared boundary.
@@ -338,7 +326,7 @@ commands or sockets.
 **Promise:** Supported SQLite state evolves consistently, applies its declared integrity
 policy, and can be backed up, verified, restored, and rolled back safely.
 
-**Lifecycle:** advertised/partial for SQLite. Postgres is withdrawn compatibility.
+**Lifecycle:** advertised/partial for SQLite. Alternate storage is withdrawn compatibility.
 
 - AC-B5-01: fresh and upgraded databases reach the same supported schema.
 - AC-B5-02: SQLite foreign keys and concurrency settings are explicit and verified.
@@ -348,12 +336,10 @@ policy, and can be backed up, verified, restored, and rolled back safely.
 
 Ordered checksummed migrations, WAL/busy timeout, manifest backup, isolated
 verification, schema-compatibility refusal, dry-run-first repair, and redacted recovery
-policy exist. FK default enforcement and exact-candidate E4 remain open. Brains does not
-run a backup scheduler.
-
-Migration 150 has equivalent SQLite and PostgreSQL DDL so an existing compatibility
-store never records skipped work as applied. The supported product remains SQLite;
-the PostgreSQL delta is archive/store compatibility, not reactivation of that backend.
+policy exist. Restore input is checked before target mutation, live restores capture a
+rollback point and recheck integrity afterward, and isolated drills emit audit records.
+FK default enforcement remains open. Brains does not run a
+backup scheduler.
 
 ### B6 - CLI, wiring, and service management
 
@@ -376,17 +362,25 @@ enabled listener on its actual bind host, holds a bounded degraded state while a
 the systemd unit suppresses restart for that configuration exit. Service status combines
 PID identity with bounded endpoint probes. Per-child protocol-aware watchdogs terminate
 an owned process tree that never serves or survives listener loss so the existing
-bounded restart loop can recover it. Deep child-protocol readiness and clean-host Windows
-E4 remain active backlog work.
+bounded restart loop can recover it. Install success now requires an owned protocol-ready
+process or compensating uninstall; native deregistration failure retains its definition.
+Windows uninstall stops the verified owned tree before deleting its task, macOS stop
+unloads the KeepAlive job, and Linux preserves the pre-existing linger policy.
+Repository checks exercise exact package, executable, endpoint, wiring, renderer, and
+hermetic lifecycle contracts. An exact candidate is not qualified until the fail-closed
+aggregate binds its source, wheel, sdist, and OCI image manifest digests, accepts the
+required native results and container smoke against that exact image. Brains-confined
+labels support isolated disposable-host validation. Before a release is approved,
+the existing guarded native lifecycle probe must also demonstrate real manager
+execution and persistence across a machine boundary on a disposable native account.
 
 ### B7 - Authenticated external events
 
-**Promise:** Advertised external events use explicit credentials, bounded scope,
-deduplication, privacy controls, and visible failure states.
+**Promise:** Frozen target: external events would require explicit credentials, bounded
+scope, deduplication, privacy controls, and visible failure states.
 
-**Lifecycle:** advertised/partial for signed GitHub ingress. BL-P1-19 is active work for
-an exact human-approved outbound public defect payload. Generic triggers, relay,
-Telegram, Slack, WhatsApp, and WhatsApp Web are withdrawn.
+**Lifecycle:** frozen/source compatibility. External event and relay surfaces are not
+supported by the local product.
 
 - AC-B7-01: ingress and any future relay reject absent/invalid credentials.
 - AC-B7-02: delivery is idempotent where an external event ID exists.
@@ -402,29 +396,29 @@ dependency failure, stale coordination state, and recovery posture.
 is removed.
 
 - AC-B8-01: `/health` remains an open liveness/inventory endpoint.
-- AC-B8-02: readiness checks supported dependencies, storage writes/migrations, service children, scheduler, wiring, and recovery.
+- AC-B8-02: readiness checks SQLite migration and quick/full/FK integrity, the retained HTTP control gateway's identity/auth boundary, authenticated MCP protocol, queue/mailbox progress, and verified recovery posture; state-driven isolated failure drills prove each retained dependency degrades independently, and withdrawn model routing is excluded.
 - AC-B8-03: logs/metrics are redacted and identify process boundaries.
 - AC-B8-04: multi-process failures and stale coordination presence are observable.
 
-Protected readiness currently reports bounded storage/migration, queue, durable-mail,
-and recovery policy. Durable mail distinguishes invalid registration/attachment, aged
-unread, notification failure, and SMTP backlog/failure without treating ordinary offline
-mail as degraded. Readiness reports operational state only and does not infer adoption,
-behavior, or value. Child listener/protocol health, scheduler
-progress, registry/package/schema convergence, supported wire transport, and
-cross-process failure remain open. Withdrawn Runtime/provider/Postgres state does not
-degrade normal readiness.
+Protected readiness reports each supported dependency independently with stable,
+secret-free reasons: SQLite migration and quick/full/FK checks, a retained HTTP control
+gateway identity/auth-boundary probe, an authenticated MCP
+initialize plus tools/list handshake, queue and durable-mail progress, and recovery
+policy backed by configuration and recovery-drill records. `/health` remains liveness
+only. Frozen capabilities do not degrade normal readiness.
 
-### B9 - Retired legacy browser surfaces
+### B9 - Deleted legacy browser surfaces
 
 **Promise:** Users encounter one deliberate modern browser contract and no retired
 workflow can contradict or bypass it.
 
-**Lifecycle:** withdrawn for dashboard and legacy admin HTML. `/app` remains advertised.
+**Lifecycle:** `/app` is advertised. Dashboard and legacy admin HTML, routes, commands,
+flags, templates, helpers, and static assets are physically absent.
 
-- AC-B9-01: `/app`, `/dashboard`, and `/admin` responsibilities/retirement are explicit.
-- AC-B9-02: authentication/authorization remain consistent until retired mounts are removed.
+- AC-B9-01: `/app` is the sole browser product; `/admin/login` and `/admin/logout`
+  only support its cookie lifecycle.
+- AC-B9-02: normal and former-opt-in route inventories reject every deleted browser path.
 - AC-B9-03: duplicate or unsupported workflows are unreachable and their assets/launch paths are removed.
 
-Remaining routes, templates, static assets, flags, and commands are BL-P0-09/BL-P2-01
-containment debt. Shared authentication code is not an activation contract.
+Shared sign-in authentication code is part of the modern `/app` contract, not a legacy
+browser activation path.

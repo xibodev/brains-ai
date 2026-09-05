@@ -38,7 +38,7 @@ test('J7.1 task creation in Act is durable across Coordination and Workspace vie
   await expect(page.getByText(title)).toBeVisible();
 
   await page.goto('/app/workspaces/e2e-workspace');
-  await page.getByRole('button', { name: /^work$/i }).click();
+  await page.getByRole('tab', { name: /^work$/i }).click();
   await expect(page.getByText(title)).toBeVisible();
   consoleGuard.assertClean();
 });
@@ -61,14 +61,14 @@ test('J7.2 handoff set in Act is visible in the Workspace communication tab', as
   expect(saved.ok(), `handoff set failed: ${saved.status()}`).toBeTruthy();
 
   await page.goto('/app/workspaces/e2e-workspace');
-  await page.getByRole('button', { name: /^communication$/i }).click();
+  await page.getByRole('tab', { name: /^communication$/i }).click();
   await expect(page.getByText(handoffTitle)).toBeVisible();
   consoleGuard.assertClean();
 });
 
 test('J7.3 a live agent links directly to its durable mailbox', async ({ page, consoleGuard }) => {
   await page.goto('/app/workspaces/e2e-workspace');
-  await page.getByRole('button', { name: /^communication$/i }).click();
+  await page.getByRole('tab', { name: /^communication$/i }).click();
   const row = page.locator('.operator-agent-row', {
     hasText: String(mailboxJourney.sender_session_id).slice(0, 12),
   });

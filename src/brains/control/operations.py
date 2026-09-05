@@ -27,6 +27,48 @@ def readiness_report() -> dict[str, Any]:
     except Exception as exc:  # pragma: no cover - readiness must remain bounded
         components["storage"] = {"state": "degraded", "detail": {"error": type(exc).__name__}}
 
+    from brains.control.readiness import (
+        gateway_protocol_readiness,
+        mcp_protocol_readiness,
+        sqlite_integrity_status,
+    )
+
+    try:
+        gateway_health = gateway_protocol_readiness()
+        components["gateway_protocol"] = {
+            "state": "ready" if gateway_health["ready"] else "degraded",
+            "detail": gateway_health,
+        }
+    except Exception as exc:  # pragma: no cover - readiness must remain bounded
+        components["gateway_protocol"] = {
+            "state": "degraded",
+            "detail": {"error": type(exc).__name__},
+        }
+
+    try:
+        sqlite_health = sqlite_integrity_status()
+        components["sqlite_integrity"] = {
+            "state": "ready" if sqlite_health["ready"] else "degraded",
+            "detail": sqlite_health,
+        }
+    except Exception as exc:  # pragma: no cover - readiness must remain bounded
+        components["sqlite_integrity"] = {
+            "state": "degraded",
+            "detail": {"error": type(exc).__name__},
+        }
+
+    try:
+        mcp_health = mcp_protocol_readiness()
+        components["mcp_protocol"] = {
+            "state": "ready" if mcp_health["ready"] else "degraded",
+            "detail": mcp_health,
+        }
+    except Exception as exc:  # pragma: no cover - readiness must remain bounded
+        components["mcp_protocol"] = {
+            "state": "degraded",
+            "detail": {"error": type(exc).__name__},
+        }
+
     try:
         from brains.control.queue_health import summarize
 
@@ -65,6 +107,8 @@ def readiness_report() -> dict[str, Any]:
             "detail": {
                 "complete": recovery["policy"]["complete"],
                 "missing_fields": recovery["policy"]["missing_fields"],
+                "candidate": recovery["candidate"],
+                "last_drill": recovery["last_drill"],
                 "reasons": recovery["reasons"],
             },
         }
@@ -85,20 +129,14 @@ def operations_snapshot() -> dict[str, Any]:
     as capabilities rather than executed here.
     """
     from brains import service
-    from brains.control.operators import list_operators
     from brains.control.queue_health import diagnose, summarize
     from brains.control.recovery_policy import recovery_readiness
-    from brains.control.tool_registry import list_registered_tools
-    from brains.experimental import ui_labs_enabled
 
     return {
         "readiness": readiness_report(),
         "queue": {"summary": summarize(), "diagnosis": diagnose()},
         "recovery": recovery_readiness(),
         "service": service.status(),
-        "tools": list_registered_tools(verify_now=False),
-        "operators": list_operators(),
-        "labs_enabled": ui_labs_enabled(),
     }
 
 

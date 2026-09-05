@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
+import { useSearchParams } from "react-router-dom";
+import { useCoreNavigation } from "../coreRoutes";
+import { api } from "../api/client";
 import type { OperatorCapability, OperatorTransport, OperatorWorkspace } from "../api/types";
 import {
   OperatorCard,
@@ -20,8 +21,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export function Act() {
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
-  const { catalog, loading, error } = useOperator();
+  const { catalog, loading, error, errorKind } = useOperator();
   const workspaces = useAsync(() => api.operatorWorkspaces(), []);
   const categories = Array.from(new Set((catalog?.data ?? []).map((row) => row.category)));
   const category = params.get("category") || catalog?.data.find((row) => row.key === params.get("capability"))?.category || categories[0];
@@ -43,8 +43,9 @@ export function Act() {
         title="Act"
         lede="Choose a control operation, target its scope, preview its durable effect, and execute through a typed HTTP contract. This is not a terminal."
       />
-      <OperatorState loading={loading || workspaces.loading} error={error || workspaces.error} />
-      {catalog && workspaces.data && (
+      <OperatorState loading={loading} error={error} kind={errorKind} empty={Boolean(catalog && catalog.data.length === 0)} boundary="act-catalog" emptyTitle="No supported actions" emptyBody="This installation advertises no browser actions for the current operator." />
+      <OperatorState loading={workspaces.loading} error={workspaces.error} kind={workspaces.errorKind} empty={Boolean(workspaces.data && workspaces.data.length === 0)} boundary="act-workspaces" emptyTitle="No action workspaces" emptyBody="No visible Workspace is available for scoped browser actions." />
+      {catalog && catalog.data.length > 0 && workspaces.data && (
         <>
           <section className="operator-parity-banner">
             <strong>Browser parity is explicit</strong>
@@ -61,7 +62,7 @@ export function Act() {
               {available.map((capability) => <button key={capability.key} className={`operator-capability ${selected?.key === capability.key ? "selected" : ""}`} onClick={() => selectCapability(capability)}><div><strong>{capability.label}</strong><Transport transport={capability.transport} /></div><p>{capability.reason || capabilityDescription(capability.key)}</p><code>{capability.scope} scope</code></button>)}
             </div>
 
-            {selected && <ActionSheet capability={selected} workspaces={workspaces.data} initialWorkspace={params.get("workspace") || undefined} navigate={navigate} />}
+            {selected && <ActionSheet capability={selected} workspaces={workspaces.data} initialWorkspace={params.get("workspace") || undefined} />}
           </div>
         </>
       )}
@@ -84,13 +85,13 @@ function capabilityDescription(key: string): string {
     "knowledge.add": "Record a reusable blocker, workaround, resolution, or caveat.",
     "pattern.decide": "Approve or reject a global reusable pattern.",
     "decision.resolve": "Resolve a queued human decision from Governance.",
-    "session.stop": "Request an idempotent stop from a contextual session view.",
     "queue.repair.preview": "Preview bounded coordination queue repairs without mutation.",
   };
   return descriptions[key] || "Use the named typed contract for this operator job.";
 }
 
-function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { capability: OperatorCapability; workspaces: OperatorWorkspace[]; initialWorkspace?: string; navigate: (to: string) => void }) {
+function ActionSheet({ capability, workspaces, initialWorkspace }: { capability: OperatorCapability; workspaces: OperatorWorkspace[]; initialWorkspace?: string }) {
+  const navigation = useCoreNavigation();
   const visibleInitialWorkspace = workspaces.some((row) => row.slug === initialWorkspace)
     ? initialWorkspace!
     : workspaces[0]?.slug || "";
@@ -127,27 +128,26 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
       else if (capability.key === "knowledge.resolve") await api.operatorResolveKnowledge(title, kind);
       else if (capability.key === "pattern.decide") await api.operatorDecidePattern(title, kind === "approved");
       else if (capability.key === "decision.resolve") await api.resolveApproval(title, kind, body, kind === "rejected" ? "rejected" : kind === "deferred" ? "deferred" : "resolved");
-      else if (capability.key === "session.stop") await api.stopSession(title, crypto.randomUUID());
       else if (capability.key === "audit.verify") await api.operatorAuditVerify();
       else if (capability.key === "tool.verify") await api.operatorVerifyTool(title);
       else if (capability.key === "queue.repair.preview") await api.repairQueueHealth(false);
       else throw new Error("Open the contextual screen to complete this action safely.");
       toast(`${capability.label} recorded`);
       setTitle(""); setBody(""); setSessionId("");
-    } catch (error) {
-      toast(formatApiError(capability.label, error));
+    } catch {
+      toast("The action could not be completed. Retry after checking authorization and local service status.");
     } finally {
       setSaving(false);
     }
   };
 
-  const contextualRoute = capability.key === "decision.resolve" ? "/governance" : capability.key === "session.stop" ? "/labs/sessions" : null;
-  const runnable = capability.enabled && ["task.create", "task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add", "knowledge.resolve", "pattern.decide", "decision.resolve", "session.stop", "audit.verify", "tool.verify", "queue.repair.preview"].includes(capability.key);
+  const contextualRoute = capability.key === "decision.resolve" ? "/governance" : null;
+  const runnable = capability.enabled && ["task.create", "task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add", "knowledge.resolve", "pattern.decide", "decision.resolve", "audit.verify", "tool.verify", "queue.repair.preview"].includes(capability.key);
   const needsTitle = !["handoff.pick", "handoff.clear", "workspace.release", "audit.verify", "queue.repair.preview"].includes(capability.key);
   const needsSession = ["task.claim", "task.complete", "task.release", "workspace.claim", "workspace.release"].includes(capability.key);
   const needsWorkspace = ["task.create", "workspace.claim", "workspace.release", "handoff.set", "handoff.pick", "handoff.clear", "message.send", "topic.post", "knowledge.add"].includes(capability.key);
-  const valid = runnable && (!needsTitle || title.trim()) && (!needsSession || sessionId.trim());
-  const titleLabel = capability.key === "workspace.claim" ? "Scope" : ["task.claim", "task.complete", "task.release"].includes(capability.key) ? "Task code" : capability.key === "knowledge.resolve" ? "Knowledge code" : capability.key === "pattern.decide" ? "Pattern name" : capability.key === "decision.resolve" ? "Decision code" : capability.key === "session.stop" ? "Session ID" : capability.key === "tool.verify" ? "Tool name" : capability.key === "message.send" || capability.key === "topic.post" ? "Subject" : "Title";
+  const valid = runnable && (!needsWorkspace || Boolean(workspace)) && (!needsTitle || title.trim()) && (!needsSession || sessionId.trim());
+  const titleLabel = capability.key === "workspace.claim" ? "Scope" : ["task.claim", "task.complete", "task.release"].includes(capability.key) ? "Task code" : capability.key === "knowledge.resolve" ? "Knowledge code" : capability.key === "pattern.decide" ? "Pattern name" : capability.key === "decision.resolve" ? "Decision code" : capability.key === "tool.verify" ? "Tool name" : capability.key === "message.send" || capability.key === "topic.post" ? "Subject" : "Title";
 
   return (
     <aside className="operator-action-sheet">
@@ -167,7 +167,7 @@ function ActionSheet({ capability, workspaces, initialWorkspace, navigate }: { c
         {!capability.enabled && <div className="operator-route-gap">Activation requirement: {capability.reason || "authorized typed HTTP support"}. No shell execution is involved.</div>}
         {capability.enabled && !runnable && <div className="operator-route-gap">Open the contextual screen to supply the identity and evidence this action requires.</div>}
       </div>
-      <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigate(contextualRoute)}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
+        <footer>{contextualRoute && capability.enabled ? <button className="operator-button" onClick={() => navigation.open(contextualRoute)}>Open contextual view</button> : null}<button className="operator-button primary" disabled={!valid || saving} onClick={() => void execute()}>{saving ? "Recording..." : runnable ? capability.label : capability.transport === "native_http" ? "Context required" : "HTTP adapter required"}</button></footer>
     </aside>
   );
 }
@@ -186,7 +186,6 @@ function effectPreview(key: string, workspace: string, title: string): string {
   if (key === "knowledge.resolve") return `Transitions one named knowledge entry after Workspace authorization.`;
   if (key === "pattern.decide") return `Approves or rejects one global reusable pattern as install admin.`;
   if (key === "decision.resolve") return `Resolves one Workspace-scoped decision through the human separation-of-duty check.`;
-  if (key === "session.stop") return `Records an idempotent stop request for the named Session.`;
   if (key === "audit.verify") return "Recomputes the signed audit chain without mutation.";
   if (key === "tool.verify") return "Checks one registered executable against PATH and records the result.";
   return "Runs a dry-read preview and does not apply repair mutations.";

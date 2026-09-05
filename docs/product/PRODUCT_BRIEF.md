@@ -1,9 +1,3 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree experimental-label, ordinary-feedback, and durable-mail evidence correction; installed-service recovery and deployment not verified
--->
-
 # Brains Product Brief
 
 ## Identity
@@ -29,7 +23,6 @@ session history, and partial view of work. Operators lack one place to:
 - see which Workspaces and agent sessions are active;
 - assign and claim shared work without collisions;
 - preserve handoffs, checkpoints, messages, and reusable knowledge;
-- coordinate concurrent agents without collisions;
 - resolve asks and approval requests;
 - retain attributable operational and audit evidence.
 
@@ -50,7 +43,7 @@ The final product goal is not "run more agents." It is:
 
 Brains aims to provide:
 
-1. **A coherent operating model.** Orgs, Workspaces, coordination Sessions, tasks,
+1. **A coherent operating model.** Workspaces, coordination Sessions, tasks,
    claims, handoffs, messages, knowledge, and human decisions have stable meanings.
 2. **Workspace and tool visibility.** Operators can see bounded portfolio, presence,
    wiring, and service posture without inferring execution that Brains did not govern.
@@ -60,44 +53,41 @@ Brains aims to provide:
    and fail closed where the contract requires a decision.
 5. **Truthful capabilities.** Missing, unsupported, experimental, and withdrawn behavior
    is not presented as normal availability.
-6. **Honest evidence.** Static code, test presence, local execution, isolated UAT, and
-   deployed observation are distinct evidence levels.
+6. **Honest evidence.** Static code, test presence, local execution, isolated
+   validation, and deployed observation are distinct evidence levels.
 7. **Recoverable operation.** SQLite state, backup, restore, health, readiness, and
    rollback have explicit contracts.
 
-Current HEAD implements parts of this promise. [FEATURE_CONTRACT.md](FEATURE_CONTRACT.md) distinguishes present, partial, and missing behavior.
+The [Feature Contract](FEATURE_CONTRACT.md) distinguishes advertised, partial, target,
+frozen, and withdrawn behavior.
 
 ## Current Advertised Product
 
 The normal installation currently claims only:
 
 - Command Center and Workspace portfolio views;
-- durable coordination Sessions, tasks, claims, handoffs, checkpoints, mail, topics,
-  peer help, knowledge, and coordination patterns;
+- durable coordination Sessions, tasks, claims, handoffs, checkpoints, mailbox,
+  peer help, and knowledge;
 - human asks, decisions, governed-effect records, and audit verification;
-- Operations readiness, queue diagnosis, service/tool posture, recovery policy, Org
-  access, supported configuration, and scoped usage;
-- signed GitHub event linkage;
+- Operations readiness, queue diagnosis, service posture, and recovery policy;
 - bounded Workspace knowledge and non-semantic repository lookup;
-- experimental behavior explicitly labelled in
-  [EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md).
 
 Execution-model, model-gateway, semantic/graph, automation, alternate-storage,
 telemetry-export, messaging-bridge, and legacy-browser implementations have been
-withdrawn as product claims. Some routes, commands, tools, flags, extras, tables, and
-source modules still exist until BL-P0-09 removes their exposure; existence is not an
-invitation to enable them.
+withdrawn as product claims. Their routes, commands, tools, flags, runtime extras, and
+browser activation paths are absent. Historical modules and tables may remain only for
+persisted-data compatibility.
 
 ## Primary users
 
 | ID | User | Primary need |
 |---|---|---|
 | P1 | Solo operator/developer | Connect agent harnesses, coordinate Workspace work, and retain continuity. |
-| P2 | Org owner | Define Org membership, product configuration, and risk boundaries. |
-| P3 | Org admin/member | Collaborate across authorized Workspaces and shared coordination state. |
+| P2 | Reserved multi-operator owner | Frozen future actor; not part of the supported local product. |
+| P3 | Reserved multi-operator member | Frozen future actor; not part of the supported local product. |
 | P4 | Service host operator | Control the local service, CLI wiring, credentials, state, and working roots. |
 | P5 | Human approver | Review asks and outward-action requests with sufficient context and attribution. |
-| P6 | Release/operations operator | Run gates, isolated UAT, backup, deploy, observe, and roll back. |
+| P6 | Release/operations operator | Run gates, validate in isolation, back up, observe, and roll back. |
 | P7 | AI agent session | Coordinate scoped work, preserve continuity, and request peer or human input. |
 
 P7 is a product actor, not a stronger authentication principal than the credential and
@@ -105,16 +95,9 @@ Session boundaries the implementation provides.
 
 ## Value
 
-Brains' defensible value is coordinated and governed operation:
-
-- one durable work and session plane across multiple agent tools;
-- fewer collisions through claims, tasks, handoffs, and presence;
-- visible human decision points;
-- a traceable path from product promise to acceptance evidence;
-- local-first operation with SQLite as the supported source of truth;
-- signed GitHub linkage without treating external activity as trusted by default.
-
-Brains does **not** promise universal token savings. Retrieval, routing, and coordination can add cost as well as remove repeated work. Value depends on task shape, model, repository size, and whether useful context is delivered at the right time.
+Brains' value is coordinated, human-governed, local-first operation across supported
+agent tools. It does **not** promise universal token savings: coordination and retrieval
+can add cost as well as avoid repeated work.
 
 ## Product boundaries
 
@@ -125,8 +108,10 @@ Brains does **not** promise universal token savings. Retrieval, routing, and coo
 - asks, approvals, handoffs, messages, tasks, claims, and shared knowledge;
 - CLI and MCP coordination surfaces;
 - SQLite storage;
-- backup, audit, observability, wiring, services, containers, and isolated harnesses;
-- signed GitHub linkage and human-approved public defect proposals.
+- backup, audit, observability, wiring, service definitions, and isolated validation
+  tools; native service-manager lifecycle, platform-specific Claude recovery,
+  exact-candidate aggregation, and publication controls remain explicit backlog
+  requirements;
 
 ### Target-only or withdrawn
 
@@ -138,10 +123,14 @@ Brains does **not** promise universal token savings. Retrieval, routing, and coo
 - running-agent message delivery;
 - Postgres, OpenTelemetry export, Telegram, Slack, WhatsApp, and WhatsApp Web;
 - legacy dashboard and admin HTML.
+- GitHub linkage and public defect publication;
+- Org multi-user/multi-operator administration and cross-process scale;
+- feedback intelligence, automatic coordination-pattern routing, ephemeral peer review,
+  optional SMTP copies, and external evidence-retention services.
 
 These concepts retain stable contract identifiers where needed for traceability, but
-their current implementations are frozen faulty or retired, are not schedulable
-backlog, and require an explicit replacement/graduation decision before re-entry.
+they are not advertised or schedulable core work. Re-entry requires an explicit
+replacement or thaw decision.
 
 ### Non-goals
 
@@ -149,7 +138,7 @@ backlog, and require an explicit replacement/graduation decision before re-entry
 - treating Git tags, screenshots, old reports, or test files as proof of a current release;
 - guaranteeing provider availability, model quality, cost savings, or external-service uptime;
 - treating the current PATH-shim gate as a complete process or network security boundary;
-- treating Org roles or API keys as enforced tenant isolation before route-level authorization exists;
+- treating compatibility Org rows or API keys as a supported multi-tenant boundary;
 - making Skills, recurring execution, or tool spawning autonomous without an explicit human-governed contract;
 - replacing Git history with an in-repository chronology or evidence archive;
 - changing the canonical Brains package, CLI, namespace, MCP prefix, state directory, repository, or browser identity without an explicit product decision.
@@ -158,8 +147,8 @@ backlog, and require an explicit replacement/graduation decision before re-entry
 
 | Term | Product meaning | Current implementation note |
 |---|---|---|
-| Org | Top-level product and UI scope. | Stored in `orgs`; route-level role enforcement is incomplete. |
-| Workspace | Repository or working-directory coordination scope inside or alongside an Org. | Older Brains engine concept; used by sessions, claims, knowledge, and visibility controls. |
+| Org | Compatibility container for local persisted scope. | Multi-user membership and administration are frozen. |
+| Workspace | Repository or working-directory coordination scope for the local operator. | Used by sessions, claims, knowledge, and visibility controls. |
 | Runtime | Target concept for one machine multiplied by one detected CLI tool. | Current implementation withdrawn; persisted rows are compatibility data, not availability. |
 | Persona | Target concept for a named reusable agent identity. | Current implementation withdrawn; not an authentication principal. |
 | Pod | Target concept for a team of Personas. | Current implementation withdrawn; legacy Squad rows remain compatibility data. |
@@ -185,18 +174,17 @@ Brains succeeds when the following can be demonstrated for one exact candidate:
    reconstructing work from private transcripts.
 5. The operator can answer asks, approve or reject governed actions, and distinguish
    governed effects from external claims.
-6. Authorization prevents cross-Org and private-Workspace access and realtime
+6. Local authentication and Workspace scoping prevent unauthorized access and realtime
    subscription.
 7. SQLite state can be diagnosed, backed up, restored, and rolled back under the
    declared recovery contract.
 8. Withdrawn capabilities have no discovery or activation path in the supported
    installation.
-9. Code, tests, isolated UAT, documentation, backup, and rollback evidence all identify
-   the same candidate.
+9. Validation identifies the artifact and environment it actually exercised.
 10. The product outcome satisfies the feature and journey acceptance criteria, not
     merely a build or process check.
 
-Current HEAD does not meet that complete definition. Current schedulable gaps are in
-[ACTIVE_BACKLOG.md](ACTIVE_BACKLOG.md); experimental uncertainty labels are in
-[EXPERIMENTAL_BACKLOG.md](EXPERIMENTAL_BACKLOG.md); stable ID and withdrawal
-disposition are indexed in [BACKLOG.md](BACKLOG.md).
+Current HEAD does not meet that complete definition. Current actionable work is in
+[BACKLOG.md](BACKLOG.md). Deferred product expansion is in
+[FROZEN_BACKLOG.md](FROZEN_BACKLOG.md); lifecycle labels are in
+[FEATURE_CONTRACT.md](FEATURE_CONTRACT.md).
