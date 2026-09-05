@@ -252,7 +252,12 @@ def test_wire_owns_exact_dependency_free_global_plugin(tmp_path: Path) -> None:
     assert "await child.exited" in rendered
     assert "sessionID" in rendered
     assert "@opencode-ai/plugin" not in rendered
-    assert "brains-ai" not in rendered
+    # The plugin must invoke the interpreter and the `brains` module rather than
+    # the `brains-ai` console script, so it stays PATH-independent. Match the
+    # rendered JSON command token exactly: a bare substring also matches any
+    # checkout directory named `brains-ai`, including this repository's own.
+    assert '"-m", "brains"' in rendered
+    assert '"brains-ai"' not in rendered
     assert "process.env" not in rendered
     assert '"BRAINS_DB_URL"' in rendered
     assert '"BRAINS_STATE_DIR"' in rendered
