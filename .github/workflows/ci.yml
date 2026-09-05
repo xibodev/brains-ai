@@ -563,6 +563,24 @@ jobs:
                   # A rich traceback puts the exception line last, so print the tail.
                   print(f"--- {label}: stderr tail (last 2500 chars) ---")
                   print(done.stderr[-2500:])
+
+              if os.name == "nt":
+                  from brains.control import durable_mailbox as mailbox
+
+                  def redact(value: str) -> str:
+                      parts = value.split("-")
+                      if len(parts) <= 5:
+                          return value
+                      return "-".join([*parts[:4], "x", parts[-1]])
+
+                  target = probe._config_path(home, tool)
+                  print("--- windows owner-only boundary ---")
+                  print("expected sid:", redact(mailbox._windows_current_user_sid()))
+                  try:
+                      mailbox._windows_secure_binding_file(target)
+                  except OSError as exc:
+                      print("harden error:", exc)
+                  print("acl sids    :", [redact(s) for s in mailbox._windows_binding_acl_sids(target)])
           PY
       - name: Verify private native installation evidence before export
         shell: bash
