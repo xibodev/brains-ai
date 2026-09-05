@@ -209,14 +209,14 @@ def test_positive_manifest_rejects_rogue_package_and_documented_surface(
     optional["rogue"] = ["rogue"]
     documented = snapshot["documented_ids"]
     assert isinstance(documented, dict)
-    backlog = documented["backlog"]
-    assert isinstance(backlog, list)
-    backlog.append("BL-P9-99")
+    advertisements = documented["forbidden_advertisements"]
+    assert isinstance(advertisements, list)
+    advertisements.append("docs/GUIDE.md:1:surface:labs")
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any("entry_points" in error for error in errors)
     assert any("optional_dependencies" in error for error in errors)
-    assert any("documented_ids.backlog" in error for error in errors)
+    assert any("documented_ids.forbidden_advertisements" in error for error in errors)
 
 
 @pytest.mark.parametrize(

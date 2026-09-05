@@ -157,12 +157,18 @@ def test_route_component_module_that_does_not_exist_fails(tmp_path: Path) -> Non
     )
 
 
-def test_check_docs_route_list_drift_fails(tmp_path: Path) -> None:
+def test_route_allowlist_drift_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A route in the allowlist that App.tsx no longer declares must be reported."""
+
     root = _fixture_root(tmp_path)
-    _edit(root, "scripts/check_traceability.py", '    "/app/command-center",\n', "")
+    monkeypatch.setattr(
+        checker,
+        "REQUIRED_SPA_ROUTES",
+        (*checker.REQUIRED_SPA_ROUTES, "/app/retired"),
+    )
     _assert_reports(
         _errors(root),
-        "check_docs REQUIRED_SPA_ROUTES lists /app/command-center, which is not declared",
+        "check_docs REQUIRED_SPA_ROUTES lists /app/retired, which is not declared",
     )
 
 
