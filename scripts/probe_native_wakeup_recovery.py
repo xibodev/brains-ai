@@ -895,8 +895,8 @@ def _run_child(
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"isolated native wakeup probe child timed out at {step}") from exc
     if completed.returncode != expected:
-        # Relay only the child's curated reason, never its raw output: exception
-        # text can contain environment paths.
+        # Never relay child output: exception text can contain environment paths.
+        # Only the child's curated reason, which names a contract, is forwarded.
         raise RuntimeError(
             f"isolated native wakeup probe child failed at {step}: "
             f"{_worker_failure_detail(completed.stdout)}"
