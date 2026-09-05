@@ -1299,12 +1299,17 @@ def main() -> int:
         # containing temporary paths.  The public runner emits one bounded report.
         if arguments.child_action:
             # A child must not print a traceback, which can carry environment
-            # paths. Its curated RuntimeError text names a contract only, and any
-            # other exception contributes just its class name; without either, a
-            # child failure is invisible to the runner.
-            child_detail = (
-                str(exc)[:200] if isinstance(exc, RuntimeError) and str(exc) else type(exc).__name__
-            )
+            # paths. Its curated RuntimeError text names a contract only. An
+            # OSError contributes its numeric codes, which identify the refusal
+            # without quoting the filename the message would carry.
+            if isinstance(exc, RuntimeError) and str(exc):
+                child_detail = str(exc)[:200]
+            elif isinstance(exc, OSError):
+                child_detail = (
+                    f"OSError:errno={exc.errno}:winerror={getattr(exc, 'winerror', None)}"
+                )
+            else:
+                child_detail = type(exc).__name__
             sys.stdout.write(json.dumps({"detail": child_detail}, sort_keys=True) + "\n")
             return 1
         failure: dict[str, object] = {
