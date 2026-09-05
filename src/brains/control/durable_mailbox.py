@@ -316,6 +316,27 @@ def _windows_current_user_sid() -> str:
     return row[1]
 
 
+# Windows resolves these principals through OS semantics rather than a user
+# grant: LOCAL SYSTEM and the local Administrators group can take ownership of
+# any file whatever its DACL says, and OWNER RIGHTS only restates the owner's own
+# access. An administrator account therefore cannot be reduced to a single-entry
+# DACL, so the boundary requires the owner and rejects any other principal.
+WINDOWS_OS_PRINCIPAL_SIDS = frozenset(
+    {
+        "S-1-3-4",  # OWNER RIGHTS
+        "S-1-5-18",  # LOCAL SYSTEM
+        "S-1-5-32-544",  # BUILTIN\\Administrators
+    }
+)
+
+
+def windows_unexpected_acl_principals(acl_sids: tuple[str, ...], owner_sid: str) -> tuple[str, ...]:
+    """Return granted principals that are neither the owner nor OS semantics."""
+    return tuple(
+        value for value in acl_sids if value != owner_sid and value not in WINDOWS_OS_PRINCIPAL_SIDS
+    )
+
+
 def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     environment = dict(os.environ)
     environment["BRAINS_BINDING_ACL_PATH"] = str(path)
@@ -359,7 +380,7 @@ def _windows_secure_binding_file(path: Path) -> None:
     acl_sids = _windows_binding_acl_sids(path)
     # The owner and privileged backup operators are OS semantics, not DACL allow
     # entries. The managed file needs no explicit access principal except its user.
-    if acl_sids != (sid,):
+    if sid not in acl_sids or windows_unexpected_acl_principals(acl_sids, sid):
         raise OSError("mailbox binding file ACL contains an unexpected principal")
 
 

@@ -386,7 +386,14 @@ def test_windows_managed_binding_is_dpapi_protected_and_acl_verified(tmp_path) -
         timeout=10,
     )
     assert verified.returncode == 0
-    assert mailbox_ctl._windows_binding_acl_sids(path) == (mailbox_ctl._windows_current_user_sid(),)
+    # An administrator-owned file keeps LOCAL SYSTEM, BUILTIN\Administrators and
+    # OWNER RIGHTS on its DACL, and those principals can reach the file through
+    # OS semantics regardless. The boundary that matters is that no other
+    # principal is granted access.
+    owner = mailbox_ctl._windows_current_user_sid()
+    acl_sids = mailbox_ctl._windows_binding_acl_sids(path)
+    assert owner in acl_sids
+    assert mailbox_ctl.windows_unexpected_acl_principals(acl_sids, owner) == ()
     subprocess.run(
         [
             mailbox_ctl._windows_system_tool("System32/icacls.exe"),
