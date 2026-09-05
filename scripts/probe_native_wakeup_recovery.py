@@ -726,6 +726,7 @@ def _assert_owner_only(path: Path) -> None:
         from brains.control.durable_mailbox import (
             _windows_binding_acl_sids,
             _windows_current_user_sid,
+            windows_unexpected_acl_principals,
         )
 
         subprocess.run(
@@ -743,7 +744,15 @@ def _assert_owner_only(path: Path) -> None:
             text=True,
             timeout=10,
         )
-        if _windows_binding_acl_sids(path) != (_windows_current_user_sid(),):
+        acl_sids = _windows_binding_acl_sids(path)
+        owner = _windows_current_user_sid()
+        # Same boundary as the managed binding: the owner must be granted and no
+        # other principal may be, with OS semantics excluded by the shared rule.
+        if (
+            not acl_sids
+            or owner not in acl_sids
+            or windows_unexpected_acl_principals(acl_sids, owner)
+        ):
             raise RuntimeError("native recovery ACL is not owner-only")
         return
     expected = 0o700 if path.is_dir() else 0o600
