@@ -366,11 +366,19 @@ def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
             "-NoProfile",
             "-NonInteractive",
             "-Command",
+            # Read the ACL through .NET rather than Get-Acl. The cmdlet lives in
+            # Microsoft.PowerShell.Security, and loading it costs a module
+            # analysis pass that is repeated in full whenever the caller's
+            # per-user cache location is empty, which is exactly the case inside
+            # an isolated probe home. These types need no module at all.
             "$ErrorActionPreference = 'Stop'; "
-            "$acl = Get-Acl -LiteralPath $env:BRAINS_BINDING_ACL_PATH; "
-            "$acl.Access | ForEach-Object { "
-            "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
-            "}",
+            "$target = $env:BRAINS_BINDING_ACL_PATH; "
+            "$acl = if ([System.IO.Directory]::Exists($target)) "
+            "{ [System.IO.Directory]::GetAccessControl($target) } "
+            "else { [System.IO.File]::GetAccessControl($target) }; "
+            "$acl.GetAccessRules($true, $true, "
+            "[System.Security.Principal.SecurityIdentifier]) | "
+            "ForEach-Object { $_.IdentityReference.Value }",
         ],
         check=False,
         capture_output=True,
