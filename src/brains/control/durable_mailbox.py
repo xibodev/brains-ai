@@ -368,14 +368,14 @@ def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
             "$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value "
             "}",
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=10,
         env=environment,
     )
     sids = tuple(sorted({line.strip() for line in completed.stdout.splitlines() if line.strip()}))
-    if not sids:
+    if completed.returncode != 0 or not sids:
         # An owner-only boundary must never treat an unreadable ACL as an empty
         # one: that would compare the owner against nothing and refuse, or worse,
         # accept. Report the first diagnostic line and stop.
