@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import itertools
 import json
 import os
 import platform
@@ -50,12 +51,18 @@ def _run(executable: Path, env: dict[str, str], *args: str) -> dict[str, Any]:
         text=True,
         timeout=120,
     )
+    # Name the subcommand so a failing host says which call broke. Only the
+    # leading literal words are used, never an argument value, so no path or
+    # host detail reaches the public record.
+    command = " ".join(itertools.takewhile(lambda item: not item.startswith("-"), args))
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ProvenanceFailure("installed executable returned a non-JSON result") from exc
+        raise ProvenanceFailure(
+            f"installed executable returned a non-JSON result for {command!r}"
+        ) from exc
     if completed.returncode != 0 or payload.get("ok") is False:
-        raise ProvenanceFailure("installed executable reported failure")
+        raise ProvenanceFailure(f"installed executable reported failure for {command!r}")
     return payload
 
 
