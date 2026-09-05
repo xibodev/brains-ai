@@ -125,7 +125,12 @@ test('J8.3 durable operator mail is explicit, threaded, and recoverable', async 
 test('J8.4 mailbox desk is keyboard reachable and responsive', async ({ page, consoleGuard }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/app/coordination?mailbox=unknown%3Amailbox%40private');
-  await expect(page.locator('.operator-mailroom').getByRole('alert')).toContainText('Mailbox unavailable');
+  // An unknown or scope-hidden mailbox must resolve to the generic not-found
+  // boundary. Naming the mailbox here would confirm its existence, so assert the
+  // typed state and the non-disclosing copy rather than mailbox-specific wording.
+  const unavailable = page.locator('.operator-mailroom').getByRole('alert');
+  await expect(unavailable).toHaveAttribute('data-async-state', 'not_found');
+  await expect(unavailable).toContainText('The requested resource is unavailable or outside your visible scope.');
   await expect(page.locator('.operator-mailroom').getByRole('button', { name: 'Compose mail' })).toHaveCount(0);
 
   await page.goto(`/app/coordination?mailbox=${encodeURIComponent(String(mailboxJourney.sender_address))}`);
