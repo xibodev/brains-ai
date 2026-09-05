@@ -169,13 +169,23 @@ def _manager_definition_evidence(
         "--mcp-port",
         str(mcp_port),
     ]
+    # ServiceSpec.command_line is a display string: the interpreter followed by
+    # its arguments, quoted only where a token contains a space. No expected
+    # argument contains one, so the rendered command must end with exactly this
+    # suffix and start with the absolute interpreter that carries it. The
+    # interpreter is not compared to sys.executable: Windows services run the
+    # windowless pythonw.exe while this probe runs python.exe, and the wheel that
+    # supplies both is already bound by distribution_provenance.
+    argument_suffix = " ".join(expected_arguments)
+    interpreter_token = ""
+    if isinstance(command, str) and command.endswith(f" {argument_suffix}"):
+        interpreter_token = command[: -(len(argument_suffix) + 1)].strip().strip('"')
     if (
         rendered.get("action") != "would-install"
         or rendered.get("platform") != platform_slug
         or rendered.get("label") != expected_label
-        or not isinstance(command, list)
-        or not all(isinstance(item, str) for item in command)
-        or command[1:] != expected_arguments
+        or not interpreter_token
+        or not Path(interpreter_token).is_absolute()
     ):
         raise ProvenanceFailure("native manager definition command differs")
     if (
