@@ -542,8 +542,17 @@ jobs:
                   }
               )
               probe._seed(probe._config_path(home, tool), tool)
+              # Mirror the probe's own call sequence: a single call in isolation
+              # can succeed where the sequence fails.
               calls = [
                   ("setup", ("setup", "--path", str(workspace), "--no-wire", "--json")),
+                  (
+                      "service install",
+                      (
+                          "service", "install", "--dry-run",
+                          "--gateway-port", "24998", "--mcp-port", "24999",
+                      ),
+                  ),
                   (
                       "wire",
                       (
@@ -551,18 +560,22 @@ jobs:
                           "--transport", "streamable-http", "--port", "24999",
                       ),
                   ),
+                  ("wire --status", ("wire", "--status")),
+                  ("unwire", ("unwire", "--tool", tool, "--no-rules")),
               ]
               for label, args in calls:
                   done = subprocess.run(
                       [str(executable), *args],
                       check=False, capture_output=True, env=env, text=True, timeout=120,
                   )
-                  print(f"--- {label}: returncode={done.returncode} ---")
-                  print(f"--- {label}: stdout repr (first 300 chars) ---")
-                  print(repr(done.stdout[:300]))
-                  # A rich traceback puts the exception line last, so print the tail.
-                  print(f"--- {label}: stderr tail (last 2500 chars) ---")
-                  print(done.stderr[-2500:])
+                  ok = done.returncode == 0 and done.stdout.strip().startswith("{")
+                  print(f"--- {label}: returncode={done.returncode} json={ok} ---")
+                  if not ok:
+                      print(f"--- {label}: stdout repr (first 300 chars) ---")
+                      print(repr(done.stdout[:300]))
+                      # A rich traceback puts the exception line last.
+                      print(f"--- {label}: stderr tail (last 2500 chars) ---")
+                      print(done.stderr[-2500:])
 
               if os.name == "nt":
                   from brains.control import durable_mailbox as mailbox
