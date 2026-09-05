@@ -860,9 +860,9 @@ jobs:
           npm run typecheck
           npx playwright install --with-deps chromium
 
-      # Blocking: every J1-J11 browser journey contract must pass on the exact
-      # candidate. Remaining browser evidence gaps stay explicit in
-      # docs/product/TRACEABILITY.md rather than being hidden by the harness.
+      # Blocking: every browser journey contract must pass on the exact
+      # candidate. A remaining browser evidence gap stays an explicit skip in the
+      # spec rather than being hidden by the harness.
       - name: Run Brains E2E
         working-directory: tests/e2e
         run: npx playwright test

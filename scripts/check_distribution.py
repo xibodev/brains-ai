@@ -25,7 +25,7 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = ROOT / "docs/product/CORE_SURFACE.json"
+MANIFEST = ROOT / ".surface/core-surface.json"
 
 #: Exact members every wheel must carry, relative to the package root.
 REQUIRED_WHEEL_FILES = (

@@ -1,7 +1,7 @@
 """Experimental feature gate — the loud boundary between mature and not.
 
 Every feature here is real code with real tests, but it does not yet meet
-the product's maturity bar (see ``docs/product/FEATURE_CONTRACT.md``):
+the product's maturity bar (see ``docs/product/PRODUCT_BRIEF.md``):
 end-to-end behavior is unproven on a shipped surface, evidence levels are
 below E3, or an enforcement boundary is still cooperative. The default
 install **hides and refuses** these surfaces; an operator reaches them only

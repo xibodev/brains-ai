@@ -4,12 +4,16 @@
 
 Before changing behavior:
 
-1. Read the [Product Brief](docs/product/PRODUCT_BRIEF.md).
-2. Identify the affected Feature, Persona, Journey, and acceptance identifiers.
-3. Inspect [Traceability](docs/product/TRACEABILITY.md) for the corresponding UI, API,
-   control, data, and test surfaces.
-4. Check the [Core Backlog](docs/product/BACKLOG.md). Deferred work remains in the
-   [Frozen Backlog](docs/product/FROZEN_BACKLOG.md) and is not a current capability.
+1. Read the [Product Brief](docs/product/PRODUCT_BRIEF.md) so a change lands inside the
+   supported scope rather than reopening something deliberately out of it.
+2. Read [Using Brains](docs/GUIDE.md) and the [MCP surface](docs/MCP.md) for the behavior
+   an operator and an agent already rely on.
+3. Check the repository's issues for existing work on the same area.
+
+The supported surface is defined in code, not prose: `CORE_MCP_TOOLS` and the
+`WITHDRAWN_*` sets in `src/brains/capabilities.py`, enforced by
+`scripts/check_core_surface.py`. Adding a tool, command, or route means changing that
+allowlist deliberately.
 
 ## Development setup
 

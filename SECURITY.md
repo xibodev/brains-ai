@@ -48,8 +48,9 @@ weakens containment of a withdrawn capability.
 
 The current product boundary and explicit limitations are documented in
 [Architecture](docs/ARCHITECTURE.md), [Operations](docs/OPERATIONS.md), and the
-[Product Brief](docs/product/PRODUCT_BRIEF.md). Deferred security work is listed in the
-[Frozen Backlog](docs/product/FROZEN_BACKLOG.md), not represented as implemented here.
+[Product Brief](docs/product/PRODUCT_BRIEF.md), which states what Brains does not claim
+to protect. Security work that is intended but unbuilt is tracked in the repository's
+issues rather than represented as implemented here.
 
 Security-sensitive changes should include negative authorization tests, failure and
 recovery behavior, and the relevant checks from

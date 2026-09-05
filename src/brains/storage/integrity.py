@@ -10,7 +10,7 @@ Three concerns live here, in dependency order:
    rots whenever a model gains a foreign key.
 2. **Diagnosis.** :func:`diagnose` runs ``PRAGMA integrity_check`` and
    ``PRAGMA foreign_key_check`` plus the product invariants named in
-   ``docs/product/BACKLOG.md`` BL-P0-07: contradictory terminal Session
+   a known limitation: contradictory terminal Session
    state, Org-less Workspaces, and orphaned/expired Session claims. Rows
    whose correct value cannot be derived from stored evidence are
    classified ``ambiguous_legacy`` and are never guessed at. A check that

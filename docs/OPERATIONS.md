@@ -189,8 +189,8 @@ Codex, and OpenCode remain pull-only notification adapters. A hook
 conflict or MCP wiring failure leaves that adapter in pull mode. Claude settings changes
 are cross-process locked and use a recoverable atomic exchange that captures displaced
 bytes. Ambiguous concurrent edits remain preserved for recovery instead of being
-discarded. Native exchange and owner-only recovery behavior is limited to the platforms
-listed in the core backlog.
+discarded. Native exchange and owner-only recovery behavior is limited to Windows and
+macOS.
 
 Probe without changing configuration:
 
@@ -503,7 +503,6 @@ ports only in a disposable environment with synthetic credentials and state. Do 
 mount or address another Brains installation. Verify teardown and configuration
 restoration before discarding the environment.
 
-The [Core Backlog](product/BACKLOG.md) contains schedulable implementation TODOs and is
-currently empty. Candidate-specific validation follows [Quality gates](QUALITY_GATES.md).
-Deferred expansion and scale work remains in the
-[Frozen Backlog](product/FROZEN_BACKLOG.md) and is not a current product promise.
+Candidate-specific validation follows [Quality gates](QUALITY_GATES.md). Work that is
+intended but unbuilt is tracked in the repository's issues; the
+[Product Brief](product/PRODUCT_BRIEF.md) states what is deliberately out of scope.
