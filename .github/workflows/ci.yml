@@ -448,16 +448,46 @@ jobs:
           --tool "${{ matrix.adapter }}"
           --output "$RUNNER_TEMP/native-installation-evidence.json"
       # The evidence file is never exported before it is verified. Echo only the
-      # bounded exception type so a failing host is diagnosable without
-      # publishing unverified evidence or any path.
+      # bounded exception type, the curated provenance message and the porcelain
+      # status, so a failing host is diagnosable without publishing unverified
+      # evidence. ProvenanceFailure messages are fixed strings and carry no path.
       - name: Report the bounded native installation failure type
         if: failure() && steps.native-installation.outcome == 'failure'
         shell: bash
-        run: >-
+        run: |
+          set -uo pipefail
           python -c "import json,os,pathlib;
           path=pathlib.Path(os.environ['RUNNER_TEMP'])/'native-installation-evidence.json';
           data=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {};
           print('native installation error_type:', data.get('error_type', 'unavailable'))"
+          echo "--- git status --porcelain=v1 --untracked-files=all ---"
+          git status --porcelain=v1 --untracked-files=all | head -n 40
+          echo "--- provenance stage ---"
+          "$BRAINS_NATIVE_PROBE_PYTHON" - <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from native_evidence import ProvenanceFailure, package_provenance, source_provenance
+
+          repo = pathlib.Path.cwd()
+          git = pathlib.Path(os.environ["BRAINS_NATIVE_PROBE_GIT"])
+          wheel = pathlib.Path(os.environ["BRAINS_NATIVE_PROBE_WHEEL"])
+          manifest = pathlib.Path(os.environ["BRAINS_NATIVE_PACKAGE_MANIFEST"])
+          try:
+              source = source_provenance(repo, os.environ["GITHUB_SHA"], git)
+          except ProvenanceFailure as exc:
+              print("source_provenance failed:", exc)
+              raise SystemExit(0)
+          print("source_provenance ok")
+          try:
+              package_provenance(manifest, source=source, wheel_path=wheel)
+          except ProvenanceFailure as exc:
+              print("package_provenance failed:", exc)
+              raise SystemExit(0)
+          print("package_provenance ok; failure is in distribution_provenance or later")
+          PY
       - name: Verify private native installation evidence before export
         shell: bash
         run: >-
