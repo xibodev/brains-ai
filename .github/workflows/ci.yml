@@ -529,7 +529,7 @@ jobs:
           }
           $wheel = (Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/native-dist" -Filter '*.whl' | Select-Object -First 1).FullName
           if (-not $wheel) { throw 'native candidate wheel is absent' }
-          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application).Source).Path
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application | Select-Object -First 1).Source).Path
           $invocation = Join-Path $env:RUNNER_TEMP ("brains-native-wakeup-" + [guid]::NewGuid())
           if (Test-Path -LiteralPath $invocation) { throw 'native evidence path already exists' }
           "NATIVE_WAKEUP_INVOCATION=$invocation" >> $env:GITHUB_ENV
@@ -550,7 +550,7 @@ jobs:
           } else {
             Join-Path $env:pythonLocation 'bin/python'
           }
-          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application).Source).Path
+          $git = (Resolve-Path -LiteralPath (Get-Command git -CommandType Application | Select-Object -First 1).Source).Path
           $wheel = (Get-ChildItem -LiteralPath "$env:RUNNER_TEMP/native-dist" -Filter '*.whl' | Select-Object -First 1).FullName
           $result = Join-Path $env:NATIVE_WAKEUP_INVOCATION 'native-wakeup-recovery.json'
           & $bootstrap scripts/probe_native_wakeup_recovery.py `
