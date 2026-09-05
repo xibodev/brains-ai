@@ -1108,6 +1108,28 @@ def _worker(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _worker_failure_detail(stdout: str) -> str:
+    """Return the worker's own bounded reason for failing.
+
+    The worker emits the same curated report this runner does, so forwarding it
+    names the rejected contract without quoting a path or host value.
+    """
+    for line in reversed(stdout.splitlines()):
+        candidate = line.strip()
+        if not candidate.startswith("{"):
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            reported = payload.get("detail") or payload.get("reason")
+            if isinstance(reported, str) and reported:
+                return reported[:200]
+        break
+    return "no bounded worker report"
+
+
 def _bootstrap(arguments: argparse.Namespace) -> int:
     if not all(
         (
@@ -1173,7 +1195,9 @@ def _bootstrap(arguments: argparse.Namespace) -> int:
             env=_worker_environment(invocation, git, environment),
         )
         if completed.returncode != 0:
-            raise RuntimeError("attested native wakeup worker failed")
+            raise RuntimeError(
+                f"attested native wakeup worker failed: {_worker_failure_detail(completed.stdout)}"
+            )
         result = json.loads(output.read_text(encoding="utf-8"))
         provenance = result.get("provenance") if isinstance(result, dict) else None
         if not isinstance(provenance, dict):
