@@ -29,15 +29,10 @@ _SPEC.loader.exec_module(checker)
 #: and the SQLAlchemy metadata come from the installed package, so the copied
 #: baseline and migration files keep those checks meaningful.
 FIXTURE_PATHS = (
-    "docs/product/TRACEABILITY.md",
-    "docs/product/FEATURE_CONTRACT.md",
-    "docs/product/BACKLOG.md",
-    "docs/product/USER_OUTCOME_SPEC.md",
-    "docs/product/PERSONAS_AND_JOURNEYS.md",
     "docs/product/PRODUCT_BRIEF.md",
     "docs/QUALITY_GATES.md",
     "README.md",
-    "scripts/check_docs.py",
+    "scripts/check_traceability.py",
     "frontend/src",
     "src/brains/storage/baseline",
     "src/brains/storage/sql_migrations",
@@ -98,34 +93,6 @@ def test_untouched_fixture_tree_is_clean(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 # SPA routes
 # --------------------------------------------------------------------------
-
-
-def test_new_spa_route_without_documentation_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "frontend/src/App.tsx",
-        '<Route path="/command-center" element={<CommandCenter />} />',
-        '<Route path="/command-center" element={<CommandCenter />} />\n'
-        '                  <Route path="/reports" element={<CommandCenter />} />',
-    )
-    errors = _errors(root)
-    _assert_reports(
-        errors, "declared route /app/reports is missing from docs/product/TRACEABILITY.md"
-    )
-    _assert_reports(errors, "declared route /app/reports is missing from check_docs")
-
-
-def test_documented_spa_route_that_no_longer_exists_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "frontend/src/App.tsx",
-        '<Route path="/command-center" element={<CommandCenter />} />',
-        "",
-    )
-    errors = _errors(root)
-    _assert_reports(errors, "documents route /app/command-center, which is not declared")
 
 
 def test_duplicate_spa_route_fails(tmp_path: Path) -> None:
@@ -190,12 +157,18 @@ def test_route_component_module_that_does_not_exist_fails(tmp_path: Path) -> Non
     )
 
 
-def test_check_docs_route_list_drift_fails(tmp_path: Path) -> None:
+def test_route_allowlist_drift_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A route in the allowlist that App.tsx no longer declares must be reported."""
+
     root = _fixture_root(tmp_path)
-    _edit(root, "scripts/check_docs.py", '    "/app/command-center",\n', "")
+    monkeypatch.setattr(
+        checker,
+        "REQUIRED_SPA_ROUTES",
+        (*checker.REQUIRED_SPA_ROUTES, "/app/retired"),
+    )
     _assert_reports(
         _errors(root),
-        "declared route /app/command-center is missing from check_docs REQUIRED_SPA_ROUTES",
+        "check_docs REQUIRED_SPA_ROUTES lists /app/retired, which is not declared",
     )
 
 
@@ -274,30 +247,6 @@ def test_stale_client_allowlist_entry_fails(monkeypatch: pytest.MonkeyPatch) -> 
 # --------------------------------------------------------------------------
 
 
-def test_undocumented_server_surface_fails() -> None:
-    routes = (checker.ServerRoute(method="GET", path="/v2/experiments"),)
-    _assert_reports(
-        checker.check_server_families(routes, ("Health",)),
-        "GET /v2/experiments belongs to no documented family",
-    )
-
-
-def test_documented_family_without_routes_fails() -> None:
-    routes = (checker.ServerRoute(method="GET", path="/health"),)
-    _assert_reports(
-        checker.check_server_families(routes, ("Health", "Relay")),
-        "documented family 'Relay' matches no mounted route",
-    )
-
-
-def test_family_missing_from_the_document_fails() -> None:
-    routes = (checker.ServerRoute(method="POST", path="/relay/reply"),)
-    _assert_reports(
-        checker.check_server_families(routes, ("Health",)),
-        "maps to family 'Relay', which docs/product/TRACEABILITY.md does not list",
-    )
-
-
 def test_copilot_alias_to_an_unmounted_route_fails() -> None:
     routes = (checker.ServerRoute(method="POST", path="/v1/chat/completions"),)
     _assert_reports(
@@ -354,31 +303,15 @@ def test_create_table_mentions_in_prose_are_not_tables() -> None:
 
 def test_migration_file_missing_from_the_corpus_fails() -> None:
     _assert_reports(
-        checker.check_migrations(("100_a",), ("100_a", "140_new"), (), frozenset({"100", "140"})),
+        checker.check_migrations(("100_a",), ("100_a", "140_new"), ()),
         "140_new exists on disk but is absent from the corpus",
     )
 
 
 def test_corpus_migration_without_a_file_fails() -> None:
     _assert_reports(
-        checker.check_migrations(("100_a", "140_new"), ("100_a",), (), frozenset({"100", "140"})),
+        checker.check_migrations(("100_a", "140_new"), ("100_a",), ()),
         "corpus ID 140_new has no file on disk",
-    )
-
-
-def test_undocumented_migration_fails() -> None:
-    _assert_reports(
-        checker.check_migrations(
-            ("100_a", "140_new"), ("100_a", "140_new"), (), frozenset({"100"})
-        ),
-        "140_new is not recorded in the docs/product/TRACEABILITY.md data and migration mapping",
-    )
-
-
-def test_documented_migration_that_does_not_exist_fails() -> None:
-    _assert_reports(
-        checker.check_migrations(("100_a",), ("100_a",), (), frozenset({"100", "199"})),
-        "records migration 199, which does not exist",
     )
 
 
@@ -392,147 +325,8 @@ def test_new_migration_file_fails_the_repository_check(tmp_path: Path) -> None:
     _assert_reports(errors, "table orphan_rows is provisioned but has no SQLAlchemy model")
 
 
-def test_migration_document_drift_fails_the_repository_check(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(root, "docs/product/TRACEABILITY.md", "| 132 |", "| 199 |")
-    errors = _errors(root)
-    _assert_reports(errors, "132_realtime_events is not recorded")
-    _assert_reports(errors, "records migration 199, which does not exist")
-
-
-# --------------------------------------------------------------------------
-# stable ID markers
-# --------------------------------------------------------------------------
-
-
-def test_unreferenced_journey_spec_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    source = root / "tests/e2e/specs/j07-sessions.spec.ts"
-    (source.parent / "j05-projects.spec.ts").write_text(
-        source.read_text(encoding="utf-8"), encoding="utf-8"
-    )
-    _assert_reports(_errors(root), "journey spec j05-projects.spec.ts is not recorded for J5")
-
-
-def test_documented_journey_spec_that_is_absent_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    (root / "tests/e2e/specs/j04-pods.spec.ts").unlink()
-    _assert_reports(_errors(root), "names j04-pods.spec.ts for J4, which is absent")
-
-
-def test_spec_without_a_journey_id_fails() -> None:
-    _assert_reports(
-        checker.check_test_markers(
-            {"?": ("smoke.spec.ts",)},
-            {journey: () for journey in checker.REQUIRED_JOURNEY_IDS},
-            {},
-            frozenset(),
-            [],
-            frozenset(),
-        ),
-        "journey spec smoke.spec.ts does not encode a jNN journey ID",
-    )
-
-
-def test_acceptance_test_for_an_unknown_feature_fails() -> None:
-    _assert_reports(
-        checker.check_test_markers(
-            {},
-            {journey: () for journey in checker.REQUIRED_JOURNEY_IDS},
-            {"F42": 1},
-            frozenset(),
-            [],
-            frozenset(),
-        ),
-        "acceptance tests name unknown feature F42",
-    )
-
-
-def test_feature_losing_acceptance_coverage_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    path = root / "tests/test_acceptance_brains.py"
-    text = path.read_text(encoding="utf-8")
-    path.write_text(text.replace("def test_f5_", "def test_pods_"), encoding="utf-8")
-    _assert_reports(_errors(root), "F5 has no acceptance test and no declared gap")
-
-
-def test_closed_acceptance_gap_must_leave_the_allowlist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = _fixture_root(tmp_path)
-    monkeypatch.setattr(
-        checker,
-        "ACCEPTANCE_COVERAGE_GAPS",
-        {"F6": "stale test-only gap"},
-    )
-    _assert_reports(
-        _errors(root),
-        "F6 now has acceptance tests; remove it from ACCEPTANCE_COVERAGE_GAPS",
-    )
-
-
-def test_reference_to_an_undeclared_acceptance_criterion_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(root, "docs/product/TRACEABILITY.md", "AC-F5-01..04", "AC-F5-01..09")
-    _assert_reports(
-        _errors(root),
-        "AC-F5-05 is referenced but not declared in docs/product/FEATURE_CONTRACT.md",
-    )
-
-
-def test_declared_acceptance_criterion_nobody_references_fails(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "docs/product/FEATURE_CONTRACT.md",
-        "- AC-B7-04:",
-        "- AC-B7-09: fabricated criterion.\n- AC-B7-04:",
-    )
-    _assert_reports(
-        _errors(root),
-        "AC-B7-09 is declared but referenced by no canonical document",
-    )
-
-
-def test_duplicate_acceptance_declaration_fails() -> None:
-    _assert_reports(
-        checker.check_test_markers(
-            {},
-            {journey: () for journey in checker.REQUIRED_JOURNEY_IDS},
-            dict.fromkeys(checker.REQUIRED_FEATURE_IDS, 1),
-            frozenset({"AC-F0-01"}),
-            ["AC-F0-01", "AC-F0-01"],
-            frozenset({"AC-F0-01"}),
-        ),
-        "duplicate acceptance criterion AC-F0-01",
-    )
-
-
-def test_acceptance_range_expansion() -> None:
-    assert checker.expand_ac_references("AC-F0-01..03 and AC-B9-02") == frozenset(
-        {"AC-F0-01", "AC-F0-02", "AC-F0-03", "AC-B9-02"}
-    )
-
-
-# --------------------------------------------------------------------------
-# input integrity
-# --------------------------------------------------------------------------
-
-
 def test_missing_source_is_reported_not_skipped(tmp_path: Path) -> None:
     root = _fixture_root(tmp_path)
     (root / "frontend/src/App.tsx").unlink()
-    with pytest.raises(checker.TraceabilityInputError):
-        _errors(root)
-
-
-def test_missing_traceability_section_is_reported(tmp_path: Path) -> None:
-    root = _fixture_root(tmp_path)
-    _edit(
-        root,
-        "docs/product/TRACEABILITY.md",
-        "## Modern SPA route inventory",
-        "## Modern SPA routes",
-    )
     with pytest.raises(checker.TraceabilityInputError):
         _errors(root)

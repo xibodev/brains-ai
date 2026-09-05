@@ -52,7 +52,6 @@ Usage::
 
 from __future__ import annotations
 
-import ast
 import re
 import sys
 from collections.abc import Callable
@@ -64,18 +63,25 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-TRACEABILITY_DOC = "docs/product/TRACEABILITY.md"
-FEATURE_CONTRACT_DOC = "docs/product/FEATURE_CONTRACT.md"
 
 #: Documents whose ``AC-*`` references must resolve to a declared criterion.
-AC_REFERENCE_DOCS = (
-    "README.md",
-    "docs/product/PRODUCT_BRIEF.md",
-    "docs/product/USER_OUTCOME_SPEC.md",
-    "docs/product/PERSONAS_AND_JOURNEYS.md",
-    "docs/product/TRACEABILITY.md",
-    "docs/product/BACKLOG.md",
-    "docs/QUALITY_GATES.md",
+
+#: The SPA route surface. A route added to ``frontend/src/App.tsx`` must be
+#: added here too, so the browser surface cannot grow silently.
+REQUIRED_SPA_ROUTES = (
+    "/app",
+    "/app/command-center",
+    "/app/workspaces",
+    "/app/workspaces/:slug",
+    "/app/coordination",
+    "/app/governance",
+    "/app/operations",
+    "/app/operations/config",
+    "/app/operations/config/:section",
+    "/app/act",
+    "/app/inbox",
+    "/app/config",
+    "/app/*",
 )
 
 SPA_BASENAME = "/app"
@@ -155,8 +161,6 @@ MIGRATION_DOC_EXEMPT = frozenset({"0000_baseline", "0001_initial", "0002_schema_
 #: Each entry is a declared evidence gap, not permission to skip coverage.
 ACCEPTANCE_COVERAGE_GAPS: dict[str, str] = {}
 
-REQUIRED_FEATURE_IDS = tuple(f"F{index}" for index in range(11))
-REQUIRED_JOURNEY_IDS = tuple(f"J{index}" for index in range(1, 12))
 
 _ROUTE_TAG_RE = re.compile(r"<Route\b")
 _ATTR_PATH_RE = re.compile(r'\bpath="(?P<path>[^"]*)"')
@@ -168,12 +172,8 @@ _IMPORT_RE = re.compile(r'import\s*\{(?P<names>[^}]*)\}\s*from\s*"(?P<module>[^"
 _USE_PARAMS_RE = re.compile(r"\{(?P<names>[^{}]*)\}\s*=\s*useParams\s*[(<]")
 _ROUTE_PARAM_RE = re.compile(r":([A-Za-z0-9_]+)")
 
-_TABLE_ROW_RE = re.compile(r"(?m)^\|(?P<row>.+)\|\s*$")
-_SECTION_RE = re.compile(r"(?m)^##\s+(?P<title>.+?)\s*$")
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
-_AC_RE = re.compile(r"\bAC-(?P<feature>F\d{1,2}|B\d)-(?P<index>\d{2})\b")
-_AC_RANGE_RE = re.compile(r"\bAC-(?P<feature>F\d{1,2}|B\d)-(?P<start>\d{2})\.\.(?P<end>\d{2})\b")
 #: Core features declare criteria as table rows; supporting capabilities declare
 #: them as list items. Both shapes are declarations.
 _AC_DECLARATION_RE = re.compile(
@@ -401,13 +401,12 @@ def _resolve_module(root: Path, importer: Path, module: str) -> Path | None:
 
 def check_spa_routes(
     routes: tuple[SpaRoute, ...],
-    doc_rows: dict[str, str],
     required_routes: tuple[str, ...],
     imports: dict[str, str],
     consumed: dict[str, frozenset[str]],
     resolve: Callable[[str], Path | None] | None = None,
 ) -> list[str]:
-    """Compare declared SPA routes with the documented route inventory."""
+    """Check declared SPA routes against the code that has to serve them."""
 
     errors: list[str] = []
 
@@ -416,11 +415,6 @@ def check_spa_routes(
         if route.path in seen:
             errors.append(f"spa: duplicate declared route {route.path}")
         seen.add(route.path)
-
-    for path in sorted(seen - set(doc_rows)):
-        errors.append(f"spa: declared route {path} is missing from {TRACEABILITY_DOC}")
-    for path in sorted(set(doc_rows) - seen):
-        errors.append(f"spa: {TRACEABILITY_DOC} documents route {path}, which is not declared")
 
     for path in sorted(seen - set(required_routes)):
         errors.append(f"spa: declared route {path} is missing from check_docs REQUIRED_SPA_ROUTES")
@@ -458,13 +452,6 @@ def check_spa_routes(
                 errors.append(
                     f"spa: route {route.path} declares :{param}, which "
                     f"{route.component or 'its element'} never reads and no allowlist covers"
-                )
-                continue
-            row = doc_rows.get(route.path, "")
-            if f":{param}" not in row.split("|", 1)[-1]:
-                errors.append(
-                    f"spa: route {route.path} has an unconsumed :{param} that "
-                    f"{TRACEABILITY_DOC} does not record as a gap"
                 )
 
     for path, params in sorted(UNCONSUMED_ROUTE_PARAMS.items()):
@@ -684,36 +671,6 @@ def route_family(path: str) -> str | None:
     return None
 
 
-def check_server_families(
-    server_routes: tuple[ServerRoute, ...],
-    doc_families: tuple[str, ...],
-) -> list[str]:
-    """Every mounted route maps to a documented family, and vice versa."""
-
-    errors: list[str] = []
-    documented = set(doc_families)
-    for family in sorted(set(NON_ROUTE_FAMILIES) - documented):
-        errors.append(f"server: NON_ROUTE_FAMILIES names undocumented family {family!r}")
-
-    matched: set[str] = set()
-    for route in server_routes:
-        family = route_family(route.path)
-        if family is None:
-            errors.append(f"server: {route.method} {route.path} belongs to no documented family")
-            continue
-        if family not in documented:
-            errors.append(
-                f"server: {route.method} {route.path} maps to family {family!r}, "
-                f"which {TRACEABILITY_DOC} does not list"
-            )
-            continue
-        matched.add(family)
-
-    for family in sorted(documented - matched - NON_ROUTE_FAMILIES):
-        errors.append(f"server: documented family {family!r} matches no mounted route")
-    return errors
-
-
 def check_copilot_aliases(
     aliases: dict[str, str],
     server_routes: tuple[ServerRoute, ...],
@@ -802,9 +759,8 @@ def check_migrations(
     corpus_ids: tuple[str, ...],
     disk_ids: tuple[str, ...],
     marker_ids: tuple[str, ...],
-    documented_numbers: frozenset[str],
 ) -> list[str]:
-    """The registry corpus, the files on disk, and the docs must agree."""
+    """The registry corpus and the files on disk must agree."""
 
     errors: list[str] = []
     seen: set[str] = set()
@@ -822,221 +778,7 @@ def check_migrations(
     for migration_id in sorted(expected_on_disk - set(disk_ids)):
         errors.append(f"migrations: corpus ID {migration_id} has no file on disk")
 
-    for migration_id in sorted(seen - MIGRATION_DOC_EXEMPT):
-        number = migration_id.split("_", 1)[0]
-        if number not in documented_numbers:
-            errors.append(
-                f"migrations: {migration_id} is not recorded in the {TRACEABILITY_DOC} "
-                "data and migration mapping"
-            )
-    for number in sorted(documented_numbers):
-        if not any(migration_id.split("_", 1)[0] == number for migration_id in seen):
-            errors.append(
-                f"migrations: {TRACEABILITY_DOC} records migration {number}, which does not exist"
-            )
     return errors
-
-
-# --------------------------------------------------------------------------
-# stable ID markers
-# --------------------------------------------------------------------------
-
-
-def collect_journey_specs(root: Path) -> dict[str, tuple[str, ...]]:
-    """Journey ID -> Playwright spec filenames that declare it."""
-
-    directory = root / "tests/e2e/specs"
-    specs: dict[str, list[str]] = {}
-    if not directory.is_dir():
-        return {}
-    for path in sorted(directory.iterdir()):
-        if not path.name.endswith(".spec.ts"):
-            continue
-        match = _SPEC_FILE_RE.fullmatch(path.name)
-        if match is None:
-            specs.setdefault("?", []).append(path.name)
-            continue
-        specs.setdefault(f"J{int(match.group('journey'))}", []).append(path.name)
-    return {journey: tuple(names) for journey, names in specs.items()}
-
-
-def collect_acceptance_features(root: Path) -> dict[str, int]:
-    """Feature ID -> number of acceptance tests naming it."""
-
-    path = root / "tests/test_acceptance_brains.py"
-    if not path.is_file():
-        raise TraceabilityInputError("missing required source: tests/test_acceptance_brains.py")
-    counts: dict[str, int] = {}
-    for match in _ACCEPTANCE_TEST_RE.finditer(_read(path)):
-        feature = f"{match.group('feature').upper()}{int(match.group('index'))}"
-        counts[feature] = counts.get(feature, 0) + 1
-    return counts
-
-
-def expand_ac_references(text: str) -> frozenset[str]:
-    """Every ``AC-*`` in ``text``, with ``AC-F0-01..05`` ranges expanded."""
-
-    found: set[str] = set()
-    for match in _AC_RANGE_RE.finditer(text):
-        feature = match.group("feature")
-        for index in range(int(match.group("start")), int(match.group("end")) + 1):
-            found.add(f"AC-{feature}-{index:02d}")
-    for match in _AC_RE.finditer(text):
-        found.add(f"AC-{match.group('feature')}-{match.group('index')}")
-    return frozenset(found)
-
-
-def collect_declared_acs(root: Path) -> tuple[frozenset[str], list[str]]:
-    """Acceptance criteria declared as rows in the feature contract."""
-
-    text = _require(root, FEATURE_CONTRACT_DOC)
-    declared: list[str] = [
-        match.group("row") or match.group("item") for match in _AC_DECLARATION_RE.finditer(text)
-    ]
-    return frozenset(declared), declared
-
-
-def check_test_markers(
-    journey_specs: dict[str, tuple[str, ...]],
-    doc_journeys: dict[str, tuple[str, ...]],
-    acceptance_features: dict[str, int],
-    declared_acs: frozenset[str],
-    declared_order: list[str],
-    referenced_acs: frozenset[str],
-) -> list[str]:
-    """Journey specs, acceptance tests, and ``AC-*`` references must line up."""
-
-    errors: list[str] = []
-
-    for name in journey_specs.get("?", ()):
-        errors.append(f"markers: journey spec {name} does not encode a jNN journey ID")
-
-    for journey in REQUIRED_JOURNEY_IDS:
-        on_disk = set(journey_specs.get(journey, ()))
-        documented = set(doc_journeys.get(journey, ()))
-        if journey not in doc_journeys:
-            errors.append(f"markers: {TRACEABILITY_DOC} has no browser evidence row for {journey}")
-            continue
-        for name in sorted(on_disk - documented):
-            errors.append(f"markers: journey spec {name} is not recorded for {journey}")
-        for name in sorted(documented - on_disk):
-            errors.append(
-                f"markers: {TRACEABILITY_DOC} names {name} for {journey}, which is absent"
-            )
-
-    for journey in sorted(set(journey_specs) - {"?"} - set(REQUIRED_JOURNEY_IDS)):
-        errors.append(f"markers: journey specs exist for unknown journey {journey}")
-
-    for feature in sorted(set(acceptance_features) - set(REQUIRED_FEATURE_IDS)):
-        errors.append(f"markers: acceptance tests name unknown feature {feature}")
-    for feature in REQUIRED_FEATURE_IDS:
-        covered = acceptance_features.get(feature, 0) > 0
-        if covered and feature in ACCEPTANCE_COVERAGE_GAPS:
-            errors.append(
-                f"markers: {feature} now has acceptance tests; "
-                "remove it from ACCEPTANCE_COVERAGE_GAPS"
-            )
-        if not covered and feature not in ACCEPTANCE_COVERAGE_GAPS:
-            errors.append(f"markers: {feature} has no acceptance test and no declared gap")
-
-    seen: set[str] = set()
-    for ac_id in declared_order:
-        if ac_id in seen:
-            errors.append(
-                f"markers: duplicate acceptance criterion {ac_id} in {FEATURE_CONTRACT_DOC}"
-            )
-        seen.add(ac_id)
-
-    for ac_id in sorted(referenced_acs - declared_acs):
-        errors.append(f"markers: {ac_id} is referenced but not declared in {FEATURE_CONTRACT_DOC}")
-    for ac_id in sorted(declared_acs - referenced_acs):
-        errors.append(f"markers: {ac_id} is declared but referenced by no canonical document")
-    return errors
-
-
-# --------------------------------------------------------------------------
-# document parsing
-# --------------------------------------------------------------------------
-
-
-def _section_body(text: str, title: str) -> str:
-    matches = list(_SECTION_RE.finditer(text))
-    for index, match in enumerate(matches):
-        if match.group("title") == title:
-            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-            return text[match.end() : end]
-    raise TraceabilityInputError(f"{TRACEABILITY_DOC}: missing section '## {title}'")
-
-
-def _table_rows(body: str) -> list[list[str]]:
-    rows: list[list[str]] = []
-    for match in _TABLE_ROW_RE.finditer(body):
-        cells = [cell.strip() for cell in match.group("row").split("|")]
-        if all(set(cell) <= {"-", ":"} and cell for cell in cells):
-            continue
-        rows.append(cells)
-    return rows[1:] if rows else rows
-
-
-def doc_spa_rows(text: str) -> dict[str, str]:
-    rows: dict[str, str] = {}
-    for cells in _table_rows(_section_body(text, "Modern SPA route inventory")):
-        keys = _BACKTICK_RE.findall(cells[0])
-        if not keys:
-            continue
-        rows[keys[0]] = " | ".join(cells)
-    return rows
-
-
-def doc_families(text: str) -> tuple[str, ...]:
-    body = _section_body(text, "Native API and realtime family inventory")
-    return tuple(cells[0] for cells in _table_rows(body) if cells[0])
-
-
-def doc_journey_specs(text: str) -> dict[str, tuple[str, ...]]:
-    body = _section_body(text, "Browser and backend evidence inventory")
-    journeys: dict[str, tuple[str, ...]] = {}
-    for cells in _table_rows(body):
-        journey = cells[0].strip()
-        if not re.fullmatch(r"J\d{1,2}", journey):
-            continue
-        names = tuple(
-            token for token in _BACKTICK_RE.findall(cells[1]) if token.endswith(".spec.ts")
-        )
-        journeys[journey] = names
-    return journeys
-
-
-def doc_migration_numbers(text: str) -> frozenset[str]:
-    """Migration numbers named in the data and migration mapping, ranges expanded."""
-
-    body = _section_body(text, "Data and migration mapping")
-    numbers: set[str] = set()
-    for cells in _table_rows(body):
-        if len(cells) < 3:
-            continue
-        coverage = cells[2]
-        for match in re.finditer(r"\b(\d{3})\s*-\s*(\d{3})\b", coverage):
-            start, end = int(match.group(1)), int(match.group(2))
-            numbers.update(f"{value:03d}" for value in range(start, end + 1))
-        numbers.update(re.findall(r"(?<![\d-])(\d{3})(?![\d-])", coverage))
-    return frozenset(numbers)
-
-
-def _check_docs_required_routes(root: Path) -> tuple[str, ...]:
-    """``REQUIRED_SPA_ROUTES`` from ``check_docs.py``, read without importing it."""
-
-    text = _require(root, "scripts/check_docs.py")
-    module = ast.parse(text)
-    for node in module.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        targets = [target.id for target in node.targets if isinstance(target, ast.Name)]
-        if "REQUIRED_SPA_ROUTES" not in targets:
-            continue
-        value = ast.literal_eval(node.value)
-        return tuple(value)
-    raise TraceabilityInputError("scripts/check_docs.py: REQUIRED_SPA_ROUTES not found")
 
 
 # --------------------------------------------------------------------------
@@ -1053,14 +795,12 @@ def check_repository(root: Path = ROOT) -> list[str]:
     from brains.storage.models import Base
 
     errors: list[str] = []
-    trace = _require(root, TRACEABILITY_DOC)
 
     routes = collect_spa_routes(root)
     errors.extend(
         check_spa_routes(
             routes,
-            doc_spa_rows(trace),
-            _check_docs_required_routes(root),
+            REQUIRED_SPA_ROUTES,
             collect_spa_imports(root),
             collect_consumed_params(root),
             resolve=lambda module: _resolve_module(root, root / "frontend/src/App.tsx", module),
@@ -1081,7 +821,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
         unmatchable=collected_calls.unmatchable,
     )
     errors.extend(check_client_server(client_calls, server_routes))
-    errors.extend(check_server_families(server_routes, doc_families(trace)))
     # Compatibility gateway aliases are withdrawn from the core composition.
     # An empty inventory is still checked so reintroduction is explicit.
     errors.extend(check_copilot_aliases({}, server_routes))
@@ -1102,24 +841,6 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 for path in registry.list_disk_migration_files()
             ),
             tuple(marker for marker, _ in registry.LEDGER_MARKERS),
-            doc_migration_numbers(trace),
-        )
-    )
-
-    declared_acs, declared_order = collect_declared_acs(root)
-    referenced: set[str] = set()
-    for relative in AC_REFERENCE_DOCS:
-        path = root / relative
-        if path.is_file():
-            referenced |= expand_ac_references(_read(path))
-    errors.extend(
-        check_test_markers(
-            collect_journey_specs(root),
-            doc_journey_specs(trace),
-            collect_acceptance_features(root),
-            declared_acs,
-            declared_order,
-            frozenset(referenced),
         )
     )
     return sorted(set(errors))

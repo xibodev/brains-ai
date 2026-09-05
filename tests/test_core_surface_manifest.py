@@ -209,14 +209,14 @@ def test_positive_manifest_rejects_rogue_package_and_documented_surface(
     optional["rogue"] = ["rogue"]
     documented = snapshot["documented_ids"]
     assert isinstance(documented, dict)
-    backlog = documented["backlog"]
-    assert isinstance(backlog, list)
-    backlog.append("BL-P9-99")
+    advertisements = documented["forbidden_advertisements"]
+    assert isinstance(advertisements, list)
+    advertisements.append("docs/GUIDE.md:1:surface:labs")
 
     errors = check_core_surface.manifest_violations(actual, expected)
     assert any("entry_points" in error for error in errors)
     assert any("optional_dependencies" in error for error in errors)
-    assert any("documented_ids.backlog" in error for error in errors)
+    assert any("documented_ids.forbidden_advertisements" in error for error in errors)
 
 
 @pytest.mark.parametrize(
@@ -245,18 +245,12 @@ def test_canonical_docs_allow_explicit_boundary_prose() -> None:
             "The retained GitHub delivery code is compatibility-only.",
         ]
     )
-    assert not check_core_surface._canonical_doc_advertisements(
-        {"docs/product/TRACEABILITY.md": source}
-    )
+    assert not check_core_surface._canonical_doc_advertisements({"docs/GUIDE.md": source})
 
 
 def test_negative_doc_clause_does_not_exempt_mixed_positive_claim() -> None:
     findings = check_core_surface._canonical_doc_advertisements(
-        {
-            "docs/product/TRACEABILITY.md": (
-                "Labs is unavailable, but users can use the dashboard.\n"
-            )
-        }
+        {"docs/GUIDE.md": ("Labs is unavailable, but users can use the dashboard.\n")}
     )
 
     assert any(finding.endswith("surface:dashboard") for finding in findings)
@@ -354,9 +348,7 @@ def test_yaml_scan_fails_closed_on_invalid_yaml() -> None:
 def test_actionable_docs_syntax_is_never_exempted_by_boundary_prose(
     source: str, expected: str
 ) -> None:
-    findings = check_core_surface._canonical_doc_advertisements(
-        {"docs/product/TRACEABILITY.md": source}
-    )
+    findings = check_core_surface._canonical_doc_advertisements({"docs/GUIDE.md": source})
     assert any(finding.endswith(expected) for finding in findings)
 
 

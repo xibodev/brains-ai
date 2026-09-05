@@ -1378,7 +1378,7 @@ class KnowledgeEntry(Base):
     supersede chain. Unlike the deliberately global ``knowledge_patterns``
     library, ledger entries are workspace-scoped and visibility-filtered by the
     current product contract; ``scope`` widens reach beyond a single workspace
-    for genuinely shared knowledge. See ``docs/product/FEATURE_CONTRACT.md``.
+    for genuinely shared knowledge. See ``docs/product/PRODUCT_BRIEF.md``.
     """
 
     __tablename__ = "knowledge_entries"
