@@ -337,6 +337,18 @@ def windows_unexpected_acl_principals(acl_sids: tuple[str, ...], owner_sid: str)
     )
 
 
+def redact_sid(value: str) -> str:
+    """Drop the account authority from a SID, keeping its family and relative id.
+
+    A refusal has to name what it rejected to be actionable, but the identifying
+    authority of a local or domain account is not ours to disclose.
+    """
+    parts = value.split("-")
+    if len(parts) <= 5:
+        return value
+    return "-".join([*parts[:4], "x", parts[-1]])
+
+
 def _windows_binding_acl_sids(path: Path) -> tuple[str, ...]:
     environment = dict(os.environ)
     environment["BRAINS_BINDING_ACL_PATH"] = str(path)
@@ -380,8 +392,12 @@ def _windows_secure_binding_file(path: Path) -> None:
     acl_sids = _windows_binding_acl_sids(path)
     # The owner and privileged backup operators are OS semantics, not DACL allow
     # entries. The managed file needs no explicit access principal except its user.
-    if sid not in acl_sids or windows_unexpected_acl_principals(acl_sids, sid):
-        raise OSError("mailbox binding file ACL contains an unexpected principal")
+    unexpected = windows_unexpected_acl_principals(acl_sids, sid)
+    if sid not in acl_sids:
+        raise OSError("mailbox binding file ACL does not grant its owner")
+    if unexpected:
+        listed = ", ".join(redact_sid(value) for value in unexpected)
+        raise OSError(f"mailbox binding file ACL contains an unexpected principal: {listed}")
 
 
 def _secure_binding_file(path: Path) -> None:
