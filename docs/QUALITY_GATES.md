@@ -45,8 +45,10 @@ evidence.
 
 Candidate qualification must bind the source, wheel, sdist, and OCI image manifest
 digests in one fail-closed result. Container runtime smoke must execute against that
-exact OCI image, and publication must reuse the qualified wheel, sdist, and image;
-missing, rebuilt, or mismatched artifacts invalidate the result.
+exact OCI image. Publication rebuilds the wheel and sdist from the tagged source rather
+than reusing the qualified files, so the binding that publication preserves is the
+source commit, not the artifact digests. Treat a mismatched or missing source binding as
+invalidating; reusing qualified artifacts end to end remains unimplemented.
 
 Platform service-manager behavior cannot be established by a Linux container. The
 guarded `scripts/probe_native_service_lifecycle.py` probe must run on a disposable native
@@ -70,6 +72,8 @@ following must hold for the exact commit proposed for the tag:
 2. Require the existing CI workflow to pass for that same commit. Its native installation
    matrix installs the candidate wheel on Windows, macOS, and Linux for both supported
    Python versions and every supported adapter, then verifies reversible wiring evidence.
+   This condition is machine-enforced: the release workflow's `qualify` job refuses to
+   publish unless the aggregate `quality gate` check succeeded for the tagged commit.
 3. Require the existing Windows and macOS Claude recovery jobs for that commit to pass
    the native atomic-exchange, owner-permission, abrupt-interruption, exact-restoration,
    and pinned-Claude discovery/continuation probes.
@@ -79,10 +83,13 @@ following must hold for the exact commit proposed for the tag:
    missing boundary, failed manager recovery, surviving listener or definition, or
    unproven configuration restoration.
 5. A human reviews the candidate identity and all required evidence before approving any
-   merge to `main`, remote push, tag, or publication. The existing tag-triggered release
-   workflow verifies that the tag matches the package version, rebuilds from that tagged
-   source, and publishes only through its configured protected environment. A passing
-   earlier commit or a Docker-only substitute does not qualify the tag.
+   merge to `main`, remote push, tag, or publication. The tag-triggered release workflow
+   verifies that the tag matches the package version, refuses to publish without a green
+   `quality gate` for that exact commit, rebuilds from the tagged source, and publishes
+   only through its configured protected environment. A passing earlier commit or a
+   Docker-only substitute does not qualify the tag.
+
+Conditions 1, 3, and 4 are human-run and are not enforced by the release workflow.
 
 These are recurring release conditions, not backlog items or a dated evidence diary.
 

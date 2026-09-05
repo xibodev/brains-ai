@@ -3,10 +3,12 @@ name: release
 # Triggered by a SemVer tag push (e.g. `v0.1.0a3`, `v0.2.0`, `v1.0.0`).
 #
 # Jobs:
-#   1. build      — produce sdist + wheel into dist/
-#   2. pypi       — publish to PyPI via Trusted Publishers (OIDC, no tokens)
-#   3. docker     — build + push multi-arch image to GHCR
-#   4. release    — create a GitHub Release with the dist/ artifacts attached
+#   1. qualify    — refuse to publish unless ci's aggregate `quality gate` check
+#                   succeeded for this exact tagged commit
+#   2. build      — produce sdist + wheel into dist/
+#   3. pypi       — publish to PyPI via Trusted Publishers (OIDC, no tokens)
+#   4. docker     — build + push multi-arch image to GHCR
+#   5. release    — create a GitHub Release with the dist/ artifacts attached
 #
 # One-time setup (must be done by a repo admin before the first tag push):
 #
@@ -38,8 +40,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  qualify:
+    name: verify the tagged commit passed ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v4
+      # Publication is gated on evidence, not on intent. A tag only ships if the
+      # aggregate `quality gate` check completed successfully for this exact
+      # commit. A passing earlier commit, a cancelled run, or no run at all all
+      # fail closed. Remedy: re-run ci on the tagged commit until it is green.
+      - name: Require a green quality gate for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "tagged commit: ${sha}"
+          conclusion="$(
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs?check_name=quality+gate" \
+              --jq '[.check_runs[] | select(.status == "completed")]
+                    | sort_by(.completed_at)
+                    | last
+                    | .conclusion // empty'
+          )"
+          if [ "${conclusion}" != "success" ]; then
+            echo "::error::quality gate is '${conclusion:-missing}' for ${sha}; refusing to publish"
+            exit 1
+          fi
+          echo "ok: quality gate succeeded for ${sha}"
+
   build:
     name: build wheel + sdist
+    needs: qualify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
