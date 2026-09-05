@@ -496,51 +496,73 @@ jobs:
           print("package_provenance ok; failure is in distribution_provenance or later")
           PY
       # The first probe call runs the installed console script and requires JSON
-      # on stdout. When that parse fails the probe discards the output, so run
-      # the same call once more and echo what the executable actually produced.
+      # on stdout. When that parse fails the probe discards the output, so repeat
+      # the call under the probe's own closed PATH and seeded home and echo what
+      # the executable actually produced.
       - name: Report the installed executable output
         if: failure() && steps.native-installation.outcome == 'failure'
         shell: bash
         run: |
           set -uo pipefail
-          if command -v cygpath >/dev/null 2>&1; then
-            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
-            exe="$(dirname "$BRAINS_NATIVE_PROBE_PYTHON")/brains-ai.exe"
-          else
-            temp_dir="$RUNNER_TEMP"
-            exe="$(dirname "$BRAINS_NATIVE_PROBE_PYTHON")/brains-ai"
-          fi
-          root="$temp_dir/brains-setup-diagnostic"
-          rm -rf "$root"
-          mkdir -p "$root/home" "$root/state" "$root/workspace"
-          rc=0
-          HOME="$root/home" \
-          USERPROFILE="$root/home" \
-          BRAINS_STATE_DIR="$root/state" \
-          BRAINS_API_KEY=synthetic-native-probe-key \
-          BRAINS_MCP_BEARER_TOKEN=synthetic-native-probe-key \
-            "$exe" setup --path "$root/workspace" --no-wire --json \
-            >"$root/out.txt" 2>"$root/err.txt" || rc=$?
-          echo "executable: $exe"
-          echo "setup exit code : $rc"
-          echo "--- setup stdout (first 5 lines) ---"
-          head -n 5 "$root/out.txt" || true
-          echo "--- setup stderr (first 20 lines) ---"
-          head -n 20 "$root/err.txt" || true
-          wrc=0
-          HOME="$root/home" \
-          USERPROFILE="$root/home" \
-          BRAINS_STATE_DIR="$root/state" \
-          BRAINS_API_KEY=synthetic-native-probe-key \
-          BRAINS_MCP_BEARER_TOKEN=synthetic-native-probe-key \
-            "$exe" wire --tool "${{ matrix.adapter }}" --force --no-rules \
-            --transport streamable-http --port 24999 \
-            >"$root/wire-out.txt" 2>"$root/wire-err.txt" || wrc=$?
-          echo "wire exit code : $wrc"
-          echo "--- wire stdout (first 40 lines) ---"
-          head -n 40 "$root/wire-out.txt" || true
-          echo "--- wire stderr (first 40 lines) ---"
-          head -n 40 "$root/wire-err.txt" || true
+          "$BRAINS_NATIVE_PROBE_PYTHON" - "${{ matrix.adapter }}" <<'PY'
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, "scripts")
+          import probe_native_installation as probe
+          from native_evidence import explicit_runtime_tools
+
+          tool = sys.argv[1]
+          required = ("node", "opencode") if tool == "opencode" else ()
+          _tools, controlled = explicit_runtime_tools(
+              os.environ.get("BRAINS_NATIVE_TOOL_PATHS", "{}"),
+              required=required,
+              prepend_paths=(Path(sys.executable).parent,),
+          )
+          os.environ["PATH"] = controlled
+          name = "brains-ai.exe" if os.name == "nt" else "brains-ai"
+          executable = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin") / name
+
+          with tempfile.TemporaryDirectory(prefix="brains-native-diag-") as raw:
+              root = Path(raw)
+              home, state, workspace = root / "home", root / "state", root / "workspace"
+              for path in (home, state, workspace):
+                  path.mkdir(mode=0o700)
+              env = os.environ.copy()
+              env.update(
+                  {
+                      "HOME": str(home),
+                      "USERPROFILE": str(home),
+                      "BRAINS_STATE_DIR": str(state),
+                      "BRAINS_API_KEY": "synthetic-native-probe-key",
+                      "BRAINS_MCP_BEARER_TOKEN": "synthetic-native-probe-key",
+                  }
+              )
+              probe._seed(probe._config_path(home, tool), tool)
+              calls = [
+                  ("setup", ("setup", "--path", str(workspace), "--no-wire", "--json")),
+                  (
+                      "wire",
+                      (
+                          "wire", "--tool", tool, "--force", "--no-rules",
+                          "--transport", "streamable-http", "--port", "24999",
+                      ),
+                  ),
+              ]
+              for label, args in calls:
+                  done = subprocess.run(
+                      [str(executable), *args],
+                      check=False, capture_output=True, env=env, text=True, timeout=120,
+                  )
+                  print(f"--- {label}: returncode={done.returncode} ---")
+                  print(f"--- {label}: stdout repr (first 600 chars) ---")
+                  print(repr(done.stdout[:600]))
+                  print(f"--- {label}: stderr (first 1500 chars) ---")
+                  print(done.stderr[:1500])
+          PY
       - name: Verify private native installation evidence before export
         shell: bash
         run: >-
