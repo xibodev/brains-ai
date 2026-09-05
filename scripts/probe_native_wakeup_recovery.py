@@ -46,6 +46,9 @@ _WINDOWS_OS_PRINCIPAL_SIDS = frozenset(
         "S-1-5-32-544",  # BUILTIN\\Administrators
     }
 )
+# A logon-session SID is S-1-5-5-<high>-<low>: the caller's own logon session
+# rather than a separate account, with an identifier that changes each logon.
+_WINDOWS_OS_PRINCIPAL_PREFIXES = ("S-1-5-5-",)
 _ISOLATED_ENV_KEYS = {
     "HOME",
     "USERPROFILE",
@@ -302,7 +305,11 @@ def _make_private(path: Path) -> None:
     # DACL says. Require the owner and reject any other principal. An empty
     # result means the ACL was unreadable, not that nobody is granted access.
     unexpected = tuple(
-        value for value in acl_sids if value != sid and value not in _WINDOWS_OS_PRINCIPAL_SIDS
+        value
+        for value in acl_sids
+        if value != sid
+        and value not in _WINDOWS_OS_PRINCIPAL_SIDS
+        and not value.startswith(_WINDOWS_OS_PRINCIPAL_PREFIXES)
     )
     if not acl_sids or sid not in acl_sids or unexpected:
         raise RuntimeError("private probe path ACL is not owner-only")

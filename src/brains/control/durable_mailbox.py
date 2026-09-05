@@ -328,12 +328,20 @@ WINDOWS_OS_PRINCIPAL_SIDS = frozenset(
         "S-1-5-32-544",  # BUILTIN\\Administrators
     }
 )
+# A logon-session SID is S-1-5-5-<high>-<low>. It names the caller's own logon
+# session rather than a separate account, so it grants nothing a third party
+# could use, and its identifier changes with every logon.
+WINDOWS_OS_PRINCIPAL_PREFIXES = ("S-1-5-5-",)
 
 
 def windows_unexpected_acl_principals(acl_sids: tuple[str, ...], owner_sid: str) -> tuple[str, ...]:
     """Return granted principals that are neither the owner nor OS semantics."""
     return tuple(
-        value for value in acl_sids if value != owner_sid and value not in WINDOWS_OS_PRINCIPAL_SIDS
+        value
+        for value in acl_sids
+        if value != owner_sid
+        and value not in WINDOWS_OS_PRINCIPAL_SIDS
+        and not value.startswith(WINDOWS_OS_PRINCIPAL_PREFIXES)
     )
 
 
