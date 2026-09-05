@@ -424,6 +424,21 @@ def explicit_runtime_tools(
             "sha256": file_sha256(executable),
         }
         directories.append(executable.parent)
+    if os.name == "nt":
+        # A closed PATH still has to let a process start. The Windows loader
+        # resolves the C runtime and other system libraries through PATH, so an
+        # installed console script cannot run at all without the system
+        # directories. They are appended last, so they can never shadow a hashed
+        # tool, and the resolution check below still proves each tool binds to
+        # the executable that was hashed.
+        system_root = Path(os.environ.get("SYSTEMROOT") or r"C:\Windows")
+        for candidate in (
+            system_root / "System32",
+            system_root,
+            system_root / "System32" / "Wbem",
+        ):
+            if candidate.is_dir():
+                directories.append(candidate)
     unique: list[str] = []
     for directory in directories:
         rendered = str(directory)
