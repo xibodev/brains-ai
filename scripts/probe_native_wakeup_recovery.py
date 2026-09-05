@@ -890,7 +890,10 @@ def _run_child(
             capture_output=True,
             text=True,
             check=False,
-            timeout=60,
+            # A child may harden a path, and that hardening waits on a cold
+            # Windows PowerShell start. This budget must stay above the inner
+            # one or the child is killed before its own tool returns.
+            timeout=240,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"isolated native wakeup probe child timed out at {step}") from exc
