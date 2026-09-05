@@ -522,11 +522,25 @@ jobs:
             "$exe" setup --path "$root/workspace" --no-wire --json \
             >"$root/out.txt" 2>"$root/err.txt" || rc=$?
           echo "executable: $exe"
-          echo "exit code : $rc"
-          echo "--- stdout (first 40 lines) ---"
-          head -n 40 "$root/out.txt" || true
-          echo "--- stderr (first 40 lines) ---"
-          head -n 40 "$root/err.txt" || true
+          echo "setup exit code : $rc"
+          echo "--- setup stdout (first 5 lines) ---"
+          head -n 5 "$root/out.txt" || true
+          echo "--- setup stderr (first 20 lines) ---"
+          head -n 20 "$root/err.txt" || true
+          wrc=0
+          HOME="$root/home" \
+          USERPROFILE="$root/home" \
+          BRAINS_STATE_DIR="$root/state" \
+          BRAINS_API_KEY=synthetic-native-probe-key \
+          BRAINS_MCP_BEARER_TOKEN=synthetic-native-probe-key \
+            "$exe" wire --tool "${{ matrix.adapter }}" --force --no-rules \
+            --transport streamable-http --port 24999 \
+            >"$root/wire-out.txt" 2>"$root/wire-err.txt" || wrc=$?
+          echo "wire exit code : $wrc"
+          echo "--- wire stdout (first 40 lines) ---"
+          head -n 40 "$root/wire-out.txt" || true
+          echo "--- wire stderr (first 40 lines) ---"
+          head -n 40 "$root/wire-err.txt" || true
       - name: Verify private native installation evidence before export
         shell: bash
         run: >-
