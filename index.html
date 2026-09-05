@@ -3,73 +3,81 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="color-scheme" content="light" />
 <title>Brains — Local-First Control Plane for AI Coding Agents</title>
 <meta name="description" content="Brains is a local-first operator control plane for directing, observing, and governing AI coding agents through shared Workspaces, durable work, local mailboxes, and human approvals." />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
 <style>
   :root{
-    --bg:#07090d; --bg-2:#0b0f16; --panel:#0e1420; --panel-2:#121a28;
-    --line:#1c2635; --line-2:#26344a;
-    --fg:#e6edf7; --muted:#8da2bd; --dim:#63758f;
-    --accent:#5eead4; --accent-2:#38bdf8; --warn:#fbbf24; --danger:#fb7185;
+    --bg:#ffffff; --bg-soft:#f6f8fb; --panel:#ffffff; --panel-2:#f2f6fa;
+    --code-bg:#f7f9fc;
+    --line:#e4eaf1; --line-2:#d0dae6;
+    --fg:#0f1a29; --muted:#4d5f77; --dim:#7889a0;
+    --accent:#0f766e; --accent-soft:#ecfdf8; --accent-line:#a7e8dc;
+    --link:#0b6bb5;
+    --warn:#9a5b06; --warn-bg:#fff9ec; --warn-line:#f6dfae;
+    --danger:#c2334d;
+    --c-cm:#8494a8; --c-fl:#0b6bb5; --c-st:#186c3b; --c-ok:#0f766e; --c-w:#9a5b06;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
     --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(15,26,41,.04),0 6px 18px rgba(15,26,41,.05);
     --maxw:1140px;
   }
   *{box-sizing:border-box}
-  html{scroll-behavior:smooth;scroll-padding-top:78px}
+  html{scroll-behavior:smooth;scroll-padding-top:78px;background:var(--bg)}
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased}
-  a{color:var(--accent-2);text-decoration:none}
+  a{color:var(--link);text-decoration:none}
   a:hover{text-decoration:underline}
   code,kbd,pre{font-family:var(--mono)}
   .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
 
   /* header */
-  header{position:sticky;top:0;z-index:50;background:rgba(7,9,13,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.88);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
   .nav{display:flex;align-items:center;gap:18px;height:64px}
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.02em;font-size:17px;color:var(--fg)}
-  .brand .glyph{width:26px;height:26px;display:grid;place-items:center;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#04121a;font-size:15px}
-  .tag{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid #3a2f10;background:#191305;padding:2px 7px;border-radius:999px}
+  .brand .glyph{width:26px;height:26px;display:grid;place-items:center;border-radius:7px;
+                background:linear-gradient(135deg,#14b8a6,#0ea5e9);color:#fff;font-size:15px}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid var(--warn-line);background:var(--warn-bg);padding:2px 7px;border-radius:999px}
   .nav-links{display:flex;gap:16px;margin-left:auto;flex-wrap:wrap}
   .nav-links a{color:var(--muted);font-size:14px}
   .nav-links a:hover{color:var(--fg);text-decoration:none}
-  .gh{border:1px solid var(--line-2);padding:7px 13px;border-radius:8px;color:var(--fg);font-size:14px}
-  .gh:hover{border-color:var(--accent);text-decoration:none}
-  .menu-btn{display:none;margin-left:auto;background:none;border:1px solid var(--line-2);color:var(--fg);border-radius:8px;padding:7px 11px;font-size:15px;cursor:pointer}
+  .gh{border:1px solid var(--line-2);padding:7px 13px;border-radius:8px;color:var(--fg);font-size:14px;background:#fff}
+  .gh:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+  .menu-btn{display:none;background:#fff;border:1px solid var(--line-2);color:var(--fg);border-radius:8px;padding:7px 11px;font-size:15px;cursor:pointer;margin-left:auto}
 
   /* hero */
   .hero{padding:74px 0 54px;border-bottom:1px solid var(--line);
-        background:radial-gradient(1100px 460px at 50% -12%,rgba(56,189,248,.10),transparent 62%)}
+        background:
+          radial-gradient(900px 420px at 50% -14%,rgba(14,165,233,.10),transparent 62%),
+          linear-gradient(180deg,#fbfdff,var(--bg))}
   .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--accent);
-           border:1px solid #123b38;background:#071a1a;padding:5px 12px;border-radius:999px;margin-bottom:20px}
+           border:1px solid var(--accent-line);background:var(--accent-soft);padding:5px 12px;border-radius:999px;margin-bottom:20px}
   h1{font-size:clamp(30px,5.2vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.03em;font-weight:750}
-  h1 .grad{background:linear-gradient(120deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  h1 .grad{background:linear-gradient(120deg,#0d9488,#0284c7);-webkit-background-clip:text;background-clip:text;color:transparent}
   .lede{font-size:clamp(15px,2vw,18.5px);color:var(--muted);max-width:74ch;margin:0 0 26px}
-  .alpha{display:flex;gap:11px;align-items:flex-start;border:1px solid #3a2f10;background:#12100a;border-radius:11px;padding:13px 15px;max-width:78ch;margin-bottom:30px}
+  .alpha{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--warn-line);background:var(--warn-bg);border-radius:11px;padding:13px 15px;max-width:78ch;margin-bottom:30px}
   .alpha .ico{color:var(--warn);flex-shrink:0}
-  .alpha p{margin:0;font-size:14px;color:#d9c9a3}
+  .alpha p{margin:0;font-size:14px;color:#7a4a08}
 
-  /* tabs + code */
-  .card{border:1px solid var(--line);background:var(--panel);border-radius:13px;overflow:hidden}
+  /* cards, tabs, code */
+  .card{border:1px solid var(--line);background:var(--panel);border-radius:13px;overflow:hidden;box-shadow:var(--shadow)}
   .card-head{display:flex;align-items:center;gap:9px;padding:10px 14px;background:var(--panel-2);border-bottom:1px solid var(--line);
              font-family:var(--mono);font-size:12px;color:var(--dim);flex-wrap:wrap}
   .dot{width:10px;height:10px;border-radius:50%}
   .tabs{display:flex;gap:5px;margin-left:auto;flex-wrap:wrap}
-  .tab{background:none;border:1px solid transparent;color:var(--dim);font-family:var(--mono);font-size:11.5px;
+  .tab{background:#fff;border:1px solid var(--line);color:var(--muted);font-family:var(--mono);font-size:11.5px;
        padding:4px 10px;border-radius:6px;cursor:pointer}
-  .tab:hover{color:var(--fg)}
-  .tab[aria-selected="true"]{color:#04121a;background:var(--accent);border-color:var(--accent);font-weight:600}
-  pre{margin:0;padding:16px;overflow-x:auto;font-size:13.2px;line-height:1.72;color:#cfe0f2}
+  .tab:hover{color:var(--fg);border-color:var(--line-2)}
+  .tab[aria-selected="true"]{color:#fff;background:var(--accent);border-color:var(--accent);font-weight:600}
+  pre{margin:0;padding:16px;overflow-x:auto;font-size:13.2px;line-height:1.72;color:#1d2b3d;background:var(--code-bg)}
   .pane[hidden]{display:none}
-  .c-cm{color:var(--dim)}.c-fl{color:var(--accent-2)}.c-st{color:#a5e6a5}.c-ok{color:var(--accent)}.c-w{color:var(--warn)}
-
-  /* terminal */
+  .c-cm{color:var(--c-cm)}.c-fl{color:var(--c-fl)}.c-st{color:var(--c-st)}.c-ok{color:var(--c-ok)}.c-w{color:var(--c-w)}
+  .prompt{color:var(--accent);font-weight:600}
   .term{margin-top:22px}
-  .term pre{background:#05070a}
-  .prompt{color:var(--accent)}
 
   /* sections */
   section{padding:66px 0;border-bottom:1px solid var(--line)}
+  section:nth-of-type(even){background:var(--bg-soft)}
   .sec-head{margin-bottom:34px}
   .sec-head h2{font-size:clamp(23px,3.4vw,32px);margin:0 0 9px;letter-spacing:-.02em}
   .sec-head p{color:var(--muted);margin:0;max-width:76ch;font-size:15.5px}
@@ -80,27 +88,28 @@
   .g3{grid-template-columns:repeat(3,1fr)}
   .g4{grid-template-columns:repeat(4,1fr)}
 
-  .feat{border:1px solid var(--line);background:var(--panel);border-radius:13px;padding:20px;transition:border-color .15s,transform .15s}
-  .feat:hover{border-color:var(--line-2);transform:translateY(-2px)}
+  .feat{border:1px solid var(--line);background:var(--panel);border-radius:13px;padding:20px;
+        transition:border-color .15s,transform .15s,box-shadow .15s;display:block;color:inherit}
+  .feat:hover{border-color:var(--accent-line);transform:translateY(-2px);box-shadow:var(--shadow);text-decoration:none}
   .feat .ic{font-size:21px;margin-bottom:11px}
-  .feat h3{margin:0 0 7px;font-size:16px;letter-spacing:-.01em}
+  .feat h3{margin:0 0 7px;font-size:16px;letter-spacing:-.01em;color:var(--fg)}
   .feat p{margin:0 0 11px;color:var(--muted);font-size:14px}
-  .feat .cmd{font-family:var(--mono);font-size:12px;color:var(--accent);background:#071a1a;border:1px solid #123b38;
+  .feat .cmd{font-family:var(--mono);font-size:12px;color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-line);
              padding:3px 8px;border-radius:6px;display:inline-block}
 
-  table{width:100%;border-collapse:collapse;font-size:14px}
+  table{width:100%;border-collapse:collapse;font-size:14px;background:var(--panel)}
   th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}
-  th{color:var(--accent);font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
-  td code{font-size:12.6px;color:var(--accent-2)}
+  th{color:var(--accent);font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:600;background:var(--panel-2)}
+  td code{font-size:12.6px;color:var(--link)}
   td.term-c{white-space:nowrap;font-family:var(--mono);color:var(--fg);font-size:13px}
-  .tbl{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--panel)}
+  .tbl{border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--shadow)}
   .tbl table tr:last-child td{border-bottom:none}
 
   .chips{display:flex;flex-wrap:wrap;gap:7px}
-  .chip{font-family:var(--mono);font-size:12px;color:var(--fg);background:var(--panel-2);border:1px solid var(--line-2);
+  .chip{font-family:var(--mono);font-size:12px;color:var(--fg);background:#fff;border:1px solid var(--line-2);
         padding:4px 10px;border-radius:7px}
-  .chip.on{color:var(--accent);border-color:#123b38;background:#071a1a}
-  .chip.off{color:var(--dim);text-decoration:line-through;opacity:.72}
+  .chip.on{color:var(--accent);border-color:var(--accent-line);background:var(--accent-soft)}
+  .chip.off{color:var(--dim);background:var(--panel-2);text-decoration:line-through}
 
   .split{display:grid;grid-template-columns:1fr 1fr;gap:30px;align-items:start}
   ul.ticks{list-style:none;padding:0;margin:14px 0 0}
@@ -108,7 +117,7 @@
   ul.ticks li::before{content:"✓";position:absolute;left:0;color:var(--accent);font-weight:700}
   ul.ticks li.no::before{content:"✕";color:var(--danger)}
 
-  footer{padding:38px 0;color:var(--dim);font-size:14px}
+  footer{padding:38px 0;color:var(--dim);font-size:14px;background:var(--bg)}
   .foot{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
   .foot .sp{margin-left:auto;display:flex;gap:18px}
 
@@ -163,16 +172,16 @@
       <p>
         <strong>Alpha, for one local human operator.</strong> The supported core is Workspace-first
         coordination, governance, operations, bounded repository lookup, and local configuration.
-        Withdrawn and deferred capabilities are not advertised as available — compatibility code or
-        historical database tables remaining does not make a capability supported.
+        What is not built is not advertised, and what is
+        deliberately out of scope is stated with its reason rather than left as a gap.
       </p>
     </div>
 
     <div class="card">
       <div class="card-head">
-        <span class="dot" style="background:#fb7185"></span>
-        <span class="dot" style="background:#fbbf24"></span>
-        <span class="dot" style="background:#5eead4"></span>
+        <span class="dot" style="background:#f0796a"></span>
+        <span class="dot" style="background:#f3c14b"></span>
+        <span class="dot" style="background:#4bbf8a"></span>
         <span>quick install</span>
         <div class="tabs" role="tablist" aria-label="Install method">
           <button class="tab" role="tab" aria-selected="true" data-tab="i-pipx">pipx</button>
@@ -196,9 +205,9 @@ uv sync --extra dev</pre></div>
 
     <div class="card term">
       <div class="card-head">
-        <span class="dot" style="background:#fb7185"></span>
-        <span class="dot" style="background:#fbbf24"></span>
-        <span class="dot" style="background:#5eead4"></span>
+        <span class="dot" style="background:#f0796a"></span>
+        <span class="dot" style="background:#f3c14b"></span>
+        <span class="dot" style="background:#4bbf8a"></span>
         <span>terminal — brains-ai</span>
       </div>
       <pre><span class="prompt">$</span> cd my-project &amp;&amp; brains-ai setup --path .
@@ -277,7 +286,7 @@ TASK-015  available     p2        Close the readiness gap
   </div>
 </section>
 
-<!-- INSTALL / QUICKSTART -->
+<!-- INSTALL -->
 <section id="install">
   <div class="wrap">
     <div class="sec-head">
@@ -369,7 +378,7 @@ brains-ai 1.4.0</pre></div>
       <h2>65 supported commands</h2>
       <p>
         One canonical executable: <code>brains-ai</code>. Commands are grouped by the thing they act on.
-        Withdrawn commands are absent from the installed CLI — they do not appear in help and fail closed.
+        Commands outside the supported set are absent from the installed CLI — they do not appear in help and fail closed.
       </p>
     </div>
 
@@ -468,7 +477,7 @@ brains-ai mcp                         <span class="c-cm"># run the MCP server di
       <h2>Your agents talk to Brains natively</h2>
       <p>
         Brains exposes a closed, allowlisted MCP surface with the <code>brains_</code> prefix.
-        The tool registry is filtered against that allowlist at startup, so a withdrawn tool has no
+        The tool registry is filtered against that allowlist at startup, so a tool outside it has no
         discovery or activation path.
       </p>
     </div>
@@ -581,7 +590,7 @@ never written into the file.</span></pre></div>
        <span class="c-fl">http://127.0.0.1:8787/v1/operator/workspaces</span>
 
 <span class="c-cm"># Protected /v1/* routes always require authentication.
-# Withdrawn routes are filtered out of the router at startup —
+# Routes outside the supported set are filtered out at startup —
 # they return a generic not-found, never a hint that they existed.</span></pre>
     </div>
   </div>
@@ -662,66 +671,62 @@ never written into the file.</span></pre></div>
 <section id="scope">
   <div class="wrap">
     <div class="sec-head">
-      <div class="kicker">Truthful capabilities</div>
-      <h2>What Brains does and does not claim</h2>
+      <div class="kicker">Scope</div>
+      <h2>What Brains does, and what it leaves to your tools</h2>
       <p>
-        Missing, unsupported, experimental, and withdrawn behaviour is not presented as normal
-        availability. This is the part most tools leave out.
+        Brains does one thing: coordination. It deliberately refuses to be your model
+        router, your search engine, or your chat bridge — because your harness and editor
+        already are.
       </p>
     </div>
 
-    <div class="split">
-      <div>
-        <h3 style="margin:0 0 10px;font-size:16px;color:var(--accent)">Supported today</h3>
-        <div class="chips">
-          <span class="chip on">Command Center &amp; Workspace views</span>
-          <span class="chip on">coordination Sessions</span>
-          <span class="chip on">tasks &amp; claims</span>
-          <span class="chip on">handoffs &amp; checkpoints</span>
-          <span class="chip on">durable mailbox</span>
-          <span class="chip on">peer help</span>
-          <span class="chip on">knowledge</span>
-          <span class="chip on">asks &amp; approvals</span>
-          <span class="chip on">governed-effect records</span>
-          <span class="chip on">audit verification</span>
-          <span class="chip on">readiness &amp; queue diagnosis</span>
-          <span class="chip on">backup / restore / rollback</span>
-          <span class="chip on">bounded repository lookup</span>
-          <span class="chip on">SQLite storage</span>
-        </div>
-      </div>
-      <div>
-        <h3 style="margin:0 0 10px;font-size:16px;color:var(--dim)">Withdrawn or deferred — not advertised</h3>
-        <div class="chips">
-          <span class="chip off">model gateway</span>
-          <span class="chip off">semantic retrieval</span>
-          <span class="chip off">code graph</span>
-          <span class="chip off">Runtimes &amp; Personas</span>
-          <span class="chip off">Pods / Projects / Issues</span>
-          <span class="chip off">managed Skills</span>
-          <span class="chip off">scheduled Autopilots</span>
-          <span class="chip off">Postgres</span>
-          <span class="chip off">OpenTelemetry export</span>
-          <span class="chip off">Slack / Telegram / WhatsApp</span>
-          <span class="chip off">legacy dashboard</span>
-          <span class="chip off">GitHub linkage</span>
-          <span class="chip off">multi-operator Orgs</span>
-        </div>
-        <p style="color:var(--muted);font-size:14px;margin-top:14px">
-          Historical modules and database tables may remain purely so an older store can still be
-          migrated. Retained compatibility code does not make a capability supported.
-        </p>
-      </div>
+    <h3 style="margin:0 0 10px;font-size:16px;color:var(--accent)">Available now</h3>
+    <div class="chips" style="margin-bottom:28px">
+      <span class="chip on">Workspaces &amp; durable Sessions</span>
+      <span class="chip on">tasks with exclusive claims</span>
+      <span class="chip on">handoffs &amp; checkpoints</span>
+      <span class="chip on">durable agent mailboxes</span>
+      <span class="chip on">peer help with evidence</span>
+      <span class="chip on">shared knowledge</span>
+      <span class="chip on">asks &amp; approvals</span>
+      <span class="chip on">hash-chained audit log</span>
+      <span class="chip on">readiness &amp; queue diagnosis</span>
+      <span class="chip on">backup / restore / rollback</span>
+      <span class="chip on">browser console &amp; /v1 API</span>
+      <span class="chip on">73 MCP tools · 4 harnesses</span>
+      <span class="chip on">text search across your repo</span>
     </div>
+
+    <h3 style="margin:0 0 10px;font-size:16px">Not in scope</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th style="width:230px">Brains does not</th><th>Because</th></tr></thead>
+        <tbody>
+          <tr><td class="term-c">Route models</td><td>Every supported harness already has its own provider login. Routing models through Brains would duplicate that and put your credentials somewhere they need not be.</td></tr>
+          <tr><td class="term-c">Index code semantically</td><td>Brains coordinates agents; it is not a search engine. Your harness and editor already index your code.</td></tr>
+          <tr><td class="term-c">Support other databases</td><td>SQLite is right for one local operator: no server, one file, and a backup that is a copy.</td></tr>
+          <tr><td class="term-c">Bridge chat apps</td><td>Brains coordinates agents with each other, not humans in Slack or Telegram.</td></tr>
+          <tr><td class="term-c">Manage prompts or skills</td><td>Each harness has its own. Brains does not compete with them.</td></tr>
+          <tr><td class="term-c">Act on the world unattended</td><td>Anything reaching outside stays behind an explicit human decision.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="color:var(--muted);font-size:15px;margin:22px 0 0;max-width:76ch">
+      <strong style="color:var(--fg)">Intended, not built.</strong> Multi-operator access,
+      GitHub event linkage, and scheduled recurring work are intended and unimplemented.
+      They are tracked as issues, and nothing in the installed product advertises or
+      partially exposes them.
+    </p>
 
     <div class="tbl" style="margin-top:26px">
       <table>
-        <thead><tr><th style="width:190px">Non-goal</th><th>Why</th></tr></thead>
+        <thead><tr><th style="width:190px">And it does not promise</th><th>Why</th></tr></thead>
         <tbody>
-          <tr><td class="term-c">Token savings</td><td>Coordination and retrieval can add cost as well as avoid repeated work. Brains does not promise universal savings.</td></tr>
-          <tr><td class="term-c">A security sandbox</td><td>The current PATH-shim gate is not a complete process or network security boundary.</td></tr>
-          <tr><td class="term-c">Multi-tenancy</td><td>Compatibility Org rows and API keys are not a supported multi-tenant boundary.</td></tr>
-          <tr><td class="term-c">Autonomy</td><td>Skills, recurring execution, and tool spawning stay behind an explicit human-governed contract.</td></tr>
+          <tr><td class="term-c">Token savings</td><td>Coordination and retrieval cost tokens too. Brains can avoid repeated work; it does not guarantee a lower bill.</td></tr>
+          <tr><td class="term-c">A security sandbox</td><td>The local execution boundary is cooperative. It is not a process or network security boundary.</td></tr>
+          <tr><td class="term-c">Multi-tenancy</td><td>There is no supported tenant boundary. Treat the database as one operator's data.</td></tr>
+          <tr><td class="term-c">Model quality</td><td>Brains does not run models and makes no claim about the tools it connects.</td></tr>
         </tbody>
       </table>
     </div>
@@ -738,12 +743,12 @@ never written into the file.</span></pre></div>
     </div>
     <div class="grid g4">
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PRODUCT_BRIEF.md" target="_blank" rel="noopener"><div class="ic">📘</div><h3>Product brief</h3><p>Identity, problem, promise, boundaries, and the success definition.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/FEATURE_CONTRACT.md" target="_blank" rel="noopener"><div class="ic">📗</div><h3>Feature contract</h3><p>Advertised, partial, target, frozen, and withdrawn behaviour.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/GUIDE.md" target="_blank" rel="noopener"><div class="ic">📗</div><h3>Using Brains</h3><p>The model, and two walkthroughs: one agent with continuity, two agents sharing work.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener"><div class="ic">🏛️</div><h3>Architecture</h3><p>How the control plane, storage, and surfaces fit together.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener"><div class="ic">🛠️</div><h3>Operations</h3><p>Running, wiring, service posture, state, and recovery.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/QUALITY_GATES.md" target="_blank" rel="noopener"><div class="ic">✅</div><h3>Quality gates</h3><p>The reproducible checks and the recurring release conditions.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PERSONAS_AND_JOURNEYS.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>Personas &amp; journeys</h3><p>Who Brains is for and the outcomes each user needs.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/TRACEABILITY.md" target="_blank" rel="noopener"><div class="ic">🔍</div><h3>Traceability</h3><p>Generated mapping from contracts to routes, components, and tests.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/MCP.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>MCP surface</h3><p>The 73 tools your agents can call, grouped by what they do.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><div class="ic">🔍</div><h3>Contributing</h3><p>How to change behaviour, and where the supported surface is defined.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener"><div class="ic">🔐</div><h3>Security</h3><p>Reporting policy and the boundaries Brains does and does not claim.</p></a>
     </div>
   </div>
