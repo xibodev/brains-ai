@@ -431,7 +431,13 @@ jobs:
           fi
           tool_paths="$("$probe_python" -c 'import json,os,shutil; names=[n for n in os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(",") if n]; values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
-          echo "python=$probe_python" >> "$GITHUB_OUTPUT"
+          # Later bash steps consume the normalised path, but the pwsh steps
+          # cannot resolve an MSYS one, so publish the native form as the output.
+          if command -v cygpath >/dev/null 2>&1; then
+            echo "python=$(cygpath -w "$probe_python")" >> "$GITHUB_OUTPUT"
+          else
+            echo "python=$probe_python" >> "$GITHUB_OUTPUT"
+          fi
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$temp_dir/native-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
@@ -489,6 +495,38 @@ jobs:
               raise SystemExit(0)
           print("package_provenance ok; failure is in distribution_provenance or later")
           PY
+      # The first probe call runs the installed console script and requires JSON
+      # on stdout. When that parse fails the probe discards the output, so run
+      # the same call once more and echo what the executable actually produced.
+      - name: Report the installed executable output
+        if: failure() && steps.native-installation.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+            exe="$(dirname "$BRAINS_NATIVE_PROBE_PYTHON")/brains-ai.exe"
+          else
+            temp_dir="$RUNNER_TEMP"
+            exe="$(dirname "$BRAINS_NATIVE_PROBE_PYTHON")/brains-ai"
+          fi
+          root="$temp_dir/brains-setup-diagnostic"
+          rm -rf "$root"
+          mkdir -p "$root/home" "$root/state" "$root/workspace"
+          rc=0
+          HOME="$root/home" \
+          USERPROFILE="$root/home" \
+          BRAINS_STATE_DIR="$root/state" \
+          BRAINS_API_KEY=synthetic-native-probe-key \
+          BRAINS_MCP_BEARER_TOKEN=synthetic-native-probe-key \
+            "$exe" setup --path "$root/workspace" --no-wire --json \
+            >"$root/out.txt" 2>"$root/err.txt" || rc=$?
+          echo "executable: $exe"
+          echo "exit code : $rc"
+          echo "--- stdout (first 40 lines) ---"
+          head -n 40 "$root/out.txt" || true
+          echo "--- stderr (first 40 lines) ---"
+          head -n 40 "$root/err.txt" || true
       - name: Verify private native installation evidence before export
         shell: bash
         run: >-
