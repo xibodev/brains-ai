@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Brains — Local-First Control Plane for AI Coding Agents</title>
+<meta name="description" content="Brains is a local-first operator control plane for directing, observing, and governing AI coding agents through shared Workspaces, durable work, local mailboxes, and human approvals." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A7%A0%3C/text%3E%3C/svg%3E" />
+<style>
+  :root{
+    --bg:#07090d; --bg-2:#0b0f16; --panel:#0e1420; --panel-2:#121a28;
+    --line:#1c2635; --line-2:#26344a;
+    --fg:#e6edf7; --muted:#8da2bd; --dim:#63758f;
+    --accent:#5eead4; --accent-2:#38bdf8; --warn:#fbbf24; --danger:#fb7185;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1140px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;scroll-padding-top:78px}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent-2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code,kbd,pre{font-family:var(--mono)}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+
+  /* header */
+  header{position:sticky;top:0;z-index:50;background:rgba(7,9,13,.82);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;gap:18px;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.02em;font-size:17px;color:var(--fg)}
+  .brand .glyph{width:26px;height:26px;display:grid;place-items:center;border-radius:7px;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#04121a;font-size:15px}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px solid #3a2f10;background:#191305;padding:2px 7px;border-radius:999px}
+  .nav-links{display:flex;gap:16px;margin-left:auto;flex-wrap:wrap}
+  .nav-links a{color:var(--muted);font-size:14px}
+  .nav-links a:hover{color:var(--fg);text-decoration:none}
+  .gh{border:1px solid var(--line-2);padding:7px 13px;border-radius:8px;color:var(--fg);font-size:14px}
+  .gh:hover{border-color:var(--accent);text-decoration:none}
+  .menu-btn{display:none;margin-left:auto;background:none;border:1px solid var(--line-2);color:var(--fg);border-radius:8px;padding:7px 11px;font-size:15px;cursor:pointer}
+
+  /* hero */
+  .hero{padding:74px 0 54px;border-bottom:1px solid var(--line);
+        background:radial-gradient(1100px 460px at 50% -12%,rgba(56,189,248,.10),transparent 62%)}
+  .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--accent);
+           border:1px solid #123b38;background:#071a1a;padding:5px 12px;border-radius:999px;margin-bottom:20px}
+  h1{font-size:clamp(30px,5.2vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.03em;font-weight:750}
+  h1 .grad{background:linear-gradient(120deg,var(--accent),var(--accent-2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{font-size:clamp(15px,2vw,18.5px);color:var(--muted);max-width:74ch;margin:0 0 26px}
+  .alpha{display:flex;gap:11px;align-items:flex-start;border:1px solid #3a2f10;background:#12100a;border-radius:11px;padding:13px 15px;max-width:78ch;margin-bottom:30px}
+  .alpha .ico{color:var(--warn);flex-shrink:0}
+  .alpha p{margin:0;font-size:14px;color:#d9c9a3}
+
+  /* tabs + code */
+  .card{border:1px solid var(--line);background:var(--panel);border-radius:13px;overflow:hidden}
+  .card-head{display:flex;align-items:center;gap:9px;padding:10px 14px;background:var(--panel-2);border-bottom:1px solid var(--line);
+             font-family:var(--mono);font-size:12px;color:var(--dim);flex-wrap:wrap}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .tabs{display:flex;gap:5px;margin-left:auto;flex-wrap:wrap}
+  .tab{background:none;border:1px solid transparent;color:var(--dim);font-family:var(--mono);font-size:11.5px;
+       padding:4px 10px;border-radius:6px;cursor:pointer}
+  .tab:hover{color:var(--fg)}
+  .tab[aria-selected="true"]{color:#04121a;background:var(--accent);border-color:var(--accent);font-weight:600}
+  pre{margin:0;padding:16px;overflow-x:auto;font-size:13.2px;line-height:1.72;color:#cfe0f2}
+  .pane[hidden]{display:none}
+  .c-cm{color:var(--dim)}.c-fl{color:var(--accent-2)}.c-st{color:#a5e6a5}.c-ok{color:var(--accent)}.c-w{color:var(--warn)}
+
+  /* terminal */
+  .term{margin-top:22px}
+  .term pre{background:#05070a}
+  .prompt{color:var(--accent)}
+
+  /* sections */
+  section{padding:66px 0;border-bottom:1px solid var(--line)}
+  .sec-head{margin-bottom:34px}
+  .sec-head h2{font-size:clamp(23px,3.4vw,32px);margin:0 0 9px;letter-spacing:-.02em}
+  .sec-head p{color:var(--muted);margin:0;max-width:76ch;font-size:15.5px}
+  .kicker{font-family:var(--mono);font-size:12px;color:var(--accent);letter-spacing:.09em;text-transform:uppercase;margin-bottom:9px}
+
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+
+  .feat{border:1px solid var(--line);background:var(--panel);border-radius:13px;padding:20px;transition:border-color .15s,transform .15s}
+  .feat:hover{border-color:var(--line-2);transform:translateY(-2px)}
+  .feat .ic{font-size:21px;margin-bottom:11px}
+  .feat h3{margin:0 0 7px;font-size:16px;letter-spacing:-.01em}
+  .feat p{margin:0 0 11px;color:var(--muted);font-size:14px}
+  .feat .cmd{font-family:var(--mono);font-size:12px;color:var(--accent);background:#071a1a;border:1px solid #123b38;
+             padding:3px 8px;border-radius:6px;display:inline-block}
+
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--accent);font-family:var(--mono);font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;font-weight:600}
+  td code{font-size:12.6px;color:var(--accent-2)}
+  td.term-c{white-space:nowrap;font-family:var(--mono);color:var(--fg);font-size:13px}
+  .tbl{border:1px solid var(--line);border-radius:13px;overflow:hidden;background:var(--panel)}
+  .tbl table tr:last-child td{border-bottom:none}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .chip{font-family:var(--mono);font-size:12px;color:var(--fg);background:var(--panel-2);border:1px solid var(--line-2);
+        padding:4px 10px;border-radius:7px}
+  .chip.on{color:var(--accent);border-color:#123b38;background:#071a1a}
+  .chip.off{color:var(--dim);text-decoration:line-through;opacity:.72}
+
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:30px;align-items:start}
+  ul.ticks{list-style:none;padding:0;margin:14px 0 0}
+  ul.ticks li{padding:6px 0 6px 25px;position:relative;color:var(--muted);font-size:14.5px}
+  ul.ticks li::before{content:"✓";position:absolute;left:0;color:var(--accent);font-weight:700}
+  ul.ticks li.no::before{content:"✕";color:var(--danger)}
+
+  footer{padding:38px 0;color:var(--dim);font-size:14px}
+  .foot{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  .foot .sp{margin-left:auto;display:flex;gap:18px}
+
+  @media(max-width:900px){
+    .g4,.g3{grid-template-columns:repeat(2,1fr)}
+    .split{grid-template-columns:1fr;gap:22px}
+  }
+  @media(max-width:680px){
+    .nav-links{display:none;order:3;width:100%;margin:0 0 12px;flex-direction:column;gap:9px}
+    .nav-links.open{display:flex}
+    .nav{height:auto;padding:12px 0;flex-wrap:wrap}
+    .menu-btn{display:block}
+    .g4,.g3,.g2{grid-template-columns:1fr}
+    .gh{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <span class="brand"><span class="glyph">◈</span> Brains <span class="tag">alpha</span></span>
+    <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-label="Toggle navigation">☰</button>
+    <nav class="nav-links" id="navLinks">
+      <a href="#why">Why</a>
+      <a href="#install">Install</a>
+      <a href="#concepts">Concepts</a>
+      <a href="#cli">CLI</a>
+      <a href="#mcp">MCP</a>
+      <a href="#console">Console</a>
+      <a href="#governance">Governance</a>
+      <a href="#operations">Operations</a>
+      <a href="#scope">Scope</a>
+    </nav>
+    <a class="gh" href="https://github.com/xibodev/brains-ai" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="wrap">
+    <span class="eyebrow">◈ Local-first · MCP-native · Human-governed</span>
+    <h1>One control plane for<br /><span class="grad">your AI coding agents</span></h1>
+    <p class="lede">
+      Brains is an operator control plane for directing, observing, and governing AI coding agents.
+      Shared Workspaces, durable tasks and handoffs, local mailboxes, reusable knowledge, human
+      approvals, and an inspectable audit trail — all on your machine, over SQLite.
+    </p>
+
+    <div class="alpha">
+      <span class="ico">▲</span>
+      <p>
+        <strong>Alpha, for one local human operator.</strong> The supported core is Workspace-first
+        coordination, governance, operations, bounded repository lookup, and local configuration.
+        Withdrawn and deferred capabilities are not advertised as available — compatibility code or
+        historical database tables remaining does not make a capability supported.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="dot" style="background:#fb7185"></span>
+        <span class="dot" style="background:#fbbf24"></span>
+        <span class="dot" style="background:#5eead4"></span>
+        <span>quick install</span>
+        <div class="tabs" role="tablist" aria-label="Install method">
+          <button class="tab" role="tab" aria-selected="true" data-tab="i-pipx">pipx</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-pip">pip</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-uv">uv</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="i-src">source</button>
+        </div>
+      </div>
+      <div class="pane" id="i-pipx"><pre><span class="c-cm"># Python 3.11 or 3.12 · isolated environment</span>
+python -m pip install --user pipx
+python -m pipx ensurepath
+pipx install brains-ai</pre></div>
+      <div class="pane" id="i-pip" hidden><pre><span class="c-cm"># into a virtual environment you control</span>
+python -m venv .venv
+.venv/bin/pip install brains-ai   <span class="c-cm"># Windows: .venv\Scripts\pip</span></pre></div>
+      <div class="pane" id="i-uv" hidden><pre>uv tool install brains-ai</pre></div>
+      <div class="pane" id="i-src" hidden><pre>git clone https://github.com/xibodev/brains-ai
+cd brains-ai
+uv sync --extra dev</pre></div>
+    </div>
+
+    <div class="card term">
+      <div class="card-head">
+        <span class="dot" style="background:#fb7185"></span>
+        <span class="dot" style="background:#fbbf24"></span>
+        <span class="dot" style="background:#5eead4"></span>
+        <span>terminal — brains-ai</span>
+      </div>
+      <pre><span class="prompt">$</span> cd my-project &amp;&amp; brains-ai setup --path .
+<span class="c-ok">✔</span> Workspace <span class="c-st">my-project</span> initialised · state at ~/.brains
+<span class="c-ok">✔</span> Admin key generated  <span class="c-cm">(keep this private)</span>
+
+<span class="prompt">$</span> brains-ai wire --tool claude-code --transport streamable-http
+<span class="c-ok">✔</span> claude-code  ~/.claude.json           <span class="c-cm">create · reversible</span>
+<span class="c-cm">  backup: .claude.json.bak-20260905-024118</span>
+
+<span class="prompt">$</span> brains-ai serve-all
+<span class="c-ok">✔</span> console  <span class="c-fl">http://127.0.0.1:8787/app</span>
+<span class="c-ok">✔</span> mcp      <span class="c-fl">http://127.0.0.1:8788/mcp</span>
+
+<span class="prompt">$</span> brains-ai task-list --workspace my-project
+<span class="c-cm">CODE      STATUS        PRIORITY  TITLE</span>
+<span class="c-cm">----      ------        --------  -----</span>
+TASK-014  in_progress   p1        Harden the migration contract
+TASK-015  available     p2        Close the readiness gap
+</pre>
+    </div>
+  </div>
+</div>
+
+<!-- WHY -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">The problem</div>
+      <h2>Agents are isolated. Your work isn't.</h2>
+      <p>
+        Every AI coding tool runs its own process, its own session history, and its own partial view.
+        Without a control plane, coordination becomes informal, state fragments across tools, and
+        safety claims rest on conventions nobody can inspect.
+      </p>
+    </div>
+
+    <div class="grid g3">
+      <div class="feat">
+        <div class="ic">🧭</div>
+        <h3>Shared coordination</h3>
+        <p>Workspaces, Sessions, tasks, claims, and handoffs with stable meanings — so two agents can share ownership without collisions.</p>
+        <span class="cmd">brains-ai task-claim</span>
+      </div>
+      <div class="feat">
+        <div class="ic">📬</div>
+        <h3>Durable local mailbox</h3>
+        <p>Agent-to-agent mail that survives restarts. The durable store is authoritative; a live wake is best-effort and never loses mail.</p>
+        <span class="cmd">brains-ai inbox-wait</span>
+      </div>
+      <div class="feat">
+        <div class="ic">🧠</div>
+        <h3>Reusable knowledge</h3>
+        <p>Record a caveat, workaround, or decision once. The next session reads it instead of re-deriving it.</p>
+        <span class="cmd">brains_knowledge_search</span>
+      </div>
+      <div class="feat">
+        <div class="ic">⚖️</div>
+        <h3>Human authority</h3>
+        <p>Asks and approvals are visible, attributable, and fail closed where the contract requires a human decision.</p>
+        <span class="cmd">brains-ai decision-resolve</span>
+      </div>
+      <div class="feat">
+        <div class="ic">🔗</div>
+        <h3>Reversible wiring</h3>
+        <p>Wire supported harnesses over MCP without overwriting unrelated configuration — and unwire back to the exact prior bytes.</p>
+        <span class="cmd">brains-ai wire / unwire</span>
+      </div>
+      <div class="feat">
+        <div class="ic">🔒</div>
+        <h3>Inspectable evidence</h3>
+        <p>A hash-chained audit log, governed-action records, and backup/restore contracts you can verify rather than trust.</p>
+        <span class="cmd">brains-ai audit-verify</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- INSTALL / QUICKSTART -->
+<section id="install">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Quickstart</div>
+      <h2>Running in four commands</h2>
+      <p>Brains requires Python 3.11 or 3.12 and stores its state under <code>~/.brains</code>. Nothing leaves your machine.</p>
+    </div>
+
+    <div class="split">
+      <div>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>Step</th><th>Command</th></tr></thead>
+            <tbody>
+              <tr><td class="term-c">1 · install</td><td><code>pipx install brains-ai</code></td></tr>
+              <tr><td class="term-c">2 · init</td><td><code>brains-ai setup --path .</code></td></tr>
+              <tr><td class="term-c">3 · connect</td><td><code>brains-ai wire --tool claude-code</code></td></tr>
+              <tr><td class="term-c">4 · run</td><td><code>brains-ai serve-all</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <ul class="ticks">
+          <li>Console at <code>http://127.0.0.1:8787/app</code></li>
+          <li>Keep the generated admin key private</li>
+          <li>State, database, and mail stay local under <code>~/.brains</code></li>
+          <li class="no">No telemetry, no external service, no account</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>verify the install</span>
+          <div class="tabs" role="tablist" aria-label="Verify">
+            <button class="tab" role="tab" aria-selected="true" data-tab="v-state">state</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="v-ready">readiness</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="v-audit">audit</button>
+          </div>
+        </div>
+        <div class="pane" id="v-state"><pre><span class="prompt">$</span> brains-ai state
+<span class="c-cm"># workspaces, live sessions, open work</span>
+
+<span class="prompt">$</span> brains-ai version
+brains-ai 1.4.0</pre></div>
+        <div class="pane" id="v-ready" hidden><pre><span class="prompt">$</span> brains-ai readiness
+<span class="c-ok">✔</span> database     migrations current
+<span class="c-ok">✔</span> listeners    console + mcp bound
+<span class="c-ok">✔</span> state dir    writable, owner-only</pre></div>
+        <div class="pane" id="v-audit" hidden><pre><span class="prompt">$</span> brains-ai audit-verify
+<span class="c-ok">✔</span> chain intact
+<span class="c-cm">  entries verified against the recorded head</span></pre></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CONCEPTS -->
+<section id="concepts">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Operating model</div>
+      <h2>Nine words that mean one thing each</h2>
+      <p>Brains' value comes from stable vocabulary. Every surface — CLI, MCP, and browser — uses the same nouns.</p>
+    </div>
+
+    <div class="tbl">
+      <table>
+        <thead><tr><th style="width:150px">Term</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td class="term-c">Workspace</td><td>A repository or working directory used as the coordination scope. Sessions, claims, knowledge, and visibility all hang off it.</td></tr>
+          <tr><td class="term-c">Session</td><td>One durable coordination handle for an agent in a Workspace. Leases, checkpoints, and events preserve continuity across restarts.</td></tr>
+          <tr><td class="term-c">Task</td><td>A unit of durable work with a code, status, and priority. Created, claimed, completed, released, or handed off.</td></tr>
+          <tr><td class="term-c">Claim</td><td>Exclusive ownership of a Workspace or task for a bounded period, so two agents cannot silently edit the same thing.</td></tr>
+          <tr><td class="term-c">Handoff</td><td>The context you leave behind when you stop: what changed, what's next, what's blocking.</td></tr>
+          <tr><td class="term-c">Checkpoint</td><td>A resume cairn dropped at a natural breakpoint so a fresh session can pick up without replaying a transcript.</td></tr>
+          <tr><td class="term-c">Ask / Approval</td><td>A human question or decision. Governed effects fail closed where the contract requires a person.</td></tr>
+          <tr><td class="term-c">Knowledge</td><td>A recorded caveat, resolution, or environment note, scoped and searchable, so findings are not re-derived.</td></tr>
+          <tr><td class="term-c">Mailbox</td><td>A durable local address for an agent Session. History is authoritative; wakeups are best-effort.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- CLI -->
+<section id="cli">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Command line</div>
+      <h2>65 supported commands</h2>
+      <p>
+        One canonical executable: <code>brains-ai</code>. Commands are grouped by the thing they act on.
+        Withdrawn commands are absent from the installed CLI — they do not appear in help and fail closed.
+      </p>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span>brains-ai &lt;command&gt;</span>
+        <div class="tabs" role="tablist" aria-label="CLI families">
+          <button class="tab" role="tab" aria-selected="true" data-tab="c-life">lifecycle</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="c-sess">sessions</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="c-work">work</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="c-comm">comms</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="c-gov">governance</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="c-ops">operations</button>
+        </div>
+      </div>
+
+      <div class="pane" id="c-life"><pre><span class="c-cm">Install, wire a harness, and run the local service.</span>
+
+brains-ai setup <span class="c-fl">--path</span> .            <span class="c-cm"># initialise a Workspace</span>
+brains-ai init                        <span class="c-cm"># initialise state only</span>
+brains-ai serve-all                   <span class="c-cm"># console + MCP in the foreground</span>
+brains-ai up                          <span class="c-cm"># bring the local stack up</span>
+brains-ai wire <span class="c-fl">--tool</span> claude-code    <span class="c-cm"># reversible MCP wiring</span>
+brains-ai unwire <span class="c-fl">--tool</span> claude-code  <span class="c-cm"># restore prior configuration</span>
+brains-ai adapter-attach / adapter-detach
+brains-ai add-repo / workspace-import
+brains-ai upgrade                     <span class="c-cm"># migrate state forward</span>
+brains-ai version</pre></div>
+
+      <div class="pane" id="c-sess" hidden><pre><span class="c-cm">Durable coordination handles and continuity.</span>
+
+brains-ai session-start <span class="c-fl">--workspace</span> .
+brains-ai session-heartbeat <span class="c-fl">--session</span> &lt;id&gt;
+brains-ai session-end <span class="c-fl">--session</span> &lt;id&gt;
+brains-ai session-link-successor      <span class="c-cm"># chain a replacement session</span>
+brains-ai sessions                    <span class="c-cm"># list durable sessions</span>
+brains-ai state                       <span class="c-cm"># one-shot orientation</span>
+brains-ai snapshot-capture / snapshot-latest
+brains-ai events / event-append / event-context / event-scope</pre></div>
+
+      <div class="pane" id="c-work" hidden><pre><span class="c-cm">Tasks, exclusive ownership, and handoffs.</span>
+
+brains-ai task-create <span class="c-fl">--title</span> <span class="c-st">"Close the readiness gap"</span>
+brains-ai task-claim <span class="c-fl">--task</span> TASK-015
+brains-ai task-complete <span class="c-fl">--task</span> TASK-015
+brains-ai task-release / task-handoff
+brains-ai task-list <span class="c-fl">--status</span> available
+
+brains-ai workspace-claim <span class="c-fl">--scope</span> code
+brains-ai workspace-release / workspace-claims
+
+brains-ai handoff-set <span class="c-fl">--title</span> <span class="c-st">"migration contract hardened"</span>
+brains-ai handoff-pick / handoff-list / handoff-clear</pre></div>
+
+      <div class="pane" id="c-comm" hidden><pre><span class="c-cm">Peer help and the unified inbox long-poll.</span>
+
+brains-ai inbox-wait <span class="c-fl">--session</span> &lt;id&gt;   <span class="c-cm"># block until mail or peer work</span>
+
+brains-ai help-file <span class="c-fl">--subject</span> <span class="c-st">"review this migration"</span>
+brains-ai help-claim / help-answer / help-release
+brains-ai help-wait / help-get / help-list / help-cancel
+
+brains-ai search-repo <span class="c-fl">-q</span> <span class="c-st">"migration contract"</span>
+                                      <span class="c-cm"># bounded, non-semantic lookup</span></pre></div>
+
+      <div class="pane" id="c-gov" hidden><pre><span class="c-cm">Human decisions and the evidence trail.</span>
+
+brains-ai decision-file <span class="c-fl">--title</span> <span class="c-st">"bump to 1.4.0?"</span>
+brains-ai decision-resolve <span class="c-fl">--chosen</span> yes
+brains-ai decision-route / decision-escalate / decision-list
+
+brains-ai audit-list                  <span class="c-cm"># signed, hash-chained entries</span>
+brains-ai audit-verify                <span class="c-cm"># recompute the chain, report divergence</span>
+brains-ai audit-adopt
+brains-ai governed-list / governed-sweep
+                                      <span class="c-cm"># the decision behind every outward effect</span></pre></div>
+
+      <div class="pane" id="c-ops" hidden><pre><span class="c-cm">Readiness, recovery, and durable state.</span>
+
+brains-ai readiness                   <span class="c-cm"># truthful service posture</span>
+brains-ai backup <span class="c-fl">--out</span> ./brains-backup.tar.gz
+brains-ai backup-inspect <span class="c-fl">--archive</span> ./brains-backup.tar.gz
+brains-ai restore <span class="c-fl">--archive</span> ./brains-backup.tar.gz
+brains-ai recovery-policy / recovery-drill
+brains-ai views-refresh               <span class="c-cm"># optional Markdown projections</span>
+brains-ai mcp                         <span class="c-cm"># run the MCP server directly</span></pre></div>
+    </div>
+  </div>
+</section>
+
+<!-- MCP -->
+<section id="mcp">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Model Context Protocol</div>
+      <h2>Your agents talk to Brains natively</h2>
+      <p>
+        Brains exposes a closed, allowlisted MCP surface with the <code>brains_</code> prefix.
+        The tool registry is filtered against that allowlist at startup, so a withdrawn tool has no
+        discovery or activation path.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <h3 style="margin:0 0 6px;font-size:16px">Supported harnesses</h3>
+        <div class="chips" style="margin-bottom:18px">
+          <span class="chip on">claude-code</span>
+          <span class="chip on">copilot-cli</span>
+          <span class="chip on">codex</span>
+          <span class="chip on">opencode</span>
+        </div>
+
+        <h3 style="margin:0 0 6px;font-size:16px">Transports</h3>
+        <div class="chips" style="margin-bottom:18px">
+          <span class="chip on">streamable-http <em style="color:var(--dim);font-style:normal">· default</em></span>
+          <span class="chip">stdio</span>
+          <span class="chip">sse <em style="color:var(--dim);font-style:normal">· legacy</em></span>
+        </div>
+
+        <h3 style="margin:0 0 6px;font-size:16px">Tool families</h3>
+        <div class="chips">
+          <span class="chip">sessions</span>
+          <span class="chip">tasks</span>
+          <span class="chip">claims</span>
+          <span class="chip">handoffs</span>
+          <span class="chip">checkpoints</span>
+          <span class="chip">mailbox</span>
+          <span class="chip">peer help</span>
+          <span class="chip">knowledge</span>
+          <span class="chip">decisions</span>
+          <span class="chip">events</span>
+          <span class="chip">audit</span>
+          <span class="chip">backup</span>
+          <span class="chip">lookup</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <span>wire a harness</span>
+          <div class="tabs" role="tablist" aria-label="MCP config">
+            <button class="tab" role="tab" aria-selected="true" data-tab="m-auto">automatic</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="m-claude">claude</button>
+            <button class="tab" role="tab" aria-selected="false" data-tab="m-codex">codex</button>
+          </div>
+        </div>
+        <div class="pane" id="m-auto"><pre><span class="c-cm"># wire every detected harness, reversibly</span>
+brains-ai wire
+
+<span class="c-cm"># or one, on an explicit transport</span>
+brains-ai wire <span class="c-fl">--tool</span> codex <span class="c-fl">--transport</span> streamable-http
+
+<span class="c-cm"># inspect without changing anything</span>
+brains-ai wire <span class="c-fl">--status</span>
+
+<span class="c-cm"># put the configuration back exactly as it was</span>
+brains-ai unwire <span class="c-fl">--tool</span> codex</pre></div>
+        <div class="pane" id="m-claude" hidden><pre><span class="c-cm">~/.claude.json — written by `brains-ai wire`</span>
+{
+  <span class="c-fl">"mcpServers"</span>: {
+    <span class="c-fl">"brains"</span>: {
+      <span class="c-fl">"type"</span>: <span class="c-st">"http"</span>,
+      <span class="c-fl">"url"</span>: <span class="c-st">"http://127.0.0.1:8788/mcp"</span>,
+      <span class="c-fl">"headers"</span>: { <span class="c-fl">"Authorization"</span>: <span class="c-st">"Bearer &lt;key&gt;"</span> },
+      <span class="c-fl">"_brains_managed"</span>: <span class="c-w">true</span>
+    }
+  }
+}
+<span class="c-cm">Only the managed entry is added. Your formatting
+and unrelated keys are preserved byte-for-byte.</span></pre></div>
+        <div class="pane" id="m-codex" hidden><pre><span class="c-cm">~/.codex/config.toml — sentinel-delimited block</span>
+<span class="c-cm"># &gt;&gt;&gt; brains managed &gt;&gt;&gt;</span>
+[mcp_servers.brains]
+url = <span class="c-st">"http://127.0.0.1:8788/mcp"</span>
+bearer_token_env_var = <span class="c-st">"BRAINS_MCP_BEARER_TOKEN"</span>
+<span class="c-cm"># &lt;&lt;&lt; brains managed &lt;&lt;&lt;</span>
+
+<span class="c-cm">The token is referenced by environment variable,
+never written into the file.</span></pre></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CONSOLE -->
+<section id="console">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Browser console</div>
+      <h2>See the portfolio, not just one terminal</h2>
+      <p>
+        Brains serves a typed operator console at <code>/app</code> alongside a native
+        <code>/v1</code> control-plane API. Every screen distinguishes loading, empty, error, and
+        unauthorized states rather than showing stale data.
+      </p>
+    </div>
+
+    <div class="grid g4">
+      <div class="feat"><div class="ic">🗂️</div><h3>Command Center</h3><p>The portfolio across every Workspace, with live agent presence and open work.</p></div>
+      <div class="feat"><div class="ic">📁</div><h3>Workspace detail</h3><p>Tabs for work, communication, knowledge, activity, and access boundaries.</p></div>
+      <div class="feat"><div class="ic">✉️</div><h3>Mailroom</h3><p>Inspect durable agent mail and threads. Browser sends require adapter proof.</p></div>
+      <div class="feat"><div class="ic">🛡️</div><h3>Governance</h3><p>Open asks, approvals, governed actions, and the verifiable audit chain.</p></div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <div class="card-head"><span>native control-plane API</span></div>
+      <pre><span class="prompt">$</span> curl -H <span class="c-st">"Authorization: Bearer &lt;admin-key&gt;"</span> \
+       <span class="c-fl">http://127.0.0.1:8787/v1/operator/workspaces</span>
+
+<span class="c-cm"># Protected /v1/* routes always require authentication.
+# Withdrawn routes are filtered out of the router at startup —
+# they return a generic not-found, never a hint that they existed.</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- GOVERNANCE -->
+<section id="governance">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Human authority</div>
+      <h2>Governed effects, not good intentions</h2>
+      <p>
+        Approval, recurring execution, process spawning, and outward effects stay human-governed.
+        Brains records the decision behind every outward effect and never claims stronger
+        enforcement than the code provides.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <ul class="ticks">
+          <li><strong>Hash-chained audit log</strong> — <code>audit-verify</code> recomputes the chain and reports the first divergence, including truncation</li>
+          <li><strong>Governed actions</strong> — actor, target, tool, argument digest, tier, decision, and result, linked to their audit entries</li>
+          <li><strong>Argument digests, not arguments</strong> — the record proves what ran without storing payloads</li>
+          <li><strong>Separation of duty</strong> — a Session cannot resolve the approval it requested</li>
+          <li><strong>Owner-only secrets</strong> — managed binding files use POSIX owner-only modes or a verified Windows DACL</li>
+          <li class="no">No autonomous outward action without an explicit human-governed contract</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-head"><span>verify the chain</span></div>
+        <pre><span class="prompt">$</span> brains-ai audit-verify
+{
+  <span class="c-fl">"ok"</span>: <span class="c-w">true</span>,
+  <span class="c-fl">"entries"</span>: 1284,
+  <span class="c-fl">"head_appended"</span>: 1284
+}
+
+<span class="c-cm"># On tamper, ok is false and the response names the
+# diverging entry id, the reason, and expected vs actual
+# hash — so you can point at the row.</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- OPERATIONS -->
+<section id="operations">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Operations</div>
+      <h2>Recoverable by contract</h2>
+      <p>SQLite is the supported source of truth. Backup, restore, readiness, and rollback have explicit contracts rather than best-effort behaviour.</p>
+    </div>
+
+    <div class="grid g3">
+      <div class="feat"><div class="ic">💾</div><h3>Backup &amp; restore</h3><p>Online backup to a <code>.tar.gz</code> with a manifest. Restore records its attempt before it touches anything.</p><span class="cmd">brains-ai backup</span></div>
+      <div class="feat"><div class="ic">🩺</div><h3>Readiness</h3><p>Truthful posture for database, migrations, listeners, and state directory — not a static green light.</p><span class="cmd">brains-ai readiness</span></div>
+      <div class="feat"><div class="ic">↩️</div><h3>Recovery drills</h3><p>Exercise the declared recovery policy against synthetic state before you need it.</p><span class="cmd">brains-ai recovery-drill</span></div>
+      <div class="feat"><div class="ic">🧱</div><h3>Migration contract</h3><p>Ordered, checksummed migrations with a frozen baseline. Unordered or altered migrations are rejected.</p><span class="cmd">brains-ai upgrade</span></div>
+      <div class="feat"><div class="ic">🧪</div><h3>Isolated validation</h3><p>Tests that can touch a service, database, or listener run in disposable containers, never against your install.</p><span class="cmd">run_quality_gates.py</span></div>
+      <div class="feat"><div class="ic">🖥️</div><h3>Service definitions</h3><p>Renderers for Task Scheduler, launchd, and systemd-user. Opt-in — see the note below.</p><span class="cmd">brains-ai wire --status</span></div>
+    </div>
+
+    <div class="alpha" style="max-width:none;margin-top:22px">
+      <span class="ico">▲</span>
+      <p>
+        <strong>Background service is opt-in.</strong> Renderer and hermetic backend behaviour are
+        covered by repository checks, but native service-manager persistence across a real login or
+        reboot is a per-candidate release condition, not a standing guarantee. Test install, restart,
+        persistence, uninstall, and restoration on a disposable host first.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- SCOPE -->
+<section id="scope">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Truthful capabilities</div>
+      <h2>What Brains does and does not claim</h2>
+      <p>
+        Missing, unsupported, experimental, and withdrawn behaviour is not presented as normal
+        availability. This is the part most tools leave out.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <h3 style="margin:0 0 10px;font-size:16px;color:var(--accent)">Supported today</h3>
+        <div class="chips">
+          <span class="chip on">Command Center &amp; Workspace views</span>
+          <span class="chip on">coordination Sessions</span>
+          <span class="chip on">tasks &amp; claims</span>
+          <span class="chip on">handoffs &amp; checkpoints</span>
+          <span class="chip on">durable mailbox</span>
+          <span class="chip on">peer help</span>
+          <span class="chip on">knowledge</span>
+          <span class="chip on">asks &amp; approvals</span>
+          <span class="chip on">governed-effect records</span>
+          <span class="chip on">audit verification</span>
+          <span class="chip on">readiness &amp; queue diagnosis</span>
+          <span class="chip on">backup / restore / rollback</span>
+          <span class="chip on">bounded repository lookup</span>
+          <span class="chip on">SQLite storage</span>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin:0 0 10px;font-size:16px;color:var(--dim)">Withdrawn or deferred — not advertised</h3>
+        <div class="chips">
+          <span class="chip off">model gateway</span>
+          <span class="chip off">semantic retrieval</span>
+          <span class="chip off">code graph</span>
+          <span class="chip off">Runtimes &amp; Personas</span>
+          <span class="chip off">Pods / Projects / Issues</span>
+          <span class="chip off">managed Skills</span>
+          <span class="chip off">scheduled Autopilots</span>
+          <span class="chip off">Postgres</span>
+          <span class="chip off">OpenTelemetry export</span>
+          <span class="chip off">Slack / Telegram / WhatsApp</span>
+          <span class="chip off">legacy dashboard</span>
+          <span class="chip off">GitHub linkage</span>
+          <span class="chip off">multi-operator Orgs</span>
+        </div>
+        <p style="color:var(--muted);font-size:14px;margin-top:14px">
+          Historical modules and database tables may remain purely so an older store can still be
+          migrated. Retained compatibility code does not make a capability supported.
+        </p>
+      </div>
+    </div>
+
+    <div class="tbl" style="margin-top:26px">
+      <table>
+        <thead><tr><th style="width:190px">Non-goal</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td class="term-c">Token savings</td><td>Coordination and retrieval can add cost as well as avoid repeated work. Brains does not promise universal savings.</td></tr>
+          <tr><td class="term-c">A security sandbox</td><td>The current PATH-shim gate is not a complete process or network security boundary.</td></tr>
+          <tr><td class="term-c">Multi-tenancy</td><td>Compatibility Org rows and API keys are not a supported multi-tenant boundary.</td></tr>
+          <tr><td class="term-c">Autonomy</td><td>Skills, recurring execution, and tool spawning stay behind an explicit human-governed contract.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- DOCS -->
+<section id="docs" style="border-bottom:none">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Documentation</div>
+      <h2>Read the contracts</h2>
+      <p>Brains documents what it promises, what it partially delivers, and where the evidence gaps are — separately.</p>
+    </div>
+    <div class="grid g4">
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PRODUCT_BRIEF.md" target="_blank" rel="noopener"><div class="ic">📘</div><h3>Product brief</h3><p>Identity, problem, promise, boundaries, and the success definition.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/FEATURE_CONTRACT.md" target="_blank" rel="noopener"><div class="ic">📗</div><h3>Feature contract</h3><p>Advertised, partial, target, frozen, and withdrawn behaviour.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener"><div class="ic">🏛️</div><h3>Architecture</h3><p>How the control plane, storage, and surfaces fit together.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener"><div class="ic">🛠️</div><h3>Operations</h3><p>Running, wiring, service posture, state, and recovery.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/QUALITY_GATES.md" target="_blank" rel="noopener"><div class="ic">✅</div><h3>Quality gates</h3><p>The reproducible checks and the recurring release conditions.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PERSONAS_AND_JOURNEYS.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>Personas &amp; journeys</h3><p>Who Brains is for and the outcomes each user needs.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/TRACEABILITY.md" target="_blank" rel="noopener"><div class="ic">🔍</div><h3>Traceability</h3><p>Generated mapping from contracts to routes, components, and tests.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener"><div class="ic">🔐</div><h3>Security</h3><p>Reporting policy and the boundaries Brains does and does not claim.</p></a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <span>Brains · distributed as <code style="color:var(--accent)">brains-ai</code> · MIT License</span>
+    <span class="sp">
+      <a href="https://github.com/xibodev/brains-ai" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://pypi.org/project/brains-ai/" target="_blank" rel="noopener">PyPI</a>
+      <a href="https://github.com/xibodev" target="_blank" rel="noopener">xibodev</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+  // Tab groups: each .tabs controls panes referenced by data-tab.
+  document.querySelectorAll('.tabs').forEach(function (group) {
+    var tabs = Array.prototype.slice.call(group.querySelectorAll('.tab'));
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        tabs.forEach(function (other) {
+          other.setAttribute('aria-selected', String(other === tab));
+          var pane = document.getElementById(other.dataset.tab);
+          if (pane) { pane.hidden = other !== tab; }
+        });
+      });
+    });
+  });
+
+  // Mobile navigation.
+  var btn = document.getElementById('menuBtn');
+  var links = document.getElementById('navLinks');
+  btn.addEventListener('click', function () {
+    var open = links.classList.toggle('open');
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  links.addEventListener('click', function (event) {
+    if (event.target.tagName === 'A') {
+      links.classList.remove('open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+</script>
+</body>
+</html>
