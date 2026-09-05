@@ -1288,11 +1288,17 @@ def main() -> int:
         }
         # This probe raises RuntimeError with a fixed, curated string naming the
         # contract it rejected, never an interpolated path or host value. Any
-        # other exception contributes only its class name, which is still enough
-        # to tell a failing host apart from a rejected contract.
-        failure["detail"] = (
-            str(exc)[:200] if isinstance(exc, RuntimeError) and str(exc) else type(exc).__name__
-        )
+        # other exception contributes only its class name, plus the basename of
+        # the tool that stalled, which is a system executable rather than a host
+        # value and is the only way to tell a hang apart from a rejection.
+        if isinstance(exc, RuntimeError) and str(exc):
+            detail = str(exc)[:200]
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            raw = exc.cmd[0] if isinstance(exc.cmd, (list, tuple)) and exc.cmd else exc.cmd
+            detail = f"TimeoutExpired:{Path(str(raw)).name}"
+        else:
+            detail = type(exc).__name__
+        failure["detail"] = detail
         sys.stdout.write(json.dumps(failure, sort_keys=True) + "\n")
         return 1
 
