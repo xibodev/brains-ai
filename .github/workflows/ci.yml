@@ -558,10 +558,11 @@ jobs:
                       check=False, capture_output=True, env=env, text=True, timeout=120,
                   )
                   print(f"--- {label}: returncode={done.returncode} ---")
-                  print(f"--- {label}: stdout repr (first 600 chars) ---")
-                  print(repr(done.stdout[:600]))
-                  print(f"--- {label}: stderr (first 1500 chars) ---")
-                  print(done.stderr[:1500])
+                  print(f"--- {label}: stdout repr (first 300 chars) ---")
+                  print(repr(done.stdout[:300]))
+                  # A rich traceback puts the exception line last, so print the tail.
+                  print(f"--- {label}: stderr tail (last 2500 chars) ---")
+                  print(done.stderr[-2500:])
           PY
       - name: Verify private native installation evidence before export
         shell: bash
