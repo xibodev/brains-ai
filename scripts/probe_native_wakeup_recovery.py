@@ -1235,6 +1235,11 @@ def main() -> int:
             ),
             "reason": "native-wakeup-recovery-proof-failed",
         }
+        # This probe raises RuntimeError with a fixed, curated string naming the
+        # contract it rejected, never an interpolated path or host value. Keeping
+        # only the class name makes a failing host unactionable.
+        if isinstance(exc, RuntimeError) and str(exc):
+            failure["detail"] = str(exc)[:200]
         sys.stdout.write(json.dumps(failure, sort_keys=True) + "\n")
         return 1
 
