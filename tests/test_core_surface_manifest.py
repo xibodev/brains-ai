@@ -245,18 +245,12 @@ def test_canonical_docs_allow_explicit_boundary_prose() -> None:
             "The retained GitHub delivery code is compatibility-only.",
         ]
     )
-    assert not check_core_surface._canonical_doc_advertisements(
-        {"docs/product/TRACEABILITY.md": source}
-    )
+    assert not check_core_surface._canonical_doc_advertisements({"docs/GUIDE.md": source})
 
 
 def test_negative_doc_clause_does_not_exempt_mixed_positive_claim() -> None:
     findings = check_core_surface._canonical_doc_advertisements(
-        {
-            "docs/product/TRACEABILITY.md": (
-                "Labs is unavailable, but users can use the dashboard.\n"
-            )
-        }
+        {"docs/GUIDE.md": ("Labs is unavailable, but users can use the dashboard.\n")}
     )
 
     assert any(finding.endswith("surface:dashboard") for finding in findings)
@@ -354,9 +348,7 @@ def test_yaml_scan_fails_closed_on_invalid_yaml() -> None:
 def test_actionable_docs_syntax_is_never_exempted_by_boundary_prose(
     source: str, expected: str
 ) -> None:
-    findings = check_core_surface._canonical_doc_advertisements(
-        {"docs/product/TRACEABILITY.md": source}
-    )
+    findings = check_core_surface._canonical_doc_advertisements({"docs/GUIDE.md": source})
     assert any(finding.endswith(expected) for finding in findings)
 
 

@@ -8,20 +8,18 @@ placeholder-only `*.example` files and synthetic test data.
 
 - Keep the `brains-ai` distribution and CLI, `brains` Python namespace, `brains_` MCP
   prefix, `.brains` state directory, and Brains browser identity aligned.
-- Start with [PRODUCT_BRIEF.md](docs/product/PRODUCT_BRIEF.md), then map behavior through
-  [FEATURE_CONTRACT.md](docs/product/FEATURE_CONTRACT.md),
-  [PERSONAS_AND_JOURNEYS.md](docs/product/PERSONAS_AND_JOURNEYS.md), and
-  [TRACEABILITY.md](docs/product/TRACEABILITY.md).
-- [BACKLOG.md](docs/product/BACKLOG.md) is the schedulable core backlog.
-  [FROZEN_BACKLOG.md](docs/product/FROZEN_BACKLOG.md) contains deferred work and is not
-  a current product promise.
-- Distinguish implemented behavior, target contracts, and evidence gaps. Retained
-  compatibility code does not make a capability supported.
+- Start with [PRODUCT_BRIEF.md](docs/product/PRODUCT_BRIEF.md). It states what is
+  available, what is deliberately not in scope, and what is intended but unbuilt.
+- Behavior is documented in [GUIDE.md](docs/GUIDE.md) and [MCP.md](docs/MCP.md). The
+  supported surface itself is defined in code, by `CORE_MCP_TOOLS` and the `WITHDRAWN_*`
+  sets in `src/brains/capabilities.py`, and enforced by `scripts/check_core_surface.py`.
+- Open work is tracked in the repository's issues, not in a backlog document.
+- Distinguish implemented behavior from intent. Retained compatibility code does not make
+  a capability supported, and an unbuilt capability is not advertised.
 
 ## Implementation rules
 
-- Keep changes minimal, functional, and mapped to stable `F*`, `B*`, `P*`, `J*`, and
-  `AC-*` identifiers where applicable.
+- Keep changes minimal and functional.
 - SQLite is the supported source of truth. Markdown projections under `.brains/views`
   are optional.
 - Do not bypass authentication on protected `/v1/*` routes.
@@ -29,9 +27,9 @@ placeholder-only `*.example` files and synthetic test data.
   human-governed. Do not claim stronger enforcement than the code provides.
 - Persistent changes require compatible migration, failure, and recovery behavior.
 - Rebuild `src/brains/web/spa` when `frontend/src` changes.
-- Update canonical documentation and traceability when routes, components, APIs,
-  controls, models, migrations, CLI/MCP families, tests, or operational contracts
-  change.
+- Update [GUIDE.md](docs/GUIDE.md), [MCP.md](docs/MCP.md), and the SPA route list in
+  `scripts/check_traceability.py` when routes, components, APIs, controls, models,
+  migrations, or CLI/MCP families change.
 
 ## Validation
 

@@ -6,7 +6,7 @@ scoped and visibility-filtered per decision record 0002), patterns have no
 across every operator and workspace. Keep pattern bodies generic and never
 embed workspace-specific or sensitive content. Workspace-scoped, visibility-
 aware knowledge belongs in the knowledge ledger described in
-``docs/product/FEATURE_CONTRACT.md``, not here.
+``docs/product/PRODUCT_BRIEF.md``, not here.
 """
 
 from __future__ import annotations

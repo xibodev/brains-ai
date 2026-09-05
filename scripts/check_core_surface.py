@@ -211,12 +211,13 @@ from brains.capabilities import (  # noqa: E402
 )
 
 CANONICAL_PRODUCT_DOCS = (
+    "README.md",
     "docs/product/PRODUCT_BRIEF.md",
-    "docs/product/FEATURE_CONTRACT.md",
-    "docs/product/PERSONAS_AND_JOURNEYS.md",
-    "docs/product/USER_OUTCOME_SPEC.md",
-    "docs/product/TRACEABILITY.md",
-    "docs/product/BACKLOG.md",
+    "docs/GUIDE.md",
+    "docs/MCP.md",
+    "docs/ARCHITECTURE.md",
+    "docs/OPERATIONS.md",
+    "docs/QUALITY_GATES.md",
 )
 PUBLIC_SURFACE_EXCLUDED_DIRS = {
     ".git",
@@ -489,26 +490,15 @@ def _environment_names() -> list[str]:
 
 
 def _documented_ids(root: Path = ROOT) -> dict[str, object]:
-    canonical = {path: (root / path).read_text(encoding="utf-8") for path in CANONICAL_PRODUCT_DOCS}
+    """What the public documents say, reduced to what still has to hold.
+
+    The identifier tables these documents used to carry are gone. What remains
+    worth enforcing is that no public document advertises a surface the
+    installation does not expose.
+    """
+
     public_surfaces = _public_surface_sources(root)
-    feature = canonical["docs/product/FEATURE_CONTRACT.md"]
-    journeys = canonical["docs/product/PERSONAS_AND_JOURNEYS.md"]
-    backlog = canonical["docs/product/BACKLOG.md"]
-    stable_id = re.compile(
-        r"\b(?:BL-P[0-3]-\d+|AC-(?:F|B)\d+-\d+|F(?:10|\d)|B\d+|J(?:1[01]|\d)|P\d+|O\d+)\b"
-    )
-    return {
-        "features": sorted(set(re.findall(r"^### (F\d+)\b", feature, re.MULTILINE))),
-        "boundaries": sorted(set(re.findall(r"^### (B\d+)\b", feature, re.MULTILINE))),
-        "acceptance": sorted(set(re.findall(r"\b(AC-(?:F|B)\d+-\d+)\b", feature))),
-        "journeys": sorted(set(re.findall(r"^### (J\d+)\b", journeys, re.MULTILINE))),
-        "backlog": sorted(set(re.findall(r"^### (BL-P\d+-\d+)\b", backlog, re.MULTILINE))),
-        "by_file": {
-            path: sorted(set(stable_id.findall(source)))
-            for path, source in sorted(canonical.items())
-        },
-        "forbidden_advertisements": _canonical_doc_advertisements(public_surfaces),
-    }
+    return {"forbidden_advertisements": _canonical_doc_advertisements(public_surfaces)}
 
 
 def _wire_inventory() -> dict[str, object]:

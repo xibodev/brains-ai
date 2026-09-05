@@ -280,7 +280,7 @@ def usage_summary(
     attribution, so it is returned only to the bootstrap admin. Handing
     install-wide totals to one Org's member would disclose another Org's
     activity; per-Org attribution is tracked as an open gap in
-    ``docs/product/FEATURE_CONTRACT.md`` (AC-F9-04).
+    ``docs/product/PRODUCT_BRIEF.md``.
     """
     if not principal.is_bootstrap_admin:
         raise policy.forbidden(

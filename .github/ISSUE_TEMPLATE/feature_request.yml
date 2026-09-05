@@ -6,11 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Start with the [Product Brief](../../docs/product/PRODUCT_BRIEF.md) and
-        [Feature Contract](../../docs/product/FEATURE_CONTRACT.md). The
-        [Core Backlog](../../docs/product/BACKLOG.md) contains schedulable work; the
-        [Frozen Backlog](../../docs/product/FROZEN_BACKLOG.md) is deferred and is not a
-        current product promise.
+        Start with the [Product Brief](../../docs/product/PRODUCT_BRIEF.md). It lists what
+        is available now, what is deliberately not in scope and why, and what is intended
+        but unbuilt. Requests that reopen an out-of-scope decision should say what changed.
 
   - type: textarea
     id: problem
@@ -48,18 +46,18 @@ body:
       description: Explain current workarounds and why a separate tool is or is not sufficient.
 
   - type: textarea
-    id: contract
+    id: surface
     attributes:
-      label: Contract mapping
-      description: List affected Feature, Persona, Journey, acceptance, or backlog IDs when known.
-      placeholder: "F3, B2, P1, J8, AC-F3-05"
+      label: Affected surface
+      description: Which CLI commands, MCP tools, routes, or console screens this touches.
+      placeholder: "brains-ai task-claim, brains_claim_task, /app/workspaces/:slug"
 
   - type: checkboxes
     id: terms
     attributes:
       label: Pre-flight
       options:
-        - label: I reviewed the current product contract and both backlog boundaries.
+        - label: I read the Product Brief and this is not something Brains deliberately leaves out.
           required: true
         - label: I searched existing issues and discussions.
           required: true
