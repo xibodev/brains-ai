@@ -65,8 +65,8 @@ test('J11 workspace-first shell is responsive and keeps Labs fail-closed', async
   expect(body.data.every((row) => !('command' in row) && !('argv' in row))).toBe(true);
 
   await page.goto('/app/labs');
-  await expect(page).toHaveURL(/\/app\/command-center$/);
-  await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+  await expect(page).toHaveURL('/app/labs');
+  await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
   consoleGuard.assertClean();
 });

@@ -1,8 +1,9 @@
-# Battle-test topology: one shared Postgres ("distributed DB") + two brains
-# "machines" (brain-a=alice, brain-b=bob). Sealed: shifted host ports (2xxxx),
-# container-local state, repo mounted read-only. Build the image first (from the
-# repo root):
-#   docker build -f sandbox/battle/Dockerfile.battle -t brains-battle:dev .
+# Retained unsupported battle fixture.
+#
+# This topology depends on withdrawn Postgres, model-routing, multi-user, and legacy
+# browser behavior. It is not a supported installation or validation path and
+# intentionally provides no activation recipe. Any archaeological evaluation must be
+# disposable and use external, uncommitted synthetic configuration.
 name: brains-battle
 
 x-brain-env: &brain-env
@@ -12,11 +13,8 @@ x-brain-env: &brain-env
   BRAINS_RUNTIME_OVERLAY: /home/agent/.brains/brains.runtime.yaml
   BRAINS_MCP_BIND: 0.0.0.0
   BRAINS_MCP_ALLOW_PUBLIC: "1"
-  # Layer B (real CLI agents): route the gateway's model tiers to an
-  # OpenAI-compatible upstream. Both default to the public OpenAI endpoint so
-  # the committed file carries no private URL/secret; the battle run exports
-  # LITELLM_BASE_URL + LITELLM_KEY (e.g. from a self-hosted LiteLLM) before
-  # `docker compose up`. Empty key is fine for Layer A (it never calls /v1/*).
+  # Retained model-routing values are compatibility fixture data only; they do not
+  # describe a supported configuration or activation path.
   BRAINS_OPENAI_COMPATIBLE_BASE_URL: ${LITELLM_BASE_URL:-https://api.openai.com/v1}
   BRAINS_OPENAI_COMPATIBLE_API_KEY: ${LITELLM_KEY:-}
 

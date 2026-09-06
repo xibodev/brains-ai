@@ -8,8 +8,8 @@ non-streaming) with the routed model + token counts pulled from the
 provider's ``usage`` block. Everything else — price lookup, baseline
 selection, DB write — happens here so the gateway code stays clean.
 
-The read-side helpers (:func:`totals`, :func:`daily_series`) back the
-``/admin/api/savings`` JSON endpoint and the dashboard panel.
+The read-side helpers (:func:`totals`, :func:`daily_series`) provide local
+usage and savings reporting for supported callers.
 """
 
 from __future__ import annotations
@@ -230,7 +230,7 @@ def totals(days: int = 7, *, include_stubs: bool = False) -> dict[str, Any]:
     """Aggregate the ledger over the trailing *days* window.
 
     Stub-provider rows (e.g. ``echo``) are excluded by default so the
-    dashboard headline reflects real upstream traffic. The count of
+    reported total reflects real upstream traffic. The count of
     excluded stub calls is still returned under ``stub_calls`` so the
     operator can see what's hidden. Pass ``include_stubs=True`` to
     fold them back in (e.g. for dev smoke tests where echo IS the
@@ -297,7 +297,7 @@ def savings_summary(days: int = 30) -> dict[str, Any]:
     The interval is a normal approximation over per-request ``savings_usd``:
     mean ± 1.96 * stdev/sqrt(n), scaled back to the aggregate total.
     Rows without priced savings are excluded; stub rows are excluded to match
-    the dashboard headline.
+    the reported total.
     """
 
     _ensure_db()
@@ -346,7 +346,7 @@ def daily_series(days: int = 7, *, include_stubs: bool = False) -> list[dict[str
 
     Each row is ``{date: 'YYYY-MM-DD', calls, savings_usd,
     cost_actual_usd}``. Days with zero calls are included as zero rows
-    so the dashboard chart has a contiguous x-axis. Stub-provider rows
+    so consumers receive a contiguous time series. Stub-provider rows
     are excluded by default; see :func:`totals` for the same toggle.
     """
     _ensure_db()
@@ -398,8 +398,7 @@ def daily_series(days: int = 7, *, include_stubs: bool = False) -> list[dict[str
 def top_routed_models(
     days: int = 7, limit: int = 5, *, include_stubs: bool = False
 ) -> list[dict[str, Any]]:
-    """Top *limit* routed models by call count over the window. Used
-    by the dashboard's "where the traffic went" sub-panel. Stub-provider
+    """Top *limit* routed models by call count over the window. Stub-provider
     rows are excluded by default so the table reflects real upstreams."""
     _ensure_db()
     since = datetime.now(UTC) - timedelta(days=max(1, int(days)))

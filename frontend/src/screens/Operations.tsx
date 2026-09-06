@@ -1,6 +1,5 @@
-import { useNavigate } from "react-router-dom";
-import { api, formatApiError } from "../api/client";
-import { relativeTime } from "../components/format";
+import { api } from "../api/client";
+import { actHref, useCoreNavigation } from "../coreRoutes";
 import {
   OperatorCard,
   OperatorMiniList,
@@ -12,20 +11,11 @@ import { useToast } from "../components/Toast";
 import { useAsync } from "../store/useAsync";
 
 export function Operations() {
-  const navigate = useNavigate();
+  const navigation = useCoreNavigation();
   const state = useAsync(() => api.operatorOperations(), []);
   const { toast } = useToast();
   const data = state.data;
-
-  const verifyTool = async (name: string) => {
-    try {
-      await api.operatorVerifyTool(name);
-      toast(`${name} verification recorded`);
-      state.refetch();
-    } catch (error) {
-      toast(formatApiError("Verify tool", error));
-    }
-  };
+  const empty = Boolean(data && (!data.service || !data.readiness || !data.queue || !data.recovery));
 
   return (
     <div className="operator-page" data-testid="operations">
@@ -33,10 +23,10 @@ export function Operations() {
         eyebrow="Install and continuity"
         title="Operations"
         lede="The service tree, tools, wiring, storage, recovery, access, and configuration, with typed safeguards for every host-level effect."
-        actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigate("/act?category=operations")}>Operational action</button></>}
+        actions={<><button className="operator-button" disabled title="Service logs need a typed host contract">View service logs</button><button className="operator-button primary" onClick={() => navigation.open(actHref({ category: "operations" }))}>Operational action</button></>}
       />
-      <OperatorState loading={state.loading} error={state.error} />
-      {data && (
+      <OperatorState loading={state.loading} error={state.error} kind={state.errorKind} empty={empty} boundary="operations" emptyTitle="No operational state" emptyBody="Required service, readiness, queue, or recovery state is unavailable." />
+      {data && !empty && (
         <>
           <section className="operator-topology" aria-label="Brains topology">
             {[
@@ -45,9 +35,11 @@ export function Operations() {
                 `${Number(Boolean(data.service.listeners?.gateway)) + Number(Boolean(data.service.listeners?.mcp))} / 2 listeners`,
               ],
               ["Storage", data.readiness.components.storage.state],
+              ["SQLite integrity", data.readiness.components.sqlite_integrity.state],
+              ["HTTP gateway", data.readiness.components.gateway_protocol.state],
+              ["MCP protocol", data.readiness.components.mcp_protocol.state],
               ["Queues", data.readiness.components.queue.state],
               ["Durable mail", data.readiness.components.durable_mail.state],
-              ["Tools", `${data.tools.length} registered`],
               ["Recovery", data.recovery.ready ? "ready" : "incomplete"],
             ].map(([name, value]) => <div key={name}><span>+</span><strong>{name}</strong><small>{value}</small></div>)}
           </section>
@@ -55,7 +47,7 @@ export function Operations() {
           <div className="operator-operations-grid">
             <OperatorCard kicker="Protected readiness" title="Dependencies" action={<OperatorStatus tone={data.readiness.status === "ready" ? "ready" : "warning"}>{data.readiness.status}</OperatorStatus>} className="operator-operation-card">
               <div className="operator-op-number">{Object.values(data.readiness.components).filter((row) => row.state === "ready").length} / {Object.keys(data.readiness.components).length}</div>
-              <p>Bounded storage, queue, durable-mail, and recovery-policy checks.</p>
+              <p>Bounded SQLite, core HTTP gateway, authenticated MCP, queue, durable-mail, and verified recovery checks.</p>
               <OperatorMiniList rows={Object.entries(data.readiness.components).map(([name, row]) => ({ label: name.replaceAll("_", " "), value: <OperatorStatus tone={row.state === "ready" ? "ready" : "warning"}>{row.state}</OperatorStatus> }))} />
             </OperatorCard>
 
@@ -67,16 +59,7 @@ export function Operations() {
                 { label: "Stale or expired", value: Object.values(data.queue.summary.families).reduce((total, row) => total + row.stale_or_expired, 0) },
                 { label: "Repair mode", value: "Dry-run first" },
               ]} />
-              <button className="operator-button" onClick={() => void api.repairQueueHealth(false).then(() => toast("Queue repair preview complete")).catch((error) => toast(formatApiError("Preview queue repair", error)))}>Preview repair</button>
-            </OperatorCard>
-
-            <OperatorCard kicker="Tools" title="Registered capabilities" action={<OperatorStatus tone="native">Native HTTP</OperatorStatus>} className="operator-operation-card">
-              <div className="operator-op-number">{data.tools.filter((tool) => tool.is_available).length} available</div>
-              <p>Verification is bounded to registered executable discovery and records an audit event.</p>
-              <div className="operator-tool-list">
-                {data.tools.slice(0, 5).map((tool) => <button key={tool.name} onClick={() => void verifyTool(tool.name)}><span><strong>{tool.display_name}</strong><small>{relativeTime(tool.last_verified_at)}</small></span><OperatorStatus tone={tool.is_available ? "ready" : "warning"}>{tool.is_available ? "available" : "missing"}</OperatorStatus></button>)}
-                {!data.tools.length && <span className="operator-muted">No tools registered.</span>}
-              </div>
+              <button className="operator-button" onClick={() => void api.repairQueueHealth(false).then(() => toast("Queue repair preview complete")).catch(() => toast("The queue repair preview could not be completed. Retry after checking authorization and local service status."))}>Preview repair</button>
             </OperatorCard>
 
             <OperatorCard kicker="Storage and recovery" title="Durability policy" action={<OperatorStatus tone={data.recovery.ready ? "ready" : "warning"}>{data.recovery.ready ? "ready" : "incomplete"}</OperatorStatus>} className="operator-operation-card">
@@ -84,16 +67,11 @@ export function Operations() {
               <p>Backup and restore stay disabled in the browser until typed preview and confirmation routes exist.</p>
               <OperatorMiniList rows={[
                 { label: "Retention", value: data.recovery.policy.retention_days == null ? "Not set" : `${data.recovery.policy.retention_days} days` },
-                { label: "Restore drill", value: data.recovery.policy.last_restore_drill_at ? relativeTime(data.recovery.policy.last_restore_drill_at) : "Not recorded" },
+                { label: "Restore candidate", value: data.recovery.candidate.ready ? "Verified" : "Not verified" },
+                { label: "Restore drill", value: data.recovery.last_drill.verified ? "Verified" : "Not verified" },
                 { label: "Schema compatibility", value: data.recovery.compatibility.migration_healthy ? "Healthy" : "Degraded" },
               ]} />
               <button className="operator-button" disabled>Backup adapter required</button>
-            </OperatorCard>
-
-            <OperatorCard kicker="Access and configuration" title="Operators and settings" action={<OperatorStatus tone="adapter">Mixed HTTP</OperatorStatus>} className="operator-operation-card">
-              <div className="operator-op-number">{data.operators.length} operators</div>
-              <p>Org membership and encrypted settings are native; remaining workspace-access operations stay explicit gaps.</p>
-              <div className="operator-action-row"><button className="operator-button" onClick={() => navigate("/operations/access")}>Manage access</button><button className="operator-button" onClick={() => navigate("/operations/config")}>Configuration</button></div>
             </OperatorCard>
 
             <OperatorCard kicker="Host contracts" title="Service and wiring" action={<OperatorStatus tone="host">Host contract</OperatorStatus>} className="operator-operation-card">

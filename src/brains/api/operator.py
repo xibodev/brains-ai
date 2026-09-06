@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from brains.authz import policy
 from brains.authz.deps import require_console_principal, require_operator_principal
 from brains.authz.principal import CAP_ORG_READ, CAP_ORG_WRITE, Principal
+from brains.context.lookup import LookupEnvelope, lookup_workspace
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import (
@@ -167,6 +168,11 @@ class KnowledgeResolveBody(BaseModel):
 
 class PatternDecisionBody(BaseModel):
     approved: bool = True
+
+
+class CoreConfigurationBody(BaseModel):
+    expected_revision: str = Field(min_length=64, max_length=64)
+    changes: dict[str, Any] = Field(min_length=1, max_length=10)
 
 
 class FeedbackReportBody(BaseModel):
@@ -500,31 +506,30 @@ def workspace_detail(
     }
 
 
+@router.get("/workspaces/{slug}/lookup")
+def workspace_lookup(
+    slug: str,
+    q: str = Query(default="", max_length=256),
+    limit: int = Query(default=10, ge=1, le=50),
+    principal: Principal = Depends(require_operator_principal),
+) -> LookupEnvelope:
+    """Return the same bounded source-lookup envelope as CLI and MCP."""
+    workspace = _workspace(principal, slug, CAP_ORG_READ)
+    return lookup_workspace(workspace["path"], q, limit=limit)
+
+
 @router.get("/coordination")
 def coordination(principal: Principal = Depends(require_operator_principal)) -> dict:
     from brains.control.claims import list_workspace_claims
     from brains.control.handoffs import list_handoffs
     from brains.control.knowledge import search_knowledge
-    from brains.control.patterns import list_patterns
     from brains.control.signals import list_signals
     from brains.control.tasks import list_tasks
-    from brains.control.topics import read_topic
 
     workspace_rows = _workspace_rows(principal)
     visible_slugs = {row["slug"] for row in workspace_rows}
     visible_paths = {row["path"] for row in workspace_rows}
     visible = _visible_workspace_ids(principal)
-    topic_posts = read_topic(limit=100)
-    if visible is not None:
-        topic_posts = [row for row in topic_posts if row.get("from_workspace") in visible_slugs]
-    topic_counts: dict[str, dict[str, Any]] = {}
-    for post in topic_posts:
-        topic = str(post["topic"])
-        current = topic_counts.setdefault(
-            topic,
-            {"topic": topic, "posts": 0, "last_post_at": post.get("created_at")},
-        )
-        current["posts"] += 1
     knowledge = search_knowledge(limit=100)
     if visible is not None:
         knowledge = [
@@ -546,12 +551,8 @@ def coordination(principal: Principal = Depends(require_operator_principal)) -> 
         "handoffs": [
             row for row in list_handoffs(active_only=False) if row.get("workspace") in visible_slugs
         ],
-        "topics": list(topic_counts.values()),
-        "topic_posts": topic_posts[:50],
         "knowledge": knowledge,
         "signals": signals,
-        "patterns": list_patterns(status="all", limit=100),
-        "live_agents": _live_agents(principal),
     }
 
 
@@ -1103,10 +1104,49 @@ def operations(principal: Principal = Depends(require_operator_principal)) -> di
     return operations_snapshot()
 
 
+@router.get("/configuration")
+def core_configuration(
+    principal: Principal = Depends(require_operator_principal),
+) -> dict[str, Any]:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("install configuration is available to the bootstrap admin only")
+    from brains.control.configuration import configuration_summary
+
+    try:
+        return configuration_summary()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503, detail="supported configuration is unavailable"
+        ) from exc
+
+
+@router.put("/configuration")
+def update_core_configuration(
+    body: CoreConfigurationBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict[str, Any]:
+    if not principal.is_bootstrap_admin:
+        raise policy.forbidden("install configuration is available to the bootstrap admin only")
+    from brains.control.configuration import (
+        ConfigurationConflict,
+        ConfigurationError,
+        apply_configuration,
+    )
+
+    try:
+        return apply_configuration(
+            body.changes,
+            expected_revision=body.expected_revision,
+            actor=principal.describe(),
+        )
+    except ConfigurationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/capabilities")
 def capabilities(principal: Principal = Depends(require_operator_principal)) -> dict:
-    from brains.experimental import ui_labs_enabled
-
     native = [
         ("task.create", "Create task", "coordination", "workspace", False),
         ("task.claim", "Claim task", "coordination", "session", False),
@@ -1117,15 +1157,10 @@ def capabilities(principal: Principal = Depends(require_operator_principal)) -> 
         ("handoff.set", "Set handoff", "coordination", "workspace", False),
         ("handoff.pick", "Pick handoff", "coordination", "session", False),
         ("handoff.clear", "Clear handoff", "coordination", "workspace", False),
-        ("message.send", "Send coordination message", "coordination", "workspace", False),
-        ("topic.post", "Post topic", "coordination", "workspace", False),
         ("knowledge.add", "Add knowledge", "coordination", "workspace", False),
         ("knowledge.resolve", "Resolve knowledge", "coordination", "workspace", False),
-        ("pattern.decide", "Approve or reject pattern", "coordination", "brain", True),
         ("decision.resolve", "Resolve decision", "governance", "workspace", False),
-        ("session.stop", "Stop session", "governance", "session", False),
         ("audit.verify", "Verify audit chain", "governance", "install", True),
-        ("tool.verify", "Verify registered tool", "operations", "install", True),
         ("queue.repair.preview", "Preview queue repair", "operations", "install", True),
     ]
     rows = [
@@ -1168,7 +1203,7 @@ def capabilities(principal: Principal = Depends(require_operator_principal)) -> 
     )
     return {
         "data": rows,
-        "labs_enabled": ui_labs_enabled(),
+        "labs_enabled": False,
         "install_admin": principal.is_bootstrap_admin,
     }
 

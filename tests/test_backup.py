@@ -1,11 +1,8 @@
 """Tests for the backup + restore tooling.
 
-Covers :mod:`brains.backup` for the SQLite backend (the default).
-Postgres path is covered by a small unit test that monkeypatches
-``shutil.which`` to assert ``pg_dump`` discovery is required, but the
-end-to-end pg_dump+psql roundtrip lives behind the same Postgres-gated
-fixture as ``tests/test_storage_postgres.py`` and is intentionally not
-exercised here.
+Covers :mod:`brains.backup` for the shipped SQLite backend. Historical
+Postgres archives remain inspectable, but Postgres runtime activation is
+withdrawn and tested fail-closed.
 """
 
 from __future__ import annotations
@@ -24,12 +21,12 @@ import brains.storage.migrations as migrations_module
 from brains.audit import _reset_key_cache
 from brains.backup import (
     BackupError,
-    BackupToolUnavailable,
     ManifestMismatch,
     UnsupportedBackend,
     create_backup,
     inspect_archive,
     restore_backup,
+    verify_backup,
 )
 from brains.config import settings
 from brains.storage.migrations import init_db
@@ -216,6 +213,10 @@ def test_restore_backup_round_trip(isolated_sqlite):
     result = restore_backup(out)
     assert result.backend == "sqlite"
     assert result.data_sha256
+    assert result.candidate_verified is True
+    assert result.post_restore_verified is True
+    assert result.rollback_archive_path is not None
+    assert verify_backup(result.rollback_archive_path).ok is True
 
     # Re-create the engine after restore so we read the restored file.
     new_engine = create_engine(settings.db_url)
@@ -224,6 +225,129 @@ def test_restore_backup_round_trip(isolated_sqlite):
         rows_after = session.query(Workspace.slug).all()
     assert ("ws-pre-backup",) in rows_after
     assert ("ws-post-backup",) not in rows_after
+
+
+@pytest.mark.acceptance
+def test_recovery_acceptance_refuses_incompatible_then_restores_with_rollback(
+    isolated_sqlite, monkeypatch
+):
+    """Backup -> damage -> refuse before mutation -> restore -> ready."""
+    from typer.testing import CliRunner
+
+    from brains.cli.app import app
+    from brains.control import mailbox_observability, queue_health
+    from brains.control import readiness as readiness_module
+    from brains.control.operations import readiness_report
+
+    with db_module.SessionLocal() as session:
+        session.add(Workspace(path=str(isolated_sqlite / "before"), slug="before-backup"))
+        session.commit()
+
+    candidate = isolated_sqlite / "candidate.tar.gz"
+    create_backup(candidate)
+    with db_module.SessionLocal() as session:
+        session.query(Workspace).filter(Workspace.slug == "before-backup").delete()
+        session.add(Workspace(path=str(isolated_sqlite / "after"), slug="after-backup"))
+        session.commit()
+
+    extracted = isolated_sqlite / "incompatible"
+    extracted.mkdir()
+    with tarfile.open(candidate, "r:gz") as archive:
+        archive.extractall(extracted, filter="data")
+    manifest_path = extracted / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["schema_versions"].append("unknown-future-migration")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    incompatible = isolated_sqlite / "incompatible.tar.gz"
+    with tarfile.open(incompatible, "w:gz") as archive:
+        archive.add(manifest_path, arcname="manifest.json")
+        archive.add(extracted / "brains.sqlite", arcname="brains.sqlite")
+
+    incompatible_status = readiness_module.backup_candidate_status(incompatible)
+    assert incompatible_status["reason"] == "candidate-schema-incompatible"
+    assert str(incompatible) not in str(incompatible_status)
+
+    tampered_verification = verify_backup(incompatible)
+    assert tampered_verification.ok is False
+    assert tampered_verification.checks["schema_versions_match"] is False
+    assert any(
+        "schema history does not match" in failure for failure in tampered_verification.failures
+    )
+
+    db_module.engine.dispose()
+    with pytest.raises(ManifestMismatch, match="target was not modified"):
+        restore_backup(incompatible)
+    probe_engine = create_engine(settings.db_url)
+    probe_session = db_module.sessionmaker(bind=probe_engine, expire_on_commit=False)
+    with probe_session() as session:
+        assert ("after-backup",) in session.query(Workspace.slug).all()
+        assert ("before-backup",) not in session.query(Workspace.slug).all()
+    probe_engine.dispose()
+
+    rollback = isolated_sqlite / "rollback.tar.gz"
+    result = restore_backup(candidate, rollback_path=rollback)
+    assert result.rollback_archive_path == str(rollback)
+    assert verify_backup(rollback).ok is True
+    rollback_probe = isolated_sqlite / "rollback-probe.sqlite"
+    restore_backup(rollback, target_url=f"sqlite:///{rollback_probe.as_posix()}")
+    rollback_engine = create_engine(f"sqlite:///{rollback_probe}")
+    rollback_session = db_module.sessionmaker(bind=rollback_engine, expire_on_commit=False)
+    with rollback_session() as session:
+        assert ("after-backup",) in session.query(Workspace.slug).all()
+    rollback_engine.dispose()
+    probe_engine = create_engine(settings.db_url)
+    probe_session = db_module.sessionmaker(bind=probe_engine, expire_on_commit=False)
+    with probe_session() as session:
+        slugs = session.query(Workspace.slug).all()
+    probe_engine.dispose()
+    assert ("before-backup",) in slugs
+    assert ("after-backup",) not in slugs
+
+    for name, value in {
+        "backup_candidate_path": str(candidate),
+        "backup_scope": "sqlite_database",
+        "backup_schedule": "daily",
+        "backup_retention_days": 7,
+        "backup_rto_minutes": 30,
+        "backup_rpo_minutes": 15,
+        "backup_offsite_owner": "operator",
+        "backup_offsite_location": "operator-managed-store",
+        "backup_restore_drill_required": True,
+    }.items():
+        monkeypatch.setattr(settings, name, value, raising=False)
+
+    db_module.engine.dispose()
+    drill = CliRunner().invoke(app, ["recovery-drill", str(candidate)])
+    assert drill.exit_code == 0, drill.output
+    drill_payload = json.loads(drill.output)
+    assert drill_payload["reason"] == "restore-drill-succeeded"
+    assert drill_payload["candidate_verified"] is True
+    assert drill_payload["restore_verified"] is True
+    assert drill_payload["rollback_verified"] is True
+    assert str(candidate) not in drill.output
+    last_drill = readiness_module.last_restore_drill_status()
+    candidate_status = readiness_module.backup_candidate_status(candidate)
+    assert last_drill["verified"] is True
+    assert last_drill["data_fingerprint"] == candidate_status["data_fingerprint"]
+    monkeypatch.setattr(
+        readiness_module,
+        "gateway_protocol_readiness",
+        lambda: {"ready": True, "stage": "ready", "reason": "ok"},
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        "mcp_protocol_readiness",
+        lambda: {"ready": True, "stage": "tools/list", "reason": "ok"},
+    )
+    # This recovery acceptance owns storage, SQLite, MCP, and recovery state.
+    # Isolate queue/mail so preceding module state cannot change its verdict;
+    # their real failure behavior is covered by the dependency matrix.
+    monkeypatch.setattr(queue_health, "summarize", lambda: {"families": {}})
+    monkeypatch.setattr(mailbox_observability, "mailbox_health_report", lambda: {"state": "ready"})
+    report = readiness_report()
+    assert report["components"]["sqlite_integrity"]["state"] == "ready"
+    assert report["components"]["recovery_policy"]["state"] == "ready"
+    assert report["status"] == "ready", report
 
 
 def test_restore_backup_detects_sha_mismatch(isolated_sqlite):
@@ -249,7 +373,16 @@ def test_restore_backup_detects_sha_mismatch(isolated_sqlite):
     db_module.engine.dispose()
     with pytest.raises(BackupError) as exc_info:
         restore_backup(tampered)
-    assert "sha256" in str(exc_info.value)
+    assert "target was not modified" in str(exc_info.value)
+
+
+def test_restore_refuses_rollback_path_that_overwrites_candidate(isolated_sqlite):
+    candidate = isolated_sqlite / "candidate.tar.gz"
+    create_backup(candidate)
+    db_module.engine.dispose()
+    with pytest.raises(BackupError, match="conflicts with recovery inputs"):
+        restore_backup(candidate, rollback_path=candidate)
+    assert verify_backup(candidate).ok is True
 
 
 def test_restore_backup_rejects_wrong_backend(isolated_sqlite):
@@ -300,7 +433,7 @@ def test_restore_backup_rejects_path_traversal_data_file(isolated_sqlite):
     # Both the write path and the read-only inspect path must reject it.
     with pytest.raises(BackupError) as exc_info:
         restore_backup(malicious)
-    assert "unsafe data_file" in str(exc_info.value)
+    assert "target was not modified" in str(exc_info.value)
     with pytest.raises(BackupError):
         inspect_archive(malicious)
 
@@ -447,22 +580,19 @@ def test_restore_backup_unsupported_backend_raises(isolated_sqlite, monkeypatch)
 # ----------------------------------------------------------------------
 
 
-def test_backup_postgres_requires_pg_dump(isolated_sqlite, monkeypatch):
-    """Postgres path must raise BackupToolUnavailable if pg_dump is missing."""
+def test_backup_postgres_runtime_is_withdrawn(isolated_sqlite, monkeypatch):
     monkeypatch.setattr(backup_module, "_current_backend", lambda: "postgres")
     monkeypatch.setattr(
         backup_module,
         "_current_db_url",
         lambda: "postgresql+psycopg://x:y@localhost/brains",
     )
-    monkeypatch.setattr(backup_module.shutil, "which", lambda name: None)
-    with pytest.raises(BackupToolUnavailable):
+    with pytest.raises(UnsupportedBackend, match="withdrawn"):
         create_backup(isolated_sqlite / "x.tar.gz")
 
 
-def test_restore_postgres_requires_psql(isolated_sqlite, monkeypatch):
-    """Restore Postgres path must raise BackupToolUnavailable if psql is missing."""
-    # Build a manifest-only archive marked postgres so we hit psql check.
+def test_restore_postgres_runtime_is_withdrawn(isolated_sqlite, monkeypatch):
+    """Historical Postgres archives remain inspectable but cannot activate a backend."""
     extract_dir = isolated_sqlite / "ext"
     extract_dir.mkdir()
     manifest = extract_dir / "manifest.json"
@@ -495,8 +625,7 @@ def test_restore_postgres_requires_psql(isolated_sqlite, monkeypatch):
         "_current_db_url",
         lambda: "postgresql+psycopg://x:y@localhost/brains",
     )
-    monkeypatch.setattr(backup_module.shutil, "which", lambda name: None)
-    with pytest.raises(BackupToolUnavailable):
+    with pytest.raises(UnsupportedBackend, match="withdrawn"):
         restore_backup(archive)
 
 

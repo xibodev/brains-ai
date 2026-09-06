@@ -100,18 +100,24 @@ def test_ws_rejects_without_key(client):
 
 def test_ws_subscribe_and_receive(client):
     with client.websocket_connect("/v1/ws?access_token=local-dev-key") as ws:
-        ws.send_json({"type": "subscribe", "topics": ["org/1/issues"], "ref": "c1"})
+        ws.send_json({"type": "subscribe", "topics": ["org/1/inbox"], "ref": "c1"})
         ack = ws.receive_json()
         assert ack["type"] == "ack"
         assert ack["ref"] == "c1"
         assert ack["ok"] is True
         # Publish from the test thread; the WS handler's subscription delivers
         # cross-thread via call_soon_threadsafe.
-        bus.publish("org/1/issues", "issue.created", entity="issue", id=42, payload={"title": "Go"})
+        bus.publish(
+            "org/1/inbox",
+            "mailbox.message",
+            entity="mailbox",
+            id=42,
+            payload={"subject": "Ready"},
+        )
         frame = ws.receive_json()
-        assert frame["type"] == "issue.created"
+        assert frame["type"] == "mailbox.message"
         assert frame["id"] == 42
-        assert frame["payload"]["title"] == "Go"
+        assert frame["payload"]["subject"] == "Ready"
         assert frame["seq"] == 1  # per-connection counter
 
 

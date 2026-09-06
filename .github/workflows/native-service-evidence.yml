@@ -1,0 +1,180 @@
+name: native service-manager evidence
+
+# This manual workflow proves real manager verbs on disposable hosted VMs. It
+# deliberately does not claim a machine-observed reboot boundary; the same checked
+# two-phase script must be run on persistent disposable VMs to satisfy the native
+# lifecycle release condition in docs/QUALITY_GATES.md.
+on:
+  workflow_dispatch:
+    inputs:
+      disposable_host_acknowledgement:
+        description: Type disposable-native-service-host
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    outputs:
+      manifest-sha256: ${{ steps.package-provenance.outputs.manifest-sha256 }}
+      artifact-id: ${{ steps.package-artifact.outputs.artifact-id }}
+      artifact-digest: ${{ steps.package-artifact.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Build and bind the exact candidate once
+        id: package-provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/native-service-dist"
+          uv build --wheel --out-dir "$RUNNER_TEMP/native-service-dist"
+          wheel="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          test -n "$wheel"
+          git_executable="$(realpath "$(command -v git)")"
+          uv run python scripts/probe_native_wakeup_recovery.py \
+            --prepare-package \
+            --candidate "$GITHUB_SHA" \
+            --git-executable "$git_executable" \
+            --wheel "$wheel" \
+            --package-manifest "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json"
+          echo "manifest-sha256=$(sha256sum "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        id: package-artifact
+        with:
+          name: native-service-dist-${{ github.sha }}
+          path: ${{ runner.temp }}/native-service-dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  manager-cycle:
+    needs: [package]
+    if: inputs.disposable_host_acknowledgement == 'disposable-native-service-host'
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - os: windows-2022
+            manager: task-scheduler
+          - os: macos-14
+            manager: launchd
+          - os: ubuntu-24.04
+            manager: systemd-user
+        python: ["3.11", "3.12"]
+        adapter: [copilot-cli, claude-code, codex, opencode]
+        transport: [streamable-http]
+    runs-on: ${{ matrix.host.os }}
+    env:
+      BRAINS_NATIVE_EVIDENCE_DISPOSABLE: disposable-native-service-host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4
+        if: matrix.adapter == 'opencode'
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v3
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-service-dist-${{ github.sha }}
+          path: ${{ runner.temp }}/native-service-dist
+      - name: Provision pinned supported OpenCode
+        if: matrix.adapter == 'opencode'
+        run: npm install --global opencode-ai@1.18.25
+      - name: Build and install the exact candidate in a fresh private environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact="$RUNNER_TEMP/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          runtime="$RUNNER_TEMP/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          venv="$RUNNER_TEMP/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          test ! -e "$artifact"
+          test ! -e "$runtime"
+          test ! -e "$venv"
+          mkdir "$artifact"
+          wheel_count="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          test "$wheel_count" = 1
+          test "$(sha256sum "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" = "${{ needs.package.outputs.manifest-sha256 }}"
+          wheel="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          python -m venv "$venv"
+          if test -x "$venv/Scripts/python.exe"; then
+            probe_python="$venv/Scripts/python.exe"
+          else
+            probe_python="$venv/bin/python"
+          fi
+          "$probe_python" -m pip install "$wheel"
+          git_executable="$("$probe_python" -c 'import shutil; value=shutil.which("git"); assert value; print(value)')"
+          case "$RUNNER_OS" in
+            Windows) required_tools=powershell,schtasks,taskkill ;;
+            macOS) required_tools=launchctl,ps,sysctl ;;
+            Linux) required_tools=ps,systemctl ;;
+            *) exit 1 ;;
+          esac
+          if test "${{ matrix.adapter }}" = opencode; then
+            required_tools="$required_tools,node,opencode"
+          fi
+          export BRAINS_REQUIRED_NATIVE_TOOLS="$required_tools"
+          tool_paths="$("$probe_python" -c 'import json,os,shutil; names=os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(","); values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
+          echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_EVIDENCE_ROOT=$runtime" >> "$GITHUB_ENV"
+          echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"
+      - name: Exercise native manager lifecycle without login claim
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py manager-cycle
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --package-manifest "$BRAINS_NATIVE_PACKAGE_MANIFEST"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --adapter "${{ matrix.adapter }}"
+          --repo "$GITHUB_WORKSPACE"
+          --output "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-prepare.json"
+      - name: Cleanup disposable native identity
+        if: always()
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py cleanup
+          --candidate "$GITHUB_SHA"
+          --wheel "$BRAINS_NATIVE_PROBE_WHEEL"
+          --package-manifest "$BRAINS_NATIVE_PACKAGE_MANIFEST"
+          --git-executable "$BRAINS_NATIVE_PROBE_GIT"
+          --adapter "${{ matrix.adapter }}"
+          --repo "$GITHUB_WORKSPACE"
+          --prior-record "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-prepare.json"
+          --output "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
+      - name: Verify private native lifecycle evidence before export
+        shell: bash
+        run: >-
+          "$BRAINS_NATIVE_PROBE_PYTHON" scripts/verify_native_evidence.py
+          --kind service
+          --candidate "$GITHUB_SHA"
+          --manager "${{ matrix.host.manager }}"
+          --python "${{ matrix.python }}"
+          --adapter "${{ matrix.adapter }}"
+          --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-prepare.json"
+          --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
+      - name: Upload sanitized native evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-service-${{ matrix.host.manager }}-py${{ matrix.python }}-${{ matrix.adapter }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-prepare.json
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-prepare.xml
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-cleanup.json
+            ${{ runner.temp }}/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}/native-service-cleanup.xml
+          if-no-files-found: error
+          retention-days: 14

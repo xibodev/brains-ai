@@ -67,7 +67,7 @@ def _resolver(workspace_path: str, chosen: str, found: dict) -> None:
         time.sleep(0.2)
 
 
-def _run_gated_push(tmp_path, chosen: str) -> tuple[int, str, dict]:
+def _run_gated_push(tmp_path, monkeypatch, chosen: str) -> tuple[int, str, dict]:
     ws = tmp_path / "ws"
     ws.mkdir()
     realbin = tmp_path / "realbin"
@@ -78,6 +78,7 @@ def _run_gated_push(tmp_path, chosen: str) -> tuple[int, str, dict]:
     # to it (the shim dir goes FIRST so the shim intercepts).
     base_env = dict(os.environ)
     base_env["PATH"] = f"{realbin}{os.pathsep}{base_env.get('PATH', '')}"
+    monkeypatch.setenv("PATH", base_env["PATH"])
 
     written = runner.install_shims(shim_dir, binaries=["git"], python=sys.executable)
     assert "git" in written, "git shim was not installed"
@@ -100,10 +101,10 @@ def _run_gated_push(tmp_path, chosen: str) -> tuple[int, str, dict]:
     return proc.returncode, proc.stdout + proc.stderr, found
 
 
-def test_gate_intercepts_queues_and_releases_on_approve(tmp_path):
+def test_gate_intercepts_queues_and_releases_on_approve(tmp_path, monkeypatch):
     """Approve path: the outward `git push` is intercepted, an ASK is filed and
     blocks, and once approved the REAL binary runs."""
-    rc, output, found = _run_gated_push(tmp_path, "approve")
+    rc, output, found = _run_gated_push(tmp_path, monkeypatch, "approve")
 
     assert found.get("code"), "no approval ASK was filed — the action was NOT gated"
     assert "REAL_GIT_RAN push origin main" in output, (
@@ -112,10 +113,10 @@ def test_gate_intercepts_queues_and_releases_on_approve(tmp_path):
     assert rc == 0, f"approved push should exit 0, got {rc}: {output}"
 
 
-def test_gate_blocks_and_denies(tmp_path):
+def test_gate_blocks_and_denies(tmp_path, monkeypatch):
     """Deny path: the same action is intercepted and, when denied, is BLOCKED —
     the real binary never runs and the shim exits non-zero."""
-    rc, output, found = _run_gated_push(tmp_path, "deny")
+    rc, output, found = _run_gated_push(tmp_path, monkeypatch, "deny")
 
     assert found.get("code"), "no approval ASK was filed — the action was NOT gated"
     assert "REAL_GIT_RAN" not in output, "denied action LEAKED to the real binary (gate breach!)"

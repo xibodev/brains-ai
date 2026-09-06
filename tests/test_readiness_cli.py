@@ -1,6 +1,4 @@
-"""CLI tests for ``brains-ai readiness``, ``queue-health status/repair``,
-and ``recovery-policy`` (B8, BL-P1-09, BL-P1-12).
-"""
+"""CLI tests for readiness, queue-health, and recovery administration (B8)."""
 
 from __future__ import annotations
 
@@ -17,6 +15,9 @@ def test_readiness_cli_prints_status_and_components():
     assert payload["status"] in ("ready", "degraded")
     assert set(payload["components"]) == {
         "storage",
+        "sqlite_integrity",
+        "gateway_protocol",
+        "mcp_protocol",
         "queue",
         "durable_mail",
         "recovery_policy",
@@ -67,3 +68,14 @@ def test_recovery_policy_cli_reports_completeness():
     payload = json.loads(result.output)
     assert "ready" in payload
     assert "missing_fields" in payload["policy"]
+
+
+def test_recovery_drill_refuses_missing_candidate_without_exposing_path(tmp_path, monkeypatch):
+    from brains.config import settings
+
+    candidate = tmp_path / "private-candidate-name.tar.gz"
+    monkeypatch.setattr(settings, "backup_candidate_path", str(candidate), raising=False)
+    result = CliRunner().invoke(app, ["recovery-drill"])
+    assert result.exit_code == 1
+    assert "candidate-unavailable" in result.output
+    assert str(candidate) not in result.output

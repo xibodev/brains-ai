@@ -555,10 +555,10 @@ export interface ConfigSummary {
   secrets_managed?: string;
 }
 
-// --- operational health (B8, BL-P1-09, BL-P1-12) ---
+// --- operational health (B8) ---
 // Bootstrap-admin only. Distinct from liveness `GET /health`: this reports a
-// protected ready/degraded verdict for storage/migration, coordination queues,
-// durable mailbox state, and recovery-policy configuration.
+// protected ready/degraded verdict for storage/migration, SQLite integrity,
+// core HTTP gateway and authenticated MCP protocols, coordination queues, durable mailbox state, and recovery.
 
 export type HealthState = "ready" | "degraded";
 
@@ -571,6 +571,9 @@ export interface ReadinessReport {
   status: HealthState;
   components: {
     storage: ReadinessComponent;
+    sqlite_integrity: ReadinessComponent;
+    gateway_protocol: ReadinessComponent;
+    mcp_protocol: ReadinessComponent;
     queue: ReadinessComponent;
     durable_mail: ReadinessComponent;
     recovery_policy: ReadinessComponent;
@@ -640,6 +643,7 @@ export interface RecoveryPolicySummary {
   rpo_minutes: number | null;
   restore_drill_required: boolean;
   last_restore_drill_at: string | null;
+  restore_drill_error: string | null;
   complete: boolean;
   missing_fields: string[];
 }
@@ -653,6 +657,19 @@ export interface RecoveryPolicyReport {
     applied_schema_versions: number;
     compaction_prerequisite_ok: boolean | null;
     detail: string | null;
+  };
+  candidate: {
+    ready: boolean;
+    configured: boolean;
+    reason: string;
+    backend?: string;
+    data_fingerprint?: string | null;
+  };
+  last_drill: {
+    verified: boolean;
+    reason: string;
+    at: string | null;
+    data_fingerprint?: string;
   };
   reasons: string[];
 }
@@ -790,16 +807,31 @@ export interface OperatorWorkspaceDetail {
   events: OperatorEvent[];
 }
 
+export interface WorkspaceLookupResult {
+  path: string;
+  line: number;
+  end_line: number;
+  snippet: string;
+  symbol: string | null;
+  match: "symbol" | "text";
+}
+
+export interface WorkspaceLookupEnvelope {
+  status: "ok" | "empty" | "limited" | "unavailable";
+  reason: string;
+  query: string;
+  results: WorkspaceLookupResult[];
+  scanned_files: number;
+  truncated: boolean;
+  incomplete_reasons: string[];
+}
+
 export interface OperatorCoordination {
   tasks: OperatorTask[];
   claims: OperatorClaim[];
   handoffs: OperatorHandoff[];
-  topics: Array<{ topic: string; posts: number; last_post_at?: string | null }>;
-  topic_posts: Array<Record<string, unknown>>;
   knowledge: OperatorKnowledge[];
   signals: OperatorSignal[];
-  patterns: OperatorPattern[];
-  live_agents: OperatorAgent[];
 }
 
 export interface MailboxAccess {
@@ -931,9 +963,41 @@ export interface OperatorOperations {
     listeners?: { gateway?: boolean; mcp?: boolean };
     service_pid?: Record<string, unknown>;
   };
-  tools: OperatorTool[];
-  operators: Array<Record<string, unknown>>;
-  labs_enabled: boolean;
+}
+
+export interface CoreConfigurationField {
+  key: string;
+  category: "service" | "mcp" | "sqlite";
+  value: string | number | boolean;
+  editable: boolean;
+  apply_mode: "read_only" | "live_reload" | "restart_required";
+  source: string;
+}
+
+export interface CoreHarnessConfiguration {
+  tool: "copilot" | "claude" | "codex" | "opencode";
+  detected: boolean;
+  mcp_wired: boolean;
+  mcp_transport: string | null;
+  rule_wired: boolean;
+  mailbox_notification_mode: string | null;
+}
+
+export interface CoreConfiguration {
+  revision: string;
+  fields: CoreConfigurationField[];
+  harnesses: CoreHarnessConfiguration[];
+  redaction: string;
+}
+
+export interface CoreConfigurationUpdate {
+  ok: boolean;
+  revision: string;
+  apply_mode: "live_reload" | "restart_required";
+  reload_applied: boolean;
+  restart_required: boolean;
+  audit_id: number;
+  changed_fields: string[];
 }
 
 export type OperatorTransport = "native_http" | "thin_adapter" | "host_contract";

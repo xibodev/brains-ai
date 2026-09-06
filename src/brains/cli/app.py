@@ -8,14 +8,14 @@ from typing import Any
 import typer
 import uvicorn
 
-from brains.context.docs_indexer import index_docs, search_docs
+from brains.context.docs_indexer import index_docs
 from brains.context.freshness import check_source
 from brains.context.graph_viz import graph_export
+from brains.context.lookup import lookup_workspace
 from brains.context.planner import plan
 from brains.context.repo_indexer import (
     index_repo,
     index_repo_persisted,
-    search_repo,
     search_repo_persisted,
 )
 from brains.control.claims import (
@@ -29,11 +29,17 @@ from brains.control.decisions import (
     resolve_decision,
 )
 from brains.control.durable_mailbox import (
+    create_managed_agent_mailbox,
     ensure_operator_mailboxes,
+    extract_native_tool_session_id,
     list_phonebook,
     lookup_mailbox,
     read_mailbox_binding_file,
+    reconcile_managed_mailbox_bindings,
+    recover_managed_agent_mailbox_binding,
     register_agent_mailbox,
+    revoke_managed_agent_mailbox_binding,
+    rotate_managed_agent_mailbox_binding,
 )
 from brains.control.events import append_event, list_events
 from brains.control.handoffs import (
@@ -162,6 +168,13 @@ def _print_json(value):
     print(json.dumps(value, indent=2, default=str))
 
 
+def _print_service_report(report: dict[str, Any]) -> None:
+    """Print a service result and give automation a truthful exit status."""
+    _print_json(report)
+    if report.get("ok") is False:
+        raise typer.Exit(code=1)
+
+
 def _require_experimental_cli(label: str) -> None:
     """Refuse an experimental command unless BRAINS_MCP_EXPERIMENTAL opts in.
 
@@ -252,24 +265,13 @@ def prune_traces_cli(
 def serve_all_cli(
     gateway_host: str = "127.0.0.1",
     gateway_port: int = 8787,
-    dashboard_host: str = "127.0.0.1",
-    dashboard_port: int = 9876,
     mcp_port: int = 9877,
     mcp_scheduler_interval: int = 60,
     no_gateway: bool = False,
-    no_dashboard: bool = False,
     no_mcp: bool = False,
-    dashboard: bool = typer.Option(
-        False,
-        "--dashboard",
-        help="Opt in to the retired legacy dashboard child (normally off; "
-        "also enabled by BRAINS_LEGACY_SURFACES=1).",
-    ),
 ):
     """Supervise gateway + MCP server in one process (restart-on-crash).
 
-    The legacy dashboard is retired from the normal install and runs only
-    with --dashboard / BRAINS_LEGACY_SURFACES=1 (--no-dashboard vetoes both).
     The MCP server is what agent CLIs/IDEs connect to, so it is included by
     default. Pass --no-mcp to leave it out. Its bind host follows
     BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (defaults to loopback).
@@ -279,14 +281,9 @@ def serve_all_cli(
     argv: list[str] = []
     if no_gateway:
         argv.append("--no-gateway")
-    if no_dashboard:
-        argv.append("--no-dashboard")
-    if dashboard:
-        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += ["--dashboard-host", dashboard_host, "--dashboard-port", str(dashboard_port)]
     argv += ["--mcp-port", str(mcp_port)]
     argv += ["--mcp-scheduler-interval", str(mcp_scheduler_interval)]
     raise SystemExit(supervisor_run(argv))
@@ -295,24 +292,26 @@ def serve_all_cli(
 @app.command("mcp")
 def mcp_cli(
     mode: str = typer.Option(
-        "sse", "--mode", help="Transport: 'sse' (hosted, default) or 'stdio'."
+        "streamable-http",
+        "--mode",
+        help="Transport: 'streamable-http' (hosted, default), 'stdio', or legacy 'sse'.",
     ),
-    port: int = typer.Option(9877, "--port", help="Port for SSE mode."),
+    port: int = typer.Option(9877, "--port", help="Port for HTTP transport modes."),
     scheduler_interval: int = typer.Option(
         60,
         "--scheduler-interval",
-        help="Seconds between recurring-task scheduler ticks (SSE mode).",
+        help="Seconds between recurring-task scheduler ticks (hosted HTTP modes).",
     ),
 ):
     """Run the Brains MCP server so agent CLIs/IDEs can connect.
 
-    SSE (default) is the always-on hosted transport — point Claude Desktop /
-    Cursor / Copilot CLI at http://127.0.0.1:<port>/sse. Use 'stdio' for
-    tools that spawn the server as a subprocess. The SSE bind host is driven
-    by BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (defaults to loopback).
+    Streamable HTTP is the hosted default at http://127.0.0.1:<port>/mcp.
+    Use ``stdio`` for tools that explicitly spawn the server as a subprocess;
+    ``sse`` remains an explicit legacy compatibility mode. The HTTP bind host
+    is driven by BRAINS_MCP_BIND / BRAINS_MCP_ALLOW_PUBLIC (loopback by default).
     """
-    if mode not in {"sse", "stdio"}:
-        raise typer.BadParameter("mode must be 'sse' or 'stdio'")
+    if mode not in {"streamable-http", "stdio", "sse"}:
+        raise typer.BadParameter("mode must be 'streamable-http', 'stdio', or legacy 'sse'")
     from brains.mcp.server import run_mcp_server
 
     run_mcp_server(mode=mode, port=port, scheduler_interval=scheduler_interval)
@@ -322,23 +321,13 @@ def mcp_cli(
 def up_cli(
     gateway_host: str = "127.0.0.1",
     gateway_port: int = 8787,
-    dashboard_host: str = "127.0.0.1",
-    dashboard_port: int = 9876,
     mcp_port: int = 9877,
     no_gateway: bool = False,
-    no_dashboard: bool = False,
     no_mcp: bool = False,
-    dashboard: bool = typer.Option(
-        False,
-        "--dashboard",
-        help="Opt in to the retired legacy dashboard child (normally off; "
-        "also enabled by BRAINS_LEGACY_SURFACES=1).",
-    ),
 ):
     """Zero-to-running: init the DB + workspace, then supervise the stack.
 
-    Equivalent to `brains-ai init` followed by `brains-ai serve-all` (gateway
-    + MCP; legacy dashboard only with --dashboard / BRAINS_LEGACY_SURFACES=1).
+    Equivalent to `brains-ai init` followed by `brains-ai serve-all`.
     Idempotent — safe to re-run.
     """
     from brains.api.admin_key import ensure_admin_key
@@ -353,14 +342,9 @@ def up_cli(
     argv: list[str] = []
     if no_gateway:
         argv.append("--no-gateway")
-    if no_dashboard:
-        argv.append("--no-dashboard")
-    if dashboard:
-        argv.append("--dashboard")
     if no_mcp:
         argv.append("--no-mcp")
     argv += ["--gateway-host", gateway_host, "--gateway-port", str(gateway_port)]
-    argv += ["--dashboard-host", dashboard_host, "--dashboard-port", str(dashboard_port)]
     argv += ["--mcp-port", str(mcp_port)]
     raise SystemExit(supervisor_run(argv))
 
@@ -371,7 +355,7 @@ def _canonical_db_url() -> str:
     Returns ``settings.db_url``. The ``Settings.db_url`` validator already
     rewrites the bare ``sqlite:///brains.db`` default to the absolute
     per-machine path under ``BRAINS_STATE_DIR`` (or ``~/.brains``), so
-    every entry point — the bare CLI, the SSE server, stdio MCP children
+    every entry point — the bare CLI, the HTTP MCP server, stdio MCP children
     spawned by agents — agrees on one shared brain.
 
     The literal-string fallback below is kept as defence in depth in case
@@ -388,10 +372,24 @@ def _canonical_db_url() -> str:
     return url
 
 
+def _effective_wire_api_key(*, create: bool) -> str:
+    """Resolve the effective MCP credential; create only when explicitly requested."""
+
+    from brains.api.admin_key import ensure_admin_key, read_persisted_key
+    from brains.config import settings
+
+    if create:
+        key, _ = ensure_admin_key(print_banner=False)
+        return key
+    return settings.api_key or read_persisted_key() or ""
+
+
 @app.command("wire")
 def wire_cli(
     transport: str = typer.Option(
-        "sse", "--transport", help="MCP transport: 'sse' (default) or 'stdio'."
+        "streamable-http",
+        "--transport",
+        help="MCP transport: 'streamable-http' (default), legacy 'sse', or 'stdio'.",
     ),
     tool: list[str] = typer.Option(
         [],
@@ -399,11 +397,19 @@ def wire_cli(
         help="Limit to specific tool(s): copilot-cli, claude-code, codex, opencode. Repeatable.",
     ),
     url: str | None = typer.Option(
-        None, "--url", help="SSE server URL (default http://127.0.0.1:<port>/sse)."
+        None, "--url", help="HTTP MCP URL (default http://127.0.0.1:<port>/mcp)."
     ),
-    port: int = typer.Option(9877, "--port", help="SSE port used when --url is not given."),
+    port: int = typer.Option(9877, "--port", help="MCP port used when --url is not given."),
     no_rules: bool = typer.Option(
         False, "--no-rules", help="Only wire the MCP entry; skip the instruction rule."
+    ),
+    mailbox_wakeups: bool = typer.Option(
+        False,
+        "--mailbox-wakeups",
+        help=(
+            "Explicitly install supported body-free mailbox wakeups; "
+            "unsupported harnesses remain pull-only."
+        ),
     ),
     force: bool = typer.Option(
         False, "--force", help="Wire even tools whose config dir is absent."
@@ -422,41 +428,49 @@ def wire_cli(
     import sys
 
     from brains import wire as wire_mod
+    from brains.mcp.transport import (
+        MCP_MODE_SSE,
+        MCP_MODE_STDIO,
+        MCP_MODE_STREAMABLE_HTTP,
+    )
 
     home = Path.home()
     if show_status:
         _print_json(wire_mod.status(home))
         return
-    if transport not in {"sse", "stdio"}:
-        raise typer.BadParameter("transport must be 'sse' or 'stdio'")
+    if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+        raise typer.BadParameter("transport must be 'streamable-http', 'stdio', or legacy 'sse'")
 
-    ctx = wire_mod.WireContext(
+    ctx = wire_mod.build_wire_context(
         transport=transport,
-        url=url or f"http://127.0.0.1:{port}/sse",
+        url=url,
+        port=port,
         python=sys.executable,
         db_url=_canonical_db_url(),
+        api_key=("" if transport == MCP_MODE_STDIO else _effective_wire_api_key(create=False)),
     )
-    if transport == "sse":
-        from brains.api.admin_key import ensure_admin_key
-
-        ctx.api_key, _ = ensure_admin_key(print_banner=False)
 
     report = wire_mod.wire(
         home,
         ctx,
         tools=list(tool) or None,
         rules=not no_rules,
+        mailbox_wakeups=mailbox_wakeups,
         force=force,
         dry_run=dry_run,
     )
     _print_json(report)
+    if report.get("ok") is False:
+        raise typer.Exit(code=1)
 
 
 @app.command("unwire")
 def unwire_cli(
     tool: list[str] = typer.Option([], "--tool", help="Limit to specific tool(s). Repeatable."),
     no_rules: bool = typer.Option(
-        False, "--no-rules", help="Only remove the MCP entry; leave the instruction rule."
+        False,
+        "--no-rules",
+        help="Only remove the MCP entry; leave the instruction rule.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would change; write nothing."),
 ):
@@ -472,28 +486,6 @@ def unwire_cli(
     _print_json(report)
 
 
-@app.command("dashboard")
-def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
-    """Run the retired legacy dashboard (opt-in only).
-
-    The modern console is served by the gateway at /app. This surface is
-    retired from the normal install; start it explicitly with
-    BRAINS_LEGACY_SURFACES=1.
-    """
-    from brains.experimental import LEGACY_SURFACES_ENV, legacy_surfaces_enabled
-
-    if not legacy_surfaces_enabled():
-        typer.echo(
-            f"error: the legacy dashboard is retired from the normal install "
-            f"(use the gateway console at /app, or set {LEGACY_SURFACES_ENV}=1 to run it)",
-            err=True,
-        )
-        raise typer.Exit(2)
-    from brains.dashboard.app import app as dashboard_app
-
-    uvicorn.run(dashboard_app, host=host, port=port)
-
-
 # ---------------------------------------------------------------------------
 # OS service (autostart serve-all)
 # ---------------------------------------------------------------------------
@@ -501,6 +493,11 @@ def dashboard_cli(host: str = "127.0.0.1", port: int = 9876):
 
 @service_app.command("install")
 def service_install_cli(
+    label: str | None = typer.Option(
+        None,
+        "--label",
+        help="Optional Brains-namespaced service identity for isolated native hosts.",
+    ),
     gateway_port: int | None = typer.Option(
         None,
         "--gateway-port",
@@ -513,7 +510,7 @@ def service_install_cli(
         "--mcp-port",
         min=1,
         max=65535,
-        help="MCP SSE port. Omit to reuse the persisted port or default to 9877.",
+        help="MCP HTTP port. Omit to reuse the persisted port or default to 9877.",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show the unit definition + commands; write nothing."
@@ -532,9 +529,10 @@ def service_install_cli(
             f"No service backend for platform {service_mod.current_platform()!r} "
             "(supported: windows, macos, linux)."
         )
-    _print_json(
+    _print_service_report(
         service_mod.install(
             dry_run=dry_run,
+            label=label,
             gateway_port=gateway_port,
             mcp_port=mcp_port,
         )
@@ -543,6 +541,7 @@ def service_install_cli(
 
 @service_app.command("uninstall")
 def service_uninstall_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be removed; change nothing."
     ),
@@ -550,39 +549,47 @@ def service_uninstall_cli(
     """Stop and remove the brains serve-all autostart service."""
     from brains import service as service_mod
 
-    _print_json(service_mod.uninstall(dry_run=dry_run))
+    _print_service_report(service_mod.uninstall(dry_run=dry_run, label=label))
 
 
 @service_app.command("status")
-def service_status_cli():
+def service_status_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Report whether the autostart service is installed + its run state."""
     from brains import service as service_mod
 
-    _print_json(service_mod.status())
+    _print_json(service_mod.status(label=label))
 
 
 @service_app.command("start")
-def service_start_cli():
+def service_start_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Start the installed service now."""
     from brains import service as service_mod
 
-    _print_json(service_mod.start())
+    _print_service_report(service_mod.start(label=label))
 
 
 @service_app.command("stop")
-def service_stop_cli():
+def service_stop_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Stop the running service (and reap the supervised child tree)."""
     from brains import service as service_mod
 
-    _print_json(service_mod.stop())
+    _print_service_report(service_mod.stop(label=label))
 
 
 @service_app.command("restart")
-def service_restart_cli():
+def service_restart_cli(
+    label: str | None = typer.Option(None, "--label", help="Explicit installed service identity."),
+):
     """Restart the service."""
     from brains import service as service_mod
 
-    _print_json(service_mod.restart())
+    _print_service_report(service_mod.restart(label=label))
 
 
 @service_app.command("logs")
@@ -743,17 +750,17 @@ def setup_cli(
         True,
         "--wire/--no-wire",
         help="Register brains MCP into installed agentic tools (Copilot CLI, "
-        "Claude Code, Codex). Default: yes.",
+        "Claude Code, Codex, OpenCode). Default: yes.",
     ),
     transport: str = typer.Option(
-        "sse",
+        "streamable-http",
         "--transport",
-        help="MCP transport for `wire`: 'sse' (default) or 'stdio'.",
+        help="MCP transport for `wire`: 'streamable-http' (default), legacy 'sse', or 'stdio'.",
     ),
     port: int = typer.Option(
         9877,
         "--port",
-        help="SSE port to wire (default 9877).",
+        help="MCP port to wire (default 9877).",
     ),
     install_service: bool = typer.Option(
         False,
@@ -774,8 +781,16 @@ def setup_cli(
         "Default is a human-readable progress summary.",
     ),
 ):
-    """One-shot first-run bootstrap: init DB, register workspace, wire MCP,
-    show optional-features status, and print the next command.
+    """First-run bootstrap: init DB, register workspace, wire MCP, show
+    optional-features status, and print the next command.
+
+    Codex remote wiring intentionally fails closed unless
+    ``BRAINS_MCP_BEARER_TOKEN`` already matches the effective Brains API
+    credential in the environment that will launch Codex. Pre-provisioning
+    matching ``BRAINS_API_KEY`` and ``BRAINS_MCP_BEARER_TOKEN`` permits one
+    invocation. Otherwise initialize first, make the named bearer variable
+    available securely, and rerun ``brains-ai wire``. Brains neither prints
+    the generated key here nor changes its parent environment.
 
     Idempotent — safe to re-run; each step is its own subcommand
     (``init`` / ``wire`` / ``features --status`` / ``serve``) so you can
@@ -786,13 +801,19 @@ def setup_cli(
       brains-ai setup                       # init + wire + status, friendly text
       brains-ai setup --json                # same flow, machine-readable JSON
       brains-ai setup --no-wire             # init only (skip agentic-tool wiring)
-      brains-ai setup --transport stdio     # wire MCP over stdio instead of SSE
+      brains-ai setup --transport stdio     # use an explicit per-client subprocess
       brains-ai setup --dry-run             # preview every step, write nothing
     """
     from brains import wire as wire_mod
     from brains.api.admin_key import admin_key_path, ensure_admin_key
     from brains.control.sessions import register_workspace
     from brains.install import status_report
+    from brains.mcp.transport import (
+        MCP_MODE_SSE,
+        MCP_MODE_STDIO,
+        MCP_MODE_STREAMABLE_HTTP,
+        mcp_http_url,
+    )
     from brains.storage.migrations import current_schema_versions, init_db
 
     summary: dict[str, Any] = {"dry_run": dry_run, "steps": []}
@@ -812,7 +833,7 @@ def setup_cli(
     else:
         init_db()
         workspace = register_workspace(path)
-        _key, was_generated = ensure_admin_key(print_banner=True)
+        _key, was_generated = ensure_admin_key(print_banner=False)
         summary["steps"].append(
             {
                 "step": "init",
@@ -831,16 +852,21 @@ def setup_cli(
 
     # --- Step 2: wire (optional) -----------------------------------------
     if wire_tools:
-        if transport not in {"sse", "stdio"}:
-            raise typer.BadParameter("transport must be 'sse' or 'stdio'")
+        if transport not in {MCP_MODE_STREAMABLE_HTTP, MCP_MODE_SSE, MCP_MODE_STDIO}:
+            raise typer.BadParameter(
+                "transport must be 'streamable-http', 'stdio', or legacy 'sse'"
+            )
+        wire_url = (
+            f"http://127.0.0.1:{port}/sse" if transport == MCP_MODE_SSE else mcp_http_url(port=port)
+        )
         ctx = wire_mod.WireContext(
             transport=transport,
-            url=f"http://127.0.0.1:{port}/sse",
+            url=wire_url,
             python=sys.executable,
             db_url=_canonical_db_url(),
         )
-        if transport == "sse" and not dry_run:
-            ctx.api_key, _ = ensure_admin_key(print_banner=False)
+        if transport != MCP_MODE_STDIO:
+            ctx.api_key = _effective_wire_api_key(create=False)
         report = wire_mod.wire(Path.home(), ctx, dry_run=dry_run)
         summary["steps"].append({"step": "wire", "report": report})
     else:
@@ -873,38 +899,60 @@ def setup_cli(
     else:
         summary["steps"].append({"step": "service", "skipped": True})
 
-    # --- Step 4: next-command hint ---------------------------------------
-    # Recommend `serve-all`: it runs gateway (8787) + dashboard (9876) +
-    # MCP SSE (9877) in one supervised tree. The wired MCP entries above
-    # point at port 9877, which only `serve-all` (or `brains-ai mcp`)
-    # brings up — `serve` alone leaves the MCP integrations dark.
-    if install_service:
-        summary["next"] = {
-            "start_gateway": "brains-ai service status",
-            "tip": (
-                "Installed as an autostart service — it's already running and "
-                "will come back on every login. Check it with `brains-ai "
-                "service status` / `brains-ai service logs`, or remove it with "
-                "`brains-ai service uninstall`."
-            ),
-        }
+    # --- Step 4: transport-specific next-command hint --------------------
+    start_gateway = "brains-ai service status" if install_service else "brains-ai serve"
+    summary["next"] = {
+        "start_gateway": start_gateway,
+        "mcp_transport": transport,
+    }
+    if not wire_tools:
+        summary["next"].update(
+            {
+                "mcp_transport": None,
+                "mcp_url": None,
+                "tip": "MCP wiring was skipped; no MCP endpoint is claimed.",
+            }
+        )
+    elif transport == MCP_MODE_STREAMABLE_HTTP:
+        summary["next"].update(
+            {
+                "start_gateway": (
+                    "brains-ai service status" if install_service else "brains-ai serve-all"
+                ),
+                "mcp_url": mcp_http_url(port=port),
+                "mcp_auth_env": wire_mod.MCP_CLIENT_BEARER_ENV,
+                "tip": (
+                    "The hosted default uses authenticated Streamable HTTP. For Codex, "
+                    f"{wire_mod.MCP_CLIENT_BEARER_ENV} must already match the effective "
+                    "Brains API credential in the environment that launches Codex; "
+                    "Brains cannot change its parent environment."
+                ),
+            }
+        )
+    elif transport == MCP_MODE_SSE:
+        summary["next"].update(
+            {
+                "start_mcp": f"brains-ai mcp --mode sse --port {port}",
+                "mcp_url": f"http://127.0.0.1:{port}/sse",
+                "legacy": True,
+                "tip": "SSE is an explicit legacy compatibility mode.",
+            }
+        )
     else:
-        summary["next"] = {
-            "start_gateway": "brains-ai serve-all",
-            "tip": (
-                "Run `brains-ai serve-all` in a separate terminal — it supervises "
-                "the gateway (127.0.0.1:8787), the dashboard (127.0.0.1:9876), "
-                f"and the MCP SSE server (127.0.0.1:{port}) the wire above points "
-                "at. `brains-ai serve` alone starts only the gateway, leaving "
-                "MCP integrations dark. To run it automatically at login, see "
-                "`brains-ai service install`."
-            ),
-        }
+        summary["next"].update(
+            {
+                "mcp_url": None,
+                "tip": "stdio is client-spawned and has no HTTP endpoint or listener.",
+            }
+        )
 
     if json_out:
         _print_json(summary)
     else:
         _render_setup_text(summary, port=port)
+    wire_step = next((step for step in summary["steps"] if step["step"] == "wire"), None)
+    if wire_step and wire_step.get("report", {}).get("ok") is False:
+        raise typer.Exit(code=1)
 
 
 def _render_setup_text(summary: dict[str, Any], *, port: int) -> None:
@@ -1024,13 +1072,23 @@ def _render_setup_text(summary: dict[str, Any], *, port: int) -> None:
     # ---------- Step 4 / 4: next ----------
     header(4, 4, "next steps")
     nxt = summary.get("next", {})
-    start = nxt.get("start_gateway", "brains-ai serve-all")
+    start = nxt.get("start_gateway", "brains-ai serve")
+    mcp_transport = nxt.get("mcp_transport")
     line()
-    line(f"   Start everything:   {typer.style(start, bold=True)}")
+    line(f"   Start Brains:       {typer.style(start, bold=True)}")
     line()
-    line("   Dashboard:          http://127.0.0.1:9876")
+    line("   Console:            http://127.0.0.1:8787/app")
     line("   Gateway:            http://127.0.0.1:8787")
-    line(f"   MCP (wired above):  http://127.0.0.1:{port}/sse")
+    if mcp_transport == "streamable-http":
+        line(f"   MCP (Streamable HTTP): {nxt.get('mcp_url')}")
+        line(f"   Codex auth env:     {nxt.get('mcp_auth_env')}")
+    elif mcp_transport == "sse":
+        line(f"   MCP (legacy SSE):   {nxt.get('mcp_url')}")
+        line(f"   Start legacy MCP:   {typer.style(nxt.get('start_mcp', ''), bold=True)}")
+    elif mcp_transport == "stdio":
+        line("   MCP:                 stdio (client-spawned; no HTTP endpoint or listener)")
+    else:
+        line("   MCP wiring:          skipped")
     line()
     line(
         "   Launch an LLM CLI through the gateway: "
@@ -1152,7 +1210,7 @@ def operator_add_cli(
     Prints the key value ONCE to stdout — copy it into the operator's
     client (Authorization: Bearer <key>) immediately. The key file is
     also written to ``~/.brains/operator-keys/<slug>.key`` for the
-    gateway / dashboard / MCP SSE auth to load on startup.
+    gateway and Streamable HTTP MCP authentication to load on startup.
     """
     from brains.control.operators import (
         OperatorExistsError,
@@ -1645,7 +1703,7 @@ def _run_features_command(
                 (r["config_enabled"] for r in report["features"] if r["feature"] == feature),
                 False,
             )
-            keep = typer.confirm(f"Enable {spec.label}?", default=default)
+            keep = typer.confirm(f"Enable {getattr(spec, 'label', feature)}?", default=default)
             if keep:
                 chosen.append(feature)
         feature_list = chosen
@@ -1781,7 +1839,10 @@ def graph_query_cli(
 
 @app.command("graph-neighbors")
 def graph_neighbors_cli(
-    node_query: str, workspace_path: str = ".", relation: str | None = None, limit: int = 50
+    node_query: str,
+    workspace_path: str = ".",
+    relation: str | None = None,
+    limit: int = 50,
 ):
     """Neighbours (callers/callees/imports/contains) of a graph node. Auto-builds."""
     _require_experimental_cli("code graph neighbors")
@@ -1817,8 +1878,9 @@ def docs_index_cli(workspace: str = "."):
 
 
 @app.command("search-repo")
-def search_repo_cli(q: str, path: str = "."):
-    _print_json(search_docs(path, q) or search_repo(path, q))
+def search_repo_cli(q: str, path: str = ".", limit: int = 10):
+    """Read-only substring/symbol lookup with no preparation required."""
+    _print_json(lookup_workspace(path, q, limit=limit))
 
 
 @app.command("embed-repo")
@@ -2070,9 +2132,8 @@ def help_file_cli(
     context: str = typer.Option("", "--context"),
     timeout_ms: int = typer.Option(30000, "--timeout-ms"),
     required_tool: str | None = typer.Option(None, "--required-tool"),
-    execution_mode: str = typer.Option("auto", "--execution-mode"),
 ):
-    """File durable peer help and return immediately."""
+    """File durable help for an existing peer and return immediately."""
     from brains.control.help import file_help_request
 
     _print_json(
@@ -2085,7 +2146,7 @@ def help_file_cli(
             context=context,
             timeout_ms=timeout_ms,
             required_tool=required_tool,
-            execution_mode=execution_mode,
+            execution_mode="existing",
         )
     )
 
@@ -2159,18 +2220,11 @@ def help_cancel_cli(
 def help_release_cli(
     code: str,
     session: str = typer.Option(..., "--session"),
-    retry_timeout_ms: int = typer.Option(30000, "--retry-timeout-ms"),
 ):
     """Release claimed help back to the open queue."""
     from brains.control.help import release_help_request
 
-    _print_json(
-        release_help_request(
-            code,
-            session_id=session,
-            retry_timeout_ms=retry_timeout_ms,
-        )
-    )
+    _print_json(release_help_request(code, session_id=session))
 
 
 @app.command("help-list")
@@ -2434,6 +2488,34 @@ def session_heartbeat_cli(
     )
 
 
+@app.command("adapter-attach")
+def adapter_attach_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+):
+    """Attach an authoritative supported-harness Session at a turn boundary."""
+    if adapter != "opencode":
+        raise typer.BadParameter("adapter is not supported for lifecycle attachment")
+    from brains.control.opencode_lifecycle import attach_opencode_session
+
+    _print_json(attach_opencode_session(workspace, native_tool_session_id))
+
+
+@app.command("adapter-detach")
+def adapter_detach_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    native_tool_session_id: str = typer.Option(..., "--native-tool-session-id"),
+    workspace: str = typer.Option(".", "--workspace"),
+):
+    """Best-effort terminal detach for a supported native harness deletion."""
+    if adapter != "opencode":
+        raise typer.BadParameter("adapter is not supported for lifecycle detachment")
+    from brains.control.opencode_lifecycle import delete_opencode_session
+
+    _print_json(delete_opencode_session(workspace, native_tool_session_id))
+
+
 @mailbox_app.command("register")
 def mailbox_register_cli(
     workspace: str = typer.Option(".", "--workspace"),
@@ -2463,6 +2545,86 @@ def mailbox_register_cli(
             notification_mode=notification_mode or "pull",
         )
     )
+
+
+@mailbox_app.command("native-id")
+def mailbox_native_id_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+    copilot_session_id: str | None = typer.Option(None, "--copilot-session-id"),
+    claude_session_id: str | None = typer.Option(None, "--claude-session-id"),
+    codex_thread_id: str | None = typer.Option(None, "--codex-thread-id"),
+    codex_session_id: str | None = typer.Option(None, "--codex-session-id"),
+    opencode_session_id: str | None = typer.Option(None, "--opencode-session-id"),
+):
+    _print_json(
+        extract_native_tool_session_id(
+            adapter,
+            {
+                "copilot_session_id": copilot_session_id,
+                "claude_session_id": claude_session_id,
+                "codex_thread_id": codex_thread_id,
+                "codex_session_id": codex_session_id,
+                "opencode_session_id": opencode_session_id,
+            },
+        )
+    )
+
+
+def _managed_mailbox_action(
+    action: str, workspace: str, adapter: str, native_id: str, session: str
+) -> None:
+    controls = {
+        "create": create_managed_agent_mailbox,
+        "rotate": rotate_managed_agent_mailbox_binding,
+        "recover": recover_managed_agent_mailbox_binding,
+        "revoke": revoke_managed_agent_mailbox_binding,
+    }
+    _print_json(controls[action](workspace, adapter, native_id, session))
+
+
+@mailbox_app.command("managed-create")
+def mailbox_managed_create_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("create", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-rotate")
+def mailbox_managed_rotate_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("rotate", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-recover")
+def mailbox_managed_recover_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("recover", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("managed-revoke")
+def mailbox_managed_revoke_cli(
+    workspace: str = typer.Option(".", "--workspace"),
+    adapter: str = typer.Option(..., "--adapter"),
+    native_id: str = typer.Option(..., "--native-tool-session-id"),
+    session: str = typer.Option(..., "--session"),
+):
+    _managed_mailbox_action("revoke", workspace, adapter, native_id, session)
+
+
+@mailbox_app.command("reconcile-bindings")
+def mailbox_reconcile_bindings_cli():
+    _print_json(reconcile_managed_mailbox_bindings())
 
 
 @mailbox_app.command("phonebook")
@@ -2786,6 +2948,31 @@ def mailbox_notification_settle_cli(
     )
 
 
+@mailbox_app.command("harness-wakeup", hidden=True)
+def mailbox_harness_wakeup_cli(
+    adapter: str = typer.Option(..., "--adapter"),
+):
+    """Translate one supported harness event into a body-free nudge."""
+    from brains.control.harness_wakeup import handle_harness_wakeup
+
+    raw = sys.stdin.read(32_769)
+    if len(raw) > 32_768:
+        _print_json({})
+        return
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+
+    def emit(output: dict[str, str]) -> None:
+        _print_json(output)
+        sys.stdout.flush()
+
+    handle_harness_wakeup(adapter, payload, emit=emit)
+
+
 @app.command("session-link-successor")
 def session_link_successor_cli(
     from_session: str = typer.Option(..., "--from-session"),
@@ -2837,7 +3024,8 @@ def session_message_cli(
     session: str = typer.Option(..., help="Session id to message."),
     text: str = typer.Option(..., help="The message to deliver to the running agent."),
     operation_id: str | None = typer.Option(
-        None, help="Idempotency handle; re-sending the same one never queues a second message."
+        None,
+        help="Idempotency handle; re-sending the same one never queues a second message.",
     ),
 ):
     """Queue a durable message for a running Session (BL-P0-05).
@@ -2849,7 +3037,11 @@ def session_message_cli(
     from brains.control import session_commands as commands_ctl
 
     command, created = commands_ctl.enqueue(
-        session, commands_ctl.KIND_MESSAGE, text=text, operation_id=operation_id, requested_by="cli"
+        session,
+        commands_ctl.KIND_MESSAGE,
+        text=text,
+        operation_id=operation_id,
+        requested_by="cli",
     )
     _print_json({**command, "duplicate": not created})
 
@@ -2859,7 +3051,8 @@ def session_stop_cli(
     session: str = typer.Option(..., help="Session id to stop."),
     reason: str = typer.Option("", help="Why the Session is being stopped."),
     operation_id: str | None = typer.Option(
-        None, help="Idempotency handle; omitted, a repeated stop is the same logical command."
+        None,
+        help="Idempotency handle; omitted, a repeated stop is the same logical command.",
     ),
 ):
     """Request that a Session's agent process be stopped (idempotent)."""
@@ -3283,7 +3476,10 @@ def _workspace_cascade(session):
     """
     import sqlite3
 
-    from brains.storage.integrity import UnsupportedDatabaseError, workspace_cascade_tables
+    from brains.storage.integrity import (
+        UnsupportedDatabaseError,
+        workspace_cascade_tables,
+    )
 
     raw = session.connection().connection
     conn = getattr(raw, "driver_connection", None) or getattr(raw, "connection", raw)
@@ -3543,7 +3739,10 @@ def workspaces_doctor_cli(
                     "schema-derived tables). Pass --apply to commit.",
                     err=True,
                 )
-                report["pruned_missing"] = {"dry_run": True, "would_delete": len(missing)}
+                report["pruned_missing"] = {
+                    "dry_run": True,
+                    "would_delete": len(missing),
+                }
                 _print_json(report)
                 return
 
@@ -3885,9 +4084,8 @@ def backup_cli(
 ):
     """Create a backup archive of the current brains DB.
 
-    Dispatches on ``subsystems.storage.backend``: SQLite uses the
-    stdlib online backup API (safe even while writers are active);
-    Postgres shells out to ``pg_dump`` (must be on PATH). Records
+    SQLite uses the stdlib online backup API (safe even while writers are
+    active). Alternate runtime backends fail closed. Records
     ``admin.backup_created.attempted`` before it runs and
     ``admin.backup_created`` once the archive exists; refuses to run at all
     if the attempt cannot be recorded.
@@ -3932,8 +4130,8 @@ def restore_cli(
 ):
     """Restore a brains DB from a backup archive.
 
-    Destructive: overwrites the on-disk SQLite file (or replays the
-    SQL dump into the Postgres DB). Run ``brains-ai backup`` first.
+    Destructive: overwrites the on-disk SQLite file. Run ``brains-ai backup``
+    first. Alternate runtime backends fail closed.
     Records ``admin.restore_run.attempted`` before it touches anything -
     a restore whose attempt cannot be recorded does not run - and
     ``admin.restore_run`` once the restore returned.
@@ -4057,7 +4255,11 @@ def db_migrate_cli() -> None:
     Exits 2 when the runner refuses, 1 when the store is still not healthy
     afterwards.
     """
-    from brains.storage.migrations import MigrationCorpusError, MigrationError, run_migrations
+    from brains.storage.migrations import (
+        MigrationCorpusError,
+        MigrationError,
+        run_migrations,
+    )
 
     try:
         report = run_migrations(apply=True)
@@ -4202,7 +4404,11 @@ def db_repair_cli(
     that could not see all of it, cannot pass silently in a pipeline.
     """
     from brains.audit import AuditWriteError, required_effect
-    from brains.storage.integrity import IntegrityError, repair_database, resolve_sqlite_path
+    from brains.storage.integrity import (
+        IntegrityError,
+        repair_database,
+        resolve_sqlite_path,
+    )
 
     if not apply:
         try:
@@ -4346,7 +4552,7 @@ def daemon_stop_cli(force: bool = typer.Option(False, "--force")):
     """Signal a running foreground daemon to stop (drain or kill per --force).
 
     Refuses to signal a PID the pidfile names when it no longer verifiably
-    identifies the daemon process that wrote it (BL-P1-09) — a reused PID
+    identifies the daemon process that wrote it — a reused PID
     would otherwise send the signal to an unrelated process. The stale
     pidfile is removed instead so a future ``daemon stop`` doesn't repeat
     the same mistake.
@@ -4482,7 +4688,7 @@ def daemon_start_cli(
 
 
 # --------------------------------------------------------------------------- #
-# readiness / queue-health / recovery-policy — B8, BL-P1-09, BL-P1-12
+# readiness / queue-health / recovery-policy — B8
 #
 # CLI mirrors of GET /v1/admin/readiness, GET/POST /v1/admin/queue-health(/repair)
 # and GET /v1/admin/recovery-policy — the same control-layer functions the API
@@ -4496,7 +4702,7 @@ def daemon_start_cli(
 
 @app.command("readiness")
 def readiness_cli() -> None:
-    """Report storage, queue, durable-mail, and recovery readiness (B8).
+    """Report SQLite, MCP, queue, durable-mail, and recovery readiness (B8).
 
     Distinct from ``brains-ai health`` style liveness checks — this reports
     one overall ready/degraded verdict plus bounded, redacted per-component
@@ -4512,7 +4718,7 @@ def readiness_cli() -> None:
 
 
 queue_health_app = typer.Typer(
-    help="Coordination queue health + continuity repair (BL-P1-12): family "
+    help="Coordination queue health + continuity repair: family "
     "summary, orphan/stale detection, and dry-run/apply repair."
 )
 app.add_typer(queue_health_app, name="queue-health")
@@ -4554,7 +4760,7 @@ def queue_health_repair_cli(
 
 @app.command("recovery-policy")
 def recovery_policy_cli() -> None:
-    """Report the declared recovery policy (BL-P1-09): scope, schedule,
+    """Report declared recovery policy and verified recovery posture: scope, schedule,
     retention, encryption expectation/owner, RTO/RPO, offsite owner/location,
     and restore-drill requirement — redacted, with completeness and a
     migration/backup compatibility precheck. Never claims backups are
@@ -4562,3 +4768,72 @@ def recovery_policy_cli() -> None:
     from brains.control.recovery_policy import recovery_readiness
 
     _print_json(recovery_readiness())
+
+
+@app.command("recovery-drill")
+def recovery_drill_cli(
+    archive_path: str | None = typer.Argument(
+        None,
+        help="Manifest archive to verify; defaults to BRAINS_BACKUP_CANDIDATE_PATH.",
+    ),
+) -> None:
+    """Perform and audit an isolated restore verification without touching the live DB."""
+    from brains.audit import AuditWriteError, required_effect
+    from brains.config import settings
+    from brains.control.readiness import backup_candidate_status, perform_restore_drill
+
+    candidate = archive_path or settings.backup_candidate_path
+    try:
+        with required_effect(
+            actor="admin",
+            action="admin.recovery_drill",
+            payload={"candidate_supplied": bool(candidate)},
+        ) as effect:
+            report = backup_candidate_status(candidate)
+            if not report["ready"]:
+                raise RuntimeError(report["reason"])
+            drill = perform_restore_drill(candidate)
+            if not drill["ready"]:
+                raise RuntimeError(drill["reason"])
+            effect.record_outcome(
+                {
+                    "candidate_verified": True,
+                    "restore_verified": True,
+                    "rollback_verified": drill["rollback_verified"],
+                    "backend": report.get("backend"),
+                    "data_fingerprint": report.get("data_fingerprint"),
+                }
+            )
+    except AuditWriteError as exc:
+        typer.echo(f"recovery drill refused: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=3) from exc
+    except RuntimeError as exc:
+        typer.echo(f"recovery drill failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:  # pragma: no cover - bounded operational failure
+        typer.echo(f"recovery drill failed: {type(exc).__name__}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_json(
+        {
+            "ready": True,
+            "reason": drill["reason"],
+            "backend": report.get("backend"),
+            "data_fingerprint": report.get("data_fingerprint"),
+            "candidate_verified": True,
+            "restore_verified": True,
+            "rollback_verified": drill["rollback_verified"],
+        }
+    )
+
+
+# Apply the shipped capability boundary only after every decorator has run.
+# Keeping implementation functions importable preserves readers/migrations for
+# historical stores without leaving a command-name activation path.
+from brains.capabilities import WITHDRAWN_CLI_COMMANDS, WITHDRAWN_CLI_GROUPS  # noqa: E402
+
+app.registered_commands[:] = [
+    command for command in app.registered_commands if command.name not in WITHDRAWN_CLI_COMMANDS
+]
+app.registered_groups[:] = [
+    group for group in app.registered_groups if group.name not in WITHDRAWN_CLI_GROUPS
+]

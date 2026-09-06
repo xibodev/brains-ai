@@ -57,7 +57,7 @@ export type ScopedState<T> = Readonly<Record<string, T>>;
 export function scopedGet<T>(state: ScopedState<T>, ref: SessionRef, fallback: T): T {
   const key = sessionKey(ref);
   if (key === null) return fallback;
-  return Object.prototype.hasOwnProperty.call(state, key) ? state[key] : fallback;
+  return Object.keys(state).includes(key) ? state[key] : fallback;
 }
 
 /**
@@ -85,7 +85,7 @@ export function scopedUpdate<T>(
 /** Drop one Session's slice entirely (its thread was reloaded from the server). */
 export function scopedClear<T>(state: ScopedState<T>, ref: SessionRef): ScopedState<T> {
   const key = sessionKey(ref);
-  if (key === null || !Object.prototype.hasOwnProperty.call(state, key)) return state;
+  if (key === null || !Object.keys(state).includes(key)) return state;
   const next = { ...state };
   delete next[key];
   return next;

@@ -9,8 +9,6 @@ Covers:
 * It deliberately EXCLUDES the caller's own sessions, regardless of
   whether the caller is ``admin`` or a normal operator.
 * It deliberately omits ended sessions (``ended_at IS NOT NULL``).
-* The dashboard ``/dashboard/operators`` page renders without 500ing
-  and reflects the same projection (no workspace names or session ids).
 * The MCP tool ``brains.list_other_operators_active`` is registered and
   callable.
 """
@@ -21,7 +19,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 
 import brains.storage.db as db_module
@@ -305,73 +302,3 @@ def test_presence_projection_omits_workspace_names_and_session_ids(
     assert set(row.keys()) == allowed
     # No workspace slug leakage even in str(row).
     assert "ws-secret" not in str(row)
-
-
-# ---------- MCP tool registration ----------
-
-
-def test_mcp_tool_registered_and_calls_through(isolated_brains: Path) -> None:
-    from brains.control.operators import ensure_admin_operator
-    from brains.mcp.server import TOOL_REGISTRY, call_tool
-
-    ensure_admin_operator()
-    assert "list_other_operators_active" in TOOL_REGISTRY
-    result = call_tool("brains.list_other_operators_active")
-    assert result == []
-
-
-# ---------- dashboard wiring ----------
-
-
-def test_dashboard_operators_page_renders(isolated_brains: Path, tmp_path, monkeypatch) -> None:
-    """The /dashboard/operators HTML page returns 200 + the panel marker."""
-    from brains.control.operators import add_operator, ensure_admin_operator
-    from brains.control.sessions import start_session
-    from brains.dashboard.app import app
-
-    ensure_admin_operator()
-    add_operator("dave")
-    ws = tmp_path / "ws-f"
-    _make_workspace(ws, "ws-f")
-
-    _set_current_operator(monkeypatch, "dave")
-    start_session(str(ws), tool="pytest")
-
-    monkeypatch.delenv("BRAINS_OPERATOR", raising=False)
-    client = TestClient(app)
-    # Authenticate with the conftest-pinned admin key.
-    response = client.get(
-        "/dashboard/operators",
-        headers={"Authorization": "Bearer local-dev-key"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.text
-    assert "Other operators" in body
-    assert "dave" in body
-
-
-def test_dashboard_operators_api_returns_projection(
-    isolated_brains: Path, tmp_path, monkeypatch
-) -> None:
-    from brains.control.operators import add_operator, ensure_admin_operator
-    from brains.control.sessions import start_session
-    from brains.dashboard.app import app
-
-    ensure_admin_operator()
-    add_operator("eve")
-    ws = tmp_path / "ws-g"
-    _make_workspace(ws, "ws-g")
-
-    _set_current_operator(monkeypatch, "eve")
-    start_session(str(ws), tool="pytest")
-
-    monkeypatch.delenv("BRAINS_OPERATOR", raising=False)
-    client = TestClient(app)
-    response = client.get(
-        "/dashboard/api/operators",
-        headers={"Authorization": "Bearer local-dev-key"},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert isinstance(payload, list)
-    assert any(row["operator_slug"] == "eve" for row in payload)

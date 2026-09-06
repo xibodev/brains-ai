@@ -1,4 +1,4 @@
-"""Recovery policy — BL-P1-09.
+"""Recovery policy and proven recovery posture.
 
 Brains does not run a backup scheduler itself: an install's *managed
 recovery* is a declared policy (scope, schedule, retention, encryption
@@ -11,10 +11,7 @@ is expected to honour. This module is the single place that:
   ``complete: False`` and the exact missing fields, never a fabricated
   "managed" claim;
 * reuses :mod:`brains.backup` and :mod:`brains.storage.migrations` to prove
-  the *mechanics* a real backup would depend on actually work - schema
-  compatibility, migration health, and (for Postgres) the required CLI
-  tools - without ever running a real backup or inventing a schedule
-  (:func:`compatibility_precheck`);
+  the SQLite mechanics and configured restore candidate a real recovery uses;
 * combines both into the single ``ready`` / ``degraded`` verdict the
   readiness surface (B8) reports (:func:`recovery_readiness`).
 
@@ -44,7 +41,7 @@ _ALWAYS_MANDATORY: tuple[str, ...] = (
 )
 
 
-def _restore_drill_error() -> str | None:
+def _declared_restore_drill_error() -> str | None:
     value = settings.backup_last_restore_drill_at
     if not value:
         return "missing"
@@ -62,11 +59,9 @@ def _restore_drill_error() -> str | None:
 def _missing_fields() -> list[str]:
     """Every mandatory recovery-policy field that is still unset.
 
-    ``backup_encryption_owner`` is only mandatory when the operator has
-    committed to encryption at rest; ``backup_last_restore_drill_at`` is only
-    mandatory when a drill is required (the default). Both default to the
-    stricter "required" position so an install cannot silently opt out by
-    doing nothing.
+    ``backup_encryption_owner`` is mandatory only when the operator has
+    committed to encryption at rest. Drill evidence is operational truth,
+    not a policy field, and is evaluated separately from this declaration.
     """
     missing: list[str] = []
     if not settings.backup_scope:
@@ -85,8 +80,6 @@ def _missing_fields() -> list[str]:
         missing.append("backup_offsite_location")
     if settings.backup_encryption_at_rest and not settings.backup_encryption_owner:
         missing.append("backup_encryption_owner")
-    if settings.backup_restore_drill_required and _restore_drill_error() is not None:
-        missing.append("backup_last_restore_drill_at")
     return missing
 
 
@@ -99,7 +92,6 @@ def policy_summary() -> dict[str, Any]:
     never has to know the sentinel convention.
     """
     missing = _missing_fields()
-    drill_error = _restore_drill_error() if settings.backup_restore_drill_required else None
     return {
         "scope": settings.backup_scope or None,
         "schedule": settings.backup_schedule or None,
@@ -112,7 +104,9 @@ def policy_summary() -> dict[str, Any]:
         "rpo_minutes": settings.backup_rpo_minutes or None,
         "restore_drill_required": settings.backup_restore_drill_required,
         "last_restore_drill_at": settings.backup_last_restore_drill_at or None,
-        "restore_drill_error": drill_error,
+        "restore_drill_error": (
+            _declared_restore_drill_error() if settings.backup_restore_drill_required else None
+        ),
         "complete": not missing,
         "missing_fields": missing,
     }
@@ -121,11 +115,8 @@ def policy_summary() -> dict[str, Any]:
 def compatibility_precheck() -> dict[str, Any]:
     """Prove the mechanics a managed policy depends on, without running one.
 
-    Reuses the existing migration/backup contracts instead of inventing a new
-    check: :func:`brains.storage.migrations.migration_status` for schema
-    health, and, for Postgres, :mod:`brains.backup`'s own ``pg_dump``/
-    ``pg_restore`` tool-presence check (:func:`brains.backup._require_tool`) -
-    the same gate a real backup/restore would hit.
+    Reuses migration status and the shipped SQLite backup implementation.
+    Alternate runtime backends are withdrawn and never probed or advertised.
     """
     from brains.storage.migrations import (
         current_schema_versions,
@@ -142,7 +133,7 @@ def compatibility_precheck() -> dict[str, Any]:
         "detail": None,
     }
     try:
-        from brains.backup import BackupToolUnavailable, _current_backend, _require_tool
+        from brains.backup import _current_backend
 
         backend = _current_backend()
         if backend == "sqlite":
@@ -150,16 +141,9 @@ def compatibility_precheck() -> dict[str, Any]:
             # image (see ``brains.backup._sqlite_backup_image``); no external
             # tool is required, so the prerequisite is met by definition.
             result["compaction_prerequisite_ok"] = True
-        elif backend == "postgres":
-            try:
-                _require_tool("pg_dump")
-                _require_tool("pg_restore")
-                result["compaction_prerequisite_ok"] = True
-            except BackupToolUnavailable as exc:
-                result["compaction_prerequisite_ok"] = False
-                result["detail"] = str(exc)
         else:
-            result["detail"] = f"unknown storage backend {backend!r}"
+            result["compaction_prerequisite_ok"] = False
+            result["detail"] = "runtime backend is withdrawn; SQLite is required"
     except Exception as exc:  # pragma: no cover - defensive; never raise from a probe
         result["detail"] = f"compaction prerequisite check failed: {type(exc).__name__}"
     return result
@@ -169,13 +153,16 @@ def recovery_readiness() -> dict[str, Any]:
     """Combined policy-completeness + mechanics verdict for readiness (B8).
 
     ``ready`` is ``True`` only when the declared policy is complete AND the
-    mechanics precheck passed. An install that configured nothing, or whose
-    storage/migration state is unhealthy, or whose Postgres backend is
-    missing ``pg_dump``/``pg_restore``, is reported not-ready with the exact
-    reasons - never silently upgraded to "managed".
+    mechanics precheck passed, a compatible candidate is verified, and any
+    required drill has a successful audit record. Operator-entered timestamps
+    are declarations only and never become drill evidence.
     """
     policy = policy_summary()
     compat = compatibility_precheck()
+    from brains.control.readiness import backup_candidate_status, last_restore_drill_status
+
+    candidate = backup_candidate_status()
+    last_drill = last_restore_drill_status()
     reasons: list[str] = []
     if not policy["complete"]:
         reasons.append("recovery policy incomplete: missing " + ", ".join(policy["missing_fields"]))
@@ -183,10 +170,20 @@ def recovery_readiness() -> dict[str, Any]:
         reasons.append("storage/migration state is not healthy")
     if compat["compaction_prerequisite_ok"] is not True:
         reasons.append(compat.get("detail") or "compaction prerequisite failed")
+    if not candidate["ready"]:
+        reasons.append(candidate["reason"])
+    if policy["restore_drill_required"] and not last_drill["verified"]:
+        reasons.append(last_drill["reason"])
+    elif policy["restore_drill_required"] and candidate.get("data_fingerprint") != last_drill.get(
+        "data_fingerprint"
+    ):
+        reasons.append("candidate-not-drilled")
     return {
         "ready": not reasons,
         "policy": policy,
         "compatibility": compat,
+        "candidate": candidate,
+        "last_drill": last_drill,
         "reasons": reasons,
     }
 

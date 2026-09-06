@@ -544,14 +544,16 @@ _EXEC_BOUNDARY = {
 
 #: Operator-invoked paths that still exec directly. They are outside the
 #: agent-execution boundary by acknowledgement, not by oversight, and are
-#: listed in BL-P0-03 so the claim and the code agree.
+#: listed here explicitly so a new process boundary cannot appear unnoticed.
 _KNOWN_UNGOVERNED_EXEC = (
+    SRC / "brains/control/durable_mailbox.py",  # local binding ACL/process identity probes
     SRC / "brains/control/supervisor.py",
     SRC / "brains/cli/app.py",  # self-update: `git pull`, `pip install`
     SRC / "brains/cli/run.py",
     SRC / "brains/auth/copilot.py",
     SRC / "brains/backup/__init__.py",
     SRC / "brains/install/__init__.py",
+    SRC / "brains/wire/__init__.py",  # operator-invoked local client version preflight
     SRC / "brains/service/common.py",
     SRC / "brains/context/freshness.py",
     SRC / "brains/daemon/detect.py",
@@ -606,7 +608,7 @@ def test_ungoverned_exec_paths_are_acknowledged_not_discovered() -> None:
             found.add(path)
     unexpected = found - set(_KNOWN_UNGOVERNED_EXEC)
     assert not unexpected, (
-        "these modules exec directly and are not acknowledged in BL-P0-03: "
+        "these modules exec directly and are not in the reviewed operator-invoked inventory: "
         + ", ".join(sorted(str(p.relative_to(SRC)) for p in unexpected))
     )
 

@@ -21,6 +21,7 @@ from sqlalchemy import create_engine
 import brains.storage.db as db_module
 import brains.storage.migrations as migrations_module
 from brains.storage.migrations import (
+    MigrationLedgerStateError,
     _list_disk_migrations,
     current_schema_versions,
     init_db,
@@ -82,8 +83,8 @@ def test_init_db_is_idempotent(isolated_db) -> None:
     assert first == second, "second init_db() recorded a duplicate version row"
 
 
-def test_010_skips_when_columns_already_exist(isolated_db) -> None:
-    """Re-running the migration on an up-to-date DB is a no-op."""
+def test_deleting_a_settled_migration_row_fails_closed(isolated_db) -> None:
+    """An apparent ledger gap is not silently re-adopted from schema shape."""
     init_db()
     # Drop the recorded version so the runner tries to apply it again.
     with db_module.SessionLocal() as session:
@@ -92,7 +93,5 @@ def test_010_skips_when_columns_already_exist(isolated_db) -> None:
             {"v": "010_hivemind_consolidation"},
         )
         session.commit()
-    # Should not raise even though spawn_* already exist.
-    init_db()
-    columns = _columns(isolated_db, "recurring_task_definitions")
-    assert REQUIRED_SPAWN_COLUMNS.issubset(columns)
+    with pytest.raises(MigrationLedgerStateError, match="ledger_gap"):
+        init_db()

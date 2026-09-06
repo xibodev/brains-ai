@@ -14,15 +14,15 @@ can be unit-tested on any host OS; registration shells out to ``schtasks``.
 
 from __future__ import annotations
 
-import contextlib
 import csv
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from brains.service.common import (
-    WINDOWS_TASK_NAME,
+    SERVICE_LABEL,
     ServiceSpec,
     cleanup_stale_pidfile,
+    native_service_identity,
     read_pidfile_record,
     run_cmd,
     state_dir,
@@ -30,9 +30,9 @@ from brains.service.common import (
 )
 
 
-def definition_path() -> Path:
+def definition_path(label: str = SERVICE_LABEL) -> Path:
     """Where we stash the rendered XML (for reference + idempotency)."""
-    return state_dir() / "service" / f"{WINDOWS_TASK_NAME}.xml"
+    return state_dir() / "service" / f"{native_service_identity('windows', label)}.xml"
 
 
 def render_task_xml(spec: ServiceSpec) -> str:
@@ -45,11 +45,12 @@ def render_task_xml(spec: ServiceSpec) -> str:
     """
     arguments = " ".join(spec.args)
     user = escape(spec.user)
+    task_name = native_service_identity("windows", spec.label)
     return f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>{escape(spec.description)}</Description>
-    <URI>\\{WINDOWS_TASK_NAME}</URI>
+    <URI>\\{task_name}</URI>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -100,11 +101,12 @@ def render_task_xml(spec: ServiceSpec) -> str:
 
 def install(spec: ServiceSpec, *, dry_run: bool = False) -> dict:
     xml = render_task_xml(spec)
-    path = definition_path()
-    register = ["schtasks", "/Create", "/TN", WINDOWS_TASK_NAME, "/XML", str(path), "/F"]
+    task_name = native_service_identity("windows", spec.label)
+    path = definition_path(spec.label)
+    register = ["schtasks", "/Create", "/TN", task_name, "/XML", str(path), "/F"]
     report: dict = {
         "platform": "windows",
-        "label": WINDOWS_TASK_NAME,
+        "label": task_name,
         "action": "would-install" if dry_run else "install",
         "definition": str(path),
         "command": spec.command_line,
@@ -122,40 +124,57 @@ def install(spec: ServiceSpec, *, dry_run: bool = False) -> dict:
     # schtasks only arms the logon trigger; start it now so `install` brings
     # the stack up immediately (parity with launchd RunAtLoad / systemd --now).
     if report["ok"]:
-        started = start()
+        started = start(spec.label)
         report["started"] = started["ok"]
         report["start_detail"] = started["detail"]
+        report["ok"] = bool(report["ok"] and started["ok"])
     return report
 
 
-def uninstall(*, dry_run: bool = False) -> dict:
-    cmd = ["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]
+def uninstall(*, dry_run: bool = False, label: str = SERVICE_LABEL) -> dict:
+    task_name = native_service_identity("windows", label)
+    cmd = ["schtasks", "/Delete", "/TN", task_name, "/F"]
     report: dict = {
         "platform": "windows",
-        "label": WINDOWS_TASK_NAME,
+        "label": task_name,
         "action": "would-uninstall" if dry_run else "uninstall",
         "cmd": " ".join(cmd),
     }
     if dry_run:
         return report
+    stopped = stop(label)
+    if not stopped["ok"]:
+        report["ok"] = False
+        report["detail"] = f"uninstall refused because stop was incomplete: {stopped['detail']}"
+        return report
     rc, out, err = run_cmd(cmd)
     report["ok"] = rc == 0
     report["detail"] = out or err
-    _delete_definition()
+    if report["ok"]:
+        removed, removal_detail = _delete_definition(label)
+        if not removed:
+            report["ok"] = False
+            report["detail"] = f"{report['detail']}; {removal_detail}".strip("; ")
     return report
 
 
-def _delete_definition() -> None:
-    with contextlib.suppress(OSError):
-        definition_path().unlink()
+def _delete_definition(label: str = SERVICE_LABEL) -> tuple[bool, str]:
+    try:
+        definition_path(label).unlink()
+    except FileNotFoundError:
+        return True, ""
+    except OSError:
+        return False, "native task was removed but its local definition could not be removed"
+    return True, ""
 
 
-def start() -> dict:
-    rc, out, err = run_cmd(["schtasks", "/Run", "/TN", WINDOWS_TASK_NAME])
+def start(label: str = SERVICE_LABEL) -> dict:
+    task_name = native_service_identity("windows", label)
+    rc, out, err = run_cmd(["schtasks", "/Run", "/TN", task_name])
     return {"platform": "windows", "action": "start", "ok": rc == 0, "detail": out or err}
 
 
-def stop() -> dict:
+def stop(label: str = SERVICE_LABEL) -> dict:
     """End the task, then reap the supervisor tree.
 
     ``schtasks /End`` only stops the task's action process; the gateway /
@@ -166,7 +185,8 @@ def stop() -> dict:
     process (``stale``) is never tree-killed by number alone; the stale
     pidfile is removed instead so a future ``status()`` stops trusting it.
     """
-    rc, out, err = run_cmd(["schtasks", "/End", "/TN", WINDOWS_TASK_NAME])
+    task_name = native_service_identity("windows", label)
+    rc, out, err = run_cmd(["schtasks", "/End", "/TN", task_name])
     detail = out or err
     check = verify_pid(read_pidfile_record())
     pid = check["pid"]
@@ -195,8 +215,8 @@ def stop() -> dict:
     }
 
 
-def restart() -> dict:
-    stopped = stop()
+def restart(label: str = SERVICE_LABEL) -> dict:
+    stopped = stop(label)
     if not stopped["ok"]:
         return {
             "platform": "windows",
@@ -204,14 +224,15 @@ def restart() -> dict:
             "ok": False,
             "detail": f"restart refused because stop was incomplete: {stopped['detail']}",
         }
-    return start()
+    return start(label)
 
 
-def status() -> dict:
+def status(label: str = SERVICE_LABEL) -> dict:
     # Parse CSV (fixed column order) rather than the localized LIST output:
     # /FO LIST labels ("Status:" / "Estado:") differ per UI language, but the
     # CSV column positions are stable — TaskName, Next Run Time, Status.
-    rc, out, err = run_cmd(["schtasks", "/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "CSV", "/NH"])
+    task_name = native_service_identity("windows", label)
+    rc, out, err = run_cmd(["schtasks", "/Query", "/TN", task_name, "/FO", "CSV", "/NH"])
     installed = rc == 0
     state = "unknown"
     if installed and out:
@@ -220,7 +241,7 @@ def status() -> dict:
             state = row[2]  # raw (may be localized, e.g. "Ready" / "Listo")
     return {
         "platform": "windows",
-        "label": WINDOWS_TASK_NAME,
+        "label": task_name,
         "installed": installed,
         "state": state,
         "detail": out or err,

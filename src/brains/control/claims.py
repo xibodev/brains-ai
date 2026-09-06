@@ -7,7 +7,12 @@ from sqlalchemy.exc import IntegrityError
 
 from brains.control.common import utc_now
 from brains.control.events import append_event
-from brains.control.sessions import get_workspace, register_workspace
+from brains.control.sessions import (
+    _lock_session_lifecycle,
+    get_workspace,
+    register_workspace,
+    require_live_session,
+)
 from brains.storage.db import SessionLocal
 from brains.storage.migrations import init_db
 from brains.storage.models import Workspace, WorkspaceClaim
@@ -53,6 +58,12 @@ def claim_workspace(
     expires_at = now + timedelta(minutes=duration_minutes)
     init_db()
     with SessionLocal() as session:
+        agent = _lock_session_lifecycle(session, session_id)
+        if agent is None:
+            raise ValueError(f"unknown session: {session_id} (claim workspace)")
+        agent = require_live_session(session, session_id, action="claim workspace")
+        if agent.workspace_id != workspace.id:
+            raise ValueError(f"session {session_id} and workspace {workspace.slug} must match")
         _expire_claims(session)
         existing = (
             session.query(WorkspaceClaim)

@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -50,6 +50,8 @@ MAX_BROADCAST_RECIPIENTS = 500
 MAX_BODY_CHARS = 65_536
 MAILBOX_NUDGE = "Brains mailbox: new mail is waiting. Pull your durable inbox."
 NOTIFY_MODES = frozenset({"turn_boundary", "immediate"})
+NOTIFICATION_CLAIM_LEASE_SECONDS = 30
+MAX_NOTIFICATION_ATTEMPTS = 3
 _OPERATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$")
 _KIND_RE = re.compile(r"^[a-z][a-z0-9_.-]{0,31}$")
 
@@ -128,7 +130,8 @@ def _ensure_notification_in_transaction(
     if attachment is None or attachment.notification_mode not in NOTIFY_MODES:
         return None
     expected_modes = {
-        "claude-code": "immediate",
+        "copilot-cli": "turn_boundary",
+        "claude-code": "turn_boundary",
         "codex": "turn_boundary",
         "opencode": "immediate",
     }
@@ -1303,6 +1306,58 @@ def take_mailbox_notification(
                 session.commit()
                 return {"notification": None, "fallback": "pull", "timeout": False}
             _queue_unread_notifications_in_transaction(session, mailbox)
+            stale_query = session.query(MailNotificationAttempt).filter(
+                MailNotificationAttempt.attachment_id == attachment.id,
+                MailNotificationAttempt.status == "claimed",
+                MailNotificationAttempt.started_at
+                <= utc_now() - timedelta(seconds=NOTIFICATION_CLAIM_LEASE_SECONDS),
+            )
+            if notification_id:
+                stale_query = stale_query.filter(
+                    MailNotificationAttempt.notification_id == notification_id.strip()
+                )
+            stale = stale_query.order_by(MailNotificationAttempt.id.asc()).first()
+            if stale is not None:
+                now = utc_now()
+                if stale.attempt >= MAX_NOTIFICATION_ATTEMPTS:
+                    stale.status = "failed"
+                    stale.error_code = "delivery_uncertain"
+                    stale.completed_at = now
+                    session.commit()
+                    session.refresh(stale)
+                    return {
+                        "notification": _notification_dict(stale),
+                        "fallback": "pull",
+                        "uncertain": True,
+                    }
+                updated = (
+                    session.query(MailNotificationAttempt)
+                    .filter(
+                        MailNotificationAttempt.id == stale.id,
+                        MailNotificationAttempt.status == "claimed",
+                        MailNotificationAttempt.attempt == stale.attempt,
+                        MailNotificationAttempt.started_at == stale.started_at,
+                    )
+                    .update(
+                        {
+                            "attempt": MailNotificationAttempt.attempt + 1,
+                            "started_at": now,
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                if not updated:
+                    session.rollback()
+                    continue
+                session.commit()
+                stale = session.get(MailNotificationAttempt, stale.id)
+                assert stale is not None
+                session.refresh(stale)
+                return {
+                    "notification": _notification_dict(stale),
+                    "fallback": "pull",
+                    "reclaimed": True,
+                }
             query = session.query(MailNotificationAttempt).filter(
                 MailNotificationAttempt.attachment_id == attachment.id,
                 MailNotificationAttempt.status == "queued",

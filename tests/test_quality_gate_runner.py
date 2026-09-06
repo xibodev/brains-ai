@@ -32,10 +32,27 @@ def test_gate_commands_share_the_ci_runner(monkeypatch) -> None:
     commands = {gate.name: gate.command for gate in plan}
 
     prefix = ["uv", "run", "--extra", "dev", "--python", "3.12", "--no-sync"]
+    assert plan[0].name == "checked TypeScript parser install"
+    assert plan[0].command[-2:] == ["ci", "--ignore-scripts"]
     assert commands["documentation contract"][: len(prefix)] == prefix
     assert commands["ruff lint"][: len(prefix)] == prefix
     assert commands["contract self-tests"][: len(prefix)] == prefix
+    assert commands["acceptance tests"][len(prefix) : len(prefix) + 3] == [
+        "python",
+        "-m",
+        "pytest",
+    ]
+    assert commands["contract self-tests"][len(prefix) : len(prefix) + 3] == [
+        "python",
+        "-m",
+        "pytest",
+    ]
+    assert commands["core surface boundary"][: len(prefix)] == prefix
+    assert commands["core surface boundary"][-2:] == ["--dist", "dist"]
     assert commands["distribution contents"][: len(prefix)] == prefix
+    names = [gate.name for gate in plan]
+    assert names.index("build wheel + sdist") < names.index("core surface boundary")
+    assert names.index("core surface boundary") < names.index("distribution contents")
 
 
 def test_main_syncs_once_before_running_gates(monkeypatch) -> None:
@@ -53,4 +70,47 @@ def test_main_syncs_once_before_running_gates(monkeypatch) -> None:
 
     assert run_quality_gates.main(["--fast", "--no-spa"]) == 0
     assert calls[0] == ["uv", "sync", "--extra", "dev", "--python", "3.12"]
-    assert all("--no-sync" in command for command in calls[1:7])
+    assert calls[1][-2:] == ["ci", "--ignore-scripts"]
+    assert all("--no-sync" in command for command in calls[2:8])
+
+
+def test_package_ci_builds_fresh_artifacts_before_core_surface() -> None:
+    workflow = (_PATH.parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    package_job = workflow.split("  package:\n", 1)[1].split("\n  native-installation-probe:\n", 1)[
+        0
+    ]
+
+    setup = package_job.index("actions/setup-node@v4")
+    pinned = package_job.index('node-version: "22"')
+    install = package_job.index("npm ci --ignore-scripts")
+    build = package_job.index("uv build")
+    checker = package_job.index("python scripts/check_core_surface.py --dist dist")
+    distribution = package_job.index("python scripts/check_distribution.py")
+    assert setup < pinned < install < build < checker < distribution
+
+
+def test_ci_invokes_repo_tests_as_python_module() -> None:
+    workflow = (_PATH.parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "uv run pytest" not in workflow
+    assert workflow.count("uv run python -m pytest") == 4
+
+
+def test_local_runner_fails_clearly_without_parser_installer(monkeypatch, capsys) -> None:
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+
+    def which(name: str) -> str | None:
+        return None if name in {"npm", "npm.cmd"} else name
+
+    monkeypatch.setattr(run_quality_gates.shutil, "which", which)
+    monkeypatch.setattr(
+        run_quality_gates.subprocess,
+        "run",
+        lambda command, **_kwargs: calls.append(command) or Result(),
+    )
+
+    assert run_quality_gates.main(["--fast", "--no-spa"]) == 1
+    assert calls == [["uv", "sync", "--extra", "dev", "--python", "3.12"]]
+    assert "npm is required to install the checked TypeScript parser" in capsys.readouterr().out

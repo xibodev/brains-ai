@@ -11,12 +11,12 @@
   --fill-active: #e5ecff;
   --fill-hover: rgba(255, 255, 255, 0.48);
   --text-primary: #12211d;
-  --text-muted: #6b7672;
-  --text-faint: #929994;
+  --text-muted: #4f5e59;
+  --text-faint: #626e6a;
   --accent: #2858cc;
   --accent-quiet: #dce6ff;
   --positive: #187454;
-  --warning: #ad6818;
+  --warning: #784406;
   --danger: #a23f37;
 
   /* per-entity accent override (set inline on persona scopes) */

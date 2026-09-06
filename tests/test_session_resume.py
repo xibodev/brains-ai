@@ -21,7 +21,7 @@ import pytest
 
 from brains.control.common import utc_now
 from brains.control.events import append_event
-from brains.control.handoffs import set_handoff
+from brains.control.handoffs import list_handoffs, set_handoff
 from brains.control.mailbox import send_message
 from brains.control.resume import (
     checkpoint,
@@ -166,7 +166,7 @@ def test_checkpoint_reuses_only_adjacent_exact_payload(tmp_path):
         assert db.query(Event).filter_by(session_id=sid, kind="checkpoint_written").count() == 3
 
 
-def test_exact_checkpoint_retry_does_not_reactivate_dormant_session(tmp_path):
+def test_exact_checkpoint_retry_refuses_dormant_session(tmp_path):
     started = start_session(str(tmp_path), tool="pytest")
     checkpoint(started["session_id"], summary="stable cairn")
     with SessionLocal() as db:
@@ -176,14 +176,15 @@ def test_exact_checkpoint_retry_does_not_reactivate_dormant_session(tmp_path):
         db.commit()
     sweep_stale_session_leases()
 
-    retry = checkpoint(started["session_id"], summary="stable cairn")
+    with pytest.raises(ValueError, match="dormant or expired"):
+        checkpoint(started["session_id"], summary="stable cairn")
 
-    assert retry["duplicate"] is True
+    assert len(list_checkpoints(started["session_id"])) == 1
     with SessionLocal() as db:
         assert db.get(AgentSession, started["session_id"]).state == "dormant"
 
 
-def test_exact_handoff_retry_does_not_reactivate_dormant_session(tmp_path):
+def test_exact_handoff_retry_refuses_dormant_session(tmp_path):
     started = start_session(str(tmp_path), tool="pytest")
     first = set_handoff(str(tmp_path), "stable handoff", session_id=started["session_id"])
     with SessionLocal() as db:
@@ -193,10 +194,10 @@ def test_exact_handoff_retry_does_not_reactivate_dormant_session(tmp_path):
         db.commit()
     sweep_stale_session_leases()
 
-    retry = set_handoff(str(tmp_path), "stable handoff", session_id=started["session_id"])
+    with pytest.raises(ValueError, match="dormant or expired"):
+        set_handoff(str(tmp_path), "stable handoff", session_id=started["session_id"])
 
-    assert retry["duplicate"] is True
-    assert retry["handoff_id"] == first["handoff_id"]
+    assert list_handoffs(str(tmp_path))[0]["handoff_id"] == first["handoff_id"]
     with SessionLocal() as db:
         assert db.get(AgentSession, started["session_id"]).state == "dormant"
 

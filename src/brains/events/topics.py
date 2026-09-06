@@ -48,18 +48,7 @@ AUDIENCE_RUNTIME = "runtime"
 
 #: The Org-scoped channels the product publishes on. Adding a channel here is
 #: the only way to make one subscribable, which keeps the grammar closed.
-ORG_CHANNELS: frozenset[str] = frozenset(
-    {
-        "issues",
-        "sessions",
-        "runtimes",
-        "inbox",
-        "projects",
-        "personas",
-        "pods",
-        "automation",
-    }
-)
+ORG_CHANNELS: frozenset[str] = frozenset({"sessions", "inbox"})
 
 #: Per-Session streams. ``stdout`` is the live transcript, ``chat`` the
 #: operator/agent message channel, ``state`` the lifecycle transitions.
@@ -148,36 +137,12 @@ def parse_topic(topic: object) -> ParsedTopic | None:
             entity=ENTITY_ORG,
             audiences=frozenset({AUDIENCE_OPERATOR}),
         )
-    if family == "issue" and len(parts) == 2:
-        return ParsedTopic(
-            family="issue",
-            reference=parts[1],
-            channel="events",
-            entity=ENTITY_ISSUE,
-            audiences=frozenset({AUDIENCE_OPERATOR}),
-        )
     if family == "session" and len(parts) == 3 and parts[2] in SESSION_STREAMS:
         return ParsedTopic(
             family="session",
             reference=parts[1],
             channel=parts[2],
             entity=ENTITY_SESSION,
-            audiences=frozenset({AUDIENCE_OPERATOR, AUDIENCE_RUNTIME}),
-        )
-    if family == "machine" and len(parts) == 3 and parts[2] in MACHINE_STREAMS:
-        return ParsedTopic(
-            family="machine",
-            reference=parts[1],
-            channel=parts[2],
-            entity=ENTITY_RUNTIME,
-            audiences=frozenset({AUDIENCE_OPERATOR, AUDIENCE_RUNTIME}),
-        )
-    if family == "runtime" and len(parts) == 3 and parts[2] in RUNTIME_STREAMS:
-        return ParsedTopic(
-            family="runtime",
-            reference=parts[1],
-            channel=parts[2],
-            entity=ENTITY_RUNTIME,
             audiences=frozenset({AUDIENCE_OPERATOR, AUDIENCE_RUNTIME}),
         )
     return None

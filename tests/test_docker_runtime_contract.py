@@ -17,6 +17,6 @@ def test_runtime_dependency_rejects_incompatible_mcp_major() -> None:
 def test_runtime_image_healthchecks_every_default_supervised_surface() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "http://127.0.0.1:8787/health" in dockerfile
-    assert "socket.create_connection(('127.0.0.1', 9877)" in dockerfile
+    assert "mcp_protocol_status(timeout=3)['ready']" in dockerfile
     # The legacy dashboard is retired from the default serve-all topology.
     assert "for port in (9876,9877)" not in dockerfile

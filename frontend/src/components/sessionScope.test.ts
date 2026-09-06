@@ -60,6 +60,18 @@ test("a response that arrives after the operator switched Session is ignored", (
   assert.ok(!isCurrent({ current: sessionKey("s1") }, sessionKey("s2")));
 });
 
+test("a deferred Workspace lookup for A can never render after switching to B", async () => {
+  let finish!: (value: string) => void;
+  const deferred = new Promise<string>((resolve) => { finish = resolve; });
+  const visibleWorkspace = { current: sessionKey("workspace-a") };
+  const requestedWorkspace = sessionKey("workspace-a");
+  visibleWorkspace.current = sessionKey("workspace-b");
+  finish("result from workspace A");
+  const result = await deferred;
+  assert.equal(result, "result from workspace A");
+  assert.ok(!isCurrent(visibleWorkspace, requestedWorkspace));
+});
+
 test("a response captured with nothing selected can never be applied", () => {
   assert.ok(!isCurrent({ current: null }, null));
 });

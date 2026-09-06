@@ -1,10 +1,10 @@
-"""Auth + host-header allowlist middleware for the MCP SSE transport.
+"""Auth + host-header allowlist middleware for MCP HTTP transports.
 
 Stdio MCP is process-bounded and inherits the parent process's trust
-boundary, so it does not need an auth layer. SSE MCP, in contrast, exposes
+boundary, so it does not need an auth layer. HTTP MCP, in contrast, exposes
 every brains tool over HTTP and therefore needs the same gate the gateway
 API enforces. This module reuses the gateway's constant-time key check and
-sliding-window rate limiter so SSE clients share one credential surface
+sliding-window rate limiter so HTTP clients share one credential surface
 with the rest of brains.
 
 A Host header allowlist defends against DNS-rebinding attacks: when bound
@@ -43,7 +43,7 @@ from brains.config import settings
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 
 # When set to a truthy value the operator has explicitly accepted that the
-# MCP SSE port may bind to a public interface and that Host header checks
+# MCP HTTP port may bind to a public interface and that Host header checks
 # should be delegated to whatever sits in front of brains.
 ALLOW_PUBLIC_ENV = "BRAINS_MCP_ALLOW_PUBLIC"
 
@@ -57,7 +57,7 @@ def _is_public_allowed() -> bool:
 
 
 def resolve_bind_host() -> str:
-    """Return the host the SSE transport should bind to.
+    """Return the host an HTTP MCP transport should bind to.
 
     Defaults to ``127.0.0.1``. If ``BRAINS_MCP_BIND`` is set to a
     non-loopback value, ``BRAINS_MCP_ALLOW_PUBLIC`` must also be set or
@@ -68,7 +68,7 @@ def resolve_bind_host() -> str:
     if raw not in LOOPBACK_HOSTS and not _is_public_allowed():
         raise RuntimeError(
             f"{BIND_ENV}={raw!r} is not a loopback interface. "
-            f"Set {ALLOW_PUBLIC_ENV}=1 to acknowledge that the MCP SSE port "
+            f"Set {ALLOW_PUBLIC_ENV}=1 to acknowledge that the MCP HTTP port "
             "(which exposes every brains tool) will be reachable beyond the "
             "local machine, and ensure you have terminated TLS and configured "
             "a Host header ACL upstream."
@@ -92,7 +92,7 @@ def host_allowlist_for(bind_host: str) -> frozenset[str] | None:
 
 
 class MCPAuthMiddleware:
-    """Authenticate every SSE request with the gateway's API key.
+    """Authenticate every HTTP MCP request with the gateway's API key.
 
     Implemented as a **pure ASGI middleware** (not ``BaseHTTPMiddleware``):
     ``BaseHTTPMiddleware`` buffers the downstream response through an async

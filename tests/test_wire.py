@@ -18,17 +18,35 @@ from brains import wire
 
 
 @pytest.fixture
-def home(tmp_path: Path) -> Path:
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # Clean-slate: tool config dirs exist but hold no brains entry yet.
     (tmp_path / ".copilot").mkdir()
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".codex").mkdir()
     (tmp_path / ".config" / "opencode").mkdir(parents=True)
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "TESTKEY")
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def compatible_opencode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        wire,
+        "_opencode_compatibility",
+        lambda: (wire.OPENCODE_SUPPORTED_VERSION, "compatible"),
+    )
 
 
 def _sse_ctx() -> wire.WireContext:
     return wire.WireContext(transport="sse", url="http://127.0.0.1:9877/sse", api_key="TESTKEY")
+
+
+def _http_ctx() -> wire.WireContext:
+    return wire.WireContext(
+        transport="streamable-http",
+        url="http://127.0.0.1:9877/mcp",
+        api_key="TESTKEY",
+    )
 
 
 def _stdio_ctx() -> wire.WireContext:
@@ -83,6 +101,30 @@ def test_absent_tool_is_skipped(tmp_path: Path) -> None:
     assert [t["tool"] for t in report["tools"]] == ["codex"]
 
 
+@pytest.mark.parametrize(
+    "original",
+    [
+        '{"mcpServers": {"other": {"command": "x"}}, "keep": true}\n',
+        '{"mcpServers": {"other": {"command": "x"}}, "keep": true}',
+        '{\n  "mcpServers": {\n    "other": {\n      "command": "x"\n    }\n  },\n  "keep": true\n}\n',
+        '{\n\t"mcpServers": {\n\t\t"other": {\n\t\t\t"command": "x"\n\t\t}\n\t},\n\t"keep": true\n}\n',
+    ],
+    ids=["compact-newline", "compact-no-newline", "two-space", "tab"],
+)
+def test_unwire_restores_the_client_config_byte_for_byte(home: Path, original: str) -> None:
+    """These files belong to the client, so a wire/unwire cycle must not reflow them."""
+    path = home / ".claude.json"
+    path.write_text(original, encoding="utf-8")
+
+    wire.wire(home, _sse_ctx(), tools=["claude-code"], rules=False)
+    wired = json.loads(path.read_text(encoding="utf-8"))
+    assert wired["mcpServers"]["brains"]["_brains_managed"] is True
+    assert wired["mcpServers"]["other"] == {"command": "x"}
+
+    wire.unwire(home, tools=["claude-code"])
+    assert path.read_bytes() == original.encode("utf-8")
+
+
 # --- SSE schemas ----------------------------------------------------------
 
 
@@ -104,14 +146,59 @@ def test_claude_sse_schema(home: Path) -> None:
     assert entry["headers"]["Authorization"] == "Bearer TESTKEY"
 
 
-def test_codex_sse_schema(home: Path) -> None:
-    wire.wire(home, _sse_ctx(), rules=False)
+def test_codex_streamable_http_schema_references_token_env_only(home: Path) -> None:
+    wire.wire(home, _http_ctx(), rules=False)
     text = (home / ".codex" / "config.toml").read_text()
     assert wire.TOML_START in text and wire.TOML_END in text
     assert "[mcp_servers.brains]" in text
-    assert 'url = "http://127.0.0.1:9877/sse"' in text
-    assert "experimental_use_rmcp_client = true" in text
-    assert 'bearer_token = "TESTKEY"' in text
+    assert 'url = "http://127.0.0.1:9877/mcp"' in text
+    assert 'bearer_token_env_var = "BRAINS_MCP_BEARER_TOKEN"' in text
+    assert "experimental_use_rmcp_client" not in text
+    assert "TESTKEY" not in text
+    assert "bearer_token =" not in text
+
+
+@pytest.mark.parametrize("client_value", [None, "", "WRONGKEY", "wrong-☃"])
+def test_codex_remote_wiring_fails_closed_before_writing_when_token_invalid(
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    client_value: str | None,
+) -> None:
+    if client_value is None:
+        monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", client_value)
+
+    report = wire.wire(home, _http_ctx(), rules=True)
+
+    assert report["ok"] is False
+    assert report["tools"][0]["tool"] == "codex"
+    assert report["tools"][0]["mcp"]["action"] == "error"
+    detail = report["tools"][0]["mcp"]["detail"]
+    assert "BRAINS_MCP_BEARER_TOKEN" in detail
+    assert "TESTKEY" not in detail
+    assert "WRONGKEY" not in detail
+    assert "wrong-☃" not in detail
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".codex" / "AGENTS.md").exists()
+    assert not (home / ".copilot" / "mcp-config.json").exists()
+
+
+def test_remote_wiring_fails_before_writes_when_effective_key_is_missing(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "synthetic-client-key")
+    ctx = _http_ctx()
+    ctx.api_key = ""
+
+    report = wire.wire(home, ctx, rules=True)
+
+    assert report["ok"] is False
+    assert report["tools"][0]["mcp"]["action"] == "error"
+    assert "effective Brains API credential" in report["tools"][0]["mcp"]["detail"]
+    assert "synthetic-client-key" not in report["tools"][0]["mcp"]["detail"]
+    assert not (home / ".codex" / "config.toml").exists()
+    assert not (home / ".codex" / "AGENTS.md").exists()
 
 
 def test_opencode_sse_schema(home: Path) -> None:
@@ -126,10 +213,25 @@ def test_opencode_sse_schema(home: Path) -> None:
     assert entry["_brains_managed"] is True
 
 
-def test_codex_sse_flags_experimental(home: Path) -> None:
+def test_codex_rejects_explicit_legacy_sse(home: Path) -> None:
     report = wire.wire(home, _sse_ctx(), tools=["codex"])
     codex = report["tools"][0]
-    assert any("experimental" in w for w in codex.get("warnings", []))
+    assert codex["mcp"]["action"] == "error"
+    assert "does not support" in codex["mcp"]["detail"]
+    assert not (home / ".codex" / "config.toml").exists()
+
+
+def test_streamable_http_schemas_for_current_remote_clients(home: Path) -> None:
+    wire.wire(home, _http_ctx(), rules=False)
+    copilot = json.loads((home / ".copilot" / "mcp-config.json").read_text())
+    claude = json.loads((home / ".claude.json").read_text())
+    opencode = json.loads((home / ".config" / "opencode" / "opencode.json").read_text())
+    assert copilot["mcpServers"]["brains"]["type"] == "http"
+    assert copilot["mcpServers"]["brains"]["url"].endswith("/mcp")
+    assert claude["mcpServers"]["brains"]["type"] == "http"
+    assert claude["mcpServers"]["brains"]["url"].endswith("/mcp")
+    assert opencode["mcp"]["brains"]["type"] == "remote"
+    assert opencode["mcp"]["brains"]["url"].endswith("/mcp")
 
 
 # --- stdio schemas --------------------------------------------------------
@@ -206,9 +308,9 @@ def test_rule_preserves_existing_content(home: Path) -> None:
 
 
 def test_wire_is_idempotent(home: Path) -> None:
-    wire.wire(home, _sse_ctx())
+    wire.wire(home, _http_ctx())
     first = (home / ".copilot" / "mcp-config.json").read_text()
-    report2 = wire.wire(home, _sse_ctx())
+    report2 = wire.wire(home, _http_ctx())
     second = (home / ".copilot" / "mcp-config.json").read_text()
     assert first == second  # no drift on a second run
     # Second run reports an update, not a create.
@@ -217,7 +319,7 @@ def test_wire_is_idempotent(home: Path) -> None:
 
 
 def test_rewire_makes_backup(home: Path) -> None:
-    wire.wire(home, _sse_ctx())
+    wire.wire(home, _http_ctx())
     wire.wire(home, _stdio_ctx())  # switch transport -> backup of prior file
     backups = list((home / ".copilot").glob("mcp-config.json.bak-*"))
     assert backups, "expected a timestamped backup on re-wire"
@@ -225,9 +327,65 @@ def test_rewire_makes_backup(home: Path) -> None:
 
 def test_only_one_brains_server_after_repeated_wire(home: Path) -> None:
     for _ in range(3):
-        wire.wire(home, _sse_ctx())
+        wire.wire(home, _http_ctx())
     text = (home / ".codex" / "config.toml").read_text()
     assert text.count("[mcp_servers.brains]") == 1
+
+
+def test_codex_migrates_only_managed_legacy_sse_block(home: Path) -> None:
+    cfg = home / ".codex" / "config.toml"
+    cfg.write_text(
+        'model = "gpt-example"\n\n'
+        f"{wire.TOML_START}\n"
+        "[mcp_servers.brains]\n"
+        'url = "http://127.0.0.1:9877/sse"\n'
+        "experimental_use_rmcp_client = true\n"
+        'bearer_token = "legacy-value"\n'
+        f"{wire.TOML_END}\n",
+        encoding="utf-8",
+    )
+
+    report = wire.wire(home, _http_ctx(), tools=["codex"], rules=False)
+
+    assert report["tools"][0]["mcp"]["action"] == "update"
+    text = cfg.read_text(encoding="utf-8")
+    assert 'model = "gpt-example"' in text
+    assert 'url = "http://127.0.0.1:9877/mcp"' in text
+    assert 'bearer_token_env_var = "BRAINS_MCP_BEARER_TOKEN"' in text
+    assert "/sse" not in text
+    assert "legacy-value" not in text
+    assert "experimental_use_rmcp_client" not in text
+
+
+def test_status_reports_actual_url_transport_and_token_env_availability(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire.wire(home, _http_ctx(), tools=["codex"], rules=False)
+    monkeypatch.delenv("BRAINS_MCP_BEARER_TOKEN", raising=False)
+
+    codex = next(row for row in wire.status(home)["tools"] if row["tool"] == "codex")
+    assert codex["mcp_transport"] == "streamable-http"
+    assert codex["mcp_url"] == "http://127.0.0.1:9877/mcp"
+    assert codex["bearer_token_env_var"] == "BRAINS_MCP_BEARER_TOKEN"
+    assert codex["bearer_token_env_available"] is False
+
+    monkeypatch.setenv("BRAINS_MCP_BEARER_TOKEN", "synthetic-test-value")
+    codex = next(row for row in wire.status(home)["tools"] if row["tool"] == "codex")
+    assert codex["bearer_token_env_available"] is True
+
+
+def test_status_reports_managed_legacy_sse_truthfully(home: Path) -> None:
+    cfg = home / ".codex" / "config.toml"
+    cfg.write_text(
+        f"{wire.TOML_START}\n"
+        "[mcp_servers.brains]\n"
+        'url = "http://127.0.0.1:9877/sse"\n'
+        f"{wire.TOML_END}\n",
+        encoding="utf-8",
+    )
+    codex = next(row for row in wire.status(home)["tools"] if row["tool"] == "codex")
+    assert codex["mcp_transport"] == "sse"
+    assert codex["mcp_url"].endswith("/sse")
 
 
 # --- conflict safety ------------------------------------------------------
@@ -306,7 +464,7 @@ def test_unparseable_json_is_not_truncated(home: Path) -> None:
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file permissions only")
 def test_sse_configs_are_owner_only(home: Path) -> None:
-    wire.wire(home, _sse_ctx(), rules=False)
+    wire.wire(home, _http_ctx(), rules=False)
     for rel in (
         ".copilot/mcp-config.json",
         ".claude.json",
@@ -321,7 +479,7 @@ def test_sse_configs_are_owner_only(home: Path) -> None:
 
 
 def test_unwire_removes_everything(home: Path) -> None:
-    wire.wire(home, _sse_ctx())
+    wire.wire(home, _http_ctx())
     wire.unwire(home)
     status = wire.status(home)
     assert all(not t["mcp_wired"] and not t["rule_wired"] for t in status["tools"])
@@ -351,7 +509,7 @@ def test_unwire_preserves_other_servers(home: Path) -> None:
 
 
 def test_dry_run_writes_nothing(home: Path) -> None:
-    wire.wire(home, _sse_ctx(), dry_run=True)
+    wire.wire(home, _http_ctx(), dry_run=True)
     assert not (home / ".copilot" / "mcp-config.json").exists()
     assert not (home / ".codex" / "config.toml").exists()
     assert not (home / ".config" / "opencode" / "opencode.json").exists()

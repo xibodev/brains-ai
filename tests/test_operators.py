@@ -63,9 +63,11 @@ def isolated_brains(tmp_path, monkeypatch):
     monkeypatch.setattr(migrations_module, "SessionLocal", SessionLocal)
     # Modules that did ``from brains.storage.db import SessionLocal``
     # captured a reference at import time; rebind that reference too.
+    import brains.control.events as events_module
     import brains.control.sessions as sessions_module
 
     monkeypatch.setattr(sessions_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(events_module, "SessionLocal", SessionLocal)
     yield state
 
 
@@ -319,6 +321,7 @@ def test_start_session_stamps_admin_by_default(isolated_brains: Path, tmp_path) 
     from brains.storage.db import SessionLocal
     from brains.storage.models import AgentSession
 
+    init_db()
     ensure_admin_operator()
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -335,6 +338,7 @@ def test_start_session_honours_explicit_operator(isolated_brains: Path, tmp_path
     from brains.control.operators import add_operator, ensure_admin_operator
     from brains.control.sessions import start_session
 
+    init_db()
     ensure_admin_operator()
     add_operator("alice")
     workspace = tmp_path / "ws"

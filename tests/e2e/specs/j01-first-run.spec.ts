@@ -33,14 +33,14 @@ test('J1.2 successful sign-in lands on Command Center and a Workspace control ro
   consoleGuard.assertClean();
 });
 
-test('J1.3 withdrawn onboarding URLs fail closed to Command Center', async ({ page, consoleGuard }) => {
+test('J1.3 withdrawn onboarding URLs fail closed without redirecting', async ({ page, consoleGuard }) => {
   await signIn(page);
 
   for (const route of ['/app/onboarding', '/app/labs/onboarding']) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(page).toHaveURL(/\/app\/command-center$/);
-    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page).toHaveURL(route);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Open Labs' })).toHaveCount(0);
   }
 

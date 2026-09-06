@@ -1,20 +1,19 @@
-<!--
-last_verified: 2026-08-31T18:30:00.000-06:00
-verified_by: OpenCode
-verification_basis: HEAD 35ce5ff1b4a2eb8bce2777ca7e3cff4d7ceece99 plus the worktree contract correction and isolated Docker full quality, packaged browser, and real OpenCode/Claude/Codex mailbox UAT; installed-service recovery and deployment not verified
--->
-
 # Brains
 
-Brains is a local-first operator control plane for coordinating AI coding agents through shared Workspaces, durable work, and human approvals.
+Brains is a local-first control plane for coordinating AI coding agents through shared
+Workspaces, durable work, local mailboxes, and human approvals.
 
-Current maturity: Brains is an alpha release. The normal product is the Workspace-first coordination, governance, operations, access/configuration, GitHub-linkage, and local-lookup surface. Withdrawn implementations are not product claims even where containment removal from current source remains open. Live deployment and external provider behavior are not certified by repository evidence.
+Agent tools run in isolation: each has its own process, its own history, and a partial
+view of the work. Brains gives them somewhere shared — so two agents can split work
+without colliding, a restarted tool can resume real context instead of a transcript, and
+you keep the decisions that need a human.
 
-Brains is the canonical product and repository identity. It is distributed as `brains-ai`, uses the `brains` Python namespace, `brains_` MCP prefix, `~/.brains` state directory, `brains-spa` frontend package, and Brains browser identity.
+Brains is alpha software for one local operator. Everything runs on your machine against
+a local SQLite database. There is no account, no telemetry, and no external service.
 
-## Install
+## Install and run
 
-Brains requires Python 3.11 or 3.12. Install the CLI in an isolated environment:
+Brains requires Python 3.11 or 3.12.
 
 ```text
 python -m pip install --user pipx
@@ -22,40 +21,52 @@ python -m pipx ensurepath
 pipx install brains-ai
 ```
 
-Initialize Brains for the project you want it to coordinate and install the supervised
-user service:
+Initialize a Workspace, connect your agent tools, and run the service:
 
 ```text
 cd <project>
-brains-ai setup --path . --service
+brains-ai setup --path .
+brains-ai wire
+brains-ai serve-all
 ```
 
-The service starts without a terminal window, restarts on failure, and starts again at
-login. Verify it with `brains-ai service status`, then open
-`http://127.0.0.1:8787/app`. The setup command prints the generated admin-key location;
-reveal it only when needed with `brains-ai admin-key show --reveal`.
+Open `http://127.0.0.1:8787/app`. Keep the generated admin key private.
 
-Use `brains-ai serve-all` only when foreground logs are useful for diagnosis or
-development. Upgrade an existing isolated installation with `pipx upgrade brains-ai`.
+Wiring edits only the managed entry in each tool's configuration. Your formatting and
+unrelated keys are preserved, and `brains-ai unwire` restores the file byte for byte.
 
-## Canonical documentation
+New here? Start with the [guide](docs/GUIDE.md).
 
-- [Product brief](docs/product/PRODUCT_BRIEF.md)
-- [Feature contract](docs/product/FEATURE_CONTRACT.md)
-- [User outcome specification](docs/product/USER_OUTCOME_SPEC.md)
-- [Personas and journeys](docs/product/PERSONAS_AND_JOURNEYS.md)
-- [Traceability](docs/product/TRACEABILITY.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Operations](docs/OPERATIONS.md)
-- [Quality gates](docs/QUALITY_GATES.md)
-- [Backlog registry](docs/product/BACKLOG.md)
-- [Active feature backlog](docs/product/ACTIVE_BACKLOG.md)
-- [Experimental feature backlog](docs/product/EXPERIMENTAL_BACKLOG.md)
+## What it does
 
-## Repository guidance
+- **Coordination** — Workspaces, durable Sessions, tasks, exclusive claims, handoffs, and
+  checkpoints that survive a tool restart
+- **Communication** — durable mailboxes between agent Sessions, and peer help requests
+  whose answers must carry evidence
+- **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived
+- **Human authority** — asks and approvals that fail closed where a person is required
+- **Evidence** — a hash-chained audit log you can recompute, and the decision behind every
+  outward effect
+- **Operations** — readiness, backup, restore, and rollback over SQLite
 
-- [Contributing](CONTRIBUTING.md)
-- [Security](SECURITY.md)
-- [Agent instructions](AGENTS.md)
-- [Code of Conduct](CODE_OF_CONDUCT.md)
-- [MIT License](LICENSE)
+Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
+
+Brains deliberately does not route models, index code semantically, or bridge chat
+applications — your harness already has provider logins and your editor already indexes
+code. The [product brief](docs/product/PRODUCT_BRIEF.md) explains each decision.
+
+## Documentation
+
+- [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
+- [MCP surface](docs/MCP.md) — the 73 tools agents can call
+- [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
+- [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together
+- [Operations](docs/OPERATIONS.md) — running the service, state, and recovery
+- [Quality gates](docs/QUALITY_GATES.md) — how Brains is validated
+
+Native service installation, platform-specific Claude recovery, and the Docker-isolated
+full gate are release conditions checked per candidate rather than standing guarantees;
+see [Operations](docs/OPERATIONS.md) before relying on a background service.
+
+See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), the
+[Code of Conduct](CODE_OF_CONDUCT.md), and the [MIT License](LICENSE).

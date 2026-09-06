@@ -234,8 +234,7 @@ def test_topic_post_wakes_other_subscribed_sessions_only(tmp_path, start_tracked
     # Topic delivery no longer creates one mailbox row per Workspace.
     assert read_messages(ses_b["session_id"]) == []
     wake = inbox_wait(ses_b["session_id"], timeout_ms=250)
-    assert wake["wakeup"] == "topic"
-    assert wake["posts"][0]["id"] == posted["id"]
+    assert wake["wakeup"] is None
 
     # The poster's own workspace stays quiet.
     assert read_messages(ses_a["session_id"]) == []
@@ -279,7 +278,7 @@ def test_topic_replies_thread_and_validate_inputs(tmp_path, start_tracked_sessio
 # --- slice 2: inbox_wait unified long-poll -----------------------------------
 
 
-def test_inbox_wait_wakes_on_mail_and_on_request(tmp_path, start_tracked_session, monkeypatch):
+def test_inbox_wait_ignores_mail_and_wakes_on_request(tmp_path, start_tracked_session, monkeypatch):
     monkeypatch.setenv("BRAINS_HELP_POLL_INTERVAL_MS", "10")
     import threading
 
@@ -293,9 +292,9 @@ def test_inbox_wait_wakes_on_mail_and_on_request(tmp_path, start_tracked_session
 
     t = threading.Thread(target=_send_later)
     t.start()
-    result = inbox_wait(ses["session_id"], timeout_ms=4000)
+    result = inbox_wait(ses["session_id"], timeout_ms=300)
     t.join()
-    assert result["wakeup"] == "mail"
+    assert result["wakeup"] is None
 
     # Peer-request wake: an ask addressed to this workspace wakes the wait.
     asker = start_tracked_session(str(tmp_path / "alpha"), tool="copilot")
@@ -346,14 +345,15 @@ def test_inbox_wait_skips_unclaimable_requests_before_limit(
             execution_mode="existing",
             timeout_ms=5000,
         )
-    file_help_request(
-        "execution only",
-        "inspect",
-        to_workspace=workspace.slug,
-        required_tool="claude",
-        execution_mode="ephemeral",
-        timeout_ms=5000,
-    )
+    with pytest.raises(ValueError, match="withdrawn"):
+        file_help_request(
+            "execution only",
+            "inspect",
+            to_workspace=workspace.slug,
+            required_tool="claude",
+            execution_mode="ephemeral",
+            timeout_ms=5000,
+        )
     expected = file_help_request(
         "claimable",
         "inspect",

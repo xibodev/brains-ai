@@ -9,7 +9,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from brains.extras import ExtraNotInstalledError, require_extra
+from brains.extras import ExtraNotInstalledError
 
 
 class ModelRoute(BaseModel):
@@ -400,7 +400,7 @@ class Settings(BaseSettings):
     )
     provider_policies: dict[str, ProviderPolicyConfig] = Field(default_factory=dict)
 
-    # --- Managed recovery policy (BL-P1-09) ---
+    # --- Managed recovery policy ---
     #
     # Declares WHAT the operator has committed to for backup/restore, so
     # readiness (B8) and the recovery-policy surfaces can report completeness
@@ -424,9 +424,11 @@ class Settings(BaseSettings):
     backup_rto_minutes: int = Field(default=0, ge=0)  # 0 = unset
     backup_rpo_minutes: int = Field(default=0, ge=0)  # 0 = unset
     backup_restore_drill_required: bool = Field(default=True)
-    # Operator-recorded evidence of the most recent isolated restore drill
-    # (ISO-8601 date/time the operator attests to; brains does not run drills
-    # itself and never fabricates this value).
+    # Local manifest archive selected for recovery. The path itself is never
+    # returned by readiness; only its bounded verification result is exposed.
+    backup_candidate_path: str = Field(default="")
+    # Legacy operator declaration retained for configuration compatibility.
+    # Readiness trusts only the audit record produced by ``recovery-drill``.
     backup_last_restore_drill_at: str = Field(default="")
 
 
@@ -442,6 +444,8 @@ ADMIN_EDITABLE_KEYS = frozenset(
         "savings",
         "subsystems",
         "rate_limit_per_minute",
+        "sqlite_busy_timeout_ms",
+        "sqlite_enforce_foreign_keys",
         "ollama_base_url",
         "gateway_preamble",
         "embed_model",
@@ -470,7 +474,7 @@ ADMIN_EDITABLE_KEYS = frozenset(
 # Every other field treats the literal ``${ENV:...}`` string as a plain
 # value, so a hostile admin can't smuggle a secret out via, say,
 # ``models.default.model: "${ENV:BRAINS_API_KEY}"``. The write-side
-# validators in ``brains.admin.service`` reject the syntax up front for
+# configuration-control validators reject the syntax up front for
 # fields outside this set.
 ENV_REF_ALLOWED_FIELDS = frozenset({"openai_compatible_api_key"})
 
@@ -621,6 +625,8 @@ def _apply_payload(base: Settings, payload: dict[str, Any]) -> Settings:
         "openai_compatible_timeout_seconds",
         "litellm_timeout_seconds",
         "rate_limit_per_minute",
+        "sqlite_busy_timeout_ms",
+        "sqlite_enforce_foreign_keys",
         "api_keys",
         "source_allowlist",
         "github_copilot_use_gh_cli",
@@ -636,31 +642,24 @@ def _apply_payload(base: Settings, payload: dict[str, Any]) -> Settings:
 
 
 def _enforce_subsystem_extras(settings_obj: Settings) -> None:
-    """Fail loud at startup when an enabled subsystem is missing its pip extra.
-
-    Walks the registered ``(subsystem_path, extra_name)`` pairs and asks
-    :func:`brains.extras.require_extra` to assert the extra is importable.
-    Postgres is a special case: it's gated on the ``storage.backend``
-    string rather than an ``enabled`` flag.
-    """
+    """Fail closed when historical config attempts withdrawn activation."""
     subs = settings_obj.subsystems
-    if subs.storage.backend == "postgres":
-        require_extra("postgres", "subsystems.storage (backend=postgres)")
+    if subs.storage.backend != "sqlite" or not settings_obj.db_url.startswith("sqlite:"):
+        raise ValueError("Postgres runtime storage is withdrawn; SQLite is required")
     bridges = subs.bridges
-    bridge_pairs = (
-        ("subsystems.bridges.telegram", "telegram", bridges.telegram.enabled),
-        ("subsystems.bridges.slack", "slack", bridges.slack.enabled),
-        ("subsystems.bridges.whatsapp", "whatsapp", bridges.whatsapp.enabled),
+    withdrawn = (
+        ("subsystems.bridges.telegram", bridges.telegram.enabled),
+        ("subsystems.bridges.slack", bridges.slack.enabled),
+        ("subsystems.bridges.whatsapp", bridges.whatsapp.enabled),
         (
             "subsystems.bridges.whatsapp_web",
-            "whatsapp_web",
             getattr(getattr(bridges, "whatsapp_web", None), "enabled", False),
         ),
-        ("subsystems.otel", "otel", subs.otel.enabled),
+        ("subsystems.otel", subs.otel.enabled),
     )
-    for path, extra_name, is_on in bridge_pairs:
+    for path, is_on in withdrawn:
         if is_on:
-            require_extra(extra_name, path)
+            raise ValueError(f"{path} is withdrawn and cannot be enabled")
 
 
 def load_settings() -> Settings:

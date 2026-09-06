@@ -78,8 +78,9 @@ class RealtimeClient {
   }
 
   private url(): string {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    return `${proto}://${location.host}/v1/ws`;
+    const endpoint = new URL("/v1/ws", document.baseURI);
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    return endpoint.href;
   }
 
   connect(): void {

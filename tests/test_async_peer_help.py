@@ -23,7 +23,7 @@ from brains.control.help import (
 from brains.control.sessions import end_session, start_session
 from brains.mcp import server as mcp_server
 from brains.storage.db import SessionLocal
-from brains.storage.models import Event, HelpRequest
+from brains.storage.models import Event, HelpRequest, HelpRequestExecution
 
 
 def test_file_returns_immediately_and_wait_timeout_preserves_open_request(tmp_path) -> None:
@@ -70,7 +70,7 @@ def test_async_status_persists_expiry(tmp_path) -> None:
         assert session.query(HelpRequest).filter_by(code=filed["code"]).one().status == "expired"
 
 
-def test_claimant_can_release_and_another_peer_can_answer(tmp_path) -> None:
+def test_claimant_can_release_and_another_peer_can_answer(tmp_path, monkeypatch) -> None:
     asker = start_session(str(tmp_path / "asker"), tool="opencode")
     first_peer = start_session(str(tmp_path / "answerer"), tool="claude")
     second_peer = start_session(str(tmp_path / "answerer"), tool="codex")
@@ -85,12 +85,36 @@ def test_claimant_can_release_and_another_peer_can_answer(tmp_path) -> None:
     assert claimed is not None
     assert claimed["code"] == filed["code"]
 
+    # A legacy queued execution row may still exist in an upgraded store. Its
+    # old mode must neither be rescheduled nor mutated back into runnable work.
+    with SessionLocal() as session:
+        request = session.query(HelpRequest).filter_by(code=filed["code"]).one()
+        session.add(
+            HelpRequestExecution(
+                request_code=filed["code"],
+                mode="auto",
+                source_workspace_id=request.from_workspace_id,
+                required_tool="codex",
+                status="failed",
+                attempt=1,
+                launch_after=utc_now(),
+            )
+        )
+        session.commit()
+    monkeypatch.setattr(
+        "brains.control.help_execution.schedule_help_review",
+        lambda _code: pytest.fail("legacy review was rescheduled"),
+    )
+
     released = release_help_request(
         filed["code"],
         session_id=first_peer["session_id"],
         retry_timeout_ms=5000,
     )
     assert released["status"] == "open"
+    with SessionLocal() as session:
+        execution = session.get(HelpRequestExecution, filed["code"])
+        assert execution.status == "failed"
     reclaimed = wait_for_request(session_id=second_peer["session_id"], timeout_ms=200)
     assert reclaimed is not None
     assert reclaimed["code"] == filed["code"]
@@ -216,13 +240,10 @@ def test_async_help_cli_and_mcp_surfaces_are_wired(tmp_path) -> None:
     } <= set(mcp_server.TOOL_REGISTRY)
 
 
-def test_help_cli_and_mcp_expose_ephemeral_execution_mode(tmp_path, monkeypatch) -> None:
-    from brains.control import help_execution
-
+def test_help_cli_and_mcp_do_not_expose_ephemeral_execution_mode(tmp_path) -> None:
     workspace = tmp_path / "review"
     workspace.mkdir()
     register = start_session(str(workspace), tool="opencode")
-    monkeypatch.setattr(help_execution, "schedule_help_review", lambda _code: True)
     result = CliRunner().invoke(
         app,
         [
@@ -241,16 +262,16 @@ def test_help_cli_and_mcp_expose_ephemeral_execution_mode(tmp_path, monkeypatch)
             "ephemeral",
         ],
     )
-    assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["execution_mode"] == "ephemeral"
+    assert result.exit_code != 0
+    assert "No such option" in result.output
 
-    mcp_result = mcp_server.call_tool(
-        "file_help_request",
-        subject="review through mcp",
-        question="inspect",
-        from_session_id=register["session_id"],
-        to_workspace=str(workspace),
-        required_tool="copilot",
-        execution_mode="auto",
-    )
-    assert mcp_result["execution_mode"] == "auto"
+    with pytest.raises(TypeError, match="execution_mode"):
+        mcp_server.call_tool(
+            "file_help_request",
+            subject="review through mcp",
+            question="inspect",
+            from_session_id=register["session_id"],
+            to_workspace=str(workspace),
+            required_tool="copilot",
+            execution_mode="auto",
+        )

@@ -1,27 +1,23 @@
-# last_verified: 2026-08-01T19:29:19.185-06:00
-# verified_by: GitHub Copilot CLI
-# verification_basis: HEAD 6eb071bba49a5e678fb6ee8a35a3b21199136374; static inspection against the current Brains product and issue-reporting contract; deployment not verified
-
 name: Bug report
-description: Something is broken or behaves differently from documented behaviour.
+description: Report supported Brains behavior that is broken or differs from its contract.
 title: "[bug] "
 labels: ["bug", "triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a Brains bug. Identify the exact code or artifact you exercised; version or release
-        labels alone are not sufficient evidence.
+        Thanks for reporting a Brains defect. For security vulnerabilities, do not use
+        this form; use [GitHub Security Advisories](https://github.com/xibodev/brains-ai/security/advisories/new).
 
-        For security vulnerabilities, **do not** use this form -- please report through
-        [GitHub Security Advisories](https://github.com/xibodev/brains-ai/security/advisories/new) instead.
+        Before submitting, remove credentials, personal data, private paths, hostnames,
+        repository contents, and other identifying diagnostics.
 
   - type: input
-    id: identity
+    id: version
     attributes:
-      label: Exact candidate identity
-      description: Commit SHA and, if installed, output of `brains-ai version` plus image/wheel identity.
-      placeholder: "commit <40-char SHA>; brains-ai version output; artifact digest if applicable"
+      label: Version or candidate
+      description: Provide the Brains version or commit SHA. Include an artifact digest only when relevant.
+      placeholder: "brains-ai 1.x.y or commit SHA"
     validations:
       required: true
 
@@ -30,59 +26,55 @@ body:
     attributes:
       label: Install method
       options:
-        - pipx install brains-ai
-        - pip install brains-ai
-        - editable install from a clone (uv pip install -e .)
-        - container image (ghcr.io/xibodev/brains-ai)
+        - pipx
+        - pip or virtual environment
+        - editable source checkout
+        - isolated container
         - other
     validations:
       required: true
 
   - type: input
-    id: os
+    id: environment
     attributes:
-      label: OS + Python
-      description: e.g. `Windows 11 23H2 / Python 3.12.5`
+      label: Environment
+      description: Operating system and Python version, without machine names or private paths.
+      placeholder: "Windows / Python 3.12"
     validations:
       required: true
 
   - type: textarea
     id: repro
     attributes:
-      label: Reproduction steps
-      description: |
-        Minimum steps to reproduce. If the bug involves the gateway, include the exact request payload
-        (with secrets redacted) and the response you saw.
+      label: Minimal reproduction
+      description: Use supported commands or endpoints and replace all sensitive values with placeholders.
       placeholder: |
-        1. `brains-ai setup`
-        2. `brains-ai serve`
-        3. `curl -X POST http://127.0.0.1:8787/v1/messages -H "x-api-key: <redacted>" -d '{...}'`
-        4. Got `<actual>`, expected `<expected>`.
+        1. Run `<supported command>` with synthetic data.
+        2. Observe `<redacted result>`.
     validations:
       required: true
 
   - type: textarea
     id: expected
     attributes:
-      label: Expected behaviour
-      description: Include the relevant Feature, Journey, or `AC-*` ID when known.
+      label: Expected behavior
+      description: Include a Feature, Journey, or acceptance ID when known.
     validations:
       required: true
 
   - type: textarea
     id: actual
     attributes:
-      label: Actual behaviour (include stack trace or full error response)
+      label: Actual behavior
+      description: Summarize the failure. Include only the smallest sanitized error excerpt needed.
     validations:
       required: true
 
   - type: textarea
-    id: logs
+    id: diagnostics
     attributes:
-      label: Relevant logs
-      description: |
-        Include relevant process output or `<state>/sessions/service.log`. Strip API keys, provider tokens,
-        personal data, and repository secrets.
+      label: Sanitized diagnostics
+      description: Do not paste environment dumps, complete logs, credentials, personal data, or private filesystem paths.
       render: shell
 
   - type: checkboxes
@@ -90,9 +82,9 @@ body:
     attributes:
       label: Pre-flight
       options:
-        - label: I identified the exact commit or artifact that reproduces the bug.
+        - label: I searched existing issues and discussions.
           required: true
-        - label: I searched existing issues and discussions and found nothing matching.
+        - label: I removed secrets, personal data, private paths, hostnames, and repository contents.
           required: true
-        - label: I have stripped credentials and PII from anything I am pasting.
+        - label: This report concerns an advertised core surface or a containment failure reachable from it.
           required: true

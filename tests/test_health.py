@@ -11,17 +11,7 @@ def test_health() -> None:
     assert body["status"] == "ok"
 
 
-def test_health_reports_extras_and_subsystems() -> None:
+def test_health_does_not_advertise_withdrawn_extras_or_subsystems() -> None:
     body = TestClient(app).get("/health").json()
     assert body["schema_version"] == RUNTIME_OVERLAY_SCHEMA_VERSION
-    extras = body["extras"]
-    # The lean-core install can run without any extras, but every declared
-    # extra must appear in the inventory so the dashboard / wizard can
-    # render a complete checklist.
-    for name in ("litellm", "postgres", "telegram", "slack", "whatsapp", "whatsapp_web", "otel"):
-        assert name in extras
-        assert isinstance(extras[name], bool)
-    subs = body["subsystems"]
-    assert subs["storage_backend"] in {"sqlite", "postgres"}
-    assert isinstance(subs["bridges_enabled"], list)
-    assert isinstance(subs["otel_enabled"], bool)
+    assert set(body) == {"status", "schema_version"}

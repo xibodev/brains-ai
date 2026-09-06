@@ -21,17 +21,21 @@ for why both of those matter.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
+from brains.mcp.transport import mcp_http_url
 from brains.service import linux, macos, windows
 from brains.service.common import (
+    SERVICE_LABEL,
     ServiceSpec,
     UnsupportedPlatform,
     current_platform,
     default_spec,
     listener_status,
     read_pidfile_record,
+    read_service_config,
     verify_pid,
     verify_service_interpreter,
     write_service_config,
@@ -61,10 +65,32 @@ def supported() -> bool:
     return current_platform() in _BACKENDS
 
 
+def _configured_label() -> str:
+    return str(read_service_config()["service_label"])
+
+
+def _wait_for_ready(spec: ServiceSpec, timeout: float = 120.0) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last = listener_status(spec.gateway_host, spec.gateway_port, spec.mcp_port)
+        pid = verify_pid(read_pidfile_record())
+        if last.get("serving") and pid.get("confidence") == "verified":
+            return {"ready": True, "listeners": last, "service_pid": pid}
+        time.sleep(0.25)
+    return {
+        "ready": False,
+        "reason": "service did not become owned and protocol-ready before timeout",
+        "listeners": last,
+        "service_pid": verify_pid(read_pidfile_record()),
+    }
+
+
 def install(
     spec: ServiceSpec | None = None,
     *,
     dry_run: bool = False,
+    label: str | None = None,
     gateway_host: str = "127.0.0.1",
     gateway_port: int | None = None,
     mcp_port: int | None = None,
@@ -74,6 +100,7 @@ def install(
     try:
         resolved = spec or default_spec(
             gateway_host=gateway_host,
+            label=label or SERVICE_LABEL,
             gateway_port=gateway_port,
             mcp_port=mcp_port,
             probe_default=not dry_run,
@@ -98,37 +125,44 @@ def install(
     report["interpreter"] = check
     report["endpoints"] = {
         "console": f"http://{resolved.gateway_host}:{resolved.gateway_port}/app",
-        "mcp": f"http://{resolved.gateway_host}:{resolved.mcp_port}/sse",
+        "mcp": mcp_http_url(resolved.gateway_host, resolved.mcp_port),
     }
     if not dry_run and report.get("ok"):
-        report["config"] = str(write_service_config(resolved))
+        readiness = _wait_for_ready(resolved)
+        report["readiness"] = readiness
+        if readiness["ready"]:
+            report["config"] = str(write_service_config(resolved))
+        else:
+            report["ok"] = False
+            report["action"] = "install-rolled-back"
+            report["rollback"] = backend.uninstall(label=resolved.label)
     return report
 
 
-def uninstall(*, dry_run: bool = False) -> dict:
+def uninstall(*, dry_run: bool = False, label: str | None = None) -> dict:
     """Stop and remove the autostart service."""
-    return _backend().uninstall(dry_run=dry_run)
+    return _backend().uninstall(dry_run=dry_run, label=label or _configured_label())
 
 
-def start() -> dict:
-    return _backend().start()
+def start(*, label: str | None = None) -> dict:
+    return _backend().start(label or _configured_label())
 
 
-def stop() -> dict:
-    return _backend().stop()
+def stop(*, label: str | None = None) -> dict:
+    return _backend().stop(label or _configured_label())
 
 
-def restart() -> dict:
-    return _backend().restart()
+def restart(*, label: str | None = None) -> dict:
+    return _backend().restart(label or _configured_label())
 
 
-def status() -> dict:
+def status(*, label: str | None = None) -> dict:
     """Report whether the service is installed + its run state.
 
     ``report["service_pid"]`` is the :func:`brains.service.common.verify_pid`
     result for the supervisor pidfile — the OS-native install/enabled state
     above answers "is the service registered", this answers "does the PID
-    it last recorded still name a live, matching process" (BL-P1-09). A
+    it last recorded still name a live, matching process". A
     stale/reused PID is reported, never silently treated as proof the
     service is running.
     """
@@ -140,13 +174,30 @@ def status() -> dict:
             "state": "unsupported",
             "service_pid": verify_pid(None),
         }
-    report = _backend().status()
+    report = _backend().status(label or _configured_label())
     report["supported"] = True
     report["service_pid"] = verify_pid(read_pidfile_record())
     report.update(listener_status())
-    report["healthy"] = bool(
-        report.get("installed") and report["service_pid"].get("running") and report["serving"]
-    )
+    pid_confidence = report["service_pid"].get("confidence")
+    installed = bool(report.get("installed"))
+    protocol_ready = bool(report["mcp_protocol"].get("ready"))
+    mcp_listener = bool(report["listeners"].get("mcp"))
+    if installed and pid_confidence == "verified":
+        runtime_classification = (
+            "installed-owned-ready" if protocol_ready else "installed-owned-unready"
+        )
+    elif pid_confidence == "stale":
+        runtime_classification = "stale-pid"
+    elif mcp_listener and (installed or pid_confidence not in {"absent", None}):
+        runtime_classification = "unknown-port-owner"
+    elif protocol_ready:
+        runtime_classification = "manual-running"
+    elif mcp_listener:
+        runtime_classification = "unknown-port-owner"
+    else:
+        runtime_classification = "stopped"
+    report["runtime_classification"] = runtime_classification
+    report["healthy"] = bool(installed and pid_confidence == "verified" and report["serving"])
     return report
 
 

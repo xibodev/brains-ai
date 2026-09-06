@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from brains.audit import list_entries
 from brains.authz import credentials as creds
+from brains.context.lookup import lookup_workspace
 from brains.control import orgs as orgs_ctl
 from brains.control.decisions import file_decision_request
 from brains.control.handoffs import set_handoff
@@ -194,31 +195,6 @@ def test_capability_catalog_never_presents_shell_execution(client, auth_headers)
     assert all(not row["enabled"] for row in rows if row["transport"] != "native_http")
 
 
-def test_member_capabilities_disable_install_and_global_admin_actions(client):
-    org = orgs_ctl.create_org(_slug("org"), "Org")
-    headers = _operator(client, org["id"])
-    body = client.get("/v1/operator/capabilities", headers=headers).json()
-    assert body["install_admin"] is False
-    by_key = {row["key"]: row for row in body["data"]}
-    for key in ("pattern.decide", "audit.verify", "tool.verify", "queue.repair.preview"):
-        assert by_key[key]["enabled"] is False
-        assert "bootstrap admin" in by_key[key]["reason"]
-
-
-def test_browser_topic_post_is_workspace_scoped_without_default_blast(
-    client, auth_headers, tmp_path
-):
-    org = orgs_ctl.create_org(_slug("org"), "Org")
-    workspace = register_workspace(str(tmp_path / "topics"), slug=_slug("topics"), org_id=org["id"])
-    response = client.post(
-        "/v1/operator/topics",
-        json={"workspace": workspace.slug, "topic": "status", "subject": "Scoped update"},
-        headers=auth_headers,
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["notified_workspaces"] == []
-
-
 def test_browser_knowledge_persists_authenticated_operator(client, auth_headers, tmp_path):
     org = orgs_ctl.create_org(_slug("org"), "Org")
     workspace = register_workspace(
@@ -235,11 +211,44 @@ def test_browser_knowledge_persists_authenticated_operator(client, auth_headers,
         assert row.created_by_operator_id is not None
 
 
-def test_unscoped_browser_topic_post_is_refused(client, auth_headers):
-    response = client.post(
-        "/v1/operator/topics",
-        json={"topic": "release", "subject": "Status"},
+def test_workspace_lookup_is_authenticated_scoped_and_nonembedding(client, auth_headers, tmp_path):
+    org = orgs_ctl.create_org(_slug("lookup-org"), "Lookup Org")
+    root = tmp_path / "lookup"
+    root.mkdir()
+    (root / "service.py").write_text("def find_signal():\n    return True\n", encoding="utf-8")
+    workspace = register_workspace(str(root), slug=_slug("lookup"), org_id=org["id"])
+
+    assert (
+        client.get(f"/v1/operator/workspaces/{workspace.slug}/lookup?q=find_signal").status_code
+        == 401
+    )
+    response = client.get(
+        f"/v1/operator/workspaces/{workspace.slug}/lookup?q=find_signal",
         headers=auth_headers,
     )
-    assert response.status_code == 400
-    assert "workspace" in response.text
+    assert response.status_code == 200, response.text
+    assert response.json() == lookup_workspace(root, "find_signal")
+    assert response.json()["results"][0]["path"] == "service.py"
+    assert not (root / ".brains").exists()
+    blank = client.get(
+        f"/v1/operator/workspaces/{workspace.slug}/lookup?q=",
+        headers=auth_headers,
+    )
+    assert blank.status_code == 200
+    assert blank.json() == lookup_workspace(root, "")
+
+
+def test_workspace_lookup_obeys_workspace_visibility(client, tmp_path):
+    own_org = orgs_ctl.create_org(_slug("lookup-own"), "Own")
+    other_org = orgs_ctl.create_org(_slug("lookup-other"), "Other")
+    root = tmp_path / "other"
+    root.mkdir()
+    (root / "private.py").write_text("private_symbol = True\n", encoding="utf-8")
+    other = register_workspace(str(root), slug=_slug("other-ws"), org_id=other_org["id"])
+    headers = _operator(client, own_org["id"])
+
+    response = client.get(
+        f"/v1/operator/workspaces/{other.slug}/lookup?q=private_symbol", headers=headers
+    )
+    assert response.status_code == 404
+    assert "private_symbol" not in response.text

@@ -47,8 +47,8 @@ test('J8.2 withdrawn execution-control routes fail closed while governance remai
   ]) {
     await page.goto(route);
     await page.waitForLoadState('networkidle').catch(() => {});
-    await expect(page).toHaveURL(/\/app\/command-center$/);
-    await expect(page.getByRole('heading', { name: 'Command Center' })).toBeVisible();
+    await expect(page).toHaveURL(route);
+    await expect(page.getByRole('heading', { name: 'Page not found' })).toBeVisible();
   }
 
   await page.goto('/app/governance');
@@ -125,7 +125,12 @@ test('J8.3 durable operator mail is explicit, threaded, and recoverable', async 
 test('J8.4 mailbox desk is keyboard reachable and responsive', async ({ page, consoleGuard }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/app/coordination?mailbox=unknown%3Amailbox%40private');
-  await expect(page.locator('.operator-mailroom').getByRole('alert')).toContainText('Mailbox unavailable');
+  // An unknown or scope-hidden mailbox must resolve to the generic not-found
+  // boundary. Naming the mailbox here would confirm its existence, so assert the
+  // typed state and the non-disclosing copy rather than mailbox-specific wording.
+  const unavailable = page.locator('.operator-mailroom').getByRole('alert');
+  await expect(unavailable).toHaveAttribute('data-async-state', 'not_found');
+  await expect(unavailable).toContainText('The requested resource is unavailable or outside your visible scope.');
   await expect(page.locator('.operator-mailroom').getByRole('button', { name: 'Compose mail' })).toHaveCount(0);
 
   await page.goto(`/app/coordination?mailbox=${encodeURIComponent(String(mailboxJourney.sender_address))}`);
@@ -139,9 +144,7 @@ test('J8.4 mailbox desk is keyboard reachable and responsive', async ({ page, co
 
   await desk.getByLabel('Open mailbox').selectOption('operator:admin@brains');
   await expect(desk.getByRole('button', { name: 'Compose mail' })).toBeEnabled();
-  const emailCopy = desk.getByLabel('External email copy');
-  await expect(emailCopy.getByLabel('Email address')).toBeVisible();
-  await expect(emailCopy.getByText('One-way only. Local Brains mail stays authoritative.')).toBeVisible();
+  await expect(desk.getByLabel('External email copy')).toHaveCount(0);
   await desk.getByRole('button', { name: 'Compose mail' }).focus();
   await page.keyboard.press('Enter');
   await expect(desk.getByRole('heading', { name: 'Compose mail' })).toBeVisible();

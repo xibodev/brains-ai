@@ -1,7 +1,7 @@
 """Persistent admin/API-key management.
 
 Brains needs a single shared secret to gate the gateway API (`/v1/*`) and
-the admin/dashboard UI (`/admin/*`, `/dashboard/*`). Historically the
+the modern operator console (`/app`, with `/admin/login` and `/admin/logout`). Historically the
 default was the literal string ``"local-dev-key"`` which made the install
 flow trivial but also meant the project shipped with default credentials —
 not acceptable for the public alpha.

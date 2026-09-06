@@ -1,18 +1,9 @@
-# Rung 3 topology: "remote" collaborators that share NOTHING but a network-
-# reachable brains hub. Models "invite a remote friend; their CLI coordinates
-# through the shared brain" without any external service.
+# Retained unsupported multi-user collaboration fixture.
 #
-#   - hub        : one brains server + its own Postgres (the shared coordination
-#                  plane, like a hosted brains the team points at).
-#   - carol/dave/erin : thin persona containers. Each has only the CLI + an MCP
-#                  wiring to the hub's SSE endpoint with its OWN operator key.
-#                  Each sits on its OWN isolated network, so a persona can reach
-#                  the hub but NOT the database directly and NOT the other
-#                  personas. No shared volume between personas. The ONLY shared
-#                  surface is the hub.
-#
-# Build the image first (reuses the battle image — has both CLIs + brains):
-#   docker build -f sandbox/battle/Dockerfile.battle -t brains-battle:dev .
+# This topology depends on withdrawn Postgres, Persona, remote-hub, and battle-image
+# behavior. It is not a supported installation or validation path and intentionally
+# provides no activation recipe. Any archaeological evaluation must be disposable and
+# use external, uncommitted synthetic configuration.
 name: brains-remote
 
 x-persona-base: &persona-base

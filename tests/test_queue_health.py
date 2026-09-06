@@ -1,4 +1,4 @@
-"""Tests for ``brains.control.queue_health`` (BL-P1-12).
+"""Tests for the B8 ``brains.control.queue_health`` contract.
 
 Covers:
 

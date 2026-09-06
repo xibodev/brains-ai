@@ -35,8 +35,10 @@ from brains.control.handoffs import list_handoffs, mark_stale_handoffs
 from brains.control.mailbox import read_messages
 from brains.control.sessions import (
     AgentSessionNotFoundError,
+    _lock_session_lifecycle,
     heartbeat_session,
     reap_zombie_sessions,
+    require_live_session,
 )
 from brains.control.tasks import list_tasks
 from brains.storage.db import SessionLocal
@@ -231,9 +233,10 @@ def checkpoint(
     normalized_metadata = json.dumps(metadata, sort_keys=True) if metadata else None
     init_db()
     with SessionLocal() as session:
-        agent = session.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+        agent = _lock_session_lifecycle(session, session_id)
         if agent is None:
             raise AgentSessionNotFoundError(f"unknown brain session: {session_id}")
+        agent = require_live_session(session, session_id, action="write checkpoint")
         latest = (
             session.query(SessionCheckpoint)
             .filter(SessionCheckpoint.session_id == session_id)

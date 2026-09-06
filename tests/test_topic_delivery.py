@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -120,17 +119,17 @@ def test_unsubscribe_stops_future_topic_wakeups(tmp_path) -> None:
     assert pending_topic_updates(reader["session_id"]) == []
 
 
-def test_inbox_wait_wakes_for_topic_until_cursor_advances(tmp_path) -> None:
+def test_inbox_wait_ignores_persisted_topic_rows(tmp_path) -> None:
     topic = _topic("wake")
     poster = start_session(str(tmp_path / "poster"), tool="opencode")
     reader = start_session(str(tmp_path / "reader"), tool="claude")
     subscribe_topic(topic, reader["session_id"])
-    posted = post_topic(topic, "wake reader", from_session_id=poster["session_id"])
+    post_topic(topic, "wake reader", from_session_id=poster["session_id"])
 
     first = inbox_wait(reader["session_id"], timeout_ms=100)
     second = inbox_wait(reader["session_id"], timeout_ms=100)
-    assert first["wakeup"] == second["wakeup"] == "topic"
-    assert first["posts"][0]["id"] == posted["id"]
+    assert first["wakeup"] is None
+    assert second["wakeup"] is None
 
     read_topic(topic, session_id=reader["session_id"])
     assert inbox_wait(reader["session_id"], timeout_ms=100)["wakeup"] is None
@@ -154,7 +153,7 @@ def test_mailbox_after_id_skips_processed_prefix_and_empty_read_emits_no_event(t
     assert [row["id"] for row in rows] == [second["id"]]
 
 
-def test_inbox_wait_mail_cursor_ignores_old_unread_then_wakes_for_new_mail(tmp_path) -> None:
+def test_inbox_wait_ignores_persisted_running_agent_mail(tmp_path) -> None:
     reader = start_session(str(tmp_path / "reader"), tool="claude")
     session_id = reader["session_id"]
     old = send_message("old", to_session_id=session_id)
@@ -162,7 +161,7 @@ def test_inbox_wait_mail_cursor_ignores_old_unread_then_wakes_for_new_mail(tmp_p
     assert inbox_wait(session_id, timeout_ms=100, after_message_id=old["id"])["wakeup"] is None
     new = send_message("new", to_session_id=session_id)
     assert new["id"] > old["id"]
-    assert inbox_wait(session_id, timeout_ms=100, after_message_id=old["id"])["wakeup"] == "mail"
+    assert inbox_wait(session_id, timeout_ms=100, after_message_id=old["id"])["wakeup"] is None
 
 
 def test_cursor_read_requires_subscription_and_unfiltered_topic(tmp_path) -> None:
@@ -228,23 +227,16 @@ def test_topic_post_refuses_dead_or_mismatched_origin(tmp_path) -> None:
         )
 
 
-def test_topic_subscription_cli_commands_are_wired(tmp_path) -> None:
+def test_topic_subscription_cli_commands_are_withdrawn(tmp_path) -> None:
     topic = _topic("cli")
     reader = start_session(str(tmp_path / "reader"), tool="claude")
     session_id = reader["session_id"]
     runner = CliRunner()
 
-    subscribed = runner.invoke(app, ["topic-subscribe", topic, "--session", session_id])
-    assert subscribed.exit_code == 0, subscribed.output
-    assert json.loads(subscribed.stdout)["topic"] == topic
-
-    listed = runner.invoke(app, ["topic-subscriptions", "--session", session_id])
-    assert listed.exit_code == 0, listed.output
-    assert json.loads(listed.stdout)[0]["topic"] == topic
-
-    removed = runner.invoke(app, ["topic-unsubscribe", topic, "--session", session_id])
-    assert removed.exit_code == 0, removed.output
-    assert json.loads(removed.stdout)["unsubscribed"] is True
+    for command in ("topic-subscribe", "topic-subscriptions", "topic-unsubscribe"):
+        result = runner.invoke(app, [command, topic, "--session", session_id])
+        assert result.exit_code != 0
+        assert "No such command" in result.output
 
 
 def test_workspace_cascade_includes_topic_delivery_state() -> None:
