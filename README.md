@@ -3,22 +3,18 @@
 The published site for [brains-ai](https://github.com/xibodev/brains-ai), served by GitHub
 Pages from this branch at <https://xibodev.github.io/brains-ai/>.
 
-This branch is intentionally orphaned: it shares no history with `main` or `staging`, so the
-repository's documentation, traceability, and core-surface gates never scan it.
-
 ## Editing
 
 `index.html` is self-contained — markup, styles, and behaviour in one file, no build step and
 no external assets. Open it directly in a browser to preview.
 
-## Content rule
+## Content sources
 
-The site may only describe capabilities the supported installation actually exposes. When the
-product surface changes, update this page from the source of truth rather than from memory:
+The page describes the current Brains installation using these repository sources:
 
-- supported MCP tools: `CORE_MCP_TOOLS` in `src/brains/capabilities.py`
-- withdrawn CLI commands and routes: `WITHDRAWN_*` in the same module
-- product claims and boundaries: `docs/product/PRODUCT_BRIEF.md`
-- lifecycle labels: `docs/product/FEATURE_CONTRACT.md`
-
-Withdrawn or deferred behaviour must stay presented as withdrawn or deferred.
+- Product overview and audience: `docs/product/PRODUCT_BRIEF.md`
+- Setup and agent workflows: `docs/GUIDE.md`
+- MCP tools: `docs/MCP.md` and `CORE_MCP_TOOLS` in `src/brains/capabilities.py`
+- Service setup, wiring, and recovery: `docs/OPERATIONS.md`
+- System structure: `docs/ARCHITECTURE.md`
+- Contribution and security guidance: `CONTRIBUTING.md` and `SECURITY.md`

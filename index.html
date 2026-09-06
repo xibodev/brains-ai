@@ -150,7 +150,7 @@
       <a href="#console">Console</a>
       <a href="#governance">Governance</a>
       <a href="#operations">Operations</a>
-      <a href="#scope">Scope</a>
+      <a href="#workflow">Workflow</a>
     </nav>
     <a class="gh" href="https://github.com/xibodev/brains-ai" target="_blank" rel="noopener">GitHub ↗</a>
   </div>
@@ -172,8 +172,6 @@
       <p>
         <strong>Alpha, for one local human operator.</strong> The supported core is Workspace-first
         coordination, governance, operations, bounded repository lookup, and local configuration.
-        What is not built is not advertised, and what is
-        deliberately out of scope is stated with its reason rather than left as a gap.
       </p>
     </div>
 
@@ -220,7 +218,7 @@ uv sync --extra dev</pre></div>
 
 <span class="prompt">$</span> brains-ai serve-all
 <span class="c-ok">✔</span> console  <span class="c-fl">http://127.0.0.1:8787/app</span>
-<span class="c-ok">✔</span> mcp      <span class="c-fl">http://127.0.0.1:8788/mcp</span>
+<span class="c-ok">✔</span> mcp      <span class="c-fl">http://127.0.0.1:9877/mcp</span>
 
 <span class="prompt">$</span> brains-ai task-list --workspace my-project
 <span class="c-cm">CODE      STATUS        PRIORITY  TITLE</span>
@@ -273,7 +271,7 @@ TASK-015  available     p2        Close the readiness gap
       <div class="feat">
         <div class="ic">🔗</div>
         <h3>Reversible wiring</h3>
-        <p>Wire supported harnesses over MCP without overwriting unrelated configuration — and unwire back to the exact prior bytes.</p>
+        <p>Connect supported harnesses over MCP. Brains preserves unrelated settings when wiring or unwiring your tools.</p>
         <span class="cmd">brains-ai wire / unwire</span>
       </div>
       <div class="feat">
@@ -292,7 +290,7 @@ TASK-015  available     p2        Close the readiness gap
     <div class="sec-head">
       <div class="kicker">Quickstart</div>
       <h2>Running in four commands</h2>
-      <p>Brains requires Python 3.11 or 3.12 and stores its state under <code>~/.brains</code>. Nothing leaves your machine.</p>
+      <p>Brains requires Python 3.11 or 3.12. Coordination state is stored locally under <code>~/.brains</code>.</p>
     </div>
 
     <div class="split">
@@ -312,7 +310,6 @@ TASK-015  available     p2        Close the readiness gap
           <li>Console at <code>http://127.0.0.1:8787/app</code></li>
           <li>Keep the generated admin key private</li>
           <li>State, database, and mail stay local under <code>~/.brains</code></li>
-          <li class="no">No telemetry, no external service, no account</li>
         </ul>
       </div>
 
@@ -378,7 +375,6 @@ brains-ai 1.4.0</pre></div>
       <h2>65 supported commands</h2>
       <p>
         One canonical executable: <code>brains-ai</code>. Commands are grouped by the thing they act on.
-        Commands outside the supported set are absent from the installed CLI — they do not appear in help and fail closed.
       </p>
     </div>
 
@@ -454,7 +450,7 @@ brains-ai audit-list                  <span class="c-cm"># signed, hash-chained 
 brains-ai audit-verify                <span class="c-cm"># recompute the chain, report divergence</span>
 brains-ai audit-adopt
 brains-ai governed-list / governed-sweep
-                                      <span class="c-cm"># the decision behind every outward effect</span></pre></div>
+                                       <span class="c-cm"># decisions and results for governed actions</span></pre></div>
 
       <div class="pane" id="c-ops" hidden><pre><span class="c-cm">Readiness, recovery, and durable state.</span>
 
@@ -476,9 +472,8 @@ brains-ai mcp                         <span class="c-cm"># run the MCP server di
       <div class="kicker">Model Context Protocol</div>
       <h2>Your agents talk to Brains natively</h2>
       <p>
-        Brains exposes a closed, allowlisted MCP surface with the <code>brains_</code> prefix.
-        The tool registry is filtered against that allowlist at startup, so a tool outside it has no
-        discovery or activation path.
+        Connect your coding tools to shared tasks, mailboxes, knowledge, and handoffs through
+        MCP tools with the <code>brains_</code> prefix.
       </p>
     </div>
 
@@ -535,25 +530,24 @@ brains-ai wire <span class="c-fl">--tool</span> codex <span class="c-fl">--trans
 <span class="c-cm"># inspect without changing anything</span>
 brains-ai wire <span class="c-fl">--status</span>
 
-<span class="c-cm"># put the configuration back exactly as it was</span>
+<span class="c-cm"># remove Brains wiring; preserves unrelated settings</span>
 brains-ai unwire <span class="c-fl">--tool</span> codex</pre></div>
         <div class="pane" id="m-claude" hidden><pre><span class="c-cm">~/.claude.json — written by `brains-ai wire`</span>
 {
   <span class="c-fl">"mcpServers"</span>: {
     <span class="c-fl">"brains"</span>: {
       <span class="c-fl">"type"</span>: <span class="c-st">"http"</span>,
-      <span class="c-fl">"url"</span>: <span class="c-st">"http://127.0.0.1:8788/mcp"</span>,
+      <span class="c-fl">"url"</span>: <span class="c-st">"http://127.0.0.1:9877/mcp"</span>,
       <span class="c-fl">"headers"</span>: { <span class="c-fl">"Authorization"</span>: <span class="c-st">"Bearer &lt;key&gt;"</span> },
       <span class="c-fl">"_brains_managed"</span>: <span class="c-w">true</span>
     }
   }
 }
-<span class="c-cm">Only the managed entry is added. Your formatting
-and unrelated keys are preserved byte-for-byte.</span></pre></div>
+<span class="c-cm">Adds the managed entry and preserves unrelated settings.</span></pre></div>
         <div class="pane" id="m-codex" hidden><pre><span class="c-cm">~/.codex/config.toml — sentinel-delimited block</span>
 <span class="c-cm"># &gt;&gt;&gt; brains managed &gt;&gt;&gt;</span>
 [mcp_servers.brains]
-url = <span class="c-st">"http://127.0.0.1:8788/mcp"</span>
+url = <span class="c-st">"http://127.0.0.1:9877/mcp"</span>
 bearer_token_env_var = <span class="c-st">"BRAINS_MCP_BEARER_TOKEN"</span>
 <span class="c-cm"># &lt;&lt;&lt; brains managed &lt;&lt;&lt;</span>
 
@@ -589,9 +583,7 @@ never written into the file.</span></pre></div>
       <pre><span class="prompt">$</span> curl -H <span class="c-st">"Authorization: Bearer &lt;admin-key&gt;"</span> \
        <span class="c-fl">http://127.0.0.1:8787/v1/operator/workspaces</span>
 
-<span class="c-cm"># Protected /v1/* routes always require authentication.
-# Routes outside the supported set are filtered out at startup —
-# they return a generic not-found, never a hint that they existed.</span></pre>
+<span class="c-cm"># Protected /v1/* routes require authentication.</span></pre>
     </div>
   </div>
 </section>
@@ -603,9 +595,8 @@ never written into the file.</span></pre></div>
       <div class="kicker">Human authority</div>
       <h2>Governed effects, not good intentions</h2>
       <p>
-        Approval, recurring execution, process spawning, and outward effects stay human-governed.
-        Brains records the decision behind every outward effect and never claims stronger
-        enforcement than the code provides.
+        Review asks and approvals, inspect governed-action records, and verify the audit trail.
+        Brains records decisions and results for actions routed through its governance controls.
       </p>
     </div>
 
@@ -617,8 +608,8 @@ never written into the file.</span></pre></div>
           <li><strong>Argument digests, not arguments</strong> — the record proves what ran without storing payloads</li>
           <li><strong>Separation of duty</strong> — a Session cannot resolve the approval it requested</li>
           <li><strong>Owner-only secrets</strong> — managed binding files use POSIX owner-only modes or a verified Windows DACL</li>
-          <li class="no">No autonomous outward action without an explicit human-governed contract</li>
         </ul>
+        <p style="color:var(--muted);font-size:14px"><strong>Trust note:</strong> Brains coordinates trusted local agents; its governance controls are not a process or network security sandbox. See <a href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener">Security</a>.</p>
       </div>
       <div class="card">
         <div class="card-head"><span>verify the chain</span></div>
@@ -658,77 +649,41 @@ never written into the file.</span></pre></div>
     <div class="alpha" style="max-width:none;margin-top:22px">
       <span class="ico">▲</span>
       <p>
-        <strong>Background service is opt-in.</strong> Renderer and hermetic backend behaviour are
-        covered by repository checks, but native service-manager persistence across a real login or
-        reboot is a per-candidate release condition, not a standing guarantee. Test install, restart,
-        persistence, uninstall, and restoration on a disposable host first.
+        <strong>Background service is opt-in.</strong> Configure Task Scheduler, launchd, or
+        systemd-user to start Brains at user login according to your OS configuration.
+        Reboot persistence has not been verified on every platform. Follow the setup guidance in
+        <a href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener">Operations</a>.
       </p>
     </div>
   </div>
 </section>
 
-<!-- SCOPE -->
-<section id="scope">
+<!-- WORKFLOW -->
+<section id="workflow">
   <div class="wrap">
     <div class="sec-head">
-      <div class="kicker">Scope</div>
-      <h2>What Brains does, and what it leaves to your tools</h2>
-      <p>
-        Brains does one thing: coordination. It deliberately refuses to be your model
-        router, your search engine, or your chat bridge — because your harness and editor
-        already are.
-      </p>
+      <div class="kicker">Workflow</div>
+      <h2>One agent implements. Another reviews.</h2>
+      <p>Use a shared Workspace to coordinate a task across two coding agents and continue where you left off.</p>
     </div>
 
-    <h3 style="margin:0 0 10px;font-size:16px;color:var(--accent)">Available now</h3>
-    <div class="chips" style="margin-bottom:28px">
-      <span class="chip on">Workspaces &amp; durable Sessions</span>
-      <span class="chip on">tasks with exclusive claims</span>
-      <span class="chip on">handoffs &amp; checkpoints</span>
-      <span class="chip on">durable agent mailboxes</span>
-      <span class="chip on">peer help with evidence</span>
-      <span class="chip on">shared knowledge</span>
-      <span class="chip on">asks &amp; approvals</span>
-      <span class="chip on">hash-chained audit log</span>
-      <span class="chip on">readiness &amp; queue diagnosis</span>
-      <span class="chip on">backup / restore / rollback</span>
-      <span class="chip on">browser console &amp; /v1 API</span>
-      <span class="chip on">73 MCP tools · 4 harnesses</span>
-      <span class="chip on">text search across your repo</span>
-    </div>
-
-    <h3 style="margin:0 0 10px;font-size:16px">Not in scope</h3>
-    <div class="tbl">
-      <table>
-        <thead><tr><th style="width:230px">Brains does not</th><th>Because</th></tr></thead>
-        <tbody>
-          <tr><td class="term-c">Route models</td><td>Every supported harness already has its own provider login. Routing models through Brains would duplicate that and put your credentials somewhere they need not be.</td></tr>
-          <tr><td class="term-c">Index code semantically</td><td>Brains coordinates agents; it is not a search engine. Your harness and editor already index your code.</td></tr>
-          <tr><td class="term-c">Support other databases</td><td>SQLite is right for one local operator: no server, one file, and a backup that is a copy.</td></tr>
-          <tr><td class="term-c">Bridge chat apps</td><td>Brains coordinates agents with each other, not humans in Slack or Telegram.</td></tr>
-          <tr><td class="term-c">Manage prompts or skills</td><td>Each harness has its own. Brains does not compete with them.</td></tr>
-          <tr><td class="term-c">Act on the world unattended</td><td>Anything reaching outside stays behind an explicit human decision.</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <p style="color:var(--muted);font-size:15px;margin:22px 0 0;max-width:76ch">
-      <strong style="color:var(--fg)">Intended, not built.</strong> Multi-operator access,
-      GitHub event linkage, and scheduled recurring work are intended and unimplemented.
-      They are tracked as issues, and nothing in the installed product advertises or
-      partially exposes them.
-    </p>
-
-    <div class="tbl" style="margin-top:26px">
-      <table>
-        <thead><tr><th style="width:190px">And it does not promise</th><th>Why</th></tr></thead>
-        <tbody>
-          <tr><td class="term-c">Token savings</td><td>Coordination and retrieval cost tokens too. Brains can avoid repeated work; it does not guarantee a lower bill.</td></tr>
-          <tr><td class="term-c">A security sandbox</td><td>The local execution boundary is cooperative. It is not a process or network security boundary.</td></tr>
-          <tr><td class="term-c">Multi-tenancy</td><td>There is no supported tenant boundary. Treat the database as one operator's data.</td></tr>
-          <tr><td class="term-c">Model quality</td><td>Brains does not run models and makes no claim about the tools it connects.</td></tr>
-        </tbody>
-      </table>
+    <div class="grid g4">
+      <div class="feat">
+        <h3>1. Connect the tools</h3>
+        <p>Register your repository as a Workspace and connect both coding tools to Brains over MCP.</p>
+      </div>
+      <div class="feat">
+        <h3>2. Implement and review</h3>
+        <p>Have one agent claim and implement the task. Ask the second agent to review the changes and report its findings.</p>
+      </div>
+      <div class="feat">
+        <h3>3. Resolve questions</h3>
+        <p>Exchange questions and findings through local agent mailboxes. File an ask when a decision needs your input.</p>
+      </div>
+      <div class="feat">
+        <h3>4. Leave a handoff</h3>
+        <p>Record what changed, what remains, and any blockers. The next session reads the handoff and continues the work.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -738,18 +693,17 @@ never written into the file.</span></pre></div>
   <div class="wrap">
     <div class="sec-head">
       <div class="kicker">Documentation</div>
-      <h2>Read the contracts</h2>
-      <p>Brains documents what it promises, what it partially delivers, and where the evidence gaps are — separately.</p>
+      <h2>Learn to use Brains</h2>
+      <p>Start with the guide, connect your tools, and learn how to run and maintain your local setup.</p>
     </div>
     <div class="grid g4">
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PRODUCT_BRIEF.md" target="_blank" rel="noopener"><div class="ic">📘</div><h3>Product brief</h3><p>Identity, problem, promise, boundaries, and the success definition.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/product/PRODUCT_BRIEF.md" target="_blank" rel="noopener"><div class="ic">📘</div><h3>Product brief</h3><p>Who Brains is for and how it helps coordinate AI coding agents.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/GUIDE.md" target="_blank" rel="noopener"><div class="ic">📗</div><h3>Using Brains</h3><p>The model, and two walkthroughs: one agent with continuity, two agents sharing work.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener"><div class="ic">🏛️</div><h3>Architecture</h3><p>How the control plane, storage, and surfaces fit together.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener"><div class="ic">🛠️</div><h3>Operations</h3><p>Running, wiring, service posture, state, and recovery.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/QUALITY_GATES.md" target="_blank" rel="noopener"><div class="ic">✅</div><h3>Quality gates</h3><p>The reproducible checks and the recurring release conditions.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/MCP.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>MCP surface</h3><p>The 73 tools your agents can call, grouped by what they do.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><div class="ic">🔍</div><h3>Contributing</h3><p>How to change behaviour, and where the supported surface is defined.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener"><div class="ic">🔐</div><h3>Security</h3><p>Reporting policy and the boundaries Brains does and does not claim.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener"><div class="ic">🔐</div><h3>Security</h3><p>Security guidance and how to report a vulnerability.</p></a>
     </div>
   </div>
 </section>
