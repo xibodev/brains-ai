@@ -2110,7 +2110,7 @@ def inbox_wait_cli(
     timeout_ms: int = typer.Option(25000, "--timeout-ms"),
     after_message_id: int | None = typer.Option(None, "--after-message-id"),
 ):
-    """Block until mail, a subscribed topic, or a peer request arrives."""
+    """Wait for claimable peer help or timeout; does not wait for mailbox messages."""
     from brains.control.mailbox import inbox_wait
 
     _print_json(
@@ -2190,6 +2190,20 @@ def help_claim_cli(
             timeout_ms=timeout_ms,
         )
     )
+
+
+@app.command("help-claim-code")
+def help_claim_code_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+):
+    """Claim exactly one peer-help request by code without blocking.
+
+    A same-owner retry does not renew deadlines. No queue fallback or process launch.
+    """
+    from brains.control.help import claim_help_request
+
+    _print_json(claim_help_request(code, session_id=session))
 
 
 @app.command("help-answer")

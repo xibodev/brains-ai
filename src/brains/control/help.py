@@ -22,8 +22,12 @@ Safety rules baked into this module:
   the new request inherits ``ask_depth = parent + 1``. Anything beyond
   the cap is refused — this is the deadlock guard for A↔B chains.
 
-All operations use the dev DB. There is no API authentication in this
-module; the MCP tool layer above is the trust boundary.
+Session actors are checked against the transport/local principal before
+liveness renewal. Request visibility remains scoped to its source Workspace.
+The transport authenticates credentials; local calls inherit the resolver's
+operating-system trust boundary. A caller-supplied Session id is not a credential.
+Claim/answer/release/cancel recheck the actor and current Workspace visibility
+under the SQLite lifecycle writer lock, held through the request transition.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 
+from brains.authz.principal import Principal
 from brains.control.common import normalize_path, utc_now
 from brains.control.events import append_event
 from brains.storage.db import SessionLocal
@@ -45,8 +50,10 @@ from brains.storage.models import (
     HelpRequest,
     HelpRequestConstraint,
     HelpRequestExecution,
+    Org,
     Workspace,
     WorkspaceAlias,
+    WorkspaceMembership,
 )
 
 
@@ -183,6 +190,7 @@ def _claimable_request_query(
     workspace_slug: str | None,
     tool: str | None,
     visible_workspace_ids: set[int] | None,
+    owned_claim: bool = False,
 ):
     """Return peer-help rows this Session could claim, before any limit."""
     targets = [HelpRequest.to_session_id == session_id]
@@ -195,7 +203,15 @@ def _claimable_request_query(
             HelpRequestConstraint.request_code == HelpRequest.code,
         )
         .filter(
-            HelpRequest.status == "open",
+            or_(
+                HelpRequest.status == "open",
+                and_(
+                    HelpRequest.status == "claimed",
+                    HelpRequest.claimed_by_session_id == session_id,
+                ),
+            )
+            if owned_claim
+            else HelpRequest.status == "open",
             or_(*targets),
         )
     )
@@ -303,6 +319,101 @@ def _claim_grace_seconds() -> int:
     return max(1, raw)
 
 
+def _help_workspace_visible(session, principal: Principal, workspace_id: int) -> bool:
+    """The shared/private Org policy, read on the transition's own connection."""
+    if principal.is_bootstrap_admin:
+        return True
+    workspace = session.get(Workspace, workspace_id)
+    if workspace is None:
+        return False
+    org_id = workspace.org_id
+    if org_id is None:
+        org_id = session.query(Org.id).filter(Org.slug == "default").scalar()
+    if org_id not in (principal.visible_org_ids() or set()):
+        return False
+    return workspace.visibility != "private" or (
+        session.query(WorkspaceMembership.id)
+        .filter(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.operator_id == principal.operator_id,
+        )
+        .first()
+        is not None
+    )
+
+
+def _require_help_actor(
+    session,
+    session_id: str,
+    *,
+    action: str,
+    lock: bool = False,
+    request_code: str | None = None,
+    renew_lease: bool = True,
+) -> AgentSession:
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.sessions import _lock_session_lifecycle, require_live_session
+
+    # Resolve before the writer lock: local resolution may initialize the DB.
+    principal = resolve_local_principal()
+    if not principal.is_operator or principal.operator_id is None:
+        raise ValueError("help session unavailable")
+    if lock:
+        _lock_session_lifecycle(session, session_id)
+        # expire_on_commit=False otherwise retains the pre-lock actor snapshot.
+        session.expire_all()
+    agent = session.get(AgentSession, session_id)
+    if agent is None:
+        raise ValueError("help session unavailable")
+    # Pre-operator persisted Sessions and synthetic fixtures have NULL owners.
+    # Only the install admin may keep using those; known owners always match.
+    legacy_admin = agent.created_by_operator_id is None and principal.is_bootstrap_admin
+    if (
+        not legacy_admin and agent.created_by_operator_id != principal.operator_id
+    ) or not _help_workspace_visible(session, principal, agent.workspace_id):
+        raise ValueError("help session unavailable")
+    if request_code is not None:
+        request = session.query(HelpRequest).filter(HelpRequest.code == request_code).one_or_none()
+        if request is None or (
+            request.from_workspace_id is not None
+            and not _help_workspace_visible(session, principal, request.from_workspace_id)
+        ):
+            raise ValueError(f"unknown or unavailable help request: {request_code}")
+    return require_live_session(session, session_id, action=action, renew_lease=renew_lease)
+
+
+def _current_claim(now: datetime):
+    # Retained running reviews may outlive peer grace; this does not launch work.
+    live_review = select(HelpRequestExecution.request_code).where(
+        HelpRequestExecution.status == "running",
+        HelpRequestExecution.lease_expires_at >= now,
+    )
+    return or_(
+        HelpRequest.claimed_at >= now - timedelta(seconds=_claim_grace_seconds()),
+        HelpRequest.code.in_(live_review),
+    )
+
+
+def _request_snapshot(session, row: HelpRequest):
+    """Fence transitions against a concurrent terminal change or release/reclaim."""
+    return session.query(HelpRequest).filter(
+        HelpRequest.id == row.id,
+        HelpRequest.status == row.status,
+        HelpRequest.claimed_by_session_id == row.claimed_by_session_id,
+        HelpRequest.claimed_at == row.claimed_at,
+        HelpRequest.expires_at == row.expires_at,
+    )
+
+
+def _help_transition(session, row: HelpRequest, *, session_id: str, action: str):
+    # Capture the request CAS before refreshing under the lifecycle writer lock.
+    # No commit may separate this actor/visibility recheck from the transition.
+    code = row.code
+    query = _request_snapshot(session, row)
+    _require_help_actor(session, session_id, action=action, lock=True, request_code=code)
+    return query
+
+
 def _expire_due(session) -> int:
     """Flip stale requests to ``expired``.
 
@@ -319,26 +430,20 @@ def _expire_due(session) -> int:
     for tests.
     """
     now = utc_now()
-    grace_cutoff = now - timedelta(seconds=_claim_grace_seconds())
     open_q = session.query(HelpRequest).filter(
         HelpRequest.expires_at < now,
         HelpRequest.status == "open",
     )
     open_count = open_q.count()
     if open_count:
-        open_q.update({"status": "expired"}, synchronize_session=False)
-    live_review = select(HelpRequestExecution.request_code).where(
-        HelpRequestExecution.status == "running",
-        HelpRequestExecution.lease_expires_at >= now,
-    )
+        open_count = open_q.update({"status": "expired"}, synchronize_session=False)
     claimed_q = session.query(HelpRequest).filter(
         HelpRequest.status == "claimed",
-        HelpRequest.claimed_at < grace_cutoff,
-        ~HelpRequest.code.in_(live_review),
+        ~_current_claim(now),
     )
     claimed_count = claimed_q.count()
     if claimed_count:
-        claimed_q.update({"status": "expired"}, synchronize_session=False)
+        claimed_count = claimed_q.update({"status": "expired"}, synchronize_session=False)
     if open_count or claimed_count:
         expired_codes = session.query(HelpRequest.code).filter(HelpRequest.status == "expired")
         session.query(HelpRequestExecution).filter(
@@ -405,13 +510,9 @@ def file_help_request(
     expires_at = now + timedelta(milliseconds=timeout_ms)
     code = _next_code()
     with SessionLocal() as session:
-        _expire_due(session)
         if from_session_id:
-            # Attribution is validated against liveness: a reaped session
-            # cannot file asks (field report #2, issue a).
-            from brains.control.sessions import require_live_session
-
-            require_live_session(session, from_session_id, action="ask_peer")
+            _require_help_actor(session, from_session_id, action="ask_peer")
+        _expire_due(session)
         depth = _current_ask_depth_for_session(session, from_session_id)
         if depth > MAX_ASK_DEPTH:
             raise HelpDeadlockError(
@@ -557,25 +658,22 @@ def ask_peer(
                 if remaining > 0:
                     deadline = max(deadline, time.monotonic() + remaining)
         if time.monotonic() >= deadline:
-            # Flip ourselves to expired and return that snapshot.
+            # The call-local deadline cannot overwrite a concurrently acquired
+            # claim or answer. Only the durable lifetime can expire the row.
             with SessionLocal() as session:
+                _expire_due(session)
+                session.commit()
                 expiring = (
                     session.query(HelpRequest).filter(HelpRequest.id == request_id).one_or_none()
                 )
-                if expiring is not None and expiring.status in ("open", "claimed"):
-                    expiring.status = "expired"
-                    session.commit()
-                    session.refresh(expiring)
-                    result = _row_to_dict(session, expiring)
-                else:
-                    result = (
-                        _row_to_dict(session, expiring)
-                        if expiring
-                        else {
-                            "code": code,
-                            "status": "expired",
-                        }
-                    )
+                result = (
+                    _row_to_dict(session, expiring)
+                    if expiring
+                    else {"code": code, "status": "expired"}
+                )
+            if result.get("status") in {"open", "claimed"}:
+                time.sleep(poll)
+                continue
             final_status = result.get("status", "expired")
             break
         time.sleep(poll)
@@ -604,11 +702,9 @@ def get_help_request(code: str, *, session_id: str | None = None) -> dict[str, A
         raise ValueError("code is required")
     init_db()
     with SessionLocal() as session:
-        _expire_due(session)
         if session_id:
-            from brains.control.sessions import require_live_session
-
-            require_live_session(session, session_id, action="get_help_request")
+            _require_help_actor(session, session_id, action="get_help_request")
+        _expire_due(session)
         row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
         session.commit()
         if row is None or not _request_visible(row):
@@ -649,9 +745,7 @@ def cancel_help_request(code: str, *, session_id: str) -> dict[str, Any]:
         raise ValueError("cancel_help_request requires session_id")
     init_db()
     with SessionLocal() as session:
-        from brains.control.sessions import require_live_session
-
-        require_live_session(session, session_id, action="cancel_help_request")
+        _require_help_actor(session, session_id, action="cancel_help_request")
         _expire_due(session)
         row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
         session.commit()
@@ -666,11 +760,13 @@ def cancel_help_request(code: str, *, session_id: str) -> dict[str, Any]:
         execution = session.get(HelpRequestExecution, code)
         review_session_id = execution.review_session_id if execution is not None else None
         updated = (
-            session.query(HelpRequest)
+            _help_transition(session, row, session_id=session_id, action="cancel_help_request")
             .filter(
-                HelpRequest.id == row.id,
                 HelpRequest.from_session_id == session_id,
-                HelpRequest.status.in_(("open", "claimed")),
+                or_(
+                    and_(HelpRequest.status == "open", HelpRequest.expires_at >= utc_now()),
+                    and_(HelpRequest.status == "claimed", _current_claim(utc_now())),
+                ),
             )
             .update({"status": "cancelled"}, synchronize_session=False)
         )
@@ -720,11 +816,8 @@ def release_help_request(
         raise ValueError("release_help_request requires session_id")
     retry_timeout_ms = max(100, int(retry_timeout_ms))
     init_db()
-    now = utc_now()
     with SessionLocal() as session:
-        from brains.control.sessions import require_live_session
-
-        require_live_session(session, session_id, action="release_help_request")
+        _require_help_actor(session, session_id, action="release_help_request")
         _expire_due(session)
         row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
         session.commit()
@@ -734,28 +827,27 @@ def release_help_request(
             raise ValueError(f"help request {code} is {row.status}, not claimed")
         if row.claimed_by_session_id != session_id:
             raise ValueError(f"help request claimed by another session: {code}")
-        updated = (
-            session.query(HelpRequest)
-            .filter(
-                HelpRequest.id == row.id,
-                HelpRequest.status == "claimed",
-                HelpRequest.claimed_by_session_id == session_id,
-            )
-            .update(
-                {
-                    "status": "open",
-                    "claimed_by_session_id": None,
-                    "claimed_at": None,
-                    "expires_at": now + timedelta(milliseconds=retry_timeout_ms),
-                },
-                synchronize_session=False,
-            )
+        transition = _help_transition(
+            session, row, session_id=session_id, action="release_help_request"
+        )
+        now = utc_now()
+        updated = transition.filter(
+            HelpRequest.status == "claimed",
+            HelpRequest.claimed_by_session_id == session_id,
+            _current_claim(now),
+        ).update(
+            {
+                "status": "open",
+                "claimed_by_session_id": None,
+                "claimed_at": None,
+                "expires_at": now + timedelta(milliseconds=retry_timeout_ms),
+            },
+            synchronize_session=False,
         )
         session.commit()
         if not updated:
             session.refresh(row)
             raise ValueError(f"help request {code} changed state before release")
-        session.commit()
         session.refresh(row)
         result = _row_to_dict(session, row)
         workspace_id = row.from_workspace_id
@@ -766,6 +858,155 @@ def release_help_request(
         session_id=session_id,
         metadata={"code": code, "retry_timeout_ms": retry_timeout_ms},
     )
+    return result
+
+
+def _claim_request(
+    *,
+    session_id: str,
+    workspace_slug: str | None = None,
+    code: str | None = None,
+    renew_lease: bool = True,
+) -> dict[str, Any] | None:
+    from brains.authz.resolver import resolve_local_principal
+    from brains.control.memberships import visible_workspace_ids_for_current
+
+    with SessionLocal() as session:
+        agent = _require_help_actor(
+            session, session_id, action="claim_help_request", renew_lease=renew_lease
+        )
+        workspace = session.get(Workspace, agent.workspace_id)
+        slug = workspace_slug
+        if slug is None and workspace is not None:
+            slug = workspace.slug
+        tool = agent.tool
+        visible = visible_workspace_ids_for_current()
+        expired = _expire_due(session)
+        if expired or renew_lease:
+            session.commit()
+        query = _claimable_request_query(
+            session,
+            session_id=session_id,
+            workspace_slug=slug,
+            tool=tool,
+            visible_workspace_ids=visible,
+            owned_claim=code is not None,
+        )
+        if code is not None:
+            query = query.filter(HelpRequest.code == code)
+        match = query.first()
+        if match is None:
+            return None
+        candidate, required_tool = match
+        candidate_code = candidate.code
+        principal = resolve_local_principal()
+        transition = _help_transition(
+            session, candidate, session_id=session_id, action="claim_help_request"
+        )
+        # The actor's Workspace and harness can change before the lock too.
+        current_agent = session.get(AgentSession, session_id)
+        if current_agent is None:
+            raise ValueError("help session unavailable")
+        workspace = session.get(Workspace, current_agent.workspace_id)
+        slug = workspace_slug
+        if slug is None and workspace is not None:
+            slug = workspace.slug
+        tool = current_agent.tool
+        eligible = _claimable_request_query(
+            session,
+            session_id=session_id,
+            workspace_slug=slug,
+            tool=tool,
+            visible_workspace_ids=None,
+            owned_claim=code is not None,
+        )
+        now = utc_now()
+        if code is not None:
+            eligible = eligible.filter(HelpRequest.code == code)
+            if eligible.first() is None:
+                return None
+        else:
+            # Releases can put an older row back ahead of the pre-lock candidate.
+            # Check each source on this same locked connection, not a cached list.
+            match = next(
+                (
+                    match
+                    for match in eligible.filter(HelpRequest.expires_at >= now)
+                    if match[0].from_workspace_id is None
+                    or _help_workspace_visible(session, principal, match[0].from_workspace_id)
+                ),
+                None,
+            )
+            if match is None:
+                return None
+            candidate, required_tool = match
+            if candidate.code != candidate_code:
+                transition = _request_snapshot(session, candidate)
+        if candidate.status == "claimed":
+            # A retry is a read, not a renewal or a second acceptance event.
+            current = eligible.filter(_current_claim(utc_now())).first()
+            return _row_to_dict(session, current[0]) if current is not None else None
+        updated = transition.filter(
+            HelpRequest.status == "open", HelpRequest.expires_at >= utc_now()
+        ).update(
+            {
+                "status": "claimed",
+                "claimed_by_session_id": session_id,
+                "claimed_at": now,
+            },
+            synchronize_session=False,
+        )
+        if not updated:
+            # A simultaneous retry by the same owner may have won the CAS.
+            # Never fall back to another code, or extend the winning claim.
+            if code is not None:
+                current = eligible.filter(
+                    HelpRequest.status == "claimed",
+                    HelpRequest.claimed_by_session_id == session_id,
+                    _current_claim(utc_now()),
+                ).first()
+                if current is not None:
+                    return _row_to_dict(session, current[0])
+            return None
+        session.query(HelpRequestExecution).filter(
+            HelpRequestExecution.request_code == candidate.code,
+            HelpRequestExecution.mode == "auto",
+        ).update(
+            {
+                "status": "cancelled",
+                "completed_at": now,
+                "updated_at": now,
+                "lease_expires_at": None,
+            },
+            synchronize_session=False,
+        )
+        session.commit()
+        session.refresh(candidate)
+        result = _row_to_dict(session, candidate)
+    append_event(
+        "help_claimed",
+        f"{result['code']}: claimed by {session_id}",
+        session_id=session_id,
+        metadata={
+            "code": result["code"],
+            "from_session_id": result["from_session_id"],
+            "required_tool": required_tool,
+            "claimer_tool": tool,
+        },
+    )
+    return result
+
+
+def claim_help_request(code: str, *, session_id: str) -> dict[str, Any]:
+    """Accept exactly one eligible request; an owned retry never renews it."""
+    if not code:
+        raise ValueError("code is required")
+    if not session_id:
+        raise ValueError("claim_help_request requires session_id")
+    init_db()
+    result = _claim_request(code=code, session_id=session_id)
+    if result is None:
+        raise ValueError(f"unknown or unavailable help request: {code}")
     return result
 
 
@@ -793,89 +1034,24 @@ def wait_for_request(
     timeout_ms = max(100, int(timeout_ms))
 
     init_db()
-    # Resolve peer's workspace slug + harness once; we won't refetch on
-    # every loop. The harness gates which constrained requests this peer
-    # may claim (``required_tool`` matching).
-    resolved_slug: str | None = workspace_slug
-    my_tool: str | None = None
-    with SessionLocal() as session:
-        from brains.control.sessions import require_live_session
-
-        agent = require_live_session(session, session_id, action="wait_for_request")
-        workspace = session.get(Workspace, agent.workspace_id)
-        my_tool = agent.tool
-        if resolved_slug is None:
-            resolved_slug = workspace.slug if workspace is not None else None
-        session.commit()
+    from brains.control.session_liveness import session_lease_seconds
 
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     poll = _poll_interval_seconds()
-    # Layer 2 visibility filter — see ``brains.control.memberships``.
-    # An operator should never be able to claim a request that
-    # originated in a private workspace they aren't a member of, even
-    # if the request was addressed by session_id directly.
-    from brains.control.memberships import visible_workspace_ids_for_current
-
-    visible = visible_workspace_ids_for_current()
+    # Idle polls still validate liveness; only bounded activity renews the lease.
+    # Leave half the configured TTL for scheduling delays, without reviving expiry.
+    renewal_interval = min(30.0, session_lease_seconds() / 2.0)
+    next_renewal = time.monotonic()
     while True:
-        with SessionLocal() as session:
-            _expire_due(session)
-            match = _claimable_request_query(
-                session,
-                session_id=session_id,
-                workspace_slug=resolved_slug,
-                tool=my_tool,
-                visible_workspace_ids=visible,
-            ).first()
-            candidate, candidate_required_tool = match if match is not None else (None, None)
-            if candidate is None:
-                session.commit()
-            if candidate is not None:
-                # Atomic claim: re-check the row is still open via a
-                # conditional update so two waiters can't both grab it.
-                now = utc_now()
-                updated = (
-                    session.query(HelpRequest)
-                    .filter(
-                        and_(
-                            HelpRequest.id == candidate.id,
-                            HelpRequest.status == "open",
-                            HelpRequest.expires_at >= now,
-                        )
-                    )
-                    .update(
-                        {
-                            "status": "claimed",
-                            "claimed_by_session_id": session_id,
-                            "claimed_at": now,
-                        },
-                        synchronize_session=False,
-                    )
-                )
-                session.commit()
-                if updated:
-                    execution = session.get(HelpRequestExecution, candidate.code)
-                    if execution is not None and execution.mode == "auto":
-                        execution.status = "cancelled"
-                        execution.completed_at = now
-                        execution.updated_at = now
-                        execution.lease_expires_at = None
-                        session.commit()
-                    session.refresh(candidate)
-                    result = _row_to_dict(session, candidate)
-                    append_event(
-                        "help_claimed",
-                        f"{candidate.code}: claimed by {session_id}",
-                        session_id=session_id,
-                        metadata={
-                            "code": candidate.code,
-                            "from_session_id": candidate.from_session_id,
-                            "required_tool": candidate_required_tool,
-                            "claimer_tool": my_tool,
-                        },
-                    )
-                    return result
-                # Lost the race — fall through to keep polling.
+        now = time.monotonic()
+        renew_lease = now >= next_renewal
+        result = _claim_request(
+            session_id=session_id, workspace_slug=workspace_slug, renew_lease=renew_lease
+        )
+        if renew_lease:
+            next_renewal = now + renewal_interval
+        if result is not None:
+            return result
         if time.monotonic() >= deadline:
             return None
         time.sleep(poll)
@@ -908,31 +1084,44 @@ def answer_request(
 
     init_db()
     with SessionLocal() as session:
-        from brains.control.sessions import require_live_session
-
-        require_live_session(session, session_id, action="answer_request")
+        _require_help_actor(session, session_id, action="answer_request")
         expired = _expire_due(session)
         row = session.query(HelpRequest).filter(HelpRequest.code == code).one_or_none()
         session.commit()
         if expired and row is not None:
             session.refresh(row)
-        if row is None:
-            raise ValueError(f"unknown help request: {code}")
+        if row is None or not _request_visible(row):
+            raise ValueError(f"unknown or unavailable help request: {code}")
         if row.status == "expired":
             raise HelpExpiredError(f"help request expired: {code}")
         if row.status == "answered":
             raise ValueError(f"help request already answered: {code}")
         if row.status != "claimed":
             raise ValueError(f"help request not in claimed state: {code} (status={row.status})")
-        if row.claimed_by_session_id and row.claimed_by_session_id != session_id:
+        if row.claimed_by_session_id != session_id:
             raise ValueError(f"help request claimed by another session: {code}")
-        row.answer = answer.strip()
-        row.evidence = evidence.strip()
-        row.answered_at = utc_now()
-        row.status = "answered"
-        if row.claimed_by_session_id is None:
-            row.claimed_by_session_id = session_id
+        now = utc_now()
+        updated = (
+            _help_transition(session, row, session_id=session_id, action="answer_request")
+            .filter(_current_claim(utc_now()))
+            .update(
+                {
+                    "answer": answer.strip(),
+                    "evidence": evidence.strip(),
+                    "answered_at": now,
+                    "status": "answered",
+                },
+                synchronize_session=False,
+            )
+        )
         session.commit()
+        if not updated:
+            _expire_due(session)
+            session.commit()
+            session.refresh(row)
+            if row.status == "expired":
+                raise HelpExpiredError(f"help request expired: {code}")
+            raise ValueError(f"help request {code} changed state before answer")
         session.refresh(row)
         result = _row_to_dict(session, row)
 
@@ -988,6 +1177,7 @@ __all__ = [
     "wait_help_request",
     "cancel_help_request",
     "release_help_request",
+    "claim_help_request",
     "wait_for_request",
     "answer_request",
     "list_open_help_requests",
