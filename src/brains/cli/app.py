@@ -2110,7 +2110,7 @@ def inbox_wait_cli(
     timeout_ms: int = typer.Option(25000, "--timeout-ms"),
     after_message_id: int | None = typer.Option(None, "--after-message-id"),
 ):
-    """Block until mail, a subscribed topic, or a peer request arrives."""
+    """Wait for claimable peer help or timeout; does not wait for mailbox messages."""
     from brains.control.mailbox import inbox_wait
 
     _print_json(

@@ -349,6 +349,7 @@ def _require_help_actor(
     action: str,
     lock: bool = False,
     request_code: str | None = None,
+    renew_lease: bool = True,
 ) -> AgentSession:
     from brains.authz.resolver import resolve_local_principal
     from brains.control.sessions import _lock_session_lifecycle, require_live_session
@@ -378,7 +379,7 @@ def _require_help_actor(
             and not _help_workspace_visible(session, principal, request.from_workspace_id)
         ):
             raise ValueError(f"unknown or unavailable help request: {request_code}")
-    return require_live_session(session, session_id, action=action)
+    return require_live_session(session, session_id, action=action, renew_lease=renew_lease)
 
 
 def _current_claim(now: datetime):
@@ -826,23 +827,22 @@ def release_help_request(
             raise ValueError(f"help request {code} is {row.status}, not claimed")
         if row.claimed_by_session_id != session_id:
             raise ValueError(f"help request claimed by another session: {code}")
+        transition = _help_transition(
+            session, row, session_id=session_id, action="release_help_request"
+        )
         now = utc_now()
-        updated = (
-            _help_transition(session, row, session_id=session_id, action="release_help_request")
-            .filter(
-                HelpRequest.status == "claimed",
-                HelpRequest.claimed_by_session_id == session_id,
-                _current_claim(utc_now()),
-            )
-            .update(
-                {
-                    "status": "open",
-                    "claimed_by_session_id": None,
-                    "claimed_at": None,
-                    "expires_at": now + timedelta(milliseconds=retry_timeout_ms),
-                },
-                synchronize_session=False,
-            )
+        updated = transition.filter(
+            HelpRequest.status == "claimed",
+            HelpRequest.claimed_by_session_id == session_id,
+            _current_claim(now),
+        ).update(
+            {
+                "status": "open",
+                "claimed_by_session_id": None,
+                "claimed_at": None,
+                "expires_at": now + timedelta(milliseconds=retry_timeout_ms),
+            },
+            synchronize_session=False,
         )
         session.commit()
         if not updated:
@@ -862,20 +862,28 @@ def release_help_request(
 
 
 def _claim_request(
-    *, session_id: str, workspace_slug: str | None = None, code: str | None = None
+    *,
+    session_id: str,
+    workspace_slug: str | None = None,
+    code: str | None = None,
+    renew_lease: bool = True,
 ) -> dict[str, Any] | None:
+    from brains.authz.resolver import resolve_local_principal
     from brains.control.memberships import visible_workspace_ids_for_current
 
     with SessionLocal() as session:
-        agent = _require_help_actor(session, session_id, action="claim_help_request")
+        agent = _require_help_actor(
+            session, session_id, action="claim_help_request", renew_lease=renew_lease
+        )
         workspace = session.get(Workspace, agent.workspace_id)
         slug = workspace_slug
         if slug is None and workspace is not None:
             slug = workspace.slug
         tool = agent.tool
         visible = visible_workspace_ids_for_current()
-        _expire_due(session)
-        session.commit()
+        expired = _expire_due(session)
+        if expired or renew_lease:
+            session.commit()
         query = _claimable_request_query(
             session,
             session_id=session_id,
@@ -890,6 +898,8 @@ def _claim_request(
         if match is None:
             return None
         candidate, required_tool = match
+        candidate_code = candidate.code
+        principal = resolve_local_principal()
         transition = _help_transition(
             session, candidate, session_id=session_id, action="claim_help_request"
         )
@@ -907,12 +917,31 @@ def _claim_request(
             session_id=session_id,
             workspace_slug=slug,
             tool=tool,
-            visible_workspace_ids=None,  # Source visibility was checked under the lock.
+            visible_workspace_ids=None,
             owned_claim=code is not None,
-        ).filter(HelpRequest.code == candidate.code)
-        if eligible.first() is None:
-            return None
+        )
         now = utc_now()
+        if code is not None:
+            eligible = eligible.filter(HelpRequest.code == code)
+            if eligible.first() is None:
+                return None
+        else:
+            # Releases can put an older row back ahead of the pre-lock candidate.
+            # Check each source on this same locked connection, not a cached list.
+            match = next(
+                (
+                    match
+                    for match in eligible.filter(HelpRequest.expires_at >= now)
+                    if match[0].from_workspace_id is None
+                    or _help_workspace_visible(session, principal, match[0].from_workspace_id)
+                ),
+                None,
+            )
+            if match is None:
+                return None
+            candidate, required_tool = match
+            if candidate.code != candidate_code:
+                transition = _request_snapshot(session, candidate)
         if candidate.status == "claimed":
             # A retry is a read, not a renewal or a second acceptance event.
             current = eligible.filter(_current_claim(utc_now())).first()
@@ -1005,10 +1034,22 @@ def wait_for_request(
     timeout_ms = max(100, int(timeout_ms))
 
     init_db()
+    from brains.control.session_liveness import session_lease_seconds
+
     deadline = time.monotonic() + (timeout_ms / 1000.0)
     poll = _poll_interval_seconds()
+    # Idle polls still validate liveness; only bounded activity renews the lease.
+    # Leave half the configured TTL for scheduling delays, without reviving expiry.
+    renewal_interval = min(30.0, session_lease_seconds() / 2.0)
+    next_renewal = time.monotonic()
     while True:
-        result = _claim_request(session_id=session_id, workspace_slug=workspace_slug)
+        now = time.monotonic()
+        renew_lease = now >= next_renewal
+        result = _claim_request(
+            session_id=session_id, workspace_slug=workspace_slug, renew_lease=renew_lease
+        )
+        if renew_lease:
+            next_renewal = now + renewal_interval
         if result is not None:
             return result
         if time.monotonic() >= deadline:

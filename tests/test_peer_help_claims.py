@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
@@ -396,6 +396,94 @@ def test_competing_exact_claims_and_cancel_have_one_winner(world, monkeypatch, w
     assert sum(event[0] == "help_claimed" for event in world.events) == (winner != "cancel")
 
 
+@pytest.mark.parametrize("lane", ["queue", "exact"])
+@pytest.mark.parametrize("older_kind", ["eligible", "hidden", "harness", "expired"])
+def test_locked_queue_reselects_oldest_current_eligible_request(
+    world, monkeypatch, lane, older_kind
+):
+    older = world.file()
+    peer_help.claim_help_request(older, session_id="second")
+    world.advance(1)
+    newer = world.file()
+
+    def release_older():
+        peer_help.release_help_request(older, session_id="second")
+        with world.db() as session:
+            row = session.query(HelpRequest).filter_by(code=older).one()
+            if older_kind == "hidden":
+                row.from_workspace_id = 3
+            elif older_kind == "harness":
+                session.add(HelpRequestConstraint(request_code=older, required_tool="codex"))
+            elif older_kind == "expired":
+                row.expires_at = world.clock.now - timedelta(seconds=1)
+            session.commit()
+
+    _interleave_snapshot(monkeypatch, release_older)
+    result = (
+        peer_help.wait_for_request(session_id="peer", timeout_ms=100)
+        if lane == "queue"
+        else peer_help.claim_help_request(newer, session_id="peer")
+    )
+    expected = older if lane == "queue" and older_kind == "eligible" else newer
+    assert result["code"] == expected
+    assert result["required_tool"] is None
+    with world.db() as session:
+        untouched = (
+            session.query(HelpRequest).filter_by(code=newer if expected == older else older).one()
+        )
+        assert untouched.status == "open"
+    assert sum(row[0] == "help_claimed" for row in world.events) == 2
+
+
+def test_queue_reselection_preserves_original_candidate_snapshot(world, monkeypatch):
+    code = world.file()
+
+    def reclaim():
+        peer_help.claim_help_request(code, session_id="second")
+        peer_help.release_help_request(code, session_id="second", retry_timeout_ms=60_000)
+
+    _interleave_snapshot(monkeypatch, reclaim)
+    assert peer_help._claim_request(session_id="peer") is None
+    assert peer_help.get_help_request(code)["status"] == "open"
+    assert sum(row[0] == "help_claimed" for row in world.events) == 1
+
+
+def test_queue_reselects_after_original_candidate_is_claimed(world, monkeypatch):
+    older = world.file()
+    peer_help.claim_help_request(older, session_id="second")
+    world.advance(1)
+    newer = world.file()
+
+    def replace_candidate():
+        peer_help.release_help_request(older, session_id="second")
+        peer_help.claim_help_request(newer, session_id="second")
+
+    _interleave_snapshot(monkeypatch, replace_candidate)
+    assert peer_help.wait_for_request(session_id="peer", timeout_ms=100)["code"] == older
+    assert peer_help.get_help_request(newer)["claimed_by_session_id"] == "second"
+
+
+def test_queue_reselection_checks_current_private_source_membership(world, monkeypatch):
+    older = world.file(required_tool="not:opencode")
+    peer_help.claim_help_request(older, session_id="second")
+    world.advance(1)
+    newer = world.file()
+
+    def release_and_grant():
+        peer_help.release_help_request(older, session_id="second")
+        with world.db() as session:
+            session.query(HelpRequest).filter_by(code=older).update({"from_workspace_id": 3})
+            session.add(WorkspaceMembership(workspace_id=3, operator_id=1, role="member"))
+            session.commit()
+
+    _interleave_snapshot(monkeypatch, release_and_grant)
+    result = peer_help.wait_for_request(session_id="peer", timeout_ms=100)
+    assert result["code"] == older
+    assert result["required_tool"] == "not:opencode"
+    assert result["from_workspace_id"] == 3
+    assert peer_help.get_help_request(newer)["status"] == "open"
+
+
 @pytest.mark.parametrize(
     "winner", ["cancel", "release", "expiry", "same_owner_reclaim", "other_owner_reclaim"]
 )
@@ -517,6 +605,149 @@ def test_release_snapshot_does_not_release_same_owner_reclaim(world, monkeypatch
         peer_help.release_help_request(code, session_id="peer")
     row = peer_help.get_help_request(code)
     assert row["status"] == "claimed" and row["claimed_at"] != first["claimed_at"]
+
+
+def test_release_retry_deadline_starts_after_writer_lock(world, monkeypatch):
+    code = world.file()
+    peer_help.claim_help_request(code, session_id="peer")
+    original = sessions._lock_session_lifecycle
+
+    def delayed_lock(session, session_id):
+        world.advance(5)
+        return original(session, session_id)
+
+    monkeypatch.setattr(sessions, "_lock_session_lifecycle", delayed_lock)
+    result = peer_help.release_help_request(code, session_id="peer", retry_timeout_ms=100)
+    assert result["status"] == "open"
+    assert datetime.fromisoformat(result["expires_at"]) == (
+        world.clock.now + timedelta(milliseconds=100)
+    )
+    assert peer_help.get_help_request(code)["status"] == "open"
+
+
+@pytest.mark.parametrize("lease_seconds", [60, 120, 3600])
+def test_idle_waiter_bounds_lease_writes_and_keeps_long_wait_live(
+    world, monkeypatch, lease_seconds
+):
+    monkeypatch.setenv("BRAINS_SESSION_LEASE_SECONDS", str(lease_seconds))
+    monkeypatch.setenv("BRAINS_HELP_POLL_INTERVAL_MS", "2000")
+    with world.db() as session:
+        session.add(
+            SessionLease(
+                session_id="peer",
+                renewed_at=world.clock.now - timedelta(seconds=1),
+                lease_expires_at=world.clock.now + timedelta(seconds=1),
+            )
+        )
+        session.commit()
+    renewals = []
+    writes = []
+    commits = []
+    original = session_liveness.renew_session_lease
+
+    def renew(session, agent, **kwargs):
+        renewals.append(world.clock.monotonic)
+        return original(session, agent, **kwargs)
+
+    def statement(_conn, _cursor, sql, _parameters, _context, _executemany):
+        if sql.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE")):
+            writes.append(world.clock.monotonic)
+
+    def committed(_session):
+        commits.append(world.clock.monotonic)
+
+    monkeypatch.setattr(session_liveness, "renew_session_lease", renew)
+    engine = world.db.kw["bind"]
+    event.listen(engine, "before_cursor_execute", statement)
+    event.listen(world.db.class_, "after_commit", committed)
+    try:
+        assert peer_help.wait_for_request(session_id="peer", timeout_ms=130_000) is None
+    finally:
+        event.remove(engine, "before_cursor_execute", statement)
+        event.remove(world.db.class_, "after_commit", committed)
+    assert renewals == [0, 30, 60, 90, 120]
+    assert commits == renewals
+    assert writes and set(writes) == set(renewals)
+    with world.db() as session:
+        lease = session.get(SessionLease, "peer")
+        assert session_liveness.lease_is_current(lease)
+        assert lease.lease_expires_at == lease.renewed_at + timedelta(seconds=lease_seconds)
+
+
+def test_repeated_idle_polls_are_read_only_between_renewals(world, monkeypatch):
+    monkeypatch.setenv("BRAINS_HELP_POLL_INTERVAL_MS", "200")
+    checks = []
+    original = sessions.require_live_session
+
+    def checked(session, session_id, **kwargs):
+        checks.append(kwargs["renew_lease"])
+        return original(session, session_id, **kwargs)
+
+    monkeypatch.setattr(sessions, "require_live_session", checked)
+    assert peer_help.wait_for_request(session_id="peer", timeout_ms=1000) is None
+    assert checks == [True, False, False, False, False, False]
+
+
+@pytest.mark.parametrize("change", ["ended", "expired", "mailbox_expired"])
+def test_idle_waiter_checks_liveness_before_next_renewal(world, monkeypatch, change):
+    monkeypatch.setenv("BRAINS_SESSION_LEASE_SECONDS", "60")
+    monkeypatch.setenv("BRAINS_HELP_POLL_INTERVAL_MS", "200")
+    with world.db() as session:
+        session.add(
+            SessionLease(
+                session_id="peer",
+                renewed_at=world.clock.now,
+                lease_expires_at=world.clock.now + timedelta(milliseconds=100),
+            )
+        )
+        if change == "mailbox_expired":
+            session.add(
+                MailboxAttachment(
+                    session_id="peer", mailbox_id=1, active_slot=1, attached_at=world.clock.now
+                )
+            )
+        session.commit()
+    sleeps = []
+
+    def invalidate(seconds):
+        sleeps.append(seconds)
+        assert len(sleeps) == 1
+        world.advance(seconds)
+        with world.db() as session:
+            if change == "ended":
+                session.get(AgentSession, "peer").ended_at = world.clock.now
+            elif change == "expired":
+                session.get(SessionLease, "peer").lease_expires_at = world.clock.now - timedelta(
+                    seconds=1
+                )
+            session.commit()
+
+    monkeypatch.setattr(peer_help.time, "sleep", invalidate)
+    with pytest.raises(ValueError, match="ended" if change == "ended" else "expired"):
+        peer_help.wait_for_request(session_id="peer", timeout_ms=30_000)
+    assert len(sleeps) == 1
+
+
+def test_nonrenewing_poll_retains_final_locked_actor_guard(world, monkeypatch):
+    code = world.file(to_workspace="elsewhere")
+
+    def arrive(seconds):
+        world.advance(seconds)
+        with world.db() as session:
+            session.query(HelpRequest).filter_by(code=code).update({"to_workspace": "peers"})
+            session.commit()
+
+    def end_before_lock():
+        with world.db() as session:
+            session.get(AgentSession, "peer").ended_at = world.clock.now
+            session.commit()
+
+    monkeypatch.setattr(peer_help.time, "sleep", arrive)
+    _interleave_snapshot(monkeypatch, end_before_lock)
+    with pytest.raises(ValueError, match="ended"):
+        peer_help.wait_for_request(session_id="peer", timeout_ms=1000)
+    assert peer_help.get_help_request(code)["status"] == "open"
+    assert all(row[0] != "help_claimed" for row in world.events)
 
 
 def test_waiter_rechecks_liveness_between_polls_without_holding_writer_lock(world, monkeypatch):
