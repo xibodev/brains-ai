@@ -58,7 +58,7 @@ code. The [product brief](docs/product/PRODUCT_BRIEF.md) explains each decision.
 ## Documentation
 
 - [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
-- [MCP surface](docs/MCP.md) — the 73 tools agents can call
+- [MCP surface](docs/MCP.md) — the 74 tools agents can call
 - [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together
 - [Operations](docs/OPERATIONS.md) — running the service, state, and recovery

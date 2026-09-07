@@ -2192,6 +2192,20 @@ def help_claim_cli(
     )
 
 
+@app.command("help-claim-code")
+def help_claim_code_cli(
+    code: str,
+    session: str = typer.Option(..., "--session"),
+):
+    """Claim exactly one peer-help request by code without blocking.
+
+    A same-owner retry does not renew deadlines. No queue fallback or process launch.
+    """
+    from brains.control.help import claim_help_request
+
+    _print_json(claim_help_request(code, session_id=session))
+
+
 @app.command("help-answer")
 def help_answer_cli(
     code: str,

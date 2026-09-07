@@ -1,6 +1,6 @@
 # MCP surface
 
-Brains exposes 73 tools over the Model Context Protocol, all prefixed `brains_`. The
+Brains exposes 74 tools over the Model Context Protocol, all prefixed `brains_`. The
 registry is filtered against a fixed allowlist at startup, so a tool that is not listed
 here has no discovery or activation path.
 
@@ -71,12 +71,12 @@ A Session is a durable coordination handle, not a process. It survives tool rest
 
 ## Communication
 
-`inbox_wait` is the call to loop on. It blocks until mail, subscribed work, or a peer
-request arrives — one long poll rather than two polling loops.
+`inbox_wait` waits for claimable peer-help requests. It does not wait for durable mailbox
+messages; read those through `mailbox_inbox` and the adapter's supported notification path.
 
 | Tool | Purpose |
 |---|---|
-| `inbox_wait` | Block until there is something to do |
+| `inbox_wait` | Wait for claimable peer help or timeout |
 | `mailbox_register` | Register or reattach a Session's mailbox |
 | `mailbox_send` / `mailbox_reply` / `mailbox_forward` | Send durable mail |
 | `mailbox_broadcast` | Send to a Workspace |
@@ -96,10 +96,47 @@ Ask another agent rather than guessing. Answers require evidence.
 |---|---|
 | `file_help_request` | File and return immediately with a code |
 | `wait_help_request` | Wait briefly; a timeout leaves it open |
+| `claim_help_request` | Accept exactly the supplied code without waiting or claiming another request |
 | `wait_for_request` | Block until work is routed to you, then claim it |
 | `answer_request` | Answer. Evidence is required |
 | `get_help_request` / `list_open_help_requests` | Read |
 | `release_help_request` / `cancel_help_request` | Give back or withdraw |
+
+`claim_help_request(code, session_id)` returns the claimed request. Repeating it as the
+same live owner returns the existing claim without renewing its deadline or recording
+another acceptance event. Unknown, ineligible, expired or terminal codes are refused;
+there is no fallback to another queued request. `wait_for_request` retains oldest-eligible
+queue claiming, including its optional Workspace-slug override.
+
+Claim eligibility uses the stored Session's harness and current caller's Workspace
+visibility. Targets match Session **or** Workspace: supplying both broadens matching,
+not pins it to that Session. Use only `to_session_id` for one specific peer, or only
+`to_workspace` with a Workspace slug for any eligible peer there.
+
+The peer-help lifecycle tools listed above check ownership when a Session is supplied:
+the authenticated operator must own that Session and see its Workspace before liveness
+is renewed. The separate `inbox_wait` notification wait checks liveness, not Session
+ownership; it does not accept work. For the lifecycle checks, anonymous and Runtime
+identities are refused. Only bootstrap admin
+may use historical Sessions with no recorded owner; a known different owner is refused
+even for bootstrap admin. Request visibility is checked separately. This is not a
+per-CLI credential boundary between Sessions owned by the same operator.
+
+Filing `timeout_ms` sets request lifetime (default 30 seconds); waiting `timeout_ms` only
+bounds that wait. A claimed request uses claim grace (default 600 seconds), not its
+original open deadline. Reading, notification settlement and duplicate claiming do not
+renew it. Release clears ownership and starts a new open lifetime. Defaults are unchanged.
+
+Claim, release, cancellation and answer use conditional state transitions; an in-flight
+answer cannot overwrite a winning cancellation, expiry or changed claim snapshot. There
+is no client-supplied claim-generation token: a new answer submission after the same
+Session releases and reclaims is evaluated against its current claim. Do not reuse a
+request for changed scope; cancel and file a replacement instead.
+
+Acceptance commits a peer to attempt the recorded scope, not to surrender control of its
+CLI. Mail delivery, reading, work acceptance and requester approval of a result are
+distinct. Discuss counterproposals, decline or defer in durable mail; no new negotiation
+states or automatic worker launch are implied. Evidence is mandatory, not proof of quality.
 
 ## Knowledge
 

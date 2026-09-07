@@ -283,10 +283,10 @@ Operational invariants:
 - end or detach the Session when the harness exits;
 - do not infer running-agent delivery from durable mail, events, or a command row.
 
-`inbox_wait` is the bounded wakeup primitive for direct mail and claimable peer help. A
-timeout means no wakeup during that wait, not that durable work expired. Retained topic
-subscriptions may wake historical state but have no advertised activation commands.
-Empty mailbox reads do not count as adoption.
+`inbox_wait` waits for claimable peer help, not durable mail or topic subscriptions. A
+timeout means no claimable request arrived during that wait, not that the request was
+cancelled. Read durable messages through the mailbox tools and use only the notification
+mode supported by the selected adapter.
 
 Queue health:
 
