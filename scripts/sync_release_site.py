@@ -7,6 +7,7 @@ import ast
 import json
 import os
 import re
+import stat
 import tempfile
 import tomllib
 from datetime import datetime
@@ -16,6 +17,7 @@ from urllib.parse import quote
 
 STABLE_TAG = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+SITE_PAGES = ("index.html", "quickstart.html", "mcp.html", "releases.html")
 
 
 def stable_releases(releases: object, repository: str) -> list[dict]:
@@ -179,6 +181,32 @@ def render_history(releases: list[dict]) -> str:
     return "\n" + "\n".join(articles) + "\n"
 
 
+def render_summary(release: dict) -> str:
+    tag = release["tag_name"]
+    date = datetime.strptime(release["published_at"], "%Y-%m-%dT%H:%M:%SZ")
+    label = f"{MONTHS[date.month - 1]} {date.day}, {date.year}"
+    items = highlights(release.get("body") or "")[:2]
+    details = (
+        "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>" if items else ""
+    )
+    return (
+        '\n<div class="release-summary"><p class="release-summary-meta">'
+        f'<a href="releases.html#release-{escape(tag.replace(".", "-"), quote=True)}">'
+        f"Latest release: {escape(tag)}</a> "
+        f'<time datetime="{date:%Y-%m-%d}">{label}</time></p>{details}'
+        '<a class="release-link" href="releases.html">All release notes</a></div>\n'
+    )
+
+
+def reject_link(path: Path) -> None:
+    info = path.lstat()
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    ):
+        raise ValueError(f"symlink or reparse point is not allowed: {path}")
+
+
 def sync_site(
     site: Path, releases: object, project: str, capabilities: str, repository: str
 ) -> bool:
@@ -191,52 +219,103 @@ def sync_site(
         "release-version": version,
         "mcp-count": str(tool_count(capabilities)),
     }
-    original = site.read_bytes()
-    document = original.decode("utf-8")
-    spans = []
-    for name, replacement in replacements.items():
-        start = f"<!-- brains:{name}:start -->"
-        end = f"<!-- brains:{name}:end -->"
-        count = document.count(start)
-        if (
-            count not in ((1,) if name == "release-history" else (1, 2))
-            or document.count(end) != count
-        ):
-            raise ValueError(f"missing or duplicate {name} markers")
-        matches = list(
-            re.finditer(re.escape(start) + r"(.*?)" + re.escape(end), document, re.DOTALL)
-        )
-        if len(matches) != count:
-            raise ValueError(f"malformed {name} markers")
-        for match in matches:
-            if "<!-- brains:" in match[1]:
-                raise ValueError("nested release markers")
-            spans.append((match.start(1), match.end(1), replacement))
-    for span_start, span_end, replacement in sorted(spans, reverse=True):
-        document = document[:span_start] + replacement + document[span_end:]
-    rendered = document.encode("utf-8")
-    if rendered == original:
-        return False
-    temporary = None
+    site = site.absolute()
+    for path in (*reversed(site.parents), site):
+        reject_link(path)
+    directory = site.is_dir()
+    originals = {}
+    if directory:
+        for path in sorted(site.iterdir()):
+            reject_link(path)
+            if path.suffix.lower() != ".html":
+                continue
+            if not path.is_file():
+                raise ValueError(f"HTML page is not a regular file: {path.name}")
+            original = path.read_bytes()
+            document = original.decode("utf-8")
+            if path.name not in SITE_PAGES and "<!-- brains:" in document:
+                raise ValueError(f"release markers in unsupported page: {path.name}")
+            originals[path.name] = original
+        legacy = set(originals) == {"index.html"} and "<!-- brains:release-history:" in originals[
+            "index.html"
+        ].decode("utf-8")
+        if not legacy and not {"index.html", "releases.html"} <= originals.keys():
+            raise ValueError("directory requires index.html and releases.html")
+    else:
+        legacy = True
+        originals[site.name] = site.read_bytes()
+    if not legacy:
+        replacements["release-summary"] = render_summary(stable[0])
+    totals = dict.fromkeys(replacements, 0)
+    outputs = {}
+    for filename, original in originals.items():
+        if directory and filename not in SITE_PAGES:
+            continue
+        document = original.decode("utf-8")
+        spans = []
+        for name, replacement in replacements.items():
+            start = f"<!-- brains:{name}:start -->"
+            end = f"<!-- brains:{name}:end -->"
+            count = document.count(start)
+            if legacy:
+                allowed: tuple[int, ...] = (1,) if name == "release-history" else (1, 2)
+            elif name in ("release-version", "mcp-count"):
+                allowed = tuple(range(5))
+            else:
+                owner = "index.html" if name == "release-summary" else "releases.html"
+                allowed = (1,) if filename == owner else (0,)
+            if count not in allowed or document.count(end) != count:
+                raise ValueError(f"missing or duplicate {name} markers in {filename}")
+            matches = list(
+                re.finditer(re.escape(start) + r"(.*?)" + re.escape(end), document, re.DOTALL)
+            )
+            if len(matches) != count:
+                raise ValueError(f"malformed {name} markers in {filename}")
+            for match in matches:
+                if "<!-- brains:" in match[1]:
+                    raise ValueError("nested release markers")
+                spans.append((match.start(1), match.end(1), replacement))
+            totals[name] += count
+        # Reject stray, misspelled, or legacy-incompatible marker tokens as well.
+        tokens = re.findall(r"<!-- brains:[^>]*-->", document)
+        expected = sum(document.count(f"<!-- brains:{name}:start -->") for name in replacements)
+        if len(tokens) != 2 * expected or document.count("<!-- brains:") != len(tokens):
+            raise ValueError(f"unsupported or malformed release markers in {filename}")
+        for span_start, span_end, replacement in sorted(spans, reverse=True):
+            document = document[:span_start] + replacement + document[span_end:]
+        rendered = document.encode("utf-8")
+        if rendered != original:
+            outputs[site / filename if directory else site] = rendered
+    if not totals["release-version"] or not totals["mcp-count"]:
+        raise ValueError("site requires release-version and mcp-count markers")
+
+    # Validate everything, then stage everything before replacing any page. Replaces
+    # are atomic per file, not a filesystem-wide transaction; publication is gated by exit 0.
+    staged = {}
     try:
-        with tempfile.NamedTemporaryFile(
-            dir=site.parent, prefix=f".{site.name}.", delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            handle.write(rendered)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.chmod(site.stat().st_mode)
-        os.replace(temporary, site)
+        for path, rendered in outputs.items():
+            with tempfile.NamedTemporaryFile(
+                dir=path.parent, prefix=f".{path.name}.", delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                staged[path] = temporary
+                handle.write(rendered)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.chmod(path.stat().st_mode)
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
     finally:
-        if temporary is not None:
+        for temporary in staged.values():
             temporary.unlink(missing_ok=True)
-    return True
+    return bool(outputs)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--site", type=Path, required=True, help="existing marked index.html")
+    parser.add_argument(
+        "--site", type=Path, required=True, help="static site directory or legacy marked index.html"
+    )
     parser.add_argument("--releases", type=Path, required=True, help="GitHub Releases JSON list")
     parser.add_argument(
         "--project", type=Path, required=True, help="latest stable tagged pyproject.toml"

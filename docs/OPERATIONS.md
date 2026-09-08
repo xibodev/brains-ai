@@ -559,13 +559,29 @@ Record such effects as external/unverified rather than governed.
 
 ## Website maintenance
 
-The [public website](https://xibodev.github.io/brains-ai/) is static `index.html` on
+The [public website](https://xibodev.github.io/brains-ai/) serves static HTML from
 `gh-pages`. GitHub Releases are the canonical release history; the browser does not
-fetch release data. `scripts/sync_release_site.py` changes only these marked regions:
+fetch release data. `scripts/sync_release_site.py --site site` accepts a directory
+and changes only marked regions in the exact root-level allowlist `index.html`,
+`quickstart.html`, `mcp.html`, and `releases.html`:
 
-- One `<!-- brains:release-history:start -->` / `<!-- brains:release-history:end -->` pair.
-- One or two `<!-- brains:release-version:start -->` / `<!-- brains:release-version:end -->` pairs, for hero/install version text without the `v` prefix.
-- One or two `<!-- brains:mcp-count:start -->` / `<!-- brains:mcp-count:end -->` pairs.
+- Exactly one `<!-- brains:release-summary:start -->` / `<!-- brains:release-summary:end -->` pair, only in required `index.html`.
+- Exactly one `<!-- brains:release-history:start -->` / `<!-- brains:release-history:end -->` pair, only in required `releases.html`.
+- Zero to four `<!-- brains:release-version:start -->` / `<!-- brains:release-version:end -->` pairs per page, with at least one across the site; version text has no `v` prefix.
+- Zero to four `<!-- brains:mcp-count:start -->` / `<!-- brains:mcp-count:end -->` pairs per page, with at least one across the site.
+
+`quickstart.html` and `mcp.html` may omit markers or be absent. Other root HTML files
+are preserved but must contain no Brains markers; root HTML names with different
+capitalization are not allowlisted. Unknown, misplaced, nested, unpaired, or excess
+markers fail validation. Symlinks and Windows reparse points in the input path or
+among its immediate directory entries are rejected; subdirectories are not traversed.
+Copy and markup outside managed regions are preserved byte for byte.
+
+The deployed single-page format remains supported: `--site site/index.html` requires
+one history pair and one or two pairs each for version and count, without a summary.
+A directory whose only root HTML file is `index.html` with history markers uses this
+same legacy schema. Deploy the automation to `main` first and verify it against the
+legacy site before transitioning `gh-pages` to the multi-page schema.
 
 The latest version is the highest published stable `vX.Y.Z`, excluding drafts,
 prereleases, and nonstable tags. It appears first; up to five other stable releases
@@ -574,6 +590,10 @@ and highlights come from release names and `## Highlights` sections, falling bac
 to the first meaningful body line or just the canonical release link. Markdown is
 reduced to escaped plain text, never rendered as trusted HTML. Highlights are limited
 to six entries of 500 characters each.
+The homepage summary links to the latest release's `releases.html#release-vX-Y-Z`
+anchor, shows its publication date, and includes the first two extracted highlights
+with the same 500-character limit per entry, plus an All release notes link. It does
+not invent substitute highlights when notes are empty.
 HTML comments (including an unterminated comment's remainder) and backtick/tilde
 fenced blocks are removed before finding Highlights or choosing fallback text.
 
@@ -582,13 +602,20 @@ The MCP count is read statically from the literal `CORE_MCP_TOOLS` set in that s
 tag's `src/brains/capabilities.py`, without importing or executing Brains. Unreleased
 `main` versions and documentation counts are not release facts. Missing or malformed
 markers, invalid canonical URLs, empty stable history, or mismatched sources fail
-before an atomic file replacement; identical input leaves the file unchanged.
+before any output is written. All pages and metadata are validated before changed
+outputs are staged in temporary sibling files. Each replacement is atomic, but the
+whole directory is not a filesystem transaction: a replacement failure can leave
+partial local output. Temporary files are cleaned up, the generator exits nonzero,
+and the workflow does not commit or publish that failed run. Retry from a clean
+checkout after fixing the cause. Identical output preserves file bytes and mtimes.
 
 `.github/workflows/sync-release-site.yml` runs manually and on release publication or
 edits. `release.yml` also calls it explicitly after GitHub Release creation, because
 events created by `GITHUB_TOKEN` do not start another event-triggered workflow. The
 sync checks out trusted automation from `main`, fetches all release pages and the
-selected tag's sources, and commits only `gh-pages/index.html`. Publication is
+selected tag's sources, and invokes directory mode. It derives the commit path list
+from tracked files within the four-page allowlist, so absent legacy pages do not
+break `git commit --only`; unrelated files are never included. Publication is
 serialized, never force-pushes, and a concurrent branch change fails visibly rather
 than overwriting another edit. Rerun after resolving a conflict.
 
@@ -623,7 +650,7 @@ Review the live site's marked version/count against the selected release's tagge
 sources. For an offline generation check with downloaded inputs:
 
 ```text
-python scripts/sync_release_site.py --site site/index.html --releases releases.json --project tagged-pyproject.toml --capabilities tagged-capabilities.py --repository xibodev/brains-ai
+python scripts/sync_release_site.py --site site --releases releases.json --project tagged-pyproject.toml --capabilities tagged-capabilities.py --repository xibodev/brains-ai
 ```
 
 Keep layout and copy edits outside managed regions. Edit canonical GitHub release

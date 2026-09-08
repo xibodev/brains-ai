@@ -329,9 +329,225 @@ def test_failed_atomic_replace_preserves_site(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == [site]
 
 
-def test_cli_end_to_end_and_malformed_json(tmp_path):
-    site = tmp_path / "index.html"
-    site.write_bytes(page())
+def directory_pages(site: Path) -> dict[str, bytes]:
+    documents = {
+        "index.html": marker("release-summary") + marker("release-version"),
+        "quickstart.html": marker("release-version") * 4,
+        "mcp.html": marker("mcp-count") * 4,
+        "releases.html": marker("release-history"),
+        "about.html": "<p>Unmanaged page</p>",
+    }
+    originals = {}
+    for name, content in documents.items():
+        originals[name] = ("<!doctype html>\r\n" + content + "\r\n<footer>Keep</footer>").encode()
+        (site / name).write_bytes(originals[name])
+    return originals
+
+
+def test_directory_sync_preserves_unmarked_bytes_and_mtimes(tmp_path):
+    originals = directory_pages(tmp_path)
+    assert sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    replacements = {
+        "release-summary": sync.render_summary(release()),
+        "release-history": sync.render_history([release()]),
+        "release-version": "1.5.0",
+        "mcp-count": "2",
+    }
+    for name, original in originals.items():
+        expected = original
+        for key, value in replacements.items():
+            expected = expected.replace(marker(key).encode(), marker(key, value).encode())
+        assert (tmp_path / name).read_bytes() == expected
+    mtimes = {path.name: path.stat().st_mtime_ns for path in tmp_path.iterdir()}
+    assert not sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert {path.name: path.stat().st_mtime_ns for path in tmp_path.iterdir()} == mtimes
+
+
+def test_directory_legacy_fallback_matches_single_file(tmp_path):
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_bytes(page())
+    single = tmp_path / "index.html"
+    single.write_bytes(page())
+    assert sync.sync_site(site, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert sync.sync_site(single, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert (site / "index.html").read_bytes() == single.read_bytes()
+    modified = (site / "index.html").stat().st_mtime_ns
+    assert not sync.sync_site(site, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert (site / "index.html").stat().st_mtime_ns == modified
+
+
+@pytest.mark.parametrize("optional_pages", [False, True])
+def test_directory_optional_pages_can_be_absent_or_unmarked(tmp_path, optional_pages):
+    (tmp_path / "index.html").write_text(marker("release-summary") + marker("release-version"))
+    (tmp_path / "releases.html").write_text(marker("release-history") + marker("mcp-count"))
+    mtimes = {}
+    if optional_pages:
+        for name in ("quickstart.html", "mcp.html"):
+            path = tmp_path / name
+            path.write_text("<p>Static search content</p>")
+            mtimes[name] = path.stat().st_mtime_ns
+    assert sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    for name, modified in mtimes.items():
+        assert (tmp_path / name).read_text() == "<p>Static search content</p>"
+        assert (tmp_path / name).stat().st_mtime_ns == modified
+
+
+@pytest.mark.parametrize(
+    "filename,content",
+    [
+        ("index.html", marker("release-version")),
+        ("index.html", marker("release-summary") * 2),
+        ("releases.html", "missing history"),
+        ("releases.html", marker("release-history") * 2),
+        ("mcp.html", marker("mcp-count") * 5),
+        ("quickstart.html", marker("release-version") * 5),
+        ("mcp.html", marker("mcp-count") + marker("release-history")),
+        ("releases.html", marker("release-history") + marker("release-summary")),
+        ("mcp.html", marker("mcp-count", marker("release-version"))),
+        ("mcp.html", "<!-- brains:mcp-count:end --><!-- brains:mcp-count:start -->"),
+        ("mcp.html", marker("mcp-count") + "<!-- brains:mcp-count:end -->"),
+        ("mcp.html", marker("mcp-count") + marker("release-typo")),
+        ("mcp.html", marker("mcp-count") + "<!-- brains:release-version:start"),
+        ("about.html", marker("release-version")),
+        ("extra.HTML", marker("release-summary")),
+    ],
+)
+def test_directory_invalid_markers_leave_every_page_untouched(tmp_path, filename, content):
+    originals = directory_pages(tmp_path)
+    originals[filename] = content.encode()
+    (tmp_path / filename).write_bytes(originals[filename])
+    mtimes = {path.name: path.stat().st_mtime_ns for path in tmp_path.iterdir()}
+    with pytest.raises(ValueError):
+        sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == originals
+    assert {path.name: path.stat().st_mtime_ns for path in tmp_path.iterdir()} == mtimes
+
+
+@pytest.mark.parametrize("missing", ["release-version", "mcp-count", "index.html", "releases.html"])
+def test_directory_required_pages_and_global_facts(tmp_path, missing):
+    originals = directory_pages(tmp_path)
+    if missing.endswith(".html"):
+        (tmp_path / missing).unlink()
+        del originals[missing]
+    else:
+        for name, original in originals.items():
+            originals[name] = original.replace(marker(missing).encode(), b"")
+            (tmp_path / name).write_bytes(originals[name])
+    with pytest.raises(ValueError):
+        sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == originals
+
+
+@pytest.mark.parametrize(
+    "records,project,capabilities",
+    [([], PROJECT, CAPABILITIES), ([release()], "", CAPABILITIES), ([release()], PROJECT, "")],
+)
+def test_directory_invalid_metadata_preserves_all_pages(tmp_path, records, project, capabilities):
+    originals = directory_pages(tmp_path)
+    with pytest.raises(ValueError):
+        sync.sync_site(tmp_path, records, project, capabilities, REPOSITORY)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == originals
+
+
+@pytest.mark.parametrize(
+    "target", ["root", "ancestor", "index.html", "about.html", "assets", "broken"]
+)
+def test_directory_rejects_symlinks_without_outside_writes(tmp_path, target):
+    site = tmp_path / "site"
+    site.mkdir()
+    originals = directory_pages(site)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "index.html"
+    sentinel.write_bytes(page())
+    link = tmp_path / "linked" if target in ("root", "ancestor") else site / target
+    destination = (
+        site if target in ("root", "ancestor") else outside if target == "assets" else sentinel
+    )
+    if target == "broken":
+        destination = outside / "missing"
+    if link.exists():
+        link.unlink()
+    try:
+        link.symlink_to(destination, target_is_directory=destination.is_dir())
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    argument = link if target == "root" else link / "index.html" if target == "ancestor" else site
+    with pytest.raises(ValueError, match="symlink"):
+        sync.sync_site(argument, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert sentinel.read_bytes() == page()
+    for name, original in originals.items():
+        if name != target:
+            assert (site / name).read_bytes() == original
+    assert link.is_symlink()
+
+
+def test_directory_stages_all_outputs_before_replacing(tmp_path, monkeypatch):
+    originals = directory_pages(tmp_path)
+    real_fsync = sync.os.fsync
+    calls = 0
+
+    def fail_second_stage(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("staging failed")
+        real_fsync(fd)
+
+    monkeypatch.setattr(sync.os, "fsync", fail_second_stage)
+    with pytest.raises(OSError, match="staging failed"):
+        sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == originals
+
+
+def test_directory_replace_failure_cleans_staged_files(tmp_path, monkeypatch):
+    originals = directory_pages(tmp_path)
+    real_replace = sync.os.replace
+    calls = 0
+
+    def fail_second_replace(source, destination):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("replacement failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(sync.os, "replace", fail_second_replace)
+    with pytest.raises(OSError, match="replacement failed"):
+        sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert {path.name for path in tmp_path.iterdir()} == set(originals)
+    # Per-file replacement can leave local partial output. A retry converges;
+    # the workflow must never commit after this nonzero generator result.
+    monkeypatch.setattr(sync.os, "replace", real_replace)
+    assert sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+    assert not sync.sync_site(tmp_path, [release()], PROJECT, CAPABILITIES, REPOSITORY)
+
+
+def test_summary_contract_first_two_highlights_and_escaping():
+    html = sync.render_summary(
+        release(body='## Highlights\n- <img onerror="bad()">\n- ' + "x" * 600 + "\n- Third")
+    )
+    assert '<div class="release-summary"><p class="release-summary-meta">' in html
+    assert '<a href="releases.html#release-v1-5-0">Latest release: v1.5.0</a>' in html
+    assert '<time datetime="2026-09-08">Sep 8, 2026</time>' in html
+    assert "<li>&lt;img onerror=&quot;bad()&quot;&gt;</li>" in html
+    assert "<li>" + "x" * 500 + "</li>" in html
+    assert html.count("<li>") == 2
+    assert "Third" not in html
+    assert '<a class="release-link" href="releases.html">All release notes</a>' in html
+    assert "<ul>" not in sync.render_summary(release(body=None))
+
+
+@pytest.mark.parametrize("mode", ["file", "legacy-directory", "directory"])
+def test_cli_end_to_end_and_malformed_json(tmp_path, mode):
+    site = tmp_path / "site"
+    site.mkdir()
+    if mode == "directory":
+        directory_pages(site)
+    else:
+        (site / "index.html").write_bytes(page())
+    argument = site / "index.html" if mode == "file" else site
     releases = tmp_path / "releases.json"
     releases.write_text(json.dumps([release()]))
     project = tmp_path / "pyproject.toml"
@@ -343,7 +559,7 @@ def test_cli_end_to_end_and_malformed_json(tmp_path):
         "-I",
         str(SCRIPT),
         "--site",
-        str(site),
+        str(argument),
         "--releases",
         str(releases),
         "--project",
@@ -359,11 +575,11 @@ def test_cli_end_to_end_and_malformed_json(tmp_path):
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0
     assert "already current" in result.stdout
-    previous = site.read_bytes()
+    previous = {path.name: path.read_bytes() for path in site.iterdir()}
     releases.write_text("not json")
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode != 0
-    assert site.read_bytes() == previous
+    assert {path.name: path.read_bytes() for path in site.iterdir()} == previous
 
 
 def test_workflow_release_hook_permissions_and_pages_repair():
@@ -390,7 +606,13 @@ def test_workflow_release_hook_permissions_and_pages_repair():
     assert "base64 --decode" in fetch
     push = next(step for step in steps if step.get("name") == "Publish only generated site facts")
     assert push["working-directory"] == "site"
-    assert "commit --only index.html" in push["run"]
+    generate = next(step for step in steps if step.get("name") == "Generate static release history")
+    assert "--site site \\\n" in generate["run"]
+    assert "git ls-files -- index.html quickstart.html mcp.html releases.html" in push["run"]
+    assert 'mapfile -t pages <<< "$tracked"' in push["run"]
+    assert 'git diff --quiet -- "${pages[@]}"' in push["run"]
+    assert "commit --only -m" in push["run"]
+    assert '-- "${pages[@]}"' in push["run"]
     assert "git push origin HEAD:gh-pages" in push["run"]
     assert "--force" not in push["run"]
     poll = steps[-1]["run"]
@@ -405,6 +627,63 @@ def test_workflow_release_hook_permissions_and_pages_repair():
     assert hook["needs"] == "release"
     assert hook["uses"] == "./.github/workflows/sync-release-site.yml"
     assert hook["permissions"] == workflow["permissions"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="requires Linux bash")
+@pytest.mark.parametrize("modern", [False, True])
+@pytest.mark.parametrize("changed", [False, True])
+def test_publish_step_uses_only_tracked_allowlisted_paths(tmp_path, modern, changed):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/sync-release-site.yml").read_text())
+    script = next(
+        step["run"]
+        for step in workflow["jobs"]["sync"]["steps"]
+        if step.get("name") == "Publish only generated site facts"
+    )
+    executable = tmp_path / "git"
+    executable.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with Path(os.environ["CALLS"]).open("a") as handle:
+    handle.write(json.dumps(args) + "\\n")
+if args[0] == "ls-files":
+    print(os.environ["TRACKED"])
+elif args[0] == "diff":
+    sys.exit(int(os.environ["CHANGED"]))
+""")
+    executable.chmod(0o755)
+    pages = list(sync.SITE_PAGES) if modern else ["index.html"]
+    calls_path = tmp_path / "calls"
+    result = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "CALLS": str(calls_path),
+            "TRACKED": "\n".join(pages),
+            "CHANGED": str(int(changed)),
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
+    assert calls[0] == ["ls-files", "--", *sync.SITE_PAGES]
+    assert calls[1] == ["diff", "--quiet", "--", *pages]
+    if changed:
+        assert len(calls) == 4
+        assert calls[2][4:] == [
+            "commit",
+            "--only",
+            "-m",
+            "docs: sync published release site",
+            "--",
+            *pages,
+        ]
+        assert calls[3] == ["push", "origin", "HEAD:gh-pages"]
+    else:
+        assert len(calls) == 2
 
 
 @pytest.mark.skipif(

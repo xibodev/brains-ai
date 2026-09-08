@@ -45,7 +45,7 @@ jobs:
       - name: Generate static release history
         run: |
           python scripts/sync_release_site.py \
-            --site site/index.html \
+            --site site \
             --releases "$RUNNER_TEMP/releases.json" \
             --project "$RUNNER_TEMP/tagged-pyproject.toml" \
             --capabilities "$RUNNER_TEMP/tagged-capabilities.py" \
@@ -54,9 +54,12 @@ jobs:
         working-directory: site
         run: |
           set -euo pipefail
-          if ! git diff --quiet -- index.html; then
+          tracked="$(git ls-files -- index.html quickstart.html mcp.html releases.html)"
+          [[ -n "$tracked" ]]
+          mapfile -t pages <<< "$tracked"
+          if ! git diff --quiet -- "${pages[@]}"; then
             git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit --only index.html -m 'docs: sync published release site'
+              commit --only -m 'docs: sync published release site' -- "${pages[@]}"
             git push origin HEAD:gh-pages
           fi
       # GITHUB_TOKEN commits do not trigger a branch Pages build. Also request
