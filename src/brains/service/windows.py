@@ -3,8 +3,8 @@
 Why a Scheduled Task and not a true Windows Service? A real service requires
 either a service-aware binary (the SCM kills plain executables that don't
 answer its control protocol) or a third-party wrapper like NSSM. A Scheduled
-Task is dependency-free, ships with every Windows install, and supports
-everything we need: start at logon, run hidden, restart on failure, and run
+Task is dependency-free, ships with every Windows install, and can start at
+logon, run hidden, supervise a task-owned restart loop, and run
 **as the logged-in user** (an interactive-token principal, so HOME / OAuth /
 the canonical DB all resolve and no password is stored).
 
@@ -15,6 +15,8 @@ can be unit-tested on any host OS; registration shells out to ``schtasks``.
 from __future__ import annotations
 
 import csv
+import subprocess
+import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -22,6 +24,7 @@ from brains.service.common import (
     SERVICE_LABEL,
     ServiceSpec,
     cleanup_stale_pidfile,
+    default_pidfile_path,
     native_service_identity,
     read_pidfile_record,
     run_cmd,
@@ -29,21 +32,43 @@ from brains.service.common import (
     verify_pid,
 )
 
+_STOP_TIMEOUT_SECONDS = 60.0
+_STOP_POLL_SECONDS = 0.2
 
-def definition_path(label: str = SERVICE_LABEL) -> Path:
+
+def definition_path(label: str = SERVICE_LABEL, *, root: str | Path | None = None) -> Path:
     """Where we stash the rendered XML (for reference + idempotency)."""
-    return state_dir() / "service" / f"{native_service_identity('windows', label)}.xml"
+    base = state_dir() if root is None else Path(root)
+    return base / "service" / f"{native_service_identity('windows', label)}.xml"
 
 
 def render_task_xml(spec: ServiceSpec) -> str:
     """Render a Task Scheduler 1.2 XML document for the serve-all task.
 
     Encodes: LogonTrigger for ``spec.user``; an interactive-token principal at
-    least-privilege; restart-on-failure (every 1 minute, up to 9999 times); no
+    least-privilege; action restart-on-failure (every 1 minute, up to 9999 times); no
     execution time limit; hidden; single-instance; and the verified windowless
-    ``pythonw -m brains serve-all`` action with a neutral working directory.
+    ``pythonw`` action with a neutral working directory. A standard-library
+    bootstrap sets the persisted state root before importing the task-owned
+    runner, which restarts failed supervisors without waiting for a new task run.
     """
-    arguments = " ".join(spec.args)
+    from brains.service.windows_runner import (
+        RESTART_COUNT,
+        RESTART_INTERVAL_SECONDS,
+        validate_args,
+    )
+
+    if tuple(spec.args[:2]) != ("-m", "brains"):
+        raise ValueError("Windows service arguments must start with '-m brains'")
+    runner_args = [spec.program, *spec.args[2:]]
+    validate_args(spec.args[2:])
+    # Task Scheduler does not inherit the installing shell's environment.
+    bootstrap = (
+        "import os,runpy; "
+        f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
+        "runpy.run_module('brains.service.windows_runner',run_name='__main__',alter_sys=True)"
+    )
+    arguments = subprocess.list2cmdline(["-c", bootstrap, *runner_args])
     user = escape(spec.user)
     task_name = native_service_identity("windows", spec.label)
     return f"""<?xml version="1.0" encoding="UTF-16"?>
@@ -84,8 +109,8 @@ def render_task_xml(spec: ServiceSpec) -> str:
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
     <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>9999</Count>
+      <Interval>PT{RESTART_INTERVAL_SECONDS // 60}M</Interval>
+      <Count>{RESTART_COUNT}</Count>
     </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
@@ -102,7 +127,7 @@ def render_task_xml(spec: ServiceSpec) -> str:
 def install(spec: ServiceSpec, *, dry_run: bool = False) -> dict:
     xml = render_task_xml(spec)
     task_name = native_service_identity("windows", spec.label)
-    path = definition_path(spec.label)
+    path = definition_path(spec.label, root=spec.state_dir)
     register = ["schtasks", "/Create", "/TN", task_name, "/XML", str(path), "/F"]
     report: dict = {
         "platform": "windows",
@@ -146,14 +171,18 @@ def uninstall(*, dry_run: bool = False, label: str = SERVICE_LABEL) -> dict:
     if not stopped["ok"]:
         report["ok"] = False
         report["detail"] = f"uninstall refused because stop was incomplete: {stopped['detail']}"
+        report["error_code"] = stopped.get("error_code", "stop-incomplete")
         return report
     rc, out, err = run_cmd(cmd)
     report["ok"] = rc == 0
     report["detail"] = out or err
+    if rc != 0:
+        report["error_code"] = "native-delete-failed"
     if report["ok"]:
         removed, removal_detail = _delete_definition(label)
         if not removed:
             report["ok"] = False
+            report["error_code"] = "definition-cleanup-incomplete"
             report["detail"] = f"{report['detail']}; {removal_detail}".strip("; ")
     return report
 
@@ -177,41 +206,74 @@ def start(label: str = SERVICE_LABEL) -> dict:
 def stop(label: str = SERVICE_LABEL) -> dict:
     """End the task, then reap the supervisor tree.
 
-    ``schtasks /End`` only stops the task's action process; the gateway /
-    dashboard / MCP children it spawned are orphaned. We additionally kill the
+    ``schtasks /End`` stops the task-owned restart loop first. We then kill the
     process tree rooted at the supervisor PID recorded in ``service.pid`` -
     but only after :func:`verify_pid` confirms that PID still names the
     supervisor we recorded. A PID the OS has since reused for an unrelated
-    process (``stale``) is never tree-killed by number alone; the stale
-    pidfile is removed instead so a future ``status()`` stops trusting it.
+    process (``stale``) is never tree-killed by number alone. Cleanup requires
+    observed exit and an unchanged PID record, not just command success.
     """
     task_name = native_service_identity("windows", label)
+    record = read_pidfile_record()
     rc, out, err = run_cmd(["schtasks", "/End", "/TN", task_name])
     detail = out or err
-    check = verify_pid(read_pidfile_record())
+    if rc != 0:
+        return {
+            "platform": "windows",
+            "action": "stop",
+            "ok": False,
+            "detail": detail,
+            "error_code": "native-stop-failed",
+        }
+    check = verify_pid(record)
     pid = check["pid"]
-    safe_cleanup = check["confidence"] in ("verified", "stale", "absent")
-    termination_ok = True
+    deadline = time.monotonic() + _STOP_TIMEOUT_SECONDS
+    error_code = None
     if pid is not None and check["confidence"] == "verified":
         krc, kout, kerr = run_cmd(["taskkill", "/PID", str(pid), "/T", "/F"])
-        termination_ok = krc == 0
         detail = f"{detail}; tree-kill pid {pid}: {kout or kerr}".strip("; ")
-    elif check["confidence"] in ("stale", "absent"):
-        cleanup_stale_pidfile()
-        if pid is not None:
-            detail = f"{detail}; skipped tree-kill: pid {pid} is stale ({check['reason']})".strip(
-                "; "
+        check = verify_pid(record)
+        while krc == 0 and check["confidence"] == "verified":
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(_STOP_POLL_SECONDS, remaining))
+            check = verify_pid(record)
+        if krc != 0 and check["running"]:
+            error_code = "native-tree-kill-failed"
+
+    stopped = check["confidence"] in ("stale", "absent") and not check["running"]
+    if stopped:
+        current = read_pidfile_record()
+        if current != record and (current is not None or default_pidfile_path().exists()):
+            stopped = False
+            error_code = "pidfile-changed"
+            detail = f"{detail}; pidfile changed during stop; retained for review".strip("; ")
+        else:
+            cleanup = cleanup_stale_pidfile()
+            stopped = (
+                cleanup["confidence"] in ("stale", "absent")
+                and not cleanup["running"]
+                and not default_pidfile_path().exists()
             )
-    elif pid is not None:
+            detail = f"{detail}; pid {pid}: {check['confidence']} ({check['reason']})".strip("; ")
+            if not stopped:
+                error_code = "pidfile-cleanup-incomplete"
+                detail = f"{detail}; pidfile cleanup incomplete"
+    else:
+        error_code = error_code or (
+            "pid-still-running" if check["confidence"] == "verified" else "pid-identity-unsafe"
+        )
         detail = (
-            f"{detail}; refused tree-kill: pid {pid} identity is "
+            f"{detail}; stop incomplete: pid {pid} identity is "
             f"{check['confidence']} ({check['reason']})"
         ).strip("; ")
     return {
         "platform": "windows",
         "action": "stop",
-        "ok": rc == 0 and safe_cleanup and termination_ok,
+        "ok": rc == 0 and stopped,
         "detail": detail,
+        "error_code": error_code or ("native-stop-failed" if rc != 0 else None),
     }
 
 
@@ -223,6 +285,7 @@ def restart(label: str = SERVICE_LABEL) -> dict:
             "action": "restart",
             "ok": False,
             "detail": f"restart refused because stop was incomplete: {stopped['detail']}",
+            "error_code": stopped.get("error_code", "stop-incomplete"),
         }
     return start(label)
 

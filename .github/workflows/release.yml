@@ -119,6 +119,7 @@ jobs:
     name: build + push GHCR image
     needs: build
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       contents: read
       packages: write

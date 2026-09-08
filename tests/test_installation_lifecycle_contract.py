@@ -153,7 +153,12 @@ def test_clean_home_service_and_wire_lifecycle_is_reversible(
         monkeypatch.setattr(
             backend,
             "verify_pid",
-            lambda _record: {"pid": None, "confidence": "absent", "reason": "synthetic"},
+            lambda _record: {
+                "pid": None,
+                "running": False,
+                "confidence": "absent",
+                "reason": "synthetic",
+            },
         )
 
     config_path = _seed_unmanaged_config(home, tool)

@@ -9,7 +9,7 @@ Two different claims are asserted here, and keeping them apart is the point:
 * **Reach** is limited, and the code must say so rather than imply coverage.
   A binary invoked by absolute path without the shim, or a raw socket, never
   enters this module at all. What the boundary *can* guarantee is that no
-  Brains-owned code path launches a process outside the gate, and that a
+   Brains-owned agent-execution path launches a process outside the gate, and that a
   ``PATH`` rewrite is at least visible in the record.
 """
 
@@ -555,6 +555,11 @@ _KNOWN_UNGOVERNED_EXEC = (
     SRC / "brains/install/__init__.py",
     SRC / "brains/wire/__init__.py",  # operator-invoked local client version preflight
     SRC / "brains/service/common.py",
+    # Direct service-process path: Task Scheduler invokes windows_runner.main,
+    # which spawns the configured pythonw.exe -m brains serve-all supervisor.
+    # Launch/recovery belongs to the operator-authorized service lifetime, not
+    # agent task execution; this is not an exemption for agent governance bypass.
+    SRC / "brains/service/windows_runner.py",
     SRC / "brains/context/freshness.py",
     SRC / "brains/daemon/detect.py",
 )

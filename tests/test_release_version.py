@@ -5,6 +5,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check_release_version.py"
 
@@ -37,3 +39,13 @@ def test_release_tag_mismatch_fails_closed() -> None:
 
     assert result.returncode != 0
     assert "does not match package version" in result.stderr
+
+
+def test_publication_jobs_share_approval_environment() -> None:
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    jobs = workflow["jobs"]
+    for name in ("pypi", "docker"):
+        environment = jobs[name]["environment"]
+        assert (environment["name"] if isinstance(environment, dict) else environment) == "pypi"
+        assert jobs[name]["needs"] == "build"
+    assert set(jobs["release"]["needs"]) == {"pypi", "docker"}

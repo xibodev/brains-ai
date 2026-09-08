@@ -212,8 +212,52 @@ read-only and needs no preparation.
 
 User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd
 user services. Repository checks exercise renderer and hermetic backend behavior. Each
-release candidate separately requires the disposable native lifecycle and reboot-boundary
-evidence defined in [Quality gates](QUALITY_GATES.md).
+release candidate separately requires the disposable real service-manager cycle and
+cleanup evidence defined in [Quality gates](QUALITY_GATES.md). Actual reboot testing is
+optional. A manager cycle does not establish login or reboot persistence; any reboot
+claim requires a machine-observed boot transition and post-reboot verification.
+
+The guarded lifecycle probe reads native registration and the local definition separately
+and compares identity-bearing fields before mutation. Its in-process rollback is limited
+to trusted invocation context, with native teardown independent of configuration cleanup.
+After quiescence, cleanup removes only the marked journey root's accounted files and
+known mutable database/log paths. Drifted configurations, links and unknown resources
+are retained; incomplete cleanup is not passing evidence. Guard/provenance failures never
+authorize cleanup from a preexisting plan. Abrupt process death before sealing requires
+operator review, not automatic recovery from unsealed evidence. Native probes require a
+disposable single-writer account and a proven service launch environment. Windows task
+XML persists the service spec's `state_dir` in a standard-library `pythonw -c` bootstrap
+that sets `BRAINS_STATE_DIR` before importing Brains, including service-package config
+imports. It dispatches `brains.service.windows_runner`, which launches the foreground
+`-m brains serve-all` child using the exact verified `pythonw.exe` path from the spec,
+not a redirector's potentially different `sys.executable`. The child inherits the bound
+state and the validated serve-all arguments. Alternate commands, daemon flags, and
+unsupported interpreter argument shapes are refused. The XML definition is stored under
+that spec's state directory; rendering and dry-run installation write nothing. Reinstall
+an existing task to acquire the runner and persist its chosen state root.
+Only `BRAINS_STATE_DIR` is captured, not the installing shell's other
+environment values or secrets. An explicit `BRAINS_DB_URL` in the launch environment
+can still select a different database; state-root persistence does not override all
+external configuration or establish real login/reboot persistence.
+
+Windows supervisor recovery is a task-owned restart loop supervised by Task Scheduler,
+not reliance on Scheduler retrying a failed supervisor action. The runner waits for one
+child at a time; a nonzero exit or launch failure waits 60 seconds before another attempt,
+with at most 9999 restarts after the initial launch per action lifetime. Exit zero stops
+without restarting. Exhaustion exits nonzero. Scheduler's separate `RestartOnFailure`
+policy remains configured at one minute and 9999 retries for action failure; configuration
+alone does not prove Scheduler performed a retry. The runner has no service-duration
+deadline and no detached worker or PID file. Its child wait lasts for the supervisor's
+lifetime, and its failure budget bounds retries rather than healthy service uptime.
+
+Only the supervisor writes `service.pid`. Windows stop captures that record, ends the
+task with `/End` to stop the runner (including during backoff), then verifies and kills
+the captured supervisor's owned PID tree. Failure to end the action refuses child cleanup
+because a surviving runner could respawn it. Exit and unchanged-record checks still gate
+PID cleanup and uninstall. Killing only the recorded supervisor tree deliberately leaves
+the task-owned runner alive to recover it; it is not a service stop. Native lifecycle
+qualification must prove both recovery and no respawn after stop, including any venv
+launcher/redirector process chain.
 
 ```text
 brains-ai service status
@@ -226,6 +270,15 @@ Brains-owned identity for disposable native validation; subsequent commands acce
 same `--label`. Labels outside that namespace are refused. The default remains
 `brains-serve-all`. Linux installation does not change the account's independent linger
 policy. Failed deregistration retains the native definition for diagnosis and retry.
+
+On macOS, ordinary start uses `launchctl kickstart` without force-restarting an
+already-running supervisor. Stop unloads the job and sends TERM only to a verified
+recorded process instance, then polls that same identity for up to 60 seconds. A
+successful unload or signal alone is not a completed stop. Stale PID files are cleaned
+after exit; reused or unverifiable PIDs are not signalled by number. A changed PID
+record, unresolved exit, or failed cleanup reports failure, and uninstall retains the
+plist. This bounds the exit polling, not the native command runtime, and does not
+independently prove that detached descendants have exited.
 
 `brains-ai service install` preflights the requested loopback gateway port. An
 explicit unavailable port is refused. When no port is supplied and the default
@@ -262,8 +315,9 @@ the resulting console/MCP endpoints.
 Use `brains-ai setup --path . --service` or `brains-ai service install` only after
 reviewing the rendered definition and configuration backup. Inspect the result with
 `brains-ai service status`. Do not run a foreground `serve-all` against the same ports
-or state directory. Test install, restart, persistence, uninstall, and restoration only
-on a disposable native host. Treat successful proof for an earlier commit as stale.
+or state directory. Test install, restart, uninstall, and restoration only on a disposable
+native host. Optional reboot-persistence testing uses the same isolation and cleanup
+rules. Treat successful proof for an earlier commit as stale.
 
 ## Coordination operation
 
