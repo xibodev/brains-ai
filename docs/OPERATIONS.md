@@ -601,7 +601,9 @@ After requesting a build, the workflow polls at most 60 times, five seconds apar
 with a 20-second API-call timeout and an eight-minute step deadline. The API's
 `latest` alias is accepted only until a new build is identified: its URL must be on
 `api.github.com` under this repository's Pages builds, its creation time must be at
-or after the request, and it must not be in the pre-request build list. Its commit
+or after the request, and it must not be in the pre-request build list. Both
+named-repository and numeric repository-ID API URLs identify the same build;
+the numeric repository ID comes from the trusted workflow context. Its commit
 must equal the published site checkout's exact SHA. Polling then pins the numeric
 build URL and succeeds only on `built` for that SHA; failure, another revision,
 changed build identity, or timeout fails the workflow. Workflow concurrency does

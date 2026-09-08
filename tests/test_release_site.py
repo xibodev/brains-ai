@@ -415,6 +415,9 @@ def test_workflow_release_hook_permissions_and_pages_repair():
     [
         ("built", True),
         ("unique", True),
+        ("repository_id_post", True),
+        ("repository_id_get", True),
+        ("repository_id_stale", True),
         ("stale_then_built", True),
         ("wrong_commit", False),
         ("failed", False),
@@ -423,6 +426,8 @@ def test_workflow_release_hook_permissions_and_pages_repair():
         ("untrusted_post", False),
         ("untrusted_get", False),
         ("wrong_repo", False),
+        ("wrong_repository_id", False),
+        ("wrong_repository_id_get", False),
         ("identity_changed", False),
     ],
 )
@@ -442,6 +447,7 @@ from pathlib import Path
 root = Path(os.environ["MOCK_ROOT"])
 scenario = os.environ["SCENARIO"]
 prefix = "https://api.github.com/repos/xibodev/brains-ai/pages/builds/"
+id_prefix = "https://api.github.com/repositories/123/pages/builds/"
 args = sys.argv[1:]
 with (root / "calls").open("a") as handle:
     handle.write(json.dumps(args) + "\\n")
@@ -449,22 +455,26 @@ if "POST" in args:
     url = prefix + ("2" if scenario == "unique" else "latest")
     if scenario == "untrusted_post": url = "https://evil.test/builds/latest"
     if scenario == "wrong_repo": url = prefix.replace("xibodev", "other") + "latest"
+    if scenario.startswith("repository_id_"): url = id_prefix + "latest"
+    if scenario == "wrong_repository_id": url = id_prefix.replace("123", "456") + "latest"
     print(json.dumps({"url": url, "status": "queued"}))
 elif "--jq" in args:
-    print(json.dumps([prefix + "1"]))
+    print(json.dumps([(id_prefix if scenario == "repository_id_stale" else prefix) + "1"]))
 else:
     count_path = root / "count"
     count = int(count_path.read_text()) + 1 if count_path.exists() else 1
     count_path.write_text(str(count))
-    stale = scenario == "stale_then_built" and count == 1
+    stale = scenario in ("stale_then_built", "repository_id_stale") and count == 1
     url = prefix + ("1" if stale else "2")
+    if scenario == "repository_id_get": url = id_prefix + "2"
+    if scenario == "wrong_repository_id_get": url = id_prefix.replace("123", "456") + "2"
     if scenario == "untrusted_get": url = "https://evil.test/builds/2"
     if scenario == "identity_changed" and count > 1: url = prefix + "3"
     status = "building" if count == 1 or scenario == "timeout" else "built"
     if scenario == "failed": status = "errored"
     print(json.dumps({"url": url, "status": status,
         "commit": "0" * 39 + ("2" if scenario == "wrong_commit" else "1"),
-        "created_at": "2026-09-07T12:00:00Z" if stale or scenario == "old_timestamp" else "2026-09-08T12:00:00Z"}))
+        "created_at": "2026-09-07T12:00:00Z" if scenario == "old_timestamp" or (stale and scenario != "repository_id_stale") else "2026-09-08T12:00:00Z"}))
 """,
     }
     for name, source in programs.items():
@@ -483,6 +493,7 @@ else:
             "MOCK_ROOT": str(tmp_path),
             "SCENARIO": scenario,
             "GITHUB_REPOSITORY": REPOSITORY,
+            "GH_REPOSITORY_ID": "123",
         },
     )
     assert (result.returncode == 0) is success, result.stdout + result.stderr
@@ -490,6 +501,7 @@ else:
     assert all(
         not any("evil.test" in arg or "repos/other/" in arg for arg in call) for call in calls
     )
+    assert all(not any("repositories/456/" in arg for arg in call) for call in calls)
     if success:
         assert "Pages built verified commit" in result.stdout
         assert calls[-1] == ["api", "repos/xibodev/brains-ai/pages/builds/2"]
