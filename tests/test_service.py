@@ -767,12 +767,15 @@ def test_windows_stop_tree_kills_a_verified_pid(monkeypatch, tmp_path) -> None:
 
     def _fake_run_cmd(cmd, **_kw):
         calls.append(cmd)
+        if cmd[0] == "taskkill":
+            monkeypatch.setattr(service_common, "_read_process_identity", lambda _pid: None)
         return 0, "", ""
 
     monkeypatch.setattr(windows, "run_cmd", _fake_run_cmd)
     report = windows.stop()
     assert report["ok"] is True
     assert any(cmd[0] == "taskkill" for cmd in calls)
+    assert not (tmp_path / "sessions" / "service.pid").exists()
 
 
 def test_windows_stop_reports_failed_tree_kill(monkeypatch, tmp_path) -> None:
@@ -866,10 +869,10 @@ def test_macos_stop_skips_signal_for_stale_pid(macos_stop_state, reused) -> None
     state = macos_stop_state
     state.identity = {"exe": "foreign", "start_time": 5000.0} if reused else None
     report = macos.stop()
-    assert report["ok"] is True
+    assert report["ok"] is (not reused)
     assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
     assert "stale" in report["detail"]
-    assert not state.pidfile.exists()
+    assert state.pidfile.exists() is reused
 
 
 @pytest.mark.parametrize("confidence", ["degraded", "unverified"])
@@ -910,9 +913,9 @@ def test_macos_stop_does_not_signal_reused_pid_after_term(macos_stop_state) -> N
     state = macos_stop_state
     state.exit_at = 0.2
     state.after_exit = {"exe": "foreign", "start_time": 5000.0}
-    assert macos.stop()["ok"] is True
+    assert macos.stop()["ok"] is False
     assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
-    assert not state.pidfile.exists()
+    assert state.pidfile.exists()
 
 
 def test_macos_stop_retains_pid_when_identity_degrades_after_term(macos_stop_state) -> None:
@@ -951,9 +954,9 @@ def test_macos_stop_rechecks_identity_after_unload(macos_stop_state, monkeypatch
         return 0, "unloaded", ""
 
     monkeypatch.setattr(macos, "_unload", unload)
-    assert macos.stop()["ok"] is True
+    assert macos.stop()["ok"] is False
     assert not state.calls
-    assert not state.pidfile.exists()
+    assert state.pidfile.exists()
 
 
 def test_macos_stop_accepts_signal_exit_race(macos_stop_state, monkeypatch) -> None:
@@ -1059,3 +1062,174 @@ def test_macos_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
     monkeypatch.setattr(macos, "stop", lambda *_args: {"ok": False, "detail": "failed"})
     monkeypatch.setattr(macos, "start", lambda: pytest.fail("start must not run"))
     assert macos.restart()["ok"] is False
+
+
+@pytest.fixture(params=[windows, macos], ids=["windows", "macos"])
+def native_stop_state(request, macos_stop_state, monkeypatch):
+    state = macos_stop_state
+    backend = request.param
+    if backend is windows:
+
+        def run(cmd):
+            state.calls.append(cmd)
+            if cmd[0] == "taskkill":
+                assert cmd == ["taskkill", "/PID", "4242", "/T", "/F"]
+                return state.signal_result
+            assert cmd[:2] == ["schtasks", "/End"]
+            return state.unload_result
+
+        monkeypatch.setattr(windows, "run_cmd", run)
+        monkeypatch.setattr(windows, "time", macos.time)
+    return backend, state
+
+
+def test_native_stop_waits_for_observed_exit_and_removes_stale_pid(native_stop_state) -> None:
+    backend, state = native_stop_state
+    state.exit_at = 0.4
+    assert backend.stop()["ok"] is True
+    assert state.elapsed == 0.4
+    assert not state.pidfile.exists()
+
+
+@pytest.mark.parametrize("identity", [{}, {"exe": "foreign", "start_time": 5000.0}])
+def test_native_stop_preserves_degraded_or_reused_pid_after_kill(
+    native_stop_state, identity
+) -> None:
+    backend, state = native_stop_state
+    state.exit_at = 0.2
+    state.after_exit = identity
+    before = state.pidfile.read_bytes()
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-identity-unsafe"
+    assert state.pidfile.read_bytes() == before
+    assert len(state.calls) == 2
+
+
+@pytest.mark.parametrize("replacement", ["{broken", '{"format": 2, "pid": 4343}'])
+def test_native_stop_preserves_changed_pidfile(native_stop_state, monkeypatch, replacement) -> None:
+    backend, state = native_stop_state
+
+    def sleep(_seconds):
+        state.identity = None
+        state.pidfile.write_text(replacement, encoding="utf-8")
+
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-changed"
+    assert state.pidfile.read_text(encoding="utf-8") == replacement
+
+
+def test_native_stop_successful_command_does_not_prove_exit(native_stop_state) -> None:
+    backend, state = native_stop_state
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-still-running"
+    assert state.elapsed == backend._STOP_TIMEOUT_SECONDS
+    assert state.pidfile.exists()
+
+
+def test_native_stop_confirms_cleanup_despite_helper_removed_flag(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    state.identity = None
+
+    def denied(_path, **_kwargs):
+        raise PermissionError("synthetic denial")
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-cleanup-incomplete"
+    assert state.pidfile.exists()
+
+
+def test_native_stop_keeps_identity_when_manager_removes_pidfile(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    run = backend.run_cmd
+
+    def ended(cmd):
+        if cmd[1] in {"/End", "bootout"}:
+            state.pidfile.unlink()
+            state.exit_at = 0.4
+        return run(cmd)
+
+    monkeypatch.setattr(backend, "run_cmd", ended)
+    assert backend.stop()["ok"] is True
+    assert state.elapsed == 0.4
+    assert len(state.calls) == 2
+
+
+def test_macos_already_unloaded_rechecks_pid_after_listing(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.identity = None
+    state.unload_result = (3, "", "not loaded")
+    run = macos.run_cmd
+
+    def listed(cmd):
+        if cmd == ["launchctl", "list"]:
+            state.identity = {"exe": "python", "start_time": 1000.0}
+            return 0, "PID Status Label", ""
+        return run(cmd)
+
+    monkeypatch.setattr(macos, "run_cmd", listed)
+    assert macos.stop()["ok"] is False
+    assert state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "unload"]
+
+
+def test_native_stop_retains_pid_if_cleanup_identity_degrades(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    state.identity = None
+    cleanup = backend.cleanup_stale_pidfile
+
+    def degraded():
+        state.identity = {}
+        return cleanup()
+
+    monkeypatch.setattr(backend, "cleanup_stale_pidfile", degraded)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-cleanup-incomplete"
+    assert state.pidfile.exists()
+
+
+def test_native_stop_never_signals_or_removes_initial_reused_pid(native_stop_state) -> None:
+    backend, state = native_stop_state
+    state.identity = {"exe": "foreign", "start_time": 5000.0}
+    before = state.pidfile.read_bytes()
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-identity-unsafe"
+    assert state.pidfile.read_bytes() == before
+    assert len(state.calls) == 1
+
+
+def test_macos_uninstall_reports_definition_cleanup_failure(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.identity = None
+    state.unload_result = (0, "unloaded", "")
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    unlink = Path.unlink
+
+    def denied(path, **kwargs):
+        if path == definition:
+            raise PermissionError("synthetic private failure")
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = macos.uninstall()
+    assert report["ok"] is False
+    assert report["error_code"] == "definition-cleanup-incomplete"
+    assert "definition could not be removed" in report["detail"]
+    assert "synthetic private failure" not in report["detail"]
+    assert definition.exists()
+    assert not state.pidfile.exists()

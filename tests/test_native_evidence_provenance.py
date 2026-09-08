@@ -509,6 +509,7 @@ def _mock_native_response(system: str, identity: str, expected: dict, registered
                 "DropInPaths": "",
                 "NeedDaemonReload": "no",
             }.items()
+            if key != "ExecStart" or registered
         )
     if not registered:
         return ""
@@ -1627,6 +1628,8 @@ def test_native_windows_semantic_definition_and_diagnostics(
     [
         "exit4",
         "exit1",
+        "exit0-empty-array",
+        "explicit-empty-array",
         "not-found-stderr",
         "bus-error",
         "empty",
@@ -1635,10 +1638,15 @@ def test_native_windows_semantic_definition_and_diagnostics(
         "active",
         "wrong-id",
         "reload",
+        "missing-fragment",
+        "unexpected-exit",
+        "duplicate-property",
+        "unexpected-load-state",
+        "loaded-missing-exec",
     ],
 )
 def test_native_systemd_not_found_requires_authoritative_properties(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: str
 ) -> None:
     monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Linux")
     monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: tmp_path))
@@ -1647,6 +1655,10 @@ def test_native_systemd_not_found_requires_authoritative_properties(
     identity = native_lifecycle.native_service_identity("linux", label)
     output = _mock_native_response("Linux", identity, {}, False)
     code, error = (1 if case == "exit1" else 4), ""
+    if case == "exit0-empty-array":
+        code = 0
+    elif case == "explicit-empty-array":
+        output += "\nExecStart=\n"
     if case == "bus-error":
         error = "Failed to connect to bus: synthetic-private-detail"
     elif case == "not-found-stderr":
@@ -1663,20 +1675,88 @@ def test_native_systemd_not_found_requires_authoritative_properties(
         output = output.replace(identity, identity + "-foreign")
     elif case == "reload":
         output = output.replace("NeedDaemonReload=no", "NeedDaemonReload=yes")
+    elif case == "missing-fragment":
+        output = output.replace("FragmentPath=\n", "")
+    elif case == "unexpected-exit":
+        code = 2
+    elif case == "duplicate-property":
+        output += "\nLoadState=not-found\n"
+    elif case == "unexpected-load-state":
+        output = output.replace("LoadState=not-found", "LoadState=synthetic-private-detail")
+    elif case == "loaded-missing-exec":
+        code = 0
+        output = output.replace("LoadState=not-found", "LoadState=loaded")
+    command = Mock(return_value=subprocess.CompletedProcess([], code, output, error))
     monkeypatch.setattr(
         native_lifecycle,
         "_native_command",
-        lambda *_args, **_kw: subprocess.CompletedProcess([], code, output, error),
+        command,
     )
-    if case in {"exit4", "exit1", "not-found-stderr"}:
+    if case in {"exit4", "exit1", "exit0-empty-array", "explicit-empty-array", "not-found-stderr"}:
         assert native_lifecycle._native_observation(label) == {
             "label": identity,
             "definition": None,
             "registered": False,
         }
     else:
-        with pytest.raises(native_lifecycle.EvidenceFailure):
+        with pytest.raises(native_lifecycle.EvidenceFailure) as caught:
             native_lifecycle._native_observation(label)
+        native_lifecycle._diagnose(caught.value, phase="prepare", stage="lifecycle")
+        diagnostic = json.loads(capsys.readouterr().err)
+        assert diagnostic["error_code"] != "systemd-observation-failed"
+        assert diagnostic["systemd_query"]["properties_present"]["ExecStart"] is False
+        assert "synthetic-private-detail" not in json.dumps(diagnostic)
+        assert str(tmp_path) not in json.dumps(diagnostic)
+        if case == "bus-error":
+            assert diagnostic["systemd_query"]["stderr"] == "bus-failure"
+        if case == "unexpected-exit":
+            assert diagnostic["systemd_query"]["return_code"] == "other"
+    assert "--all" in command.call_args.args[0]
+
+
+def test_native_systemd_query_diagnostics_never_expose_property_values() -> None:
+    secret = "synthetic-private-path-token"
+    result = subprocess.CompletedProcess(
+        [],
+        123,
+        "\n".join(
+            [
+                f"Id={secret}",
+                f"LoadState={secret}",
+                f"ActiveState={secret}",
+                f"ExecStart={secret}",
+                f"Environment={secret}",
+                f"{secret}={secret}",
+            ]
+        ),
+        secret,
+    )
+    diagnostic = native_lifecycle._systemd_query_diagnostic(result, "synthetic-unit")
+    assert diagnostic["return_code"] == diagnostic["stderr"] == "other"
+    assert diagnostic["load_state"] == diagnostic["active_state"] == "other"
+    assert diagnostic["identity_matches"] is False
+    assert diagnostic["properties_present"]["ExecStart"] is True
+    assert secret not in json.dumps(diagnostic)
+
+
+def test_native_workflow_queries_linux_shape_before_lifecycle() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/native-service-evidence.yml").read_text())
+    steps = workflow["jobs"]["manager-cycle"]["steps"]
+    diagnostic = next(
+        step for step in steps if step.get("name") == "Diagnose Linux native unit query shape"
+    )
+    lifecycle = next(
+        step
+        for step in steps
+        if step.get("name") == "Exercise native manager lifecycle without login claim"
+    )
+    assert steps.index(diagnostic) < steps.index(lifecycle)
+    assert diagnostic["if"] == "runner.os == 'Linux'"
+    assert "for show_all in (False, True)" in diagnostic["run"]
+    assert "_systemd_query_diagnostic(result, identity)" in diagnostic["run"]
+    assert "capture_output=True" in diagnostic["run"]
+    assert "print(result" not in diagnostic["run"]
 
 
 def test_native_config_removal_preserves_drift_links_and_unexpected_directories(
@@ -2066,6 +2146,7 @@ def test_native_workflows_declare_full_matrix_and_success_only_upload() -> None:
             step
             for step in steps
             if "probe_native_" in str(step.get("run", ""))
+            and "--package-manifest" in str(step.get("run", ""))
             and "verify_native_evidence.py" not in str(step.get("run", ""))
         )
         upload = next(

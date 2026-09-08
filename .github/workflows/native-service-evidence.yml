@@ -213,6 +213,34 @@ jobs:
           echo 'native-preflight: user-manager-active bus-socket-owned manager-query-ok'
           echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
           echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+      - name: Diagnose Linux native unit query shape
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          "$BRAINS_NATIVE_PROBE_PYTHON" - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from probe_native_service_lifecycle import _systemd_query_diagnostic
+
+          identity = "brains-serve-all-evidence-" + os.environ["GITHUB_SHA"][:8] + ".service"
+          properties = "Id,LoadState,ActiveState,FragmentPath,ExecStart,Environment,WorkingDirectory,DropInPaths,NeedDaemonReload"
+          for show_all in (False, True):
+              try:
+                  result = subprocess.run(
+                      ["systemctl", "--user", "show", identity, "--no-pager",
+                       *(["--all"] if show_all else []), "--property=" + properties],
+                      capture_output=True, text=True, timeout=30, check=False,
+                  )
+                  summary = _systemd_query_diagnostic(result, identity)
+              except Exception:
+                  summary = {"query_failed": True}
+              print(json.dumps({"diagnostic": "systemd-query-shape", "show_all": show_all, **summary}))
+          PY
       - name: Exercise native manager lifecycle without login claim
         # The probe emits allowlisted failure diagnostics directly to stderr.
         # Do not dump private plans, failed records, or native command output.

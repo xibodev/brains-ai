@@ -7,10 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from brains import service
 from brains.cli.app import app
+from brains.service import common as service_common
 from brains.service import linux, macos, windows
 from brains.service.common import ServiceSpec, read_service_config, write_service_config
 
@@ -61,15 +63,21 @@ def test_windows_uninstall_reaps_verified_tree_before_task_deletion(tmp_path, mo
     definition.write_text("owned", encoding="utf-8")
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        windows,
-        "run_cmd",
-        lambda command, **_kwargs: calls.append(command) or (0, "ok", ""),
+        service_common,
+        "_read_process_identity",
+        lambda _pid: {"exe": "python", "start_time": 1000.0},
     )
-    monkeypatch.setattr(
-        windows,
-        "verify_pid",
-        lambda _record: {"pid": 42, "confidence": "verified", "reason": "owned"},
-    )
+    service_common.write_pidfile(pid=42)
+
+    def run(command):
+        calls.append(command)
+        if command[0] == "taskkill":
+            monkeypatch.setattr(service_common, "_read_process_identity", lambda _pid: None)
+        if command[1] == "/Delete":
+            assert not service_common.default_pidfile_path().exists()
+        return 0, "ok", ""
+
+    monkeypatch.setattr(windows, "run_cmd", run)
     report = windows.uninstall()
     assert report["ok"] is True
     verbs = [
@@ -107,6 +115,103 @@ def test_macos_stop_boots_out_keepalive_job_and_uninstall_retains_failed_definit
     assert definition.is_file()
     assert any(command[1] == "bootout" for command in calls)
     assert not any(command[1] == "stop" for command in calls)
+
+
+@pytest.mark.parametrize("stale_pid", [False, True])
+def test_macos_repeated_uninstall_accepts_authoritative_absence(
+    tmp_path, monkeypatch, stale_pid
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(service_common, "_read_process_identity", lambda _pid: None)
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    foreign = definition.with_name("com.example.foreign.plist")
+    foreign.write_text("foreign", encoding="utf-8")
+    if stale_pid:
+        service_common.write_pidfile(pid=4242)
+    calls = []
+
+    def run(command):
+        calls.append(command)
+        if command == ["launchctl", "list"]:
+            return 0, "PID\tStatus\tLabel\n-\t0\tcom.example.foreign", ""
+        assert command[1] in {"bootout", "unload"}
+        return 3, "", "not loaded"
+
+    monkeypatch.setattr(macos, "run_cmd", run)
+    for _ in range(2):
+        assert macos.uninstall()["ok"] is True
+        assert not definition.exists()
+        assert not service_common.default_pidfile_path().exists()
+        assert foreign.read_text(encoding="utf-8") == "foreign"
+    assert [cmd[1] for cmd in calls] == ["bootout", "unload", "list"] * 2
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [
+        (1, "", "manager unavailable"),
+        (127, "", "utility unavailable"),
+        (0, "", ""),
+        (0, "unexpected output", ""),
+        (0, "PID Status Label\nmalformed", ""),
+        (0, "PID Status Label\n- 0 com.brains.serve-all", ""),
+    ],
+)
+def test_macos_uninstall_requires_authoritative_absence(tmp_path, monkeypatch, listing) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "state"))
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    canary = "synthetic-private-command-output"
+
+    def run(command):
+        if command == ["launchctl", "list"]:
+            return listing
+        assert command[1] in {"bootout", "unload"}
+        return 5, "", canary
+
+    monkeypatch.setattr(macos, "run_cmd", run)
+    report = macos.uninstall()
+    assert report["ok"] is False
+    assert report["error_code"] == "native-unload-failed"
+    assert canary not in report["error_code"]
+    assert definition.read_text(encoding="utf-8") == "owned"
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [{"exe": "python", "start_time": 1000.0}, {}, {"exe": "foreign", "start_time": 5000.0}],
+)
+def test_macos_already_unloaded_preserves_live_pid_and_definition(
+    tmp_path, monkeypatch, identity
+) -> None:
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(
+        service_common,
+        "_read_process_identity",
+        lambda _pid: {"exe": "python", "start_time": 1000.0},
+    )
+    service_common.write_pidfile(pid=4242)
+    pidfile = service_common.default_pidfile_path()
+    before = pidfile.read_bytes()
+    monkeypatch.setattr(service_common, "_read_process_identity", lambda _pid: identity)
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+
+    def run(command):
+        assert command[0] == "launchctl" and command[1] in {"bootout", "unload"}
+        return 3, "", "not loaded"
+
+    monkeypatch.setattr(macos, "run_cmd", run)
+    assert macos.uninstall()["ok"] is False
+    assert pidfile.read_bytes() == before
+    assert definition.read_text(encoding="utf-8") == "owned"
 
 
 def test_linux_install_never_changes_linger_and_failed_uninstall_retains_unit(

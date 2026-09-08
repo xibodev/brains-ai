@@ -119,6 +119,7 @@ def uninstall(*, dry_run: bool = False, label: str = SERVICE_LABEL) -> dict:
     if dry_run:
         return report
     stopped = stop(label)
+    report["error_code"] = stopped.get("error_code")
     rc = 0 if stopped["ok"] else 1
     out, err = (stopped["detail"], "") if stopped["ok"] else ("", stopped["detail"])
     if rc == 0:
@@ -127,7 +128,8 @@ def uninstall(*, dry_run: bool = False, label: str = SERVICE_LABEL) -> dict:
         except FileNotFoundError:
             pass
         except OSError:
-            rc, err = 1, "native job was unloaded but its definition could not be removed"
+            rc, out, err = 1, "", "native job was unloaded but its definition could not be removed"
+            report["error_code"] = "definition-cleanup-incomplete"
     report["ok"] = rc == 0
     report["detail"] = out or err
     return report
@@ -171,12 +173,35 @@ def stop(label: str = SERVICE_LABEL) -> dict:
     record = read_pidfile_record()
     rc, out, err = _unload(label)
     detail = out or err
-    if rc != 0:
-        return {"platform": "macos", "action": "stop", "ok": False, "detail": detail}
     check = verify_pid(record)
+    if rc != 0:
+        # A failed targeted query cannot distinguish absence from manager failure.
+        # Only a successful complete listing can establish an already-unloaded job.
+        absent = False
+        if check["confidence"] in ("stale", "absent") and not check["running"]:
+            lrc, listing, _ = run_cmd(["launchctl", "list"])
+            rows = [line.split() for line in listing.splitlines() if line.strip()]
+            identity = native_service_identity("macos", label)
+            absent = (
+                lrc == 0
+                and bool(rows)
+                and rows[0] == ["PID", "Status", "Label"]
+                and all(len(row) == 3 and row[2] != identity for row in rows[1:])
+            )
+        if not absent:
+            return {
+                "platform": "macos",
+                "action": "stop",
+                "ok": False,
+                "detail": detail,
+                "error_code": "native-unload-failed",
+            }
+        detail = f"{detail}; native job already absent".strip("; ")
+        check = verify_pid(record)
     pid = check["pid"]
+    error_code = None
     deadline = time.monotonic() + _STOP_TIMEOUT_SECONDS
-    if pid is not None and check["confidence"] == "verified":
+    if rc == 0 and pid is not None and check["confidence"] == "verified":
         krc, kout, kerr = run_cmd(["/bin/kill", "-TERM", str(pid)])
         detail = f"{detail}; signal pid {pid}: {kout or kerr}".strip("; ")
         check = verify_pid(record)
@@ -187,24 +212,30 @@ def stop(label: str = SERVICE_LABEL) -> dict:
             time.sleep(min(_STOP_POLL_SECONDS, remaining))
             check = verify_pid(record)
 
-    stopped = check["confidence"] in ("stale", "absent")
+    stopped = check["confidence"] in ("stale", "absent") and not check["running"]
     if stopped:
         # Do not follow or discard a replacement supervisor's PID record.
         current = read_pidfile_record()
-        if current is not None and current != record:
+        if current != record and (current is not None or default_pidfile_path().exists()):
             stopped = False
+            error_code = "pidfile-changed"
             detail = f"{detail}; pidfile changed during stop; retained for review".strip("; ")
         else:
             cleanup = cleanup_stale_pidfile()
             stopped = (
-                cleanup["confidence"] in ("stale", "absent") and not default_pidfile_path().exists()
+                cleanup["confidence"] in ("stale", "absent")
+                and not cleanup["running"]
+                and not default_pidfile_path().exists()
             )
             detail = f"{detail}; pid {pid}: {check['confidence']} ({check['reason']})".strip("; ")
             if not stopped:
+                error_code = "pidfile-cleanup-incomplete"
                 detail = f"{detail}; pidfile cleanup incomplete"
     elif check["confidence"] == "verified":
+        error_code = "pid-still-running"
         detail = f"{detail}; stop incomplete: owned pid {pid} has not exited".strip("; ")
     else:
+        error_code = "pid-identity-unsafe"
         detail = (
             f"{detail}; refused signal: pid {pid} identity is "
             f"{check['confidence']} ({check['reason']})"
@@ -214,6 +245,7 @@ def stop(label: str = SERVICE_LABEL) -> dict:
         "action": "stop",
         "ok": stopped,
         "detail": detail,
+        "error_code": error_code,
     }
 
 
@@ -225,6 +257,7 @@ def restart(label: str = SERVICE_LABEL) -> dict:
             "action": "restart",
             "ok": False,
             "detail": f"restart refused because stop was incomplete: {stopped['detail']}",
+            "error_code": stopped.get("error_code", "stop-incomplete"),
         }
     return start(label)
 

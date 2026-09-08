@@ -132,6 +132,11 @@ _DIAGNOSTIC_MESSAGES = (
     "registered task principal or identity differs",
     "registered task trigger principal differs",
     "systemd observation failed",
+    "systemd query return code rejected",
+    "systemd query stderr rejected",
+    "systemd property schema differs",
+    "systemd unit identity differs",
+    "systemd load state differs",
     "systemd absence is ambiguous",
     "loaded systemd definition differs",
     "unexpected native enablement link",
@@ -301,6 +306,7 @@ def _diagnose(
     operation = None
     command = None
     wait_status = None
+    systemd_status = None
     trace = exc.__traceback__ if exc is not None else None
     while trace is not None:
         name = trace.tb_frame.f_code.co_name
@@ -368,6 +374,11 @@ def _diagnose(
                         else None,
                     }.items()
                 }
+        if name == "_native_observation" and trace.tb_frame.f_locals.get("system") == "Linux":
+            result = trace.tb_frame.f_locals.get("result")
+            identity = trace.tb_frame.f_locals.get("identity")
+            if isinstance(result, subprocess.CompletedProcess) and type(identity) is str:
+                systemd_status = _systemd_query_diagnostic(result, identity)
         trace = trace.tb_next
     record: dict[str, Any] = {
         "diagnostic": "native-service-failure",
@@ -404,6 +415,8 @@ def _diagnose(
         }
     if wait_status is not None:
         record["wait_status"] = wait_status
+    if systemd_status is not None:
+        record["systemd_query"] = systemd_status
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
@@ -888,6 +901,45 @@ def _native_command(
     return subprocess.run(args, capture_output=True, text=True, timeout=30, check=False, env=env)
 
 
+def _systemd_query_diagnostic(result: subprocess.CompletedProcess, identity: str) -> dict[str, Any]:
+    """Summarize query shape without emitting property values, paths or stderr."""
+    properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    error = result.stderr.strip()
+    error_category = "other"
+    if not error:
+        error_category = "empty"
+    elif error == f"Unit {identity} could not be found.":
+        error_category = "unit-not-found"
+    elif error.startswith("Failed to connect to bus:"):
+        error_category = "bus-failure"
+    return {
+        "return_code": str(result.returncode) if result.returncode in (0, 1, 4) else "other",
+        "stderr": error_category,
+        "load_state": properties.get("LoadState")
+        if properties.get("LoadState") in {"loaded", "not-found", "error", "masked", "bad-setting"}
+        else "other",
+        "active_state": properties.get("ActiveState")
+        if properties.get("ActiveState")
+        in {"inactive", "active", "failed", "activating", "deactivating"}
+        else "other",
+        "identity_matches": properties.get("Id") == identity,
+        "properties_present": {
+            key: key in properties
+            for key in (
+                "Id",
+                "LoadState",
+                "ActiveState",
+                "FragmentPath",
+                "ExecStart",
+                "Environment",
+                "WorkingDirectory",
+                "DropInPaths",
+                "NeedDaemonReload",
+            )
+        },
+    }
+
+
 def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> None:
     # Scheduler serialization can reorder fields, assign IDs and materialize
     # schema defaults. None changes the action or the account allowed to run it.
@@ -1072,10 +1124,12 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
                 "show",
                 identity,
                 "--no-pager",
+                "--all",
                 "--property=Id,LoadState,ActiveState,FragmentPath,ExecStart,Environment,WorkingDirectory,DropInPaths,NeedDaemonReload",
             ]
         )
-        properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        lines = [line for line in result.stdout.splitlines() if line]
+        properties = dict(line.split("=", 1) for line in lines if "=" in line)
         required = {
             "Id",
             "LoadState",
@@ -1087,27 +1141,35 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
             "DropInPaths",
             "NeedDaemonReload",
         }
-        if (
-            set(properties) != required
-            or properties["Id"] != identity
-            or result.returncode not in (0, 1, 4)
-            or result.stderr.strip()
-            not in (
-                {"", f"Unit {identity} could not be found."}
-                if properties.get("LoadState") == "not-found"
-                else {""}
-            )
+        if result.returncode not in (0, 1, 4):
+            raise EvidenceFailure("systemd query return code rejected")
+        if result.stderr.strip() not in (
+            {"", f"Unit {identity} could not be found."}
+            if properties.get("LoadState") == "not-found"
+            else {""}
         ):
-            raise EvidenceFailure("systemd observation failed")
+            raise EvidenceFailure("systemd query stderr rejected")
+        # systemd v255 systemctl-show.c print_property() prints Exec* arrays
+        # inside a loop only: an empty array emits no key, even with --all.
+        # Permit that omission solely for a fully observed not-found unit.
+        allowed_keys = [required]
+        if properties.get("LoadState") == "not-found":
+            allowed_keys.append(required - {"ExecStart"})
+        if set(properties) not in allowed_keys or len(lines) != len(properties):
+            raise EvidenceFailure("systemd property schema differs")
+        if properties["Id"] != identity:
+            raise EvidenceFailure("systemd unit identity differs")
+        if properties["LoadState"] not in {"loaded", "not-found"}:
+            raise EvidenceFailure("systemd load state differs")
         registered = properties["LoadState"] != "not-found"
         if registered and result.returncode != 0:
-            raise EvidenceFailure("systemd observation failed")
+            raise EvidenceFailure("systemd query return code rejected")
         if not registered:
             if (
                 properties["ActiveState"] != "inactive"
                 or properties["NeedDaemonReload"] != "no"
                 or any(
-                    properties[key]
+                    properties.get(key, "")
                     for key in (
                         "FragmentPath",
                         "ExecStart",
