@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -248,7 +249,10 @@ def test_search_respects_visibility(isolated_brains, tmp_path, monkeypatch):
     assert priv["code"] not in alice_codes
 
 
-def test_retrieve_original_respects_knowledge_visibility(isolated_brains, tmp_path, monkeypatch):
+@pytest.mark.parametrize("scope", ["shared", "global"])
+def test_retrieve_original_respects_knowledge_visibility(
+    isolated_brains, tmp_path, monkeypatch, scope
+):
     from brains.control.knowledge import add_knowledge_entry
     from brains.control.operators import add_operator, ensure_admin_operator
     from brains.control.retrieve import retrieve_original
@@ -269,7 +273,7 @@ def test_retrieve_original_respects_knowledge_visibility(isolated_brains, tmp_pa
         "caveat",
         "shared caveat",
         body="shared body",
-        scope="shared",
+        scope=scope,
     )
 
     assert retrieve_original(f"knowledge:{priv['code']}")["content"] == "private body"
@@ -277,3 +281,243 @@ def test_retrieve_original_respects_knowledge_visibility(isolated_brains, tmp_pa
     with pytest.raises(ValueError, match="inaccessible"):
         retrieve_original(f"knowledge:{priv['code']}")
     assert retrieve_original(f"knowledge:{shared['code']}")["content"] == "shared body"
+
+
+@pytest.fixture
+def original_rows(isolated_brains, tmp_path):
+    from brains.control.operators import add_operator, ensure_admin_operator
+    from brains.storage.models import Artifact, Chunk, Org, OrgMember, Source
+
+    ensure_admin_operator()
+    operator, _ = add_operator("reader")
+    workspace_id = _make_workspace(tmp_path / "originals", "originals", visibility="private")
+    with db_module.SessionLocal() as session:
+        org = session.query(Org).filter(Org.slug == "default").one()
+        session.add(OrgMember(org_id=org.id, operator_id=operator["id"], role="member"))
+        source = Source(
+            workspace_id=workspace_id, source_type="repo", uri=str(tmp_path / "originals")
+        )
+        session.add(source)
+        session.flush()
+        artifact = Artifact(
+            source_id=source.id,
+            path="original.txt",
+            title="Original title",
+            summary="stored summary",
+            metadata_json=json.dumps({"abs_path": str(tmp_path / "outside-source/original.txt")}),
+        )
+        session.add(artifact)
+        session.flush()
+        chunk = Chunk(artifact_id=artifact.id, ordinal=0, content="stored chunk")
+        session.add(chunk)
+        session.commit()
+        return source, artifact, chunk
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+def test_retrieve_original_authorized_and_membership_revoked(original_rows, monkeypatch, kind):
+    from unittest.mock import Mock
+
+    import brains.control.retrieve as retrieve
+    from brains.control.memberships import add_membership, remove_membership
+
+    _, artifact, chunk = original_rows
+    row = artifact if kind == "artifact" else chunk
+    ref = f"{kind}:{row.id}"
+    add_membership("originals", "reader")
+    _set_current_operator(monkeypatch, "reader")
+    assert retrieve.retrieve_original(ref)["content"] == (
+        "stored summary" if kind == "artifact" else "stored chunk"
+    )
+
+    remove_membership("originals", "reader")
+    read = Mock(side_effect=AssertionError("inaccessible file read"))
+    monkeypatch.setattr(retrieve, "_artifact_content", read)
+    with pytest.raises(ValueError) as denied:
+        retrieve.retrieve_original(ref)
+    assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+@pytest.mark.parametrize("visibility", ["empty", "other-workspace", "other-org", "unowned"])
+def test_retrieve_original_denies_outside_scope(
+    original_rows, tmp_path, monkeypatch, kind, visibility
+):
+    from unittest.mock import Mock
+
+    import brains.control.retrieve as retrieve
+    from brains.control.memberships import (
+        set_workspace_visibility,
+        visible_workspace_ids_for_current,
+    )
+    from brains.storage.models import OrgMember, Source
+
+    source, artifact, chunk = original_rows
+    if visibility == "other-workspace":
+        _make_workspace(tmp_path / "other", "other")
+    elif visibility == "other-org":
+        set_workspace_visibility("originals", "shared")
+        with db_module.SessionLocal() as session:
+            session.query(OrgMember).delete()
+            session.commit()
+    elif visibility == "unowned":
+        with db_module.SessionLocal() as session:
+            session.get(Source, source.id).workspace_id = None
+            session.commit()
+    _set_current_operator(monkeypatch, "reader")
+    visible = visible_workspace_ids_for_current()
+    assert visible if visibility == "other-workspace" else visible == set()
+    read = Mock(side_effect=AssertionError("inaccessible file read"))
+    monkeypatch.setattr(retrieve, "_artifact_content", read)
+
+    row = artifact if kind == "artifact" else chunk
+    for ident in (row.id, 999999):
+        ref = f"{kind}:{ident}"
+        with pytest.raises(ValueError) as denied:
+            retrieve.retrieve_original(ref)
+        assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+@pytest.mark.parametrize("ancestry", ["valid", "unowned", "missing-source", "missing-artifact"])
+@pytest.mark.parametrize("operator", ["admin", "reader"])
+def test_retrieve_original_requires_ancestry(original_rows, monkeypatch, kind, ancestry, operator):
+    from unittest.mock import Mock
+
+    import brains.control.retrieve as retrieve
+    from brains.control.memberships import add_membership
+    from brains.storage.models import Artifact, Chunk, Source
+
+    source, artifact, chunk = original_rows
+    add_membership("originals", "reader")
+    _set_current_operator(monkeypatch, operator)
+    with db_module.SessionLocal() as session:
+        if ancestry == "unowned":
+            session.get(Source, source.id).workspace_id = None
+        elif ancestry == "missing-source":
+            session.get(Artifact, artifact.id).source_id = 999999
+        elif ancestry == "missing-artifact":
+            session.get(Chunk, chunk.id).artifact_id = 999999
+        session.commit()
+    ident = artifact.id if kind == "artifact" else chunk.id
+    if ancestry == "missing-artifact" and kind == "artifact":
+        ident = 999999
+    ref = f"{kind}:{ident}"
+    if ancestry == "valid" or (ancestry == "unowned" and operator == "admin"):
+        assert retrieve.retrieve_original(ref)["content"] == (
+            "stored summary" if kind == "artifact" else "stored chunk"
+        )
+    else:
+        read = Mock(side_effect=AssertionError("orphan file read"))
+        monkeypatch.setattr(retrieve, "_artifact_content", read)
+        with pytest.raises(ValueError) as denied:
+            retrieve.retrieve_original(ref)
+        assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+        read.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+def test_retrieve_original_empty_principal_slot_denies_admin_fallback(
+    original_rows, monkeypatch, kind
+):
+    from unittest.mock import Mock
+
+    import brains.control.retrieve as retrieve
+    from brains.authz.resolver import principal_slot
+
+    _, artifact, chunk = original_rows
+    ref = f"{kind}:{artifact.id if kind == 'artifact' else chunk.id}"
+    _set_current_operator(monkeypatch, "admin")
+    read = Mock(side_effect=AssertionError("unauthenticated file read"))
+    monkeypatch.setattr(retrieve, "_artifact_content", read)
+    with principal_slot(), pytest.raises(ValueError) as denied:
+        retrieve.retrieve_original(ref)
+    assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+def test_retrieve_original_resolver_failure_denies_without_disclosure(
+    original_rows, monkeypatch, kind
+):
+    from unittest.mock import Mock
+
+    import brains.authz.resolver as resolver
+    import brains.control.retrieve as retrieve
+
+    _, artifact, chunk = original_rows
+    ref = f"{kind}:{artifact.id if kind == 'artifact' else chunk.id}"
+    _set_current_operator(monkeypatch, "admin")
+    resolve = Mock(side_effect=RuntimeError("synthetic-private-resolver-detail"))
+    monkeypatch.setattr(resolver, "resolve_local_principal", resolve)
+    read = Mock(side_effect=AssertionError("unresolved principal file read"))
+    monkeypatch.setattr(retrieve, "_artifact_content", read)
+    with pytest.raises(ValueError) as denied:
+        retrieve.retrieve_original(ref)
+    assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+    assert denied.value.__cause__ is None
+    assert denied.value.__context__ is None
+    resolve.assert_called_once_with()
+    read.assert_not_called()
+
+
+def test_retrieve_original_artifact_keeps_current_file_and_summary_fallback(
+    original_rows, tmp_path, monkeypatch
+):
+    import brains.control.retrieve as retrieve
+    from brains.control.memberships import add_membership
+
+    _, artifact, _ = original_rows
+    add_membership("originals", "reader")
+    _set_current_operator(monkeypatch, "reader")
+    ref = f"artifact:{artifact.id}"
+    current_file = tmp_path / "outside-source/original.txt"
+    current_file.parent.mkdir()
+    current_file.write_text("current file content", encoding="utf-8")
+    assert retrieve.retrieve_original(ref) == {
+        "ref": ref,
+        "kind": "artifact",
+        "id": artifact.id,
+        "title": artifact.title,
+        "path": artifact.path,
+        "content": "current file content",
+        "metadata": {"source_id": artifact.source_id, "language": None, "size": 0},
+    }
+    current_file.unlink()
+    assert retrieve.retrieve_original(ref)["content"] == "stored summary"
+
+
+@pytest.mark.parametrize("kind", ["artifact", "chunk"])
+def test_retrieve_original_mcp_uses_current_principal(original_rows, monkeypatch, kind):
+    import inspect
+    from unittest.mock import Mock
+
+    import brains.control.retrieve as retrieve
+    from brains.authz.resolver import (
+        principal_for_operator_slug,
+        principal_slot,
+        set_current_principal,
+    )
+    from brains.control.memberships import add_membership, remove_membership
+    from brains.mcp.tools import retrieve_original_tool
+
+    _, artifact, chunk = original_rows
+    ref = f"{kind}:{artifact.id if kind == 'artifact' else chunk.id}"
+    assert list(inspect.signature(retrieve_original_tool).parameters) == ["ref"]
+    assert list(inspect.signature(retrieve.retrieve_original).parameters) == ["ref"]
+    _set_current_operator(monkeypatch, "admin")
+    add_membership("originals", "reader")
+    with principal_slot():
+        set_current_principal(principal_for_operator_slug("reader"))
+        assert retrieve_original_tool(ref)["content"] == (
+            "stored summary" if kind == "artifact" else "stored chunk"
+        )
+        remove_membership("originals", "reader")
+        read = Mock(side_effect=AssertionError("inaccessible file read"))
+        monkeypatch.setattr(retrieve, "_artifact_content", read)
+        with pytest.raises(ValueError) as denied:
+            retrieve_original_tool(ref)
+        assert str(denied.value) == f"unknown or inaccessible {kind} ref: {ref}"
+        read.assert_not_called()

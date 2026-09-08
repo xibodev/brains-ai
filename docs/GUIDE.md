@@ -181,6 +181,22 @@ If work should move to someone else mid-flight, hand it off rather than abandoni
 brains-ai task-handoff --from-task TASK-015 --title "Finish the readiness contract"
 ```
 
+## Retrieving originals
+
+`brains_retrieve_original(ref)` accepts `knowledge:<code>`, `artifact:<id>`, and
+`chunk:<id>`. Artifact and chunk reads check the current caller's Workspace visibility
+through the owning Source on every call, before returning content or reading a file.
+Revoking private Workspace membership therefore denies subsequent reads, even with a
+previously obtained reference. Missing Artifact or Source ancestry is refused, including
+for bootstrap admin. A Source without a Workspace is not implicitly shared: only
+bootstrap admin's unrestricted visibility permits it. Knowledge entries explicitly scoped
+`shared` or `global` retain their existing visibility.
+
+Unknown and inaccessible references return the same error shape without stored metadata
+or file paths. Artifact retrieval still reads the current file when available and falls
+back to the stored summary otherwise; it is not an immutable snapshot. Chunk retrieval
+returns stored chunk content, and knowledge retrieval returns the stored body.
+
 ## When a human is required
 
 Some decisions are not an agent's to make. File an ask and keep working:

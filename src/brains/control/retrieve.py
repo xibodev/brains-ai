@@ -66,6 +66,8 @@ def _artifact_content(artifact: Artifact, source: Source | None) -> str:
 def retrieve_original(ref: str) -> dict[str, Any]:
     """Return the full content behind a compact context ``ref``."""
 
+    from brains.control.memberships import visible_workspace_ids_for_current
+
     kind, ident = _split_ref(ref)
     init_db()
     with _db_module.SessionLocal() as session:
@@ -93,10 +95,25 @@ def retrieve_original(ref: str) -> dict[str, Any]:
         except ValueError as exc:
             raise ValueError(f"{kind} ref id must be an integer: {ref}") from exc
 
+        error = f"unknown or inaccessible {kind} ref: {ref}"
+        chunk = None
         if kind == "chunk":
             chunk = session.get(Chunk, row_id)
             if chunk is None:
-                raise ValueError(f"unknown chunk ref: {ref}")
+                raise ValueError(error)
+            artifact = session.get(Artifact, chunk.artifact_id)
+        else:
+            artifact = session.get(Artifact, row_id)
+        if artifact is None:
+            raise ValueError(error)
+        source = session.get(Source, artifact.source_id)
+        if source is None:
+            raise ValueError(error)
+        visible = visible_workspace_ids_for_current()
+        if visible is not None and source.workspace_id not in visible:
+            raise ValueError(error)
+
+        if chunk is not None:
             return {
                 "ref": ref,
                 "kind": "chunk",
@@ -105,10 +122,6 @@ def retrieve_original(ref: str) -> dict[str, Any]:
                 "metadata": {"artifact_id": chunk.artifact_id, "ordinal": chunk.ordinal},
             }
 
-        artifact = session.get(Artifact, row_id)
-        if artifact is None:
-            raise ValueError(f"unknown artifact ref: {ref}")
-        source = session.get(Source, artifact.source_id)
         return {
             "ref": ref,
             "kind": "artifact",

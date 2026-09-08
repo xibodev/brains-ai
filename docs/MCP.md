@@ -27,8 +27,25 @@ open work, and recorded knowledge in a single round trip.
 |---|---|
 | `get_state` | Everything an agent needs to know on arrival |
 | `search_repo` | Bounded text lookup across the repository. Not semantic |
-| `retrieve_original` | Fetch a stored original by reference |
+| `retrieve_original` | Retrieve content by reference within the current caller's visibility |
 | `generate_views` | Refresh the optional Markdown projections |
+
+`retrieve_original(ref)` accepts `knowledge:<code>`, `artifact:<id>`, or `chunk:<id>`;
+it has no Session, operator, or Workspace override. Artifact access follows
+Artifact -> Source -> Workspace, and chunk access follows Chunk -> Artifact -> Source ->
+Workspace. The current caller's Workspace visibility is checked on each call before
+content is returned or a file is read. Missing Artifact or Source ancestry fails closed
+even for bootstrap admin. A null Source Workspace is refused for scoped callers, not
+treated as shared; bootstrap admin retains unrestricted access to valid Sources.
+Knowledge keeps its existing explicit `shared`/`global` scope exceptions.
+
+For absent, orphaned, or inaccessible rows, the control raises `ValueError` with
+`unknown or inaccessible <kind> ref: <ref>`, where `<kind>` is `knowledge`, `artifact`, or
+`chunk`. The error discloses no stored title, content, metadata, or file path. Malformed
+references and non-integer artifact/chunk IDs retain their validation errors.
+Artifacts return current file content when readable, otherwise the stored summary
+(or an empty string); chunks return stored content and knowledge returns its stored body.
+This is not an immutable-original or snapshot-provenance guarantee.
 
 ## Sessions
 
