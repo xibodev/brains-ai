@@ -684,6 +684,55 @@ def test_windows_identity_uses_cim_creation_time(monkeypatch) -> None:
     assert isinstance(identity["start_time"], float)
 
 
+def test_macos_identity_samples_one_complete_row(monkeypatch) -> None:
+    calls = []
+    row = "4242 Tue Sep  8 12:34:56 2026 /Applications/Python App/Python"
+    monkeypatch.setattr(service_common, "run_cmd", lambda cmd: calls.append(cmd) or (0, row, ""))
+    identity = service_common._macos_identity(4242)
+    assert calls == [["ps", "-ww", "-p", "4242", "-o", "pid=,lstart=,comm="]]
+    assert identity["exe"] == "/Applications/Python App/Python"
+    assert isinstance(identity["start_time"], float)
+    assert service_common._normalize_exe(identity["exe"]) == "python"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        (127, "", "missing utility"),
+        (1, "", "permission denied"),
+        (0, "", ""),
+        (0, "4242", ""),
+        (0, "4343 Tue Sep 8 12:34:56 2026 python", ""),
+        (0, "4242 Tue Sep 8 12:34:56 2026 python\n4343", ""),
+        (0, "4242 Tue Bad 8 12:34:56 2026 python", ""),
+    ],
+)
+def test_macos_identity_failed_or_partial_sample_is_not_exit(monkeypatch, result) -> None:
+    monkeypatch.setattr(service_common, "run_cmd", lambda cmd: result)
+    monkeypatch.setattr(service_common, "current_platform", lambda: "macos")
+    check = verify_pid({"format": 2, "pid": 4242, "exe": "python", "start_time": 1000.0})
+    assert check["running"] is True
+    assert check["confidence"] == "degraded"
+    assert not check.get("identity_mismatch")
+
+
+def test_macos_identity_empty_selection_proves_exit(monkeypatch) -> None:
+    monkeypatch.setattr(service_common, "run_cmd", lambda cmd: (1, "", ""))
+    assert service_common._macos_identity(4242) is None
+
+
+@pytest.mark.parametrize("value", [None, True, "5000", float("nan"), float("inf"), -1, 0])
+@pytest.mark.parametrize("field", ["recorded", "live"])
+def test_verify_pid_invalid_start_time_never_proves_reuse(monkeypatch, value, field) -> None:
+    record = {"format": 2, "pid": 4242, "exe": "python", "start_time": 1000.0}
+    live = {"exe": "foreign", "start_time": 5000.0}
+    (record if field == "recorded" else live)["start_time"] = value
+    monkeypatch.setattr(service_common, "_read_process_identity", lambda pid: live)
+    check = verify_pid(record)
+    assert check["identity_verified"] is not True
+    assert check.get("identity_mismatch") is False
+
+
 def test_verify_pid_unverified_for_legacy_pidfile_of_a_live_process(monkeypatch) -> None:
     monkeypatch.setattr(
         service_common,
@@ -941,9 +990,10 @@ def test_macos_stop_does_not_signal_reused_pid_after_term(macos_stop_state) -> N
     state = macos_stop_state
     state.exit_at = 0.2
     state.after_exit = {"exe": "foreign", "start_time": 5000.0}
-    assert macos.stop()["ok"] is False
+    assert macos.stop()["ok"] is True
     assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
-    assert state.pidfile.exists()
+    assert not state.pidfile.exists()
+    assert state.after_exit == {"exe": "foreign", "start_time": 5000.0}
 
 
 def test_macos_stop_retains_pid_when_identity_degrades_after_term(macos_stop_state) -> None:
@@ -987,7 +1037,7 @@ def test_macos_stop_accepts_pidfile_disappearance_after_observed_exit(
     def verified(record):
         check = verify(record)
         if disappearance == "verify":
-            state.pidfile.unlink()
+            state.pidfile.unlink(missing_ok=True)
         return check
 
     reads = 0
@@ -999,10 +1049,10 @@ def test_macos_stop_accepts_pidfile_disappearance_after_observed_exit(
             state.pidfile.unlink()
         return read()
 
-    def cleaned():
+    def cleaned(**kwargs):
         if disappearance == "cleanup":
             state.pidfile.unlink()
-        return cleanup()
+        return cleanup(**kwargs)
 
     monkeypatch.setattr(macos, "verify_pid", verified)
     monkeypatch.setattr(macos, "read_pidfile_record", current)
@@ -1040,9 +1090,205 @@ def test_macos_stop_rechecks_identity_after_unload(macos_stop_state, monkeypatch
         return 0, "unloaded", ""
 
     monkeypatch.setattr(macos, "_unload", unload)
-    assert macos.stop()["ok"] is False
+    assert macos.stop()["ok"] is True
     assert not state.calls
-    assert state.pidfile.exists()
+    assert not state.pidfile.exists()
+    assert state.identity == {"exe": "foreign", "start_time": 5000.0}
+
+
+@pytest.mark.parametrize("removed_by_supervisor", [False, True])
+def test_macos_uninstall_accepts_verified_to_reused_transition(
+    macos_stop_state, monkeypatch, removed_by_supervisor
+):
+    state = macos_stop_state
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+
+    def unloaded(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        if removed_by_supervisor:
+            state.pidfile.unlink()
+        return 0, "", ""
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    report = macos.uninstall()
+    assert report["ok"] is True
+    assert report["pid_confidence"] == "stale"
+    assert report["pid_identity_evidence"] == "executable-and-start-time-mismatch"
+    assert not definition.exists()
+    assert not state.pidfile.exists()
+    assert not state.calls
+    assert state.identity == {"exe": "foreign", "start_time": 5000.0}
+
+
+def test_macos_reuse_after_failed_unload_retains_record(macos_stop_state, monkeypatch):
+    state = macos_stop_state
+    before = state.pidfile.read_bytes()
+
+    def unloaded(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 1, "", "manager failure"
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "native-unload-failed"
+    assert state.pidfile.read_bytes() == before
+    assert not state.calls
+
+
+@pytest.mark.parametrize("cleanup_identity", [{}, {"exe": "python", "start_time": 1000.0}])
+def test_macos_reuse_cleanup_requires_fresh_complete_mismatch(
+    macos_stop_state, monkeypatch, cleanup_identity
+):
+    state = macos_stop_state
+    before = state.pidfile.read_bytes()
+    cleanup = macos.cleanup_stale_pidfile
+
+    def unloaded(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 0, "", ""
+
+    def cleaned(**kwargs):
+        state.identity = cleanup_identity
+        return cleanup(**kwargs)
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
+    assert macos.stop()["ok"] is False
+    assert state.pidfile.read_bytes() == before
+    assert not state.calls
+
+
+def test_macos_reuse_cleanup_checks_bytes_at_unlink_guard(macos_stop_state, monkeypatch):
+    state = macos_stop_state
+    read_bytes = Path.read_bytes
+    cleanup = macos.cleanup_stale_pidfile
+    replacement = b"{malformed replacement"
+
+    def unloaded(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 0, "", ""
+
+    def cleaned(**kwargs):
+        reads = 0
+
+        def changed(path):
+            nonlocal reads
+            if path == state.pidfile:
+                reads += 1
+                if reads == 3:
+                    path.write_bytes(replacement)
+            return read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", changed)
+        return cleanup(**kwargs)
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
+    assert macos.stop()["ok"] is False
+    assert state.pidfile.read_bytes() == replacement
+    assert not state.calls
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"exe": "foreign", "start_time": 1000.0},
+        {"exe": "python", "start_time": 5000.0},
+        {"exe": "foreign", "start_time": None},
+        {"exe": None, "start_time": 5000.0},
+        {"exe": "foreign", "start_time": float("nan")},
+        {"exe": "foreign", "start_time": float("inf")},
+        {"exe": "foreign", "start_time": "5000"},
+        {"exe": 12, "start_time": 5000.0},
+        {"exe": " ", "start_time": 5000.0},
+        {},
+    ],
+)
+def test_macos_stop_partial_mismatch_waits_read_only_and_preserves_record(
+    macos_stop_state, monkeypatch, identity
+) -> None:
+    state = macos_stop_state
+    before = state.pidfile.read_bytes()
+
+    def unloaded(_label):
+        state.identity = identity
+        return 0, "", ""
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-identity-unsafe"
+    assert state.elapsed == macos._STOP_TIMEOUT_SECONDS
+    assert state.pidfile.read_bytes() == before
+    assert not state.calls
+
+
+@pytest.mark.parametrize("stage", ["before-cleanup", "during-verify"])
+@pytest.mark.parametrize("replacement", [b'{"format": 2, "pid": 4343}', b"{broken", b"\xff", b" "])
+def test_macos_reuse_cleanup_preserves_changed_bytes(
+    macos_stop_state, monkeypatch, stage, replacement
+) -> None:
+    state = macos_stop_state
+    foreign = {"exe": "foreign", "start_time": 5000.0}
+    cleanup = macos.cleanup_stale_pidfile
+
+    def unloaded(_label):
+        state.identity = foreign
+        return 0, "", ""
+
+    def cleaned(**kwargs):
+        if stage == "before-cleanup":
+            state.pidfile.write_bytes(replacement)
+        else:
+
+            def changed(pid):
+                state.pidfile.write_bytes(replacement)
+                return foreign
+
+            monkeypatch.setattr(service_common, "_read_process_identity", changed)
+        return cleanup(**kwargs)
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert state.pidfile.read_bytes() == replacement
+    assert not state.calls
+    assert state.identity == foreign
+
+
+def test_macos_reuse_cleanup_preserves_semantically_equal_rewrite(macos_stop_state, monkeypatch):
+    state = macos_stop_state
+    record = read_pidfile_record(state.pidfile)
+    replacement = json.dumps(record, indent=2).encode()
+    cleanup = macos.cleanup_stale_pidfile
+
+    def unloaded(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 0, "", ""
+
+    def cleaned(**kwargs):
+        state.pidfile.write_bytes(replacement)
+        return cleanup(**kwargs)
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
+    assert macos.stop()["ok"] is False
+    assert state.pidfile.read_bytes() == replacement
+    assert not state.calls
+
+
+@pytest.mark.parametrize("payload", [b"{broken", b"\xff", b'{"pid": -1}', b'{"pid": true}'])
+def test_macos_stop_preserves_initial_malformed_record(macos_stop_state, payload):
+    state = macos_stop_state
+    state.pidfile.write_bytes(payload)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert state.pidfile.read_bytes() == payload
+    assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
 
 
 def test_macos_stop_accepts_signal_exit_race(macos_stop_state, monkeypatch) -> None:
@@ -1186,6 +1432,12 @@ def test_native_stop_preserves_degraded_or_reused_pid_after_kill(
     state.after_exit = identity
     before = state.pidfile.read_bytes()
     report = backend.stop()
+    if backend is macos and identity:
+        assert report["ok"] is True
+        assert report["error_code"] is None
+        assert not state.pidfile.exists()
+        assert len(state.calls) == 2
+        return
     assert report["ok"] is False
     assert report["error_code"] == "pid-identity-unsafe"
     assert state.pidfile.read_bytes() == before
@@ -1275,9 +1527,9 @@ def test_native_stop_retains_pid_if_cleanup_identity_degrades(
     state.identity = None
     cleanup = backend.cleanup_stale_pidfile
 
-    def degraded():
+    def degraded(**kwargs):
         state.identity = {}
-        return cleanup()
+        return cleanup(**kwargs)
 
     monkeypatch.setattr(backend, "cleanup_stale_pidfile", degraded)
     report = backend.stop()

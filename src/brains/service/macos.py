@@ -120,6 +120,9 @@ def uninstall(*, dry_run: bool = False, label: str = SERVICE_LABEL) -> dict:
         return report
     stopped = stop(label)
     report["error_code"] = stopped.get("error_code")
+    for key in ("pid_confidence", "pid_identity_evidence"):
+        if key in stopped:
+            report[key] = stopped[key]
     rc = 0 if stopped["ok"] else 1
     out, err = (stopped["detail"], "") if stopped["ok"] else ("", stopped["detail"])
     if rc == 0:
@@ -170,7 +173,12 @@ def start(label: str = SERVICE_LABEL) -> dict:
 def stop(label: str = SERVICE_LABEL) -> dict:
     """Unload, signal only the recorded process instance, and wait for its exit."""
     # Keep the identity even if launchd shutdown removes the file before exit.
+    try:
+        captured_content = default_pidfile_path().read_bytes()
+    except OSError:
+        captured_content = b""
     record = read_pidfile_record()
+    captured_verified = verify_pid(record)["confidence"] == "verified"
     rc, out, err = _unload(label)
     detail = out or err
     check = verify_pid(record)
@@ -212,7 +220,7 @@ def stop(label: str = SERVICE_LABEL) -> dict:
                 "detail": f"{detail}; pidfile changed during stop; retained for review".strip("; "),
                 "error_code": "pidfile-changed",
             }
-        if check["confidence"] not in ("verified", "degraded", "unverified"):
+        if not check["running"] or check.get("identity_mismatch") is True:
             break
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -227,12 +235,15 @@ def stop(label: str = SERVICE_LABEL) -> dict:
             continue
         if check["confidence"] == "verified" and krc != 0:
             break
-        # Separate ps probes can lose identity fields during launchd shutdown.
+        # Missing fields or a one-field mismatch do not prove exit/PID reuse.
         # Wait read-only while uncertain; never signal using the earlier identity.
         time.sleep(min(_STOP_POLL_SECONDS, remaining))
         check = verify_pid(record)
 
-    stopped = check["confidence"] in ("stale", "absent") and not check["running"]
+    reused_after_unload = rc == 0 and captured_verified and check.get("identity_mismatch") is True
+    stopped = (
+        check["confidence"] in ("stale", "absent") and not check["running"]
+    ) or reused_after_unload
     if stopped:
         # Do not follow or discard a replacement supervisor's PID record.
         current = read_pidfile_record()
@@ -241,10 +252,16 @@ def stop(label: str = SERVICE_LABEL) -> dict:
             error_code = "pidfile-changed"
             detail = f"{detail}; pidfile changed during stop; retained for review".strip("; ")
         else:
-            cleanup = cleanup_stale_pidfile()
+            cleanup = cleanup_stale_pidfile(
+                expected_content=captured_content,
+                allow_identity_mismatch=reused_after_unload,
+            )
             stopped = (
                 cleanup["confidence"] in ("stale", "absent")
-                and not cleanup["running"]
+                and (
+                    not cleanup["running"]
+                    or (reused_after_unload and cleanup.get("identity_mismatch") is True)
+                )
                 and not default_pidfile_path().exists()
             )
             detail = f"{detail}; pid {pid}: {check['confidence']} ({check['reason']})".strip("; ")
@@ -266,6 +283,18 @@ def stop(label: str = SERVICE_LABEL) -> dict:
         "ok": stopped,
         "detail": detail,
         "error_code": error_code,
+        "pid_confidence": check["confidence"],
+        "pid_identity_evidence": (
+            "executable-and-start-time-mismatch"
+            if check.get("identity_mismatch") is True
+            else "process-absent"
+            if check["confidence"] == "stale" and not check["running"]
+            else "identity-not-proven"
+            if check["confidence"] in ("stale", "degraded", "unverified")
+            else "identity-matching"
+            if check["confidence"] == "verified"
+            else "no-record"
+        ),
     }
 
 

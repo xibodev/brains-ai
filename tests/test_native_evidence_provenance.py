@@ -1682,6 +1682,47 @@ def test_native_command_diagnostic_does_not_attribute_nonservice_error(
     assert "synthetic-secret" not in json.dumps(diagnostic)
 
 
+@pytest.mark.parametrize(
+    "confidence,evidence,expected",
+    [
+        ("stale", "executable-and-start-time-mismatch", True),
+        ("degraded", "identity-not-proven", True),
+        ("stale", "process-absent", True),
+        ("/private/synthetic-secret", "synthetic-secret", False),
+        (["stale"], {"detail": "synthetic-secret"}, False),
+        (None, True, False),
+    ],
+)
+def test_native_diagnostic_allowlists_pid_identity(
+    monkeypatch, capsys, confidence, evidence, expected
+):
+    payload = {
+        "ok": False,
+        "error_code": "pid-identity-unsafe",
+        "pid_confidence": confidence,
+        "pid_identity_evidence": evidence,
+        "detail": "synthetic-secret",
+    }
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 1, json.dumps(payload), "")),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic", ["service", "uninstall"])
+    native_lifecycle._diagnose(raised.value, phase="cleanup", stage="cleanup-native")
+    output = capsys.readouterr().err
+    diagnostic = json.loads(output)
+    assert "synthetic-secret" not in output
+    if expected:
+        assert diagnostic["service_pid_identity"] == {
+            "pid_confidence": confidence,
+            "pid_identity_evidence": evidence,
+        }
+    else:
+        assert "service_pid_identity" not in diagnostic
+
+
 @pytest.mark.parametrize("observation", ["unavailable", "foreign", "wrong-identity"])
 def test_native_prepare_requires_positive_absence_before_any_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, observation: str
