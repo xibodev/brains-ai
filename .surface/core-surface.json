@@ -2,9 +2,11 @@
   "distribution": {
     "sdist": [
       "LICENSE",
+      "MANIFEST.in",
       "PKG-INFO",
       "README.md",
       "pyproject.toml",
+      "scripts/sync_release_site.py",
       "setup.cfg",
       "src/brains/__init__.py",
       "src/brains/__main__.py",
@@ -379,6 +381,7 @@
       "tests/test_readiness_failure_drills.py",
       "tests/test_realtime_scope.py",
       "tests/test_recovery_policy.py",
+      "tests/test_release_site.py",
       "tests/test_release_version.py",
       "tests/test_schemas_roundtrip.py",
       "tests/test_service.py",

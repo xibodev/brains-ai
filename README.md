@@ -57,6 +57,7 @@ code. The [product brief](docs/product/PRODUCT_BRIEF.md) explains each decision.
 
 ## Documentation
 
+- [Website and release history](https://xibodev.github.io/brains-ai/) - published release overview
 - [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
 - [MCP surface](docs/MCP.md) — the 74 tools agents can call
 - [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
