@@ -579,6 +579,8 @@ def _lifecycle_main(
         "manager-cycle-partial-install",
         "config-drift",
         "native-drift",
+        "windows-policy-drift",
+        "windows-policy-foreign-principal",
         "verify-mid-step",
         "verify-restoration",
         "cleanup-config-drift",
@@ -596,6 +598,8 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     system: str,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    if scenario.startswith("windows-policy-") and system != "Windows":
+        pytest.skip("Windows registered policy regression")
     monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
     monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
     home = tmp_path / "home"
@@ -630,6 +634,15 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         content = _mock_native_response(system, identity, expected_definition, registered)
         if scenario == "native-drift" and registered:
             content = content.replace("serve-all", "foreign-command")
+        if scenario.startswith("windows-policy-") and registered:
+            payload = json.loads(content)
+            task = ET.fromstring(payload["xml"])
+            count = task.find("{*}Settings/{*}RestartOnFailure/{*}Count")
+            assert count is not None
+            count.text = "3"
+            payload["xml"] = ET.tostring(task, encoding="unicode")
+            payload["principal_matches"] = scenario != "windows-policy-foreign-principal"
+            content = json.dumps(payload)
         missing = system == "Darwin" and not registered
         return subprocess.CompletedProcess(
             args,
@@ -799,6 +812,8 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         "manager-cycle-partial-install",
         "config-drift",
         "native-drift",
+        "windows-policy-drift",
+        "windows-policy-foreign-principal",
     }:
         phase = "manager-cycle" if scenario == "manager-cycle-partial-install" else "prepare"
         code, result = _lifecycle_main(monkeypatch, tmp_path, phase, executable, provenance)
@@ -806,7 +821,7 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         rollback = result["failure_cleanup"]
         if runtime.exists():
             assert "plan_core_sha256" not in json.loads(native_lifecycle._plan_path().read_text())
-        if scenario == "native-drift":
+        if scenario in {"native-drift", "windows-policy-foreign-principal"}:
             assert rollback["native_error_type"] == "EvidenceFailure"
             assert state["installed"] is True
             assert not any(args[:2] == ["service", "uninstall"] for args in actions)
@@ -820,12 +835,19 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             assert rollback["configuration_removed"] is True
             assert not config_path.exists()
         assert rollback["runtime_root_removed"] is (
-            scenario not in {"config-drift", "native-drift"}
+            scenario not in {"config-drift", "native-drift", "windows-policy-foreign-principal"}
         )
-        assert runtime.exists() is (scenario in {"config-drift", "native-drift"})
+        assert runtime.exists() is (
+            scenario in {"config-drift", "native-drift", "windows-policy-foreign-principal"}
+        )
         diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
         assert diagnostics[0]["phase"] == phase
-        assert diagnostics[0]["last_step"] == "adapter-wired"
+        assert diagnostics[0]["last_step"] == (
+            "installed" if scenario.startswith("windows-policy-") else "adapter-wired"
+        )
+        if scenario.startswith("windows-policy-"):
+            assert diagnostics[0]["task_recovery_policy"]["actual"]["restart_count"] == 3
+            assert diagnostics[0]["task_recovery_policy"]["expected"]["restart_count"] == 9999
         assert diagnostics[-1]["stage"] == "rollback-outcome"
         assert (
             diagnostics[-1]["cleanup"]["runtime_root_removed"] == rollback["runtime_root_removed"]
@@ -1881,15 +1903,26 @@ def test_native_windows_rejects_missing_or_changed_recovery_settings(
         node.text = "synthetic-foreign-setting"
     else:
         parent.append(ET.fromstring(ET.tostring(node)))
-    with pytest.raises(
-        native_lifecycle.EvidenceFailure, match="registered task recovery settings differ"
-    ):
-        native_lifecycle._check_task_xml(
-            actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
-        )
+    identity = native_lifecycle.native_service_identity("windows", spec.label)
+    if mutation == "missing" and field in {"Enabled", "MultipleInstancesPolicy"}:
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+        return
+    message = {
+        "Enabled": "registered task recovery enabled differs",
+        "MultipleInstancesPolicy": "registered task recovery multiple instances differs",
+        "ExecutionTimeLimit": "registered task recovery execution limit differs",
+        "RestartOnFailure/Interval": "registered task recovery restart interval differs",
+        "RestartOnFailure/Count": "registered task recovery restart count differs",
+    }[field]
+    with pytest.raises(native_lifecycle.EvidenceFailure, match=message):
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+    native_lifecycle._check_task_xml(actual, wanted, identity, check_recovery=False)
 
 
-def test_native_windows_accepts_equivalent_recovery_interval_and_harmless_defaults() -> None:
+@pytest.mark.parametrize("zero", ["PT0S", "PT0H", "P0D", "P0DT0H0M0.000000S"])
+def test_native_windows_accepts_equivalent_recovery_interval_and_harmless_defaults(
+    zero: str,
+) -> None:
     spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
     wanted = ET.fromstring(windows.render_task_xml(spec))
     actual = ET.fromstring(ET.tostring(wanted))
@@ -1899,12 +1932,134 @@ def test_native_windows_accepts_equivalent_recovery_interval_and_harmless_defaul
     interval = settings.find(ns + "RestartOnFailure/" + ns + "Interval")
     enabled = settings.find(ns + "Enabled")
     assert interval is not None and enabled is not None
-    interval.text = "PT60S"
-    enabled.text = "1"
+    interval.text = "P0DT0H1M0S"
+    settings.remove(enabled)
+    multiple = settings.find(ns + "MultipleInstancesPolicy")
+    assert multiple is not None
+    settings.remove(multiple)
+    execution = settings.find(ns + "ExecutionTimeLimit")
+    count = settings.find(ns + "RestartOnFailure/" + ns + "Count")
+    assert execution is not None and count is not None
+    execution.text = zero
+    count.text = "+0009999"
+    trigger_limit = ET.SubElement(
+        actual.find(ns + "Triggers/" + ns + "LogonTrigger"), ns + "ExecutionTimeLimit"
+    )
+    trigger_limit.text = "P3D"
     ET.SubElement(settings, ns + "UseUnifiedSchedulingEngine").text = "true"
     native_lifecycle._check_task_xml(
         actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "seconds"),
+    [
+        ("PT0S", 0),
+        ("PT0H", 0),
+        ("P0D", 0),
+        ("PT60S", 60),
+        ("PT1M", 60),
+        ("P3D", 259200),
+        ("PT72H", 259200),
+        ("PT0.000001S", 0.000001),
+        ("P", None),
+        ("PT", None),
+        ("P0DT", None),
+        ("P1Y", None),
+        ("P1M", None),
+        ("P1W", None),
+        ("-PT1S", None),
+        ("PTNaNS", None),
+        ("PT1e2S", None),
+        ("PT0.0000001S", None),
+        ("P999999999D", None),
+        ("synthetic-secret", None),
+    ],
+)
+def test_native_task_duration_is_finite_and_semantic(
+    value: str, seconds: int | float | None
+) -> None:
+    assert native_lifecycle._duration_seconds(value) == seconds
+
+
+@pytest.mark.parametrize("limit", ["P3D", "PT72H", "PT0.000001S", "PT1S"])
+def test_native_task_nonzero_execution_limit_fails_policy_but_not_ownership(limit: str) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    node = actual.find("{*}Settings/{*}ExecutionTimeLimit")
+    assert node is not None
+    node.text = limit
+    identity = native_lifecycle.native_service_identity("windows", spec.label)
+    with pytest.raises(native_lifecycle.EvidenceFailure, match="recovery execution limit differs"):
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+    native_lifecycle._check_task_xml(actual, wanted, identity, check_recovery=False)
+
+
+def test_native_recovery_policy_reports_all_normalized_values_without_secrets(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    changes = {
+        "Enabled": "false",
+        "MultipleInstancesPolicy": "Queue",
+        "ExecutionTimeLimit": "P3D",
+        "RestartOnFailure/Interval": "PT2M",
+        "RestartOnFailure/Count": "3",
+    }
+    for field, value in changes.items():
+        node = actual.find("/".join(ns + part for part in ("Settings/" + field).split("/")))
+        assert node is not None
+        node.text = value
+    ET.SubElement(actual, ns + "Data").text = "synthetic-secret"
+    with pytest.raises(native_lifecycle.EvidenceFailure) as caught:
+        native_lifecycle._check_task_xml(
+            actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
+        )
+    native_lifecycle._diagnose(caught.value, phase="prepare", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["error_code"] == "registered-task-recovery-enabled-differs"
+    assert diagnostic["task_recovery_policy"]["actual"] == {
+        "enabled": False,
+        "multiple_instances": "Queue",
+        "execution_limit_seconds": 259200,
+        "restart_interval_seconds": 120,
+        "restart_count": 3,
+    }
+    assert diagnostic["task_recovery_policy"]["expected"]["execution_limit_seconds"] == 0
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+    for field in changes:
+        node = actual.find("/".join(ns + part for part in ("Settings/" + field).split("/")))
+        assert node is not None
+        node.text = "synthetic-secret"
+    assert "synthetic-secret" not in json.dumps(native_lifecycle._task_recovery_policy(actual))
+
+
+@pytest.mark.parametrize("field", ["Command", "Arguments", "WorkingDirectory", "UserId", "Context"])
+def test_native_task_ownership_mode_never_accepts_foreign_identity(field: str) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    if field == "Context":
+        actual.find(ns + "Actions").set("Context", "foreign")
+    elif field == "UserId":
+        # Principal resolution itself is checked by _native_observation; an
+        # absent user cannot bypass the structural identity check either.
+        actual.find(ns + "Principals/" + ns + "Principal/" + ns + "UserId").text = ""
+    else:
+        actual.find(ns + "Actions/" + ns + "Exec/" + ns + field).text = "foreign"
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._check_task_xml(
+            actual,
+            wanted,
+            native_lifecycle.native_service_identity("windows", spec.label),
+            check_recovery=False,
+        )
 
 
 @pytest.mark.parametrize(

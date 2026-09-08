@@ -132,6 +132,11 @@ _DIAGNOSTIC_MESSAGES = (
     "registered task principal or identity differs",
     "registered task trigger principal differs",
     "registered task recovery settings differ",
+    "registered task recovery enabled differs",
+    "registered task recovery multiple instances differs",
+    "registered task recovery execution limit differs",
+    "registered task recovery restart interval differs",
+    "registered task recovery restart count differs",
     "systemd observation failed",
     "systemd query return code rejected",
     "systemd query stderr rejected",
@@ -322,6 +327,7 @@ def _diagnose(
     systemd_status = None
     service_error_code = None
     scheduler_status = None
+    recovery_policy = None
     trace = exc.__traceback__ if exc is not None else None
     while trace is not None:
         name = trace.tb_frame.f_code.co_name
@@ -404,6 +410,16 @@ def _diagnose(
             scheduler = trace.tb_frame.f_locals.get("scheduler_status")
             if type(scheduler) is dict:
                 scheduler_status = _validated_scheduler_status(scheduler)
+        if name == "_check_task_xml" or (
+            name == "_native_observation" and trace.tb_frame.f_locals.get("system") == "Windows"
+        ):
+            actual = trace.tb_frame.f_locals.get("actual")
+            wanted = trace.tb_frame.f_locals.get("wanted")
+            if isinstance(actual, ET.Element) and isinstance(wanted, ET.Element):
+                recovery_policy = {
+                    "actual": _task_recovery_policy(actual),
+                    "expected": _task_recovery_policy(wanted),
+                }
         if name == "_native_observation" and trace.tb_frame.f_locals.get("system") == "Linux":
             result = trace.tb_frame.f_locals.get("result")
             identity = trace.tb_frame.f_locals.get("identity")
@@ -451,6 +467,8 @@ def _diagnose(
         record["service_error_code"] = service_error_code
     if scheduler_status is not None:
         record["task_scheduler"] = scheduler_status
+    if recovery_policy is not None:
+        record["task_recovery_policy"] = recovery_policy
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
@@ -1029,25 +1047,90 @@ def _systemd_query_diagnostic(result: subprocess.CompletedProcess, identity: str
     }
 
 
-def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> None:
+def _duration_seconds(value: str) -> int | float | None:
+    """Bounded nonnegative day/time ISO 8601 subset; no calendar months/years."""
+    if len(value) > 80:
+        return None
+    match = re.fullmatch(
+        r"P(?:(\d{1,9})D)?(?:T(?:(\d{1,9})H)?(?:(\d{1,9})M)?(?:(\d{1,9}(?:\.\d{1,6})?)S)?)?",
+        value,
+    )
+    if match is None or not any(match.groups()) or value.endswith("T"):
+        return None
+    days, hours, minutes, seconds = match.groups()
+    # Integer microseconds avoid rounding a small nonzero duration into zero.
+    whole, _, fraction = (seconds or "0").partition(".")
+    micros = (
+        int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes or 0) * 60 + int(whole)
+    ) * 1_000_000 + int(fraction.ljust(6, "0"))
+    if micros > (2**32 - 1) * 1_000_000:
+        return None
+    return micros // 1_000_000 if micros % 1_000_000 == 0 else micros / 1_000_000
+
+
+def _task_recovery_policy(document: ET.Element) -> dict[str, Any]:
+    """Only normalized scalars and schema-state enums may enter diagnostics."""
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    settings = document.findall(ns + "Settings")
+    result: dict[str, Any] = {}
+    # Defaults: Microsoft Task Scheduler Schema, settingsType. A missing
+    # execution limit is three days, never the unlimited limit this probe needs.
+    # https://learn.microsoft.com/windows/win32/taskschd/task-scheduler-schema
+    for field, key, default in (
+        ("Enabled", "enabled", "true"),
+        ("MultipleInstancesPolicy", "multiple_instances", "IgnoreNew"),
+        ("ExecutionTimeLimit", "execution_limit_seconds", "PT72H"),
+        ("RestartOnFailure/Interval", "restart_interval_seconds", None),
+        ("RestartOnFailure/Count", "restart_count", None),
+    ):
+        if len(settings) > 1:
+            result[key] = "invalid"
+            continue
+        nodes = (
+            settings[0].findall("/".join(ns + part for part in field.split("/")))
+            if settings
+            else []
+        )
+        if (
+            len(nodes) > 1
+            or (nodes and len(nodes[0]))
+            or (
+                field.startswith("RestartOnFailure/")
+                and settings
+                and len(settings[0].findall(ns + "RestartOnFailure")) > 1
+            )
+        ):
+            result[key] = "invalid"
+            continue
+        value = (nodes[0].text or "").strip() if nodes else default
+        if value is None:
+            result[key] = "missing"
+        elif key == "enabled":
+            result[key] = {"true": True, "1": True, "false": False, "0": False}.get(
+                value, "invalid"
+            )
+        elif key == "multiple_instances":
+            result[key] = (
+                value if value in {"IgnoreNew", "Parallel", "Queue", "StopExisting"} else "invalid"
+            )
+        elif key.endswith("seconds"):
+            parsed = _duration_seconds(value)
+            result[key] = parsed if parsed is not None else "invalid"
+        else:
+            result[key] = (
+                int(value)
+                if re.fullmatch(r"\+?[0-9]{1,10}", value) and int(value) <= 2**32 - 1
+                else "invalid"
+            )
+    return result
+
+
+def _check_task_xml(
+    actual: ET.Element, wanted: ET.Element, identity: str, *, check_recovery: bool = True
+) -> None:
     # Scheduler serialization can reorder fields, assign IDs and materialize
     # schema defaults. None changes the action or the account allowed to run it.
     ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
-    critical = {
-        "Enabled": {"true", "1"},
-        "MultipleInstancesPolicy": {"IgnoreNew"},
-        "ExecutionTimeLimit": {"PT0S"},
-        "RestartOnFailure/Interval": {"PT1M", "PT60S"},
-        "RestartOnFailure/Count": {"9999"},
-    }
-    for document in (actual, wanted):
-        settings = document.findall(ns + "Settings")
-        if len(settings) != 1 or len(settings[0].findall(ns + "RestartOnFailure")) != 1:
-            raise EvidenceFailure("registered task recovery settings differ")
-        for field, values in critical.items():
-            nodes = settings[0].findall("/".join(ns + part for part in field.split("/")))
-            if len(nodes) != 1 or len(nodes[0]) or (nodes[0].text or "").strip() not in values:
-                raise EvidenceFailure("registered task recovery settings differ")
     for document in (actual, wanted):
         if document.tag != ns + "Task" or any(
             len(document.findall(ns + name)) != 1 for name in ("Actions", "Triggers", "Principals")
@@ -1130,7 +1213,10 @@ def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> No
             ) not in {"true", "1"}:
                 raise EvidenceFailure("registered task trigger definition differs")
         elif field == ns + "ExecutionTimeLimit":
-            if trigger.findtext(field, "PT72H") != expected_trigger.findtext(field, "PT72H"):
+            observed_limit = _duration_seconds(trigger.findtext(field, "PT72H"))
+            if observed_limit is None or observed_limit != _duration_seconds(
+                expected_trigger.findtext(field, "PT72H")
+            ):
                 raise EvidenceFailure("registered task trigger definition differs")
         else:
             left, right = trigger.find(field), expected_trigger.find(field)
@@ -1142,9 +1228,23 @@ def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> No
                 or (left.text or "") != (right.text or "")
             ):
                 raise EvidenceFailure("registered task trigger definition differs")
+    if check_recovery:
+        for policy in (_task_recovery_policy(actual), _task_recovery_policy(wanted)):
+            if policy["enabled"] is not True:
+                raise EvidenceFailure("registered task recovery enabled differs")
+            if policy["multiple_instances"] != "IgnoreNew":
+                raise EvidenceFailure("registered task recovery multiple instances differs")
+            if policy["execution_limit_seconds"] != 0:
+                raise EvidenceFailure("registered task recovery execution limit differs")
+            if policy["restart_interval_seconds"] != 60:
+                raise EvidenceFailure("registered task recovery restart interval differs")
+            if policy["restart_count"] != 9999:
+                raise EvidenceFailure("registered task recovery restart count differs")
 
 
-def _native_observation(label: str, expected: dict[str, Any] | None = None) -> dict[str, Any]:
+def _native_observation(
+    label: str, expected: dict[str, Any] | None = None, *, check_recovery: bool = True
+) -> dict[str, Any]:
     """Read registration and local definition independently; errors are not absence."""
     system = platform.system()
     slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
@@ -1215,7 +1315,7 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
             actual = ET.fromstring(payload["xml"])
             wanted = ET.fromstring(expected["content"])
 
-            _check_task_xml(actual, wanted, identity)
+            _check_task_xml(actual, wanted, identity, check_recovery=check_recovery)
             if payload["principal_matches"] is not True:
                 raise EvidenceFailure("registered task principal or identity differs")
             if payload["trigger_matches"] is not True:
@@ -1400,8 +1500,14 @@ def _expected_native_definition(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def _assert_native_ownership(
-    plan: dict[str, Any], *, absent: bool = False, allow_absent: bool = False
+    plan: dict[str, Any],
+    *,
+    absent: bool = False,
+    allow_absent: bool = False,
+    check_recovery: bool = False,
 ) -> bool:
+    # Policy qualification is opt-in here: a broken restart policy must not
+    # prevent teardown of an otherwise exactly owned native action/principal.
     expected = plan["native_definition"]
     _assert_plain_path(Path(expected["executable"]))
     platform_slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[platform.system()]
@@ -1415,7 +1521,7 @@ def _assert_native_ownership(
     ):
         raise EvidenceFailure("native cleanup executable or state identity differs")
     _assert_plain_path(Path(expected["definition_path"]))
-    observed = _native_observation(plan["label"], expected)
+    observed = _native_observation(plan["label"], expected, check_recovery=check_recovery)
     if (
         set(observed) != {"label", "definition", "registered"}
         or observed["label"] != expected["label"]
@@ -1433,7 +1539,7 @@ def _assert_native_ownership(
 def _uninstall_owned(plan: dict[str, Any]) -> None:
     if not _assert_native_ownership(plan, allow_absent=True):
         return
-    observed = _native_observation(plan["label"], plan["native_definition"])
+    observed = _native_observation(plan["label"], plan["native_definition"], check_recovery=False)
     if observed["registered"]:
         _run(plan["executable"], ["service", "uninstall", "--label", plan["label"]])
     else:
@@ -1442,7 +1548,9 @@ def _uninstall_owned(plan: dict[str, Any]) -> None:
         # after separately proving no process/listener and no registration.
         _wait_removed(plan["executable"], plan["label"])
         _assert_native_ownership(plan)
-        if _native_observation(plan["label"], plan["native_definition"])["registered"]:
+        if _native_observation(plan["label"], plan["native_definition"], check_recovery=False)[
+            "registered"
+        ]:
             raise EvidenceFailure("native registration changed during cleanup")
         Path(plan["native_definition"]["definition_path"]).unlink()
     _wait_removed(plan["executable"], plan["label"])
@@ -1994,7 +2102,7 @@ def prepare(
     installed = _status_evidence(_wait_healthy(executable, label), label)
     installed_incarnation = _ready_incarnation(installed)
     _record(plan, "installed", installed)
-    _assert_native_ownership(plan)
+    _assert_native_ownership(plan, check_recovery=True)
     _run(executable, ["service", "stop", "--label", label])
     _assert_native_ownership(plan)
     stopped = _wait_stopped(plan)
@@ -2025,6 +2133,7 @@ def prepare(
     if recovered_incarnation[0] == old_pid:
         raise EvidenceFailure("native manager did not establish a new owned incarnation")
     _record(plan, "manager-recovered-owned-process", recovered)
+    _assert_native_ownership(plan, check_recovery=True)
     _record(
         plan,
         "boundary-prepared",
@@ -2112,6 +2221,7 @@ def verify(
     if not boot_changed:
         raise EvidenceFailure("native boundary has no machine-observed reboot")
     healthy = _wait_healthy(executable, label)
+    _assert_native_ownership(plan, check_recovery=True)
     _record(
         plan,
         "boundary-verified",
