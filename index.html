@@ -12,12 +12,12 @@
     --bg:#ffffff; --bg-soft:#f6f8fb; --panel:#ffffff; --panel-2:#f2f6fa;
     --code-bg:#f7f9fc;
     --line:#e4eaf1; --line-2:#d0dae6;
-    --fg:#0f1a29; --muted:#4d5f77; --dim:#7889a0;
+    --fg:#0f1a29; --muted:#4d5f77; --dim:#52657d;
     --accent:#0f766e; --accent-soft:#ecfdf8; --accent-line:#a7e8dc;
     --link:#0b6bb5;
     --warn:#9a5b06; --warn-bg:#fff9ec; --warn-line:#f6dfae;
     --danger:#c2334d;
-    --c-cm:#8494a8; --c-fl:#0b6bb5; --c-st:#186c3b; --c-ok:#0f766e; --c-w:#9a5b06;
+    --c-cm:#52657d; --c-fl:#0b6bb5; --c-st:#186c3b; --c-ok:#0f766e; --c-w:#9a5b06;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
     --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
     --shadow:0 1px 2px rgba(15,26,41,.04),0 6px 18px rgba(15,26,41,.05);
@@ -28,6 +28,7 @@
   body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.65;-webkit-font-smoothing:antialiased}
   a{color:var(--link);text-decoration:none}
   a:hover{text-decoration:underline}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--link);outline-offset:4px}
   code,kbd,pre{font-family:var(--mono)}
   .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
 
@@ -55,6 +56,8 @@
   h1{font-size:clamp(30px,5.2vw,52px);line-height:1.08;margin:0 0 18px;letter-spacing:-.03em;font-weight:750}
   h1 .grad{background:linear-gradient(120deg,#0d9488,#0284c7);-webkit-background-clip:text;background-clip:text;color:transparent}
   .lede{font-size:clamp(15px,2vw,18.5px);color:var(--muted);max-width:74ch;margin:0 0 26px}
+  .latest-release{margin:0 0 20px;font-size:14px}
+  .latest-release a{font-weight:600;text-decoration:underline;text-underline-offset:3px}
   .alpha{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--warn-line);background:var(--warn-bg);border-radius:11px;padding:13px 15px;max-width:78ch;margin-bottom:30px}
   .alpha .ico{color:var(--warn);flex-shrink:0}
   .alpha p{margin:0;font-size:14px;color:#7a4a08}
@@ -119,19 +122,41 @@
 
   footer{padding:38px 0;color:var(--dim);font-size:14px;background:var(--bg)}
   .foot{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-  .foot .sp{margin-left:auto;display:flex;gap:18px}
+  .foot .sp{margin-left:auto;display:flex;gap:18px;flex-wrap:wrap}
+
+  /* Static release history, also readable without JavaScript. */
+  .release-entry{display:grid;grid-template-columns:190px minmax(0,1fr);gap:32px;padding:28px 0;border-top:1px solid var(--line-2);overflow-wrap:anywhere}
+  .release-entry:last-child{border-bottom:1px solid var(--line-2)}
+  .release-meta h3{margin:0 0 4px;font-size:21px;letter-spacing:-.02em}
+  .release-meta time{display:block;color:var(--muted);font-size:14px}
+  .release-badge{display:inline-block;margin-top:12px;font-size:12px;font-weight:600;color:var(--accent);border-left:2px solid var(--accent);padding-left:8px}
+  .release-details{min-width:0;max-width:76ch;color:var(--muted);font-size:15px}
+  .release-details h4{margin:0 0 10px;color:var(--fg);font-size:17px}
+  .release-details ul{margin:0 0 16px;padding-left:20px}
+  .release-details li+li{margin-top:8px}
+  .release-link{font-weight:600;text-decoration:underline;text-underline-offset:3px}
+  .release-archive{margin:22px 0 0;font-size:14px;color:var(--muted)}
 
   @media(max-width:900px){
     .g4,.g3{grid-template-columns:repeat(2,1fr)}
     .split{grid-template-columns:1fr;gap:22px}
   }
-  @media(max-width:680px){
+  @media(max-width:1100px){
     .nav-links{display:none;order:3;width:100%;margin:0 0 12px;flex-direction:column;gap:9px}
     .nav-links.open{display:flex}
     .nav{height:auto;padding:12px 0;flex-wrap:wrap}
     .menu-btn{display:block}
-    .g4,.g3,.g2{grid-template-columns:1fr}
     .gh{display:none}
+  }
+  @media(max-width:680px){
+    .g4,.g3,.g2{grid-template-columns:1fr}
+    .release-entry{grid-template-columns:minmax(0,1fr);gap:16px;padding:24px 0}
+    .foot .sp{margin-left:0}
+  }
+  @media(prefers-reduced-motion:reduce){
+    html{scroll-behavior:auto}
+    .feat{transition:none}
+    .feat:hover{transform:none}
   }
 </style>
 </head>
@@ -151,6 +176,7 @@
       <a href="#governance">Governance</a>
       <a href="#operations">Operations</a>
       <a href="#workflow">Workflow</a>
+      <a href="#releases">Releases</a>
     </nav>
     <a class="gh" href="https://github.com/xibodev/brains-ai" target="_blank" rel="noopener">GitHub ↗</a>
   </div>
@@ -166,6 +192,8 @@
       Shared Workspaces, durable tasks and handoffs, local mailboxes, reusable knowledge, human
       approvals, and an inspectable audit trail — all on your machine, over SQLite.
     </p>
+
+    <p class="latest-release"><a href="#releases">Latest release: v<!-- brains:release-version:start -->1.5.0<!-- brains:release-version:end --> &middot; See what's new</a></p>
 
     <div class="alpha">
       <span class="ico">▲</span>
@@ -254,7 +282,7 @@ TASK-015  available     p2        Close the readiness gap
         <div class="ic">📬</div>
         <h3>Durable local mailbox</h3>
         <p>Agent-to-agent mail that survives restarts. The durable store is authoritative; a live wake is best-effort and never loses mail.</p>
-        <span class="cmd">brains-ai inbox-wait</span>
+        <span class="cmd">brains-ai mailbox inbox</span>
       </div>
       <div class="feat">
         <div class="ic">🧠</div>
@@ -326,7 +354,7 @@ TASK-015  available     p2        Close the readiness gap
 <span class="c-cm"># workspaces, live sessions, open work</span>
 
 <span class="prompt">$</span> brains-ai version
-brains-ai 1.4.0</pre></div>
+brains-ai <!-- brains:release-version:start -->1.5.0<!-- brains:release-version:end --></pre></div>
         <div class="pane" id="v-ready" hidden><pre><span class="prompt">$</span> brains-ai readiness
 <span class="c-ok">✔</span> database     migrations current
 <span class="c-ok">✔</span> listeners    console + mcp bound
@@ -372,7 +400,7 @@ brains-ai 1.4.0</pre></div>
   <div class="wrap">
     <div class="sec-head">
       <div class="kicker">Command line</div>
-      <h2>65 supported commands</h2>
+      <h2>One CLI, grouped by purpose</h2>
       <p>
         One canonical executable: <code>brains-ai</code>. Commands are grouped by the thing they act on.
       </p>
@@ -429,20 +457,30 @@ brains-ai workspace-release / workspace-claims
 brains-ai handoff-set <span class="c-fl">--title</span> <span class="c-st">"migration contract hardened"</span>
 brains-ai handoff-pick / handoff-list / handoff-clear</pre></div>
 
-      <div class="pane" id="c-comm" hidden><pre><span class="c-cm">Peer help and the unified inbox long-poll.</span>
+      <div class="pane" id="c-comm" hidden><pre><span class="c-cm">Peer help and durable mail are separate.</span>
 
-brains-ai inbox-wait <span class="c-fl">--session</span> &lt;id&gt;   <span class="c-cm"># block until mail or peer work</span>
+brains-ai inbox-wait <span class="c-fl">--session</span> &lt;id&gt;   <span class="c-cm"># wait for claimable peer help, not mail</span>
+brains-ai mailbox inbox <span class="c-fl">--help</span>        <span class="c-cm"># durable inbox options and binding proof</span>
 
-brains-ai help-file <span class="c-fl">--subject</span> <span class="c-st">"review this migration"</span>
-brains-ai help-claim / help-answer / help-release
-brains-ai help-wait / help-get / help-list / help-cancel
+brains-ai help-file <span class="c-fl">--subject</span> <span class="c-st">"review this migration"</span> <span class="c-fl">--question</span> <span class="c-st">"Does the migration preserve existing rows?"</span>
+                                      <span class="c-cm"># add requester, peer, and lifetime as below</span>
+brains-ai help-claim-code &lt;code&gt; <span class="c-fl">--session</span> &lt;id&gt;
+                                      <span class="c-cm"># accept exactly this code, without waiting</span>
+brains-ai help-claim <span class="c-fl">--session</span> &lt;id&gt;   <span class="c-cm"># wait for and claim oldest eligible help</span>
+brains-ai help-get &lt;code&gt; <span class="c-fl">--session</span> &lt;id&gt;
+brains-ai help-wait &lt;code&gt; <span class="c-fl">--session</span> &lt;id&gt;
+                                      <span class="c-cm"># wait for a result; timeout does not cancel</span>
+brains-ai help-answer &lt;code&gt; <span class="c-fl">--session</span> &lt;id&gt; <span class="c-fl">--answer</span> &lt;text&gt; <span class="c-fl">--evidence</span> &lt;text&gt;
+brains-ai help-release &lt;code&gt; <span class="c-fl">--session</span> &lt;id&gt;
+brains-ai help-cancel &lt;code&gt; <span class="c-fl">--session</span> &lt;requester-id&gt;
+brains-ai help-list
 
-brains-ai search-repo <span class="c-fl">-q</span> <span class="c-st">"migration contract"</span>
+brains-ai search-repo <span class="c-st">"migration contract"</span> <span class="c-fl">--path</span> .
                                       <span class="c-cm"># bounded, non-semantic lookup</span></pre></div>
 
       <div class="pane" id="c-gov" hidden><pre><span class="c-cm">Human decisions and the evidence trail.</span>
 
-brains-ai decision-file <span class="c-fl">--title</span> <span class="c-st">"bump to 1.4.0?"</span>
+brains-ai decision-file <span class="c-fl">--title</span> <span class="c-st">"publish the next release?"</span>
 brains-ai decision-resolve <span class="c-fl">--chosen</span> yes
 brains-ai decision-route / decision-escalate / decision-list
 
@@ -650,8 +688,11 @@ never written into the file.</span></pre></div>
       <span class="ico">▲</span>
       <p>
         <strong>Background service is opt-in.</strong> Configure Task Scheduler, launchd, or
-        systemd-user to start Brains at user login according to your OS configuration.
-        Reboot persistence has not been verified on every platform. Follow the setup guidance in
+        systemd-user according to your OS configuration. After upgrading on Windows, reinstall
+        the existing task with <code>brains-ai service install</code> to refresh its state-directory
+        binding and runner; preserve any custom label and port options, then check
+        <code>brains-ai service status</code>. A native manager cycle does not establish login
+        or reboot persistence. Follow the setup guidance in
         <a href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener">Operations</a>.
       </p>
     </div>
@@ -685,6 +726,40 @@ never written into the file.</span></pre></div>
         <p>Record what changed, what remains, and any blockers. The next session reads the handoff and continues the work.</p>
       </div>
     </div>
+    <div class="card term">
+      <div class="card-head"><span>peer review: inspect, then accept the exact request</span></div>
+      <pre><span class="c-cm"># Requester: file for one peer with a five-minute open lifetime.</span>
+brains-ai help-file <span class="c-fl">--subject</span> <span class="c-st">"Review the migration"</span> <span class="c-fl">--question</span> <span class="c-st">"Are existing rows preserved?"</span> <span class="c-fl">--from-session</span> &lt;requester-id&gt; <span class="c-fl">--to-session</span> &lt;peer-id&gt; <span class="c-fl">--timeout-ms</span> 300000
+
+<span class="c-cm"># Peer: wait for help, then use the returned code instead of HR-example.</span>
+brains-ai inbox-wait <span class="c-fl">--session</span> &lt;peer-id&gt;
+brains-ai help-get HR-example <span class="c-fl">--session</span> &lt;peer-id&gt;
+brains-ai help-claim-code HR-example <span class="c-fl">--session</span> &lt;peer-id&gt;
+
+<span class="c-cm"># After review: supply the actual findings and supporting evidence.</span>
+brains-ai help-answer HR-example <span class="c-fl">--session</span> &lt;peer-id&gt; <span class="c-fl">--answer</span> &lt;findings&gt; <span class="c-fl">--evidence</span> &lt;evidence&gt;</pre>
+    </div>
+    <p style="color:var(--muted);font-size:14px"><code>help-claim-code</code> accepts only the supplied request; it never substitutes queued work or launches a worker. A same-owner retry does not extend the claim. <code>inbox-wait</code> only waits for claimable peer help, not durable mail, and does not accept work. Read mail separately through <code>mailbox inbox</code> with the required Session attachment and binding proof. See the <a href="https://github.com/xibodev/brains-ai/blob/main/docs/GUIDE.md#two-agents-without-collisions">two-agent guide</a> for ownership, targeting, and timeout rules.</p>
+  </div>
+</section>
+
+<!-- RELEASES -->
+<section id="releases" aria-labelledby="releases-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Release notes</div>
+      <h2 id="releases-title">What's new in Brains</h2>
+      <p>Recent releases, with the changes that matter when you coordinate agents and run Brains locally. Full notes and downloads live on GitHub.</p>
+    </div>
+    <!-- brains:release-history:start -->
+<article class="release-entry" id="release-v1-5-0"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.5.0">v1.5.0</a></h3><time datetime="2026-09-08">Sep 8, 2026</time><span class="release-badge">Latest release</span></div><div class="release-details"><ul><li>Exact peer-help acceptance: claim_help_request and the brains-ai help-claim-code CLI accept one specified request with atomic ownership checks. Same-owner retries return the existing claim without renewing its deadline or accepting different work.</li><li>Windows background services bind BRAINS_STATE_DIR before importing Brains and use task-owned supervisor recovery. Stop ends the runner before owned-child cleanup, with native qualification checking that the service stays stopped through the recovery window.</li><li>Safer macOS service cleanup verifies process identity before signalling and handles PID reuse without stopping an unrelated process. Uncertain identity or changed PID records fail closed rather than being discarded.</li><li>Native service lifecycle qualification covers Windows, macOS, and Linux manager cycles and cleanup for the release candidate. Publication remains human-approved and tied to the qualified source commit; manager-cycle evidence is not a claim of login or reboot persistence.</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.5.0">Full release notes</a></div></article>
+<article class="release-entry" id="release-v1-4-0"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.4.0">v1.4.0</a></h3><time datetime="2026-09-06">Sep 6, 2026</time></div><div class="release-details"><ul><li>Core backlog completion for the next release candidate by @mekjr1 in https://github.com/xibodev/brains-ai/pull/19</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.4.0">Full release notes</a></div></article>
+<article class="release-entry" id="release-v1-3-1"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.3.1">v1.3.1</a></h3><time datetime="2026-09-02">Sep 2, 2026</time></div><div class="release-details"><ul><li>Run Windows service without a console by @mekjr1 in https://github.com/xibodev/brains-ai/pull/17</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.3.1">Full release notes</a></div></article>
+<article class="release-entry" id="release-v1-3-0"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.3.0">v1.3.0</a></h3><time datetime="2026-09-01">Sep 1, 2026</time></div><div class="release-details"><ul><li>Make service dry runs deterministic by @mekjr1 in https://github.com/xibodev/brains-ai/pull/3</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.3.0">Full release notes</a></div></article>
+<article class="release-entry" id="release-v1-2-0"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.2.0">v1.2.0</a></h3><time datetime="2026-08-26">Aug 26, 2026</time></div><div class="release-details"><ul><li>Full Changelog: https://github.com/xibodev/brains-ai/compare/v1.1.4...v1.2.0</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.2.0">Full release notes</a></div></article>
+<article class="release-entry" id="release-v1-1-4"><div class="release-meta"><h3><a href="https://github.com/xibodev/brains-ai/releases/tag/v1.1.4">v1.1.4</a></h3><time datetime="2026-08-24">Aug 24, 2026</time></div><div class="release-details"><ul><li>Full Changelog: https://github.com/xibodev/brains-ai/compare/v1.1.3...v1.1.4</li></ul><a class="release-link" href="https://github.com/xibodev/brains-ai/releases/tag/v1.1.4">Full release notes</a></div></article>
+<!-- brains:release-history:end -->
+    <p class="release-archive"><a href="https://github.com/xibodev/brains-ai/releases">Browse all GitHub Releases</a> for the complete history, downloads, and upgrade notes.</p>
   </div>
 </section>
 
@@ -701,7 +776,7 @@ never written into the file.</span></pre></div>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/GUIDE.md" target="_blank" rel="noopener"><div class="ic">📗</div><h3>Using Brains</h3><p>The model, and two walkthroughs: one agent with continuity, two agents sharing work.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/ARCHITECTURE.md" target="_blank" rel="noopener"><div class="ic">🏛️</div><h3>Architecture</h3><p>How the control plane, storage, and surfaces fit together.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/OPERATIONS.md" target="_blank" rel="noopener"><div class="ic">🛠️</div><h3>Operations</h3><p>Running, wiring, service posture, state, and recovery.</p></a>
-      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/MCP.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>MCP surface</h3><p>The 73 tools your agents can call, grouped by what they do.</p></a>
+      <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/docs/MCP.md" target="_blank" rel="noopener"><div class="ic">🧭</div><h3>MCP surface</h3><p>The <!-- brains:mcp-count:start -->74<!-- brains:mcp-count:end --> tools your agents can call, grouped by what they do.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><div class="ic">🔍</div><h3>Contributing</h3><p>How to change behaviour, and where the supported surface is defined.</p></a>
       <a class="feat" href="https://github.com/xibodev/brains-ai/blob/main/SECURITY.md" target="_blank" rel="noopener"><div class="ic">🔐</div><h3>Security</h3><p>Security guidance and how to report a vulnerability.</p></a>
     </div>
@@ -713,6 +788,7 @@ never written into the file.</span></pre></div>
     <span>Brains · distributed as <code style="color:var(--accent)">brains-ai</code> · MIT License</span>
     <span class="sp">
       <a href="https://github.com/xibodev/brains-ai" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/xibodev/brains-ai/releases" target="_blank" rel="noopener">GitHub Releases</a>
       <a href="https://pypi.org/project/brains-ai/" target="_blank" rel="noopener">PyPI</a>
       <a href="https://github.com/xibodev" target="_blank" rel="noopener">xibodev</a>
     </span>
