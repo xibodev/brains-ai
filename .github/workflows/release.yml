@@ -191,3 +191,12 @@ jobs:
             --generate-notes \
             $PRE \
             dist/*
+
+  site:
+    name: sync published release site
+    needs: release
+    permissions:
+      contents: write
+      pages: write
+    # Releases created with GITHUB_TOKEN do not dispatch release-event workflows.
+    uses: ./.github/workflows/sync-release-site.yml

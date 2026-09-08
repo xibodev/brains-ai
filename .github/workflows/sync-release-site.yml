@@ -1,0 +1,115 @@
+name: sync release site
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: release-site-publish
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check out static site
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: site
+      - name: Fetch published release facts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$RUNNER_TEMP/release-pages.json"
+          jq 'add' "$RUNNER_TEMP/release-pages.json" > "$RUNNER_TEMP/releases.json"
+          tag="$(PYTHONPATH=scripts python -c 'import json, os; from sync_release_site import stable_releases; print(stable_releases(json.load(open(os.environ["RUNNER_TEMP"] + "/releases.json")), os.environ["GITHUB_REPOSITORY"])[0]["tag_name"])')"
+          [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          gh api "repos/${GITHUB_REPOSITORY}/contents/pyproject.toml?ref=${tag}" --jq .content | base64 --decode > "$RUNNER_TEMP/tagged-pyproject.toml"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/src/brains/capabilities.py?ref=${tag}" --jq .content | base64 --decode > "$RUNNER_TEMP/tagged-capabilities.py"
+      - name: Generate static release history
+        run: |
+          python scripts/sync_release_site.py \
+            --site site/index.html \
+            --releases "$RUNNER_TEMP/releases.json" \
+            --project "$RUNNER_TEMP/tagged-pyproject.toml" \
+            --capabilities "$RUNNER_TEMP/tagged-capabilities.py" \
+            --repository "$GITHUB_REPOSITORY"
+      - name: Publish only generated site facts
+        working-directory: site
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- index.html; then
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --only index.html -m 'docs: sync published release site'
+            git push origin HEAD:gh-pages
+          fi
+      # GITHUB_TOKEN commits do not trigger a branch Pages build. Also request
+      # one when unchanged so a manual run can repair a previous build failure.
+      - name: Request and verify GitHub Pages rebuild
+        timeout-minutes: 8
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          target="$(git -C site rev-parse HEAD)"
+          [[ "$target" =~ ^[0-9a-f]{40}$ ]]
+          builds="repos/${GITHUB_REPOSITORY}/pages/builds"
+          prefix="https://api.github.com/${builds}/"
+          build_path() {
+            local url="$1" id
+            [[ "$url" == "$prefix"* ]] || return 1
+            id="${url#"$prefix"}"
+            [[ "$id" =~ ^[0-9]+$ || ( "${2:-}" == latest && "$id" == latest ) ]] || return 1
+            printf '%s/%s' "$builds" "$id"
+          }
+          previous="$(timeout 20s gh api "$builds" --jq 'map(.url)')"
+          requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          response="$(timeout 20s gh api --method POST "$builds")"
+          endpoint="$(build_path "$(jq -er '.url' <<< "$response")" latest)"
+          for attempt in {1..60}; do
+            build="$(timeout 20s gh api "$endpoint")"
+            url="$(jq -er '.url' <<< "$build")"
+            pinned="$(build_path "$url")"
+            created="$(jq -er '.created_at' <<< "$build")"
+            [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
+            # The latest alias may still show the old build immediately after POST.
+            if jq -e --arg url "$url" 'index($url) != null' <<< "$previous" > /dev/null || [[ "$created" < "$requested_at" ]]; then
+              sleep 5
+              continue
+            fi
+            if [[ "$(jq -er '.commit' <<< "$build")" != "$target" ]]; then
+              echo '::error::Pages build targets a different commit'
+              exit 1
+            fi
+            if [[ "$endpoint" != "$builds/latest" && "$endpoint" != "$pinned" ]]; then
+              echo '::error::Pages build identity changed'
+              exit 1
+            fi
+            if [[ "$endpoint" == "$builds/latest" ]]; then
+              endpoint="$pinned"
+              continue
+            fi
+            case "$(jq -er '.status' <<< "$build")" in
+              built) echo "Pages built verified commit $target"; exit 0 ;;
+              queued|building) sleep 5 ;;
+              *) echo '::error::Pages build failed or returned an unknown status'; exit 1 ;;
+            esac
+          done
+          echo '::error::Timed out waiting for the requested Pages commit'
+          exit 1

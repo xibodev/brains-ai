@@ -557,6 +557,76 @@ The execution boundary is in-process. It governs paths that use it; it does not 
 arbitrary commands or network calls made directly by an external coding-agent harness.
 Record such effects as external/unverified rather than governed.
 
+## Website maintenance
+
+The [public website](https://xibodev.github.io/brains-ai/) is static `index.html` on
+`gh-pages`. GitHub Releases are the canonical release history; the browser does not
+fetch release data. `scripts/sync_release_site.py` changes only these marked regions:
+
+- One `<!-- brains:release-history:start -->` / `<!-- brains:release-history:end -->` pair.
+- One or two `<!-- brains:release-version:start -->` / `<!-- brains:release-version:end -->` pairs, for hero/install version text without the `v` prefix.
+- One or two `<!-- brains:mcp-count:start -->` / `<!-- brains:mcp-count:end -->` pairs.
+
+The latest version is the highest published stable `vX.Y.Z`, excluding drafts,
+prereleases, and nonstable tags. It appears first; up to five other stable releases
+follow by `published_at` descending. Dates are actual UTC publication dates. Titles
+and highlights come from release names and `## Highlights` sections, falling back
+to the first meaningful body line or just the canonical release link. Markdown is
+reduced to escaped plain text, never rendered as trusted HTML. Highlights are limited
+to six entries of 500 characters each.
+HTML comments (including an unterminated comment's remainder) and backtick/tilde
+fenced blocks are removed before finding Highlights or choosing fallback text.
+
+The version must match `project.version` in that release tag's `pyproject.toml`.
+The MCP count is read statically from the literal `CORE_MCP_TOOLS` set in that same
+tag's `src/brains/capabilities.py`, without importing or executing Brains. Unreleased
+`main` versions and documentation counts are not release facts. Missing or malformed
+markers, invalid canonical URLs, empty stable history, or mismatched sources fail
+before an atomic file replacement; identical input leaves the file unchanged.
+
+`.github/workflows/sync-release-site.yml` runs manually and on release publication or
+edits. `release.yml` also calls it explicitly after GitHub Release creation, because
+events created by `GITHUB_TOKEN` do not start another event-triggered workflow. The
+sync checks out trusted automation from `main`, fetches all release pages and the
+selected tag's sources, and commits only `gh-pages/index.html`. Publication is
+serialized, never force-pushes, and a concurrent branch change fails visibly rather
+than overwriting another edit. Rerun after resolving a conflict.
+
+The workflow needs `contents: write` and `pages: write`. It explicitly requests a
+legacy Pages build after a successful push, including unchanged manual repair runs:
+`GITHUB_TOKEN` pushes alone do not trigger branch-based Pages builds. It does not
+change Pages settings. The repository must already use `gh-pages` as its Pages source;
+a rejected build request is a visible workflow failure, not successful deployment.
+After requesting a build, the workflow polls at most 60 times, five seconds apart,
+with a 20-second API-call timeout and an eight-minute step deadline. The API's
+`latest` alias is accepted only until a new build is identified: its URL must be on
+`api.github.com` under this repository's Pages builds, its creation time must be at
+or after the request, and it must not be in the pre-request build list. Its commit
+must equal the published site checkout's exact SHA. Polling then pins the numeric
+build URL and succeeds only on `built` for that SHA; failure, another revision,
+changed build identity, or timeout fails the workflow. Workflow concurrency does
+not serialize unrelated Pages publishers, and a verified build does not prevent
+a later external deployment from replacing the site.
+
+Repair and verify with GitHub CLI:
+
+```text
+gh workflow run sync-release-site.yml --ref main --repo xibodev/brains-ai
+gh run list --workflow sync-release-site.yml --repo xibodev/brains-ai
+gh api repos/xibodev/brains-ai/pages/builds/latest
+```
+
+A healthy result is a successful sync run and a Pages build with `status: built`.
+Review the live site's marked version/count against the selected release's tagged
+sources. For an offline generation check with downloaded inputs:
+
+```text
+python scripts/sync_release_site.py --site site/index.html --releases releases.json --project tagged-pyproject.toml --capabilities tagged-capabilities.py --repository xibodev/brains-ai
+```
+
+Keep layout and copy edits outside managed regions. Edit canonical GitHub release
+notes to change generated highlights, then rerun the sync if necessary.
+
 ## Validation isolation
 
 Run tests that can alter service managers, client configuration, state, databases, or
