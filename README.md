@@ -51,9 +51,16 @@ New here? Start with the [guide](docs/GUIDE.md).
 
 Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
 
-Brains deliberately does not route models, index code semantically, or bridge chat
-applications — your harness already has provider logins and your editor already indexes
-code. The [product brief](docs/product/PRODUCT_BRIEF.md) explains each decision.
+Model routing, semantic retrieval, and chat bridges are not supported today. The
+[product brief](docs/product/PRODUCT_BRIEF.md) distinguishes planned direction from
+non-goals and documents retained internal paths without making them supported features.
+
+## Planning and contributions
+
+[GitHub Issues](https://github.com/xibodev/brains-ai/issues) define work outcomes and
+acceptance criteria. The [Brains Project](https://github.com/orgs/xibodev/projects/1)
+is the sole source for priority, order, and status; these are not duplicated in Markdown
+backlogs or external copies. See [Contributing](CONTRIBUTING.md) before starting work.
 
 ## Documentation
 

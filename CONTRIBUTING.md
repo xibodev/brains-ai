@@ -4,11 +4,14 @@
 
 Before changing behavior:
 
-1. Read the [Product Brief](docs/product/PRODUCT_BRIEF.md) so a change lands inside the
-   supported scope rather than reopening something deliberately out of it.
+1. Read the [Product Brief](docs/product/PRODUCT_BRIEF.md) to distinguish supported
+   behavior, intended direction, and non-goals.
 2. Read [Using Brains](docs/GUIDE.md) and the [MCP surface](docs/MCP.md) for the behavior
    an operator and an agent already rely on.
-3. Check the repository's issues for existing work on the same area.
+3. Check [GitHub Issues](https://github.com/xibodev/brains-ai/issues) for existing work
+   and acceptance criteria, and the [Brains Project](https://github.com/orgs/xibodev/projects/1)
+   for priority, order, and status. Keep those planning fields only in the Project,
+   not in Markdown backlogs or external copies.
 
 The supported surface is defined in code, not prose: `CORE_MCP_TOOLS` and the
 `WITHDRAWN_*` sets in `src/brains/capabilities.py`, enforced by
@@ -76,9 +79,11 @@ suite with:
 pwsh -File scripts/run_docker_e2e.ps1
 ```
 
-Use synthetic state and credentials. Assert the visible product outcome, expected error
-and authorization states, reconnect/recovery behavior, and the relevant `J*`/`AC-*`
-contract. Do not commit screenshots or reports as current product proof.
+Use synthetic state and credentials. Assert the issue's acceptance criteria, visible
+product outcome, expected error and authorization states, and reconnect/recovery
+behavior. Preserve relevant existing journey tests; new work does not require a separate
+Feature or Journey registry entry. Do not commit screenshots or reports as current
+product proof.
 
 ## Supported code map
 
@@ -100,7 +105,7 @@ presence is not an activation or support promise.
 ## Change rules
 
 - Keep one concern per pull request and explain the user-visible outcome.
-- Map behavior changes to stable Feature, Journey, and acceptance identifiers.
+- Link behavior changes to an issue with an explicit outcome and acceptance criteria.
 - Add the smallest automated contract that proves both success and failure behavior.
 - Preserve authentication and Workspace scope on protected HTTP, realtime, MCP, and
   background paths.

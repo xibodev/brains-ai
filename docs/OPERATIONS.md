@@ -7,8 +7,8 @@ presence is E1 evidence only. This runbook does not establish that an installed 
 external connection, recovery drill, container, or deployment is operating.
 
 The supported product is Workspace-first coordination, human governance, SQLite
-operations, and service/wiring posture. The following are withdrawn and absent from
-normal discovery and activation:
+operations, and service/wiring posture. The following are withdrawn from the supported
+CLI, MCP, HTTP, and browser surfaces:
 
 - Runtime enrollment/execution, Personas, Pods, Projects, Issues, execution onboarding,
   execution Session supervision, running-agent chat, and Runtime process stop;
@@ -21,8 +21,20 @@ normal discovery and activation:
 - legacy dashboard and configuration HTML; `/admin/login` and `/admin/logout` remain
   only for the supported SPA cookie lifecycle.
 
-No environment switch, pip extra, direct URL, or explicit tool allowlist activates a
-withdrawn capability.
+Environment switches, pip extras, direct URLs, and explicit MCP tool selections do not
+restore those withdrawn public surfaces. This is not a guarantee that all internal
+activation paths have been removed.
+
+Session registration still calls a best-effort background prewarm path. The settings
+`prewarm_index_on_session`, `graph_auto_build`, and `semantic_auto_embed` default to
+true. For an eligible Workspace directory, the worker checks stored index state and
+can build a missing code graph. Embedding additionally requires a configured
+`embed_model` (empty by default), a missing repository source, and the file-count gate
+to pass. This residual path does not make semantic retrieval or code graphs supported;
+its presence alone does not establish that indexing or a network request occurred.
+Set `BRAINS_PREWARM_INDEX_ON_SESSION=0` in the environment of each process that
+registers Sessions, then restart those processes, to suppress scheduling through this
+path. This does not remove existing index state or enable withdrawn tools.
 
 ## Install and start
 
@@ -47,9 +59,11 @@ of URLs, logs, issues, fixtures, and repositories.
 
 Repository checks exercise exact-wheel installation, service-definition rendering,
 reversible wiring, and hermetic lifecycle behavior. An exact candidate is not qualified
-until the fail-closed aggregate accepts its required native and container results. Real
-native manager persistence and restoration across the supported host matrix remain
-open. Review the service section below before opting into `--service`.
+until the fail-closed aggregate accepts its required native and container results.
+Successful native manager-cycle and cleanup evidence qualifies the tested candidate
+and host, not login or reboot persistence. Reboot persistence remains unknown without
+the separate machine-observed reboot probe. Review the service section below before
+opting into `--service`.
 
 The supported installed executable is `brains-ai`. Helpers that invoke `brains` are
 obsolete.
@@ -665,4 +679,5 @@ restoration before discarding the environment.
 
 Candidate-specific validation follows [Quality gates](QUALITY_GATES.md). Work that is
 intended but unbuilt is tracked in the repository's issues; the
-[Product Brief](product/PRODUCT_BRIEF.md) states what is deliberately out of scope.
+[Product Brief](product/PRODUCT_BRIEF.md) distinguishes current support, intended
+direction, and non-goals.

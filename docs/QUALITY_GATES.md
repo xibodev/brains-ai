@@ -156,9 +156,11 @@ These are recurring release conditions, not backlog items or a dated evidence di
 
 ## Acceptance
 
-Acceptance tests map stable `F*`, `B*`, `J*`, `O*`, and `AC-*` identifiers to observable
-user outcomes. Passing lower-level tests does not replace an end-to-end acceptance check
-when a change crosses CLI, MCP, browser, persistence, or service boundaries.
+Acceptance tests must prove the linked issue's acceptance criteria and observable user
+outcomes. Existing `F*`, `B*`, `J*`, `O*`, and `AC-*` test identifiers remain useful
+references, not a requirement to maintain a separate feature registry. Passing lower-level
+tests does not replace an end-to-end acceptance check when a change crosses CLI, MCP,
+browser, persistence, or service boundaries.
 
 ## Documentation
 
@@ -166,5 +168,7 @@ Public documentation states current supported behavior, target contracts, and un
 evidence gaps separately. Record a command and its healthy result instead of a manual
 verification timestamp, commit hash, test count, screenshot pack, or delivery diary.
 
-The core and frozen backlogs contain actions only. Completed work is removed; Git history
-retains its disposition.
+[GitHub Issues](https://github.com/xibodev/brains-ai/issues) hold outcomes, acceptance
+criteria, and delivery evidence. Keep priority, order, and status only in the
+[Brains Project](https://github.com/orgs/xibodev/projects/1), not in Markdown backlog
+documents or external shadow copies.

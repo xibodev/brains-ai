@@ -58,24 +58,42 @@ It is not a team server. It has no multi-user model today.
   74 MCP tools across four supported harnesses.
 - **Repository lookup** — bounded text search. Not semantic.
 
-## Not in scope
+## Not supported today
 
-These are decisions, not gaps. Each has a reason:
+Unsupported does not always mean a permanent non-goal. Planned scope is defined in
+[GitHub Issues](https://github.com/xibodev/brains-ai/issues); retained code alone does
+not supply it.
 
-| Not in scope | Why |
+| Capability | Boundary |
 |---|---|
-| Model routing or a model gateway | Every supported harness already has its own provider login. Brains routing models would duplicate it and put your credentials somewhere they need not be. |
-| Semantic retrieval and code graphs | Brains coordinates agents; it is not a search engine. Your harness and editor already index code. |
-| Postgres and other backends | SQLite is the right store for a single local operator: no server, one file, and a backup that is a copy. |
-| Chat bridges — Slack, Telegram, WhatsApp | Brains coordinates agents with each other, not humans in chat applications. |
+| Semantic retrieval and knowledge/code relationships | Planned in [#35](https://github.com/xibodev/brains-ai/issues/35) and [#39](https://github.com/xibodev/brains-ai/issues/39), not delivered by enabling retained indexers or graphs. |
+| Model routing or a model gateway | Not adopted. Each supported harness owns its provider login; the planned assistant is not a model gateway. |
+| Postgres and other backends | Not adopted. SQLite remains the supported store for one local operator. |
+| Telemetry export | Not adopted and not a prerequisite for planned retrieval or coordination. |
+| Chat bridges — Slack, Telegram, WhatsApp | Not adopted. Optional human-assistant integration is distinct from reviving these bridges. |
 | Managed skills and prompt libraries | Each harness has its own. Brains does not compete with them. |
-| Autonomous outward action | Anything that reaches the outside world stays behind an explicit human decision. |
+| Autonomous outward action | Not adopted. Outward effects remain human-governed. |
+
+These scope decisions do not mean every internal activation path is absent. Session
+registration still reaches best-effort graph/embedding prewarm, and welcome hints can
+mention withdrawn tools. Those tools remain unavailable through MCP. See
+[Operations](../OPERATIONS.md#scope-and-proof-boundary) for the prewarm conditions and
+the existing setting that suppresses that path.
 
 ## Intended, not built
 
-Multi-operator access, GitHub event linkage, scheduled recurring work, and external
-evidence retention are intended and not implemented. They are tracked as issues. Nothing
-in the installed product advertises or partially exposes them.
+The intended direction expands the coordination core toward a semantic knowledge base
+and evidence-linked knowledge relationships, conversational work coordination, bounded
+specialist workers, and remote runners with durable outbound assignments. Temporary
+guests would receive narrowly scoped, time-limited collaboration access, not a full
+multi-organization model. Optional human-assistant integration, GitHub event linkage,
+scheduled recurring work, and external evidence retention extend that direction.
+
+These are planned capabilities, not currently supported behavior or release commitments.
+The local execution boundary remains cooperative; guest isolation and worker containment
+must not be inferred from existing code. Issues own scope and acceptance criteria;
+the [Brains Project](https://github.com/orgs/xibodev/projects/1) alone owns priority,
+order, and status. This brief is not a planning registry or delivery schedule.
 
 ## What Brains does not promise
 
@@ -101,9 +119,11 @@ Brains is working when:
 5. The operator can answer asks, approve or refuse governed actions, and tell a governed
    effect apart from an external claim.
 6. SQLite state can be diagnosed, backed up, restored, and rolled back.
-7. Anything not in scope has no activation path in the installed product.
+7. Withdrawn public surfaces remain unavailable, and residual internal activation paths
+   are documented as limitations rather than supported capabilities.
 
-Current work is tracked in the repository's issues.
+Current work is defined in [GitHub Issues](https://github.com/xibodev/brains-ai/issues)
+and organized in the [Brains Project](https://github.com/orgs/xibodev/projects/1).
 
 ## Further reading
 

@@ -1,8 +1,9 @@
 # MCP surface
 
 Brains exposes 74 tools over the Model Context Protocol, all prefixed `brains_`. The
-registry is filtered against a fixed allowlist at startup, so a tool that is not listed
-here has no discovery or activation path.
+registry is filtered against `CORE_MCP_TOOLS` in `src/brains/capabilities.py` at startup.
+Tools outside that allowlist are neither registered nor callable through MCP. Session
+welcome hints can still mention withdrawn tools; those hints do not make them available.
 
 ## Connecting
 
@@ -44,8 +45,6 @@ A Session is a durable coordination handle, not a process. It survives tool rest
 | `find_brain_sessions` | Reverse lookup from a tool-side id |
 | `list_tool_session_links` | Every tool incarnation that served a Session |
 | `link_session_successor` | Chain an ended handle to its replacement |
-| `list_live_agents` | Live Sessions across every Workspace |
-| `list_other_operators_active` | Minimal cross-operator presence |
 
 ## Continuity
 
@@ -55,7 +54,6 @@ A Session is a durable coordination handle, not a process. It survives tool rest
 | `list_checkpoints` / `latest_checkpoint` | Read them back |
 | `set_handoff` / `pick_handoff` | Leave and take the context for stopping and starting |
 | `clear_handoff` / `list_handoffs` | Manage them |
-| `capture_snapshot` / `latest_snapshot` | Store and read a structured snapshot |
 
 ## Work
 
@@ -84,7 +82,7 @@ messages; read those through `mailbox_inbox` and the adapter's supported notific
 | `mailbox_phonebook` / `mailbox_lookup` | Discover addresses |
 | `mailbox_notification_take` / `mailbox_notification_settle` | Claim and settle a wake |
 | `mailbox_native_id` / `mailbox_binding_reconcile` | Identity and rebinding |
-| `mailbox_managed_create` / `_rotate` / `_recover` / `_revoke` | Managed binding lifecycle |
+| `mailbox_managed_create` / `mailbox_managed_rotate` / `mailbox_managed_recover` / `mailbox_managed_revoke` | Managed binding lifecycle |
 
 The durable store is authoritative. A live wake is best effort and never loses mail.
 
@@ -177,7 +175,7 @@ states or automatic worker launch are implied. Evidence is mandatory, not proof 
 ## What is not here
 
 There are no MCP tools for model routing, semantic retrieval, code graphs, runtime
-execution, or chat bridges. Those are outside what Brains does — see the
+execution, or chat bridges. Those are outside the current supported surface — see the
 [product brief](product/PRODUCT_BRIEF.md).
 
 Calling a tool that is not on the allowlist fails closed. It is not hidden behind a flag.
