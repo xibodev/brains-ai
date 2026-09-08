@@ -15,6 +15,7 @@ can be unit-tested on any host OS; registration shells out to ``schtasks``.
 from __future__ import annotations
 
 import csv
+import subprocess
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -30,9 +31,10 @@ from brains.service.common import (
 )
 
 
-def definition_path(label: str = SERVICE_LABEL) -> Path:
+def definition_path(label: str = SERVICE_LABEL, *, root: str | Path | None = None) -> Path:
     """Where we stash the rendered XML (for reference + idempotency)."""
-    return state_dir() / "service" / f"{native_service_identity('windows', label)}.xml"
+    base = state_dir() if root is None else Path(root)
+    return base / "service" / f"{native_service_identity('windows', label)}.xml"
 
 
 def render_task_xml(spec: ServiceSpec) -> str:
@@ -41,9 +43,18 @@ def render_task_xml(spec: ServiceSpec) -> str:
     Encodes: LogonTrigger for ``spec.user``; an interactive-token principal at
     least-privilege; restart-on-failure (every 1 minute, up to 9999 times); no
     execution time limit; hidden; single-instance; and the verified windowless
-    ``pythonw -m brains serve-all`` action with a neutral working directory.
+    ``pythonw`` action with a neutral working directory. A standard-library
+    bootstrap sets the persisted state root before importing Brains in-process.
     """
-    arguments = " ".join(spec.args)
+    if tuple(spec.args[:2]) != ("-m", "brains"):
+        raise ValueError("Windows service arguments must start with '-m brains'")
+    # Task Scheduler does not inherit the installing shell's environment.
+    bootstrap = (
+        "import os,runpy; "
+        f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
+        "runpy.run_module('brains',run_name='__main__',alter_sys=True)"
+    )
+    arguments = subprocess.list2cmdline(["-c", bootstrap, *spec.args[2:]])
     user = escape(spec.user)
     task_name = native_service_identity("windows", spec.label)
     return f"""<?xml version="1.0" encoding="UTF-16"?>
@@ -102,7 +113,7 @@ def render_task_xml(spec: ServiceSpec) -> str:
 def install(spec: ServiceSpec, *, dry_run: bool = False) -> dict:
     xml = render_task_xml(spec)
     task_name = native_service_identity("windows", spec.label)
-    path = definition_path(spec.label)
+    path = definition_path(spec.label, root=spec.state_dir)
     register = ["schtasks", "/Create", "/TN", task_name, "/XML", str(path), "/F"]
     report: dict = {
         "platform": "windows",

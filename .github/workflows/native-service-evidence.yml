@@ -91,19 +91,38 @@ jobs:
         run: npm install --global opencode-ai@1.18.25
       - name: Build and install the exact candidate in a fresh private environment
         shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.package.outputs.manifest-sha256 }}
         run: |
           set -euo pipefail
-          artifact="$RUNNER_TEMP/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
-          runtime="$RUNNER_TEMP/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
-          venv="$RUNNER_TEMP/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          # Normalise Windows paths for MSYS tools; use Python hashing on macOS.
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          artifact="$temp_dir/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          runtime="$temp_dir/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          venv="$temp_dir/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
           test ! -e "$artifact"
           test ! -e "$runtime"
           test ! -e "$venv"
           mkdir "$artifact"
-          wheel_count="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          wheel_count="$(find "$temp_dir/native-service-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
           test "$wheel_count" = 1
-          test "$(sha256sum "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" = "${{ needs.package.outputs.manifest-sha256 }}"
-          wheel="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+
+          dist = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-service-dist"
+          manifest = dist / "native-wakeup-package-provenance.json"
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_MANIFEST_SHA256"]
+          if digest != expected:
+              raise SystemExit("candidate package provenance does not match the built manifest")
+          PY
+          wheel="$(find "$temp_dir/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
           python -m venv "$venv"
           if test -x "$venv/Scripts/python.exe"; then
             probe_python="$venv/Scripts/python.exe"
@@ -125,9 +144,13 @@ jobs:
           tool_paths="$("$probe_python" -c 'import json,os,shutil; names=os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(","); values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
-          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$temp_dir/native-service-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+          # Python reads these environment paths directly, without MSYS argv conversion.
+          if command -v cygpath >/dev/null 2>&1; then
+            runtime="$(cygpath -w "$runtime")"
+          fi
           echo "BRAINS_NATIVE_EVIDENCE_ROOT=$runtime" >> "$GITHUB_ENV"
           echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"

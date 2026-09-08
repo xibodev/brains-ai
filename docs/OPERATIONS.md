@@ -212,8 +212,29 @@ read-only and needs no preparation.
 
 User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd
 user services. Repository checks exercise renderer and hermetic backend behavior. Each
-release candidate separately requires the disposable native lifecycle and reboot-boundary
-evidence defined in [Quality gates](QUALITY_GATES.md).
+release candidate separately requires the disposable real service-manager cycle and
+cleanup evidence defined in [Quality gates](QUALITY_GATES.md). Actual reboot testing is
+optional. A manager cycle does not establish login or reboot persistence; any reboot
+claim requires a machine-observed boot transition and post-reboot verification.
+
+The guarded lifecycle probe reads native registration and the local definition separately
+and compares identity-bearing fields before mutation. Its in-process rollback is limited
+to trusted invocation context, with native teardown independent of configuration cleanup.
+After quiescence, cleanup removes only the marked journey root's accounted files and
+known mutable database/log paths. Drifted configurations, links and unknown resources
+are retained; incomplete cleanup is not passing evidence. Guard/provenance failures never
+authorize cleanup from a preexisting plan. Abrupt process death before sealing requires
+operator review, not automatic recovery from unsealed evidence. Native probes require a
+disposable single-writer account and a proven service launch environment. Windows task
+XML persists the service spec's `state_dir` in a standard-library `pythonw -c` bootstrap
+that sets `BRAINS_STATE_DIR` before importing Brains, then runs `-m brains` in the same
+process with the remaining arguments preserved. Other interpreter argument shapes are
+refused. The XML definition is stored under that spec's state directory; rendering and
+dry-run installation write nothing. Reinstall an existing task to persist its chosen
+state root. Only `BRAINS_STATE_DIR` is captured, not the installing shell's other
+environment values or secrets. An explicit `BRAINS_DB_URL` in the launch environment
+can still select a different database; state-root persistence does not override all
+external configuration or establish real login/reboot persistence.
 
 ```text
 brains-ai service status
@@ -262,8 +283,9 @@ the resulting console/MCP endpoints.
 Use `brains-ai setup --path . --service` or `brains-ai service install` only after
 reviewing the rendered definition and configuration backup. Inspect the result with
 `brains-ai service status`. Do not run a foreground `serve-all` against the same ports
-or state directory. Test install, restart, persistence, uninstall, and restoration only
-on a disposable native host. Treat successful proof for an earlier commit as stale.
+or state directory. Test install, restart, uninstall, and restoration only on a disposable
+native host. Optional reboot-persistence testing uses the same isolation and cleanup
+rules. Treat successful proof for an earlier commit as stale.
 
 ## Coordination operation
 

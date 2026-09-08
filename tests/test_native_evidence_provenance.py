@@ -6,15 +6,19 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
 import zipfile
 from pathlib import Path, PurePosixPath
+from unittest.mock import Mock
 
 import pytest
 import yaml
 
+from brains.service import linux, macos, windows
 from brains.service.common import ServiceSpec
 
 _NATIVE_EVIDENCE_PATH = Path(__file__).resolve().parents[1] / "scripts/native_evidence.py"
@@ -449,10 +453,125 @@ def test_explicit_runtime_tools_are_hashed_and_close_the_child_path(
         )
 
 
-@pytest.mark.parametrize("reuse_pid", [False, True])
+def _mock_native_response(system: str, identity: str, expected: dict, registered: bool) -> str:
+    if system == "Windows":
+        return json.dumps(
+            {"xml": expected["content"] if registered else None, "principal_matches": True}
+        )
+    if system == "Linux":
+        unit = (
+            dict(
+                line.split("=", 1)
+                for line in expected["content"].splitlines()
+                if "=" in line and not line.startswith("#")
+            )
+            if expected
+            else {}
+        )
+        command = unit.get("ExecStart", "")
+        return "\n".join(
+            f"{key}={value}"
+            for key, value in {
+                "Id": identity,
+                "LoadState": "loaded" if registered else "not-found",
+                "ActiveState": "active" if registered else "inactive",
+                "FragmentPath": expected["definition_path"] if registered else "",
+                "ExecStart": (
+                    f"{{ path={shlex.split(command)[0]} ; argv[]={command} ; "
+                    "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+                    "code=(null) ; status=0/0 }"
+                )
+                if registered
+                else "",
+                "Environment": unit.get("Environment", "") if registered else "",
+                "WorkingDirectory": unit.get("WorkingDirectory", "") if registered else "",
+                "DropInPaths": "",
+                "NeedDaemonReload": "no",
+            }.items()
+        )
+    if not registered:
+        return ""
+    plist = plistlib.loads(expected["content"].encode())
+    args = "\n".join(f"\t\t{arg}" for arg in plist["ProgramArguments"])
+    return (
+        f"gui/1000/{identity} = {{\n\tpath = {expected['definition_path']}\n"
+        f"\tprogram = {plist['ProgramArguments'][0]}\n\targuments = {{\n{args}\n\t}}\n"
+        f"\tworking directory = {plist['WorkingDirectory']}\n\tenvironment = {{\n"
+        f"\t\tBRAINS_STATE_DIR => {plist['EnvironmentVariables']['BRAINS_STATE_DIR']}\n\t}}\n}}\n"
+    )
+
+
+def _lifecycle_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    phase: str,
+    executable: Path,
+    provenance: dict | Exception,
+    *extra: str,
+) -> tuple[int, dict]:
+    monkeypatch.setattr(sys, "prefix", str(executable.parent.parent))
+    monkeypatch.setattr(
+        native_lifecycle,
+        "create_provenance",
+        Mock(side_effect=provenance)
+        if isinstance(provenance, Exception)
+        else lambda **_kw: provenance,
+    )
+    monkeypatch.setattr(native_lifecycle, "explicit_runtime_tools", lambda *_args, **_kw: ({}, ""))
+    monkeypatch.setattr(native_lifecycle.getpass, "getuser", lambda: "synthetic-operator")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    output = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe_native_service_lifecycle.py",
+            phase,
+            "--candidate",
+            "1" * 40,
+            "--wheel",
+            str(tmp_path / "synthetic.whl"),
+            "--package-manifest",
+            str(tmp_path / "synthetic-manifest.json"),
+            "--git-executable",
+            str(tmp_path / "synthetic-git"),
+            "--adapter",
+            "codex",
+            "--output",
+            str(output),
+            *extra,
+        ],
+    )
+    code = native_lifecycle.main()
+    return code, json.loads(output.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("system", ["Windows", "Darwin", "Linux"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "success",
+        "reuse-pid",
+        "prepare-partial-install",
+        "prepare-partial-definition",
+        "manager-cycle-partial-install",
+        "config-drift",
+        "native-drift",
+        "verify-mid-step",
+        "verify-restoration",
+        "cleanup-config-drift",
+        "manager-cycle-cleanup",
+        "runtime-drift",
+        "runtime-marker-drift",
+        "runtime-directory-drift",
+        "runtime-link-drift",
+    ],
+)
 def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reuse_pid: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str, system: str
 ) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
+    monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
     home = tmp_path / "home"
     home.mkdir()
     runtime = tmp_path / "runtime"
@@ -462,14 +581,90 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
     monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "a" * 64)
     monkeypatch.setattr(native_lifecycle, "_kill_owned_tree", lambda _pid: None)
+    ports = iter((24001, 24002))
+    monkeypatch.setattr(native_lifecycle, "_port", lambda: next(ports))
 
     config_path = home / ".codex/config.toml"
     baseline_content: bytes | None = None
     wired_content: bytes | None = None
     state = {"installed": False, "running": False}
+    expected_definition: dict = {}
+    original_expected = native_lifecycle._expected_native_definition
+
+    def expected(plan: dict) -> dict:
+        expected_definition.update(original_expected(plan))
+        return dict(expected_definition)
+
+    def native_command(args: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
+        slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
+        identity = native_lifecycle.native_service_identity(
+            slug, "brains-serve-all-evidence-11111111"
+        )
+        registered = state["installed"] and (system != "Darwin" or state["running"])
+        content = _mock_native_response(system, identity, expected_definition, registered)
+        if scenario == "native-drift" and registered:
+            content = content.replace("serve-all", "foreign-command")
+        missing = system == "Darwin" and not registered
+        return subprocess.CompletedProcess(
+            args,
+            113 if missing else 0,
+            content,
+            f'Could not find service "{identity}" in domain for user gui: 1000' if missing else "",
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_expected_native_definition", expected)
+    monkeypatch.setattr(native_lifecycle, "_native_command", native_command)
+    actions: list[list[str]] = []
 
     def fake_run(_executable: str, args: list[str], env: dict[str, str] | None = None) -> dict:
         nonlocal baseline_content, wired_content
+        actions.append(args)
+        if "--dry-run" in args:
+            slug, key = {
+                "Windows": ("windows", "xml"),
+                "Darwin": ("macos", "plist"),
+                "Linux": ("linux", "unit"),
+            }[native_lifecycle.platform.system()]
+            label = args[args.index("--label") + 1]
+            spec = ServiceSpec(
+                program="/synthetic/python",
+                args=[
+                    "-m",
+                    "brains",
+                    "serve-all",
+                    "--gateway-port",
+                    "24001",
+                    "--mcp-port",
+                    "24002",
+                ],
+                working_dir=str(home),
+                user="synthetic-user",
+                label=label,
+                state_dir=str(runtime / "state"),
+                gateway_port=24001,
+                mcp_port=24002,
+            )
+            identity = native_lifecycle.native_service_identity(slug, label)
+            definition_path = {
+                "Windows": runtime / "state/service" / f"{identity}.xml",
+                "Darwin": home / "Library/LaunchAgents" / f"{identity}.plist",
+                "Linux": home / ".config/systemd/user" / identity,
+            }[system]
+            content = {
+                "Windows": windows.render_task_xml,
+                "Darwin": macos.render_plist,
+                "Linux": linux.render_unit,
+            }[system](spec)
+            return {
+                "action": "would-install",
+                "platform": slug,
+                "label": native_lifecycle.native_service_identity(
+                    slug, args[args.index("--label") + 1]
+                ),
+                "definition": str(definition_path),
+                "command": spec.command_line,
+                key: content,
+            }
         if args[0] == "setup":
             sessions = runtime / "state/sessions"
             sessions.mkdir(parents=True, exist_ok=True)
@@ -485,16 +680,34 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             config_path.with_name("config.toml.bak-20260903-010102").write_bytes(wired_content)
             config_path.write_bytes(baseline_content)
         elif args[:2] == ["service", "install"]:
+            definition_path = Path(expected_definition["definition_path"])
+            definition_path.parent.mkdir(parents=True, exist_ok=True)
+            definition_path.write_text(
+                expected_definition["content"],
+                encoding="utf-16" if system == "Windows" else "utf-8",
+            )
+            if scenario == "prepare-partial-definition":
+                raise native_lifecycle.EvidenceFailure("synthetic registration failure")
             state.update(installed=True, running=True)
+            if scenario == "config-drift":
+                config_path.write_bytes(b"unexpected client edit")
+            if scenario in {
+                "prepare-partial-install",
+                "manager-cycle-partial-install",
+                "config-drift",
+                "native-drift",
+            }:
+                raise native_lifecycle.EvidenceFailure("synthetic partial install")
         elif args[:2] == ["service", "stop"]:
             state["running"] = False
         elif args[:2] in (["service", "start"], ["service", "restart"]):
             state["running"] = True
         elif args[:2] == ["service", "uninstall"]:
             state.update(installed=False, running=False)
+            Path(expected_definition["definition_path"]).unlink()
         return {"ok": True}
 
-    pids = iter((101, 101, 103, 104, 105) if reuse_pid else (101, 102, 103, 104, 105))
+    pids = iter((101, 101, 103, 104, 105) if scenario == "reuse-pid" else (101, 102, 103, 104, 105))
 
     def healthy(_executable: str, _label: str, timeout: float = 150) -> dict:
         pid = next(pids)
@@ -532,7 +745,7 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
                 _label,
             ),
             "state": "inactive",
-            "installed": state["installed"],
+            "installed": state["installed"] and (system != "Darwin" or state["running"]),
             "healthy": False,
             "runtime_classification": "stopped",
             "service_pid": {"pid": None, "confidence": "absent"},
@@ -546,19 +759,112 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     monkeypatch.setattr(native_lifecycle, "_wait_removed", status)
     provenance = {"binding_sha256": "f" * 64}
 
-    if reuse_pid:
-        with pytest.raises(native_lifecycle.EvidenceFailure, match="reused"):
-            native_lifecycle.prepare("synthetic-brains-ai", "1" * 40, "codex", provenance)
-        return
-    executable = tmp_path / "synthetic-brains-ai"
+    executable = (
+        tmp_path
+        / "venv"
+        / ("Scripts" if os.name == "nt" else "bin")
+        / ("brains-ai.exe" if os.name == "nt" else "brains-ai")
+    )
+    executable.parent.mkdir(parents=True)
     executable.write_bytes(b"synthetic executable")
-    prepared = native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
+    if scenario in {
+        "prepare-partial-install",
+        "prepare-partial-definition",
+        "manager-cycle-partial-install",
+        "config-drift",
+        "native-drift",
+    }:
+        phase = "manager-cycle" if scenario == "manager-cycle-partial-install" else "prepare"
+        code, result = _lifecycle_main(monkeypatch, tmp_path, phase, executable, provenance)
+        assert code == 1 and result["passed"] is False
+        rollback = result["failure_cleanup"]
+        if runtime.exists():
+            assert "plan_core_sha256" not in json.loads(native_lifecycle._plan_path().read_text())
+        if scenario == "native-drift":
+            assert rollback["native_error_type"] == "EvidenceFailure"
+            assert state["installed"] is True
+            assert not any(args[:2] == ["service", "uninstall"] for args in actions)
+        else:
+            assert rollback["native_removed"] is True
+            assert state["installed"] is False
+        if scenario == "config-drift":
+            assert rollback["configuration_error_type"] == "EvidenceFailure"
+            assert config_path.read_bytes() == b"unexpected client edit"
+        else:
+            assert rollback["configuration_removed"] is True
+            assert not config_path.exists()
+        assert rollback["runtime_root_removed"] is (
+            scenario not in {"config-drift", "native-drift"}
+        )
+        assert runtime.exists() is (scenario in {"config-drift", "native-drift"})
+        return
+    if scenario == "reuse-pid":
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="reused"):
+            native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
+        return
+    if scenario == "manager-cycle-cleanup":
+        code, prepared = _lifecycle_main(
+            monkeypatch, tmp_path / "cycle", "manager-cycle", executable, provenance
+        )
+        assert code == 0 and prepared["passed"] is True
+    else:
+        prepared = native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
     assert prepared["boundary"]["boot_changed"] is False
     prepared["passed"] = True
     prepare_path = tmp_path / "native-service-prepare.json"
     prepare_path.write_text(json.dumps(prepared), encoding="utf-8")
     prepare_sha256 = hashlib.sha256(prepare_path.read_bytes()).hexdigest()
     original_plan = json.loads(native_lifecycle._plan_path().read_text(encoding="utf-8"))
+    if scenario == "manager-cycle-cleanup" or scenario.startswith("runtime-"):
+        if scenario == "runtime-marker-drift":
+            (runtime / "journey-owner.json").write_text("{}")
+        elif scenario == "runtime-directory-drift":
+            (runtime / "foreign-directory").mkdir()
+        elif scenario.startswith("runtime-"):
+            foreign = runtime / "foreign.txt"
+            foreign.write_bytes(b"unowned")
+            if scenario == "runtime-link-drift":
+                original_is_symlink = Path.is_symlink
+                monkeypatch.setattr(
+                    Path, "is_symlink", lambda self: self == foreign or original_is_symlink(self)
+                )
+        else:
+            (runtime / "state/brains.db").write_bytes(b"mutable database")
+            (runtime / "state/sessions/service.log.1").write_bytes(b"rotated log")
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "cleanup",
+            executable,
+            provenance,
+            "--prior-record",
+            str(prepare_path),
+        )
+        if scenario.startswith("runtime-"):
+            assert code == 1 and runtime.exists()
+            if scenario in {"runtime-drift", "runtime-link-drift"}:
+                assert (runtime / "foreign.txt").read_bytes() == b"unowned"
+        else:
+            assert code == 0 and result["passed"] is True
+            assert result["cleanup"]["runtime_root_removed"] is True
+            assert not runtime.exists()
+        return
+    if scenario == "cleanup-config-drift":
+        config_path.write_bytes(b"unexpected client edit")
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "cleanup",
+            executable,
+            provenance,
+            "--prior-record",
+            str(prepare_path),
+        )
+        assert code == 1 and result["passed"] is False
+        assert state["installed"] is False
+        assert config_path.read_bytes() == b"unexpected client edit"
+        assert not any(args[0] == "unwire" for args in actions)
+        return
     for field, value in (
         ("boot_marker", "c" * 64),
         ("executable", str(tmp_path / "substituted-brains-ai")),
@@ -591,6 +897,39 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             installed_executable=executable,
         )
     monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "b" * 64)
+    if scenario in {"verify-mid-step", "verify-restoration"}:
+        original_record = native_lifecycle._record
+
+        def interrupted_record(plan: dict, step: str, evidence: dict) -> None:
+            original_record(plan, step, evidence)
+            assert native_lifecycle._plan_path().read_bytes() == before
+            target = (
+                "boundary-verified" if scenario == "verify-mid-step" else "configuration-restored"
+            )
+            if step == target:
+                raise native_lifecycle.EvidenceFailure("synthetic interrupted verification")
+
+        monkeypatch.setattr(native_lifecycle, "_record", interrupted_record)
+        before = native_lifecycle._plan_path().read_bytes()
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "verify",
+            executable,
+            provenance,
+            "--prepare-record",
+            str(prepare_path),
+            "--prepare-record-sha256",
+            prepare_sha256,
+        )
+        assert code == 1
+        assert result["failure_cleanup"]["native_removed"] is True
+        assert result["failure_cleanup"]["configuration_removed"] is True
+        assert not runtime.exists()
+        assert (
+            native_lifecycle._validated_plan_digest(original_plan) == prepared["plan_core_sha256"]
+        )
+        return
     verified = native_lifecycle.verify(
         "1" * 40,
         adapter="codex",
@@ -624,17 +963,442 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         "login_transition_attestation": None,
     }
     assert verified["steps"][-1]["evidence"]["listeners_removed"] is True
-    cleanup = native_lifecycle.cleanup(
-        expected_executable=executable,
-        completed_restoration=next(
-            step["evidence"]
-            for step in verified["steps"]
-            if step["step"] == "configuration-restored"
-        ),
+    assert json.loads(native_lifecycle._plan_path().read_text()) == original_plan
+    verified["passed"] = True
+    verify_path = tmp_path / "native-service-verify.json"
+    native_lifecycle._write_result(verify_path, verified, passed=True)
+    prior = native_lifecycle._prior_normal_record(
+        verify_path, provenance["binding_sha256"], "1" * 40, "codex"
     )
-    assert cleanup["runtime_root_removed"] is True
+    assert prior["record"] == verified
+    verify_bytes = verify_path.read_bytes()
+    for mutation in (
+        "missing-binding",
+        "malformed-binding",
+        "unknown-key",
+        "sha",
+        "journey",
+        "plan",
+        "resealed-plan",
+    ):
+        changed = json.loads(json.dumps(verified))
+        if mutation == "missing-binding":
+            del changed["prepare_record_sha256"]
+        elif mutation == "malformed-binding":
+            changed["prepare_record_sha256"] = None
+        elif mutation == "unknown-key":
+            changed["unknown"] = True
+        elif mutation == "sha":
+            changed["prepare_record_sha256"] = "0" * 64
+        elif mutation == "journey":
+            changed["journey"] = native_lifecycle._journey("1" * 40, "codex", "f" * 64)
+        elif mutation == "plan":
+            changed["plan_core_sha256"] = "0" * 64
+        else:
+            tampered = json.loads(json.dumps(original_plan))
+            tampered["steps"].append({"unexpected": True})
+            tampered["plan_core_sha256"] = native_evidence.canonical_sha256(
+                {key: tampered[key] for key in native_lifecycle.PLAN_CORE_FIELDS}
+            )
+            native_lifecycle._plan_path().write_text(json.dumps(tampered))
+        verify_path.write_text(json.dumps(changed))
+        with monkeypatch.context() as patch:
+            fallback = Mock(side_effect=AssertionError("untrusted cleanup"))
+            patch.setattr(native_lifecycle, "cleanup", fallback)
+            patch.setattr(native_lifecycle, "_rollback", fallback)
+            code, rejected = _lifecycle_main(
+                patch,
+                tmp_path / mutation,
+                "cleanup",
+                executable,
+                provenance,
+                "--prior-record",
+                str(verify_path),
+                "--prepare-record",
+                str(prepare_path),
+                "--prepare-record-sha256",
+                prepare_sha256,
+            )
+            assert code == 1 and rejected["passed"] is False
+            fallback.assert_not_called()
+        native_lifecycle._plan_path().write_text(json.dumps(original_plan))
+    verify_path.write_bytes(verify_bytes)
+    code, result = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        "cleanup",
+        executable,
+        provenance,
+        "--prior-record",
+        str(verify_path),
+        "--prepare-record",
+        str(prepare_path),
+        "--prepare-record-sha256",
+        prepare_sha256,
+    )
+    assert code == 0 and result["passed"] is True
+    assert result["cleanup"]["definition_removed"] is True
+    assert result["cleanup"]["initial_client_home_restored"] is True
+    assert result["cleanup"]["runtime_root_removed"] is True
+    assert result["cleanup"]["prepare_record_sha256"] == prepare_sha256
+    assert result["plan_core_sha256"] == prepared["plan_core_sha256"]
+    assert sum(args[:2] == ["service", "uninstall"] for args in actions) == 1
     assert not runtime.exists()
     assert not config_path.exists()
+
+
+@pytest.mark.parametrize("phase", ["prepare", "verify"])
+def test_native_prior_record_requires_exact_phase_schema(tmp_path: Path, phase: str) -> None:
+    record = _service_record("1" * 40)
+    if phase == "prepare":
+        record = _prepare_record(record)
+    binding = record["provenance"]["binding_sha256"]
+    record["journey"] = native_lifecycle._journey("1" * 40, "codex", binding)
+    path = tmp_path / "prior.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert native_lifecycle._prior_normal_record(path, binding, "1" * 40, "codex")["phase"] == phase
+    mutations = [{key: value for key, value in record.items() if key != field} for field in record]
+    mutations.append({**record, "unknown": True})
+    if phase == "prepare":
+        mutations.append({**record, "prepare_record_sha256": "a" * 64})
+    else:
+        mutations.extend(
+            {**record, "prepare_record_sha256": value}
+            for value in (
+                None,
+                True,
+                123,
+                [],
+                {},
+                "",
+                "a" * 63,
+                "a" * 65,
+                "g" * 64,
+                "A" * 64,
+                "a" * 64 + "\n",
+            )
+        )
+    for changed in mutations:
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="not provenance-bound"):
+            native_lifecycle._prior_normal_record(path, binding, "1" * 40, "codex")
+
+
+@pytest.mark.parametrize("phase", ["prepare", "manager-cycle", "verify", "cleanup"])
+@pytest.mark.parametrize("failure", ["guard", "provenance"])
+def test_native_main_untrusted_failure_never_uses_preexisting_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str, failure: str
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    plan_path = runtime / "journey-plan.json"
+    plan_path.write_text('{"executable":"foreign","label":"brains-serve-all"}')
+    before = plan_path.read_bytes()
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(runtime))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
+    if failure == "guard":
+        monkeypatch.delenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", raising=False)
+    else:
+        monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", native_lifecycle.ACKNOWLEDGEMENT)
+        monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    executable = (
+        tmp_path
+        / "venv"
+        / ("Scripts" if os.name == "nt" else "bin")
+        / ("brains-ai.exe" if os.name == "nt" else "brains-ai")
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"synthetic")
+    calls = Mock(side_effect=AssertionError("no native or config mutation authorized"))
+    for name in ("cleanup", "_rollback", "_run", "_native_observation", "_remove_synthetic_config"):
+        monkeypatch.setattr(native_lifecycle, name, calls)
+    code, result = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        phase,
+        executable,
+        native_lifecycle.EvidenceFailure("untrusted provenance"),
+    )
+    assert code == 1 and result["passed"] is False
+    assert "failure_cleanup" not in result
+    calls.assert_not_called()
+    assert plan_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("observation", ["unavailable", "foreign", "wrong-identity"])
+def test_native_prepare_requires_positive_absence_before_any_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, observation: str
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(runtime))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", native_lifecycle.ACKNOWLEDGEMENT)
+    monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "a" * 64)
+    ports = iter((24001, 24002))
+    monkeypatch.setattr(native_lifecycle, "_port", lambda: next(ports))
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_native_command",
+        lambda *_args, **_kw: subprocess.CompletedProcess([], 2, "", "access denied"),
+    )
+    if observation != "unavailable":
+        monkeypatch.setattr(
+            native_lifecycle,
+            "_native_observation",
+            lambda _label: {
+                "label": "foreign",
+                "definition": "foreign" if observation == "foreign" else None,
+                "registered": True,
+            },
+        )
+    mutation = Mock(side_effect=AssertionError("mutation before ownership"))
+    monkeypatch.setattr(native_lifecycle, "_run", mutation)
+    monkeypatch.setattr(native_lifecycle, "_seed", mutation)
+    context: dict = {}
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle.prepare(
+            "synthetic", "1" * 40, "codex", {"binding_sha256": "f" * 64}, rollback_context=context
+        )
+    mutation.assert_not_called()
+    assert context == {}
+    assert not (home / ".codex").exists()
+
+
+@pytest.mark.parametrize("system", ["Windows", "Darwin", "Linux"])
+@pytest.mark.parametrize(
+    "case", ["absent", "owned", "unloaded", "error", "foreign", "local-drift", "identity"]
+)
+def test_native_observation_parses_manager_responses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, case: str
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
+    monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "runtime/state"))
+    label = "brains-serve-all-evidence-11111111"
+    slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
+    identity = native_lifecycle.native_service_identity(slug, label)
+    spec = ServiceSpec(
+        program="/synthetic/python",
+        label=label,
+        user="synthetic-user",
+        working_dir="/synthetic/home",
+        state_dir="/synthetic/state",
+    )
+    path = {
+        "Windows": tmp_path / "runtime/state/service" / f"{identity}.xml",
+        "Darwin": tmp_path / "Library/LaunchAgents" / f"{identity}.plist",
+        "Linux": tmp_path / ".config/systemd/user" / identity,
+    }[system]
+    content = {
+        "Windows": windows.render_task_xml,
+        "Darwin": macos.render_plist,
+        "Linux": linux.render_unit,
+    }[system](spec)
+    expected = {"label": identity, "definition_path": str(path), "content": content}
+    if case != "absent":
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            content + ("foreign" if case == "local-drift" else ""),
+            encoding="utf-16" if system == "Windows" else "utf-8",
+        )
+    registered = case not in {"absent", "unloaded"}
+    output = _mock_native_response(system, identity, expected, registered)
+    if case == "foreign":
+        output = output.replace("/synthetic/python", "/foreign/python")
+    if case == "identity":
+        output = output.replace(identity, identity + "-foreign")
+    missing = system == "Darwin" and not registered
+    error = f'Could not find service "{identity}" in domain for user gui: 1000' if missing else ""
+    code = 113 if missing else 0
+    if case == "error":
+        code, error = 2, "access denied"
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_native_command",
+        lambda *_args, **_kw: subprocess.CompletedProcess([], code, output, error),
+    )
+    if case in {"error", "foreign", "local-drift", "identity"}:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._native_observation(label, expected)
+    else:
+        result = native_lifecycle._native_observation(label, expected)
+        assert result["registered"] is registered
+        assert result["definition"] == (None if case == "absent" else expected)
+        if case != "absent":
+            with pytest.raises(native_lifecycle.EvidenceFailure):
+                native_lifecycle._native_observation(label)
+
+
+def test_native_config_removal_preserves_drift_links_and_unexpected_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "codex"
+    root.mkdir()
+    path = root / "config.toml"
+    path.write_bytes(b"owned")
+    monkeypatch.setattr(native_lifecycle, "_config_root", lambda _tool: root)
+    snapshot = native_lifecycle._config_snapshot("codex")
+    path.write_bytes(b"foreign")
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert path.read_bytes() == b"foreign"
+    path.write_bytes(b"owned")
+    unexpected = root / "unowned-empty"
+    unexpected.mkdir()
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert unexpected.is_dir()
+    assert path.read_bytes() == b"owned"
+    path.write_bytes(b"owned")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self == path or original_is_symlink(self))
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert path.read_bytes() == b"owned"
+
+
+@pytest.mark.parametrize("tool", ["opencode", "claude-code"])
+@pytest.mark.parametrize("drift", [False, True])
+def test_native_cleanup_accounts_real_wire_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, drift: bool
+) -> None:
+    from brains import wire
+
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(state))
+    monkeypatch.setattr(
+        wire, "_opencode_compatibility", lambda: (wire.OPENCODE_SUPPORTED_VERSION, "synthetic")
+    )
+    # All file generation/removal below uses the real wire implementation. Only
+    # external binary discovery/execution and permission hardening are mocked.
+    monkeypatch.setattr(
+        wire.subprocess, "run", Mock(side_effect=AssertionError("external execution"))
+    )
+    monkeypatch.setattr(wire, "_harden", lambda _path: None)
+    clock = ["20260907-010101"]
+    monkeypatch.setattr(wire, "_timestamp", lambda: clock[0])
+    monkeypatch.setattr(native_lifecycle.time, "strftime", lambda *_args: clock[0])
+    prior = home / ".claude.json.bak-20260901-010101"
+    if tool == "claude-code":
+        prior.write_bytes(b"preexisting backup")
+    original = native_lifecycle._config_snapshot(tool)
+    native_lifecycle._seed(native_lifecycle._config_path(tool), tool)
+    baseline = native_lifecycle._config_snapshot(tool)
+    native_lifecycle._check_backup_collision(tool)
+    context = wire.WireContext(
+        api_key="synthetic-credential",
+        url="http://127.0.0.1:24002/mcp",
+        db_url="sqlite:///" + (state / "brains.db").as_posix(),
+    )
+    report = wire.wire(home, context, tools=[tool], force=True, rules=False)
+    assert report["ok"] is True
+    wired = native_lifecycle._config_snapshot(tool)
+    directories = native_lifecycle._config_directories(tool)
+    if tool == "opencode":
+        assert directories == [".", "plugins"]
+        assert (home / ".config/opencode/plugins/brains-lifecycle.js").is_file()
+    clock[0] = "20260907-010102"
+    native_lifecycle._check_backup_collision(tool)
+    report = wire.unwire(home, tools=[tool], rules=False)
+    assert report["tools"][0]["mcp"]["action"] == "remove"
+    restored = native_lifecycle._config_snapshot(tool)
+    backups = native_evidence.account_managed_backups(baseline, wired, restored)
+    assert len(backups) == 2
+    if tool == "claude-code":
+        secret_backup = home / ".claude.json.bak-20260907-010102"
+        assert b"synthetic-credential" in secret_backup.read_bytes()
+        assert prior.read_bytes() == b"preexisting backup"
+    else:
+        assert (home / ".config/opencode/plugins").is_dir()
+        assert not (home / ".config/opencode/plugins/brains-lifecycle.js").exists()
+    if drift:
+        unexpected = (
+            home / ".claude.json.bak-20260907-010103"
+            if tool == "claude-code"
+            else home / ".config/opencode/foreign"
+        )
+        if tool == "claude-code":
+            unexpected.write_bytes(b"foreign backup")
+        else:
+            unexpected.mkdir()
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._remove_synthetic_config(
+                tool, restored, directories=directories, original=original
+            )
+        assert unexpected.exists()
+        assert native_lifecycle._config_path(tool).exists()
+        return
+    native_lifecycle._remove_synthetic_config(
+        tool, restored, directories=directories, original=original
+    )
+    assert native_lifecycle._config_snapshot(tool) == original
+    assert not native_lifecycle._config_root(tool).exists()
+    if tool == "claude-code":
+        assert list(home.glob(".claude.json.bak-*")) == [prior]
+        clock[0] = "20260901-010101"
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="already exists"):
+            native_lifecycle._check_backup_collision(tool)
+
+
+@pytest.mark.parametrize("outcome", ["stopped", "timeout", "ownership-drift"])
+def test_native_macos_stop_waits_for_quiescence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-11111111"
+    plan = {"label": label, "executable": "synthetic"}
+    polls: list[str] = []
+
+    def ownership(_plan: dict) -> bool:
+        polls.append("ownership")
+        if outcome == "ownership-drift" and polls.count("ownership") == 2:
+            raise native_lifecycle.EvidenceFailure("foreign definition")
+        return True
+
+    def status(_executable: str, _label: str) -> dict:
+        polls.append("status")
+        stopped = outcome == "stopped" and polls.count("status") == 2
+        return {
+            "platform": "macos",
+            "label": native_lifecycle.native_service_identity("macos", label),
+            "state": "not-loaded",
+            "installed": False,
+            "healthy": False,
+            "runtime_classification": "stopped",
+            "service_pid": {
+                "pid": None if stopped else 123,
+                "confidence": "absent" if stopped else "verified",
+            },
+            "listeners": {"gateway": not stopped, "mcp": not stopped},
+            "mcp_protocol": {"ready": not stopped},
+        }
+
+    monkeypatch.setattr(native_lifecycle, "_assert_native_ownership", ownership)
+    monkeypatch.setattr(native_lifecycle, "_status", status)
+    ticks = iter((0, 0, 0.5, 1))
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(native_lifecycle.time, "sleep", lambda _delay: None)
+    if outcome == "stopped":
+        evidence = native_lifecycle._wait_stopped(plan, timeout=1)
+        assert evidence["owned_process"]["confidence"] == "absent"
+        assert polls == ["ownership", "status", "ownership", "status"]
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._wait_stopped(plan, timeout=1)
+        assert polls.count("status") == (1 if outcome == "ownership-drift" else 2)
 
 
 def test_native_readiness_wait_rejects_partial_listener_state(
@@ -754,6 +1518,10 @@ def test_native_cleanup_rejects_tampered_operational_plan(field: str) -> None:
         "baseline_snapshot": {"config": {"size": 1, "sha256": "b" * 64}},
         "wired_snapshot": {"config": {"size": 2, "sha256": "c" * 64}},
         "steps": [],
+        "native_definition": {},
+        "runtime_owner": {},
+        "runtime_inventory": {},
+        "config_directories": [],
     }
     plan["plan_core_sha256"] = native_evidence.canonical_sha256(
         {key: plan[key] for key in native_lifecycle.PLAN_CORE_FIELDS}

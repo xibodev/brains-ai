@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
@@ -299,8 +302,152 @@ def test_windows_task_xml_encodes_policy(spec: ServiceSpec) -> None:
     assert "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" in xml
     assert spec.program.endswith("pythonw.exe")
     assert spec.program in xml
-    assert "-m brains serve-all" in xml
+    arguments = ET.fromstring(xml).findtext(".//{*}Arguments")
+    bootstrap = (
+        "import os,runpy; "
+        f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
+        "runpy.run_module('brains',run_name='__main__',alter_sys=True)"
+    )
+    assert arguments == subprocess.list2cmdline(["-c", bootstrap, "serve-all"])
     assert "USER-PC\\user" in xml
+
+
+@pytest.mark.parametrize(
+    "state_root",
+    [
+        r"C:\private state\brains",
+        'C:\\private "quoted" & state\\brains',
+        "C:\\private\\\u96ea\u00e9\\brains",
+        "C:\\private state\\brains\\",
+        "C:\\private\\'; raise RuntimeError('not code'); #",
+    ],
+)
+@pytest.mark.parametrize("inherited_state", [None, r"C:\different state"])
+def test_windows_bootstrap_sets_only_state_before_dispatch(
+    spec, state_root, inherited_state, monkeypatch
+) -> None:
+    spec.state_dir = state_root
+    spec.program = r"C:\Python & tools\pythonw.exe"
+    spec.working_dir = r"C:\neutral & work"
+    spec.args = [
+        "-m",
+        "brains",
+        "serve-all",
+        "--gateway-host",
+        "127.0.0.1",
+        "--gateway-port",
+        "8877",
+        "--mcp-port",
+        "9988",
+        "",
+        "with spaces",
+        'with "quotes" & \u96ea',
+        "C:\\trailing space\\",
+    ]
+    original_args = spec.args.copy()
+    canary = "synthetic-secret-do-not-persist-8392"
+    monkeypatch.setenv("BRAINS_API_KEY", canary)
+    monkeypatch.setenv("BRAINS_DB_URL", "sqlite:///synthetic-external.db")
+    monkeypatch.setenv("BRAINS_STATE_DIR", r"C:\installing shell state")
+    encoded: list[list[str]] = []
+    list2cmdline = subprocess.list2cmdline
+
+    def encode(arguments):
+        encoded.append(arguments.copy())
+        return list2cmdline(arguments)
+
+    monkeypatch.setattr(windows.subprocess, "list2cmdline", encode)
+    xml = windows.render_task_xml(spec)
+    root = ET.fromstring(xml)
+    assert len(encoded) == 1
+    action = encoded[0]
+    assert action[0] == "-c"
+    assert action[2:] == original_args[2:]
+    assert root.findtext(".//{*}Arguments") == list2cmdline(action)
+    assert root.findtext(".//{*}Command") == spec.program
+    assert root.findtext(".//{*}WorkingDirectory") == spec.working_dir
+    assert "&amp;" in xml
+    assert canary not in xml
+    assert "BRAINS_API_KEY" not in xml
+    assert "BRAINS_DB_URL" not in xml
+    assert "synthetic-external.db" not in xml
+    assert spec.args == original_args
+    assert os.environ["BRAINS_STATE_DIR"] == r"C:\installing shell state"
+
+    if inherited_state is None:
+        monkeypatch.delenv("BRAINS_STATE_DIR")
+    else:
+        monkeypatch.setenv("BRAINS_STATE_DIR", inherited_state)
+    environment = dict(os.environ)
+    # Python -c supplies this argv; run_module(alter_sys=True) replaces argv[0].
+    monkeypatch.setattr(sys, "argv", ["-c", *action[2:]])
+    dispatched = []
+
+    def dispatch(module, *, run_name, alter_sys):
+        assert dict(os.environ) == {**environment, "BRAINS_STATE_DIR": state_root}
+        assert sys.argv == ["-c", *original_args[2:]]
+        dispatched.append((module, run_name, alter_sys))
+
+    monkeypatch.setattr(runpy, "run_module", dispatch)
+    exec(action[1], {})
+    assert dispatched == [("brains", "__main__", True)]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [[], ["-m"], ["serve-all"], ["-m", "other"], ["-c", "pass"], ["-I", "-m", "brains"]],
+)
+def test_windows_renderer_rejects_unsupported_arguments(spec, arguments) -> None:
+    spec.args = arguments
+    with pytest.raises(ValueError, match="must start with '-m brains'"):
+        windows.render_task_xml(spec)
+
+
+def test_windows_render_and_dry_run_are_write_free(spec, monkeypatch, tmp_path) -> None:
+    ambient = tmp_path / "ambient"
+    selected = tmp_path / "selected"
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(ambient))
+    spec.state_dir = str(selected)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("rendering and dry-run must not write or invoke the service manager")
+
+    monkeypatch.setattr(Path, "mkdir", forbidden)
+    monkeypatch.setattr(Path, "write_text", forbidden)
+    monkeypatch.setattr(windows, "run_cmd", forbidden)
+    xml = windows.render_task_xml(spec)
+    report = windows.install(spec, dry_run=True)
+    assert report["xml"] == xml
+    assert report["definition"] == str(selected / "service" / "BrainsServeAll.xml")
+    assert report["action"] == "would-install"
+    assert not selected.exists()
+    assert not ambient.exists()
+
+
+def test_windows_install_writes_definition_to_spec_state_dir(spec, monkeypatch, tmp_path) -> None:
+    ambient = tmp_path / "ambient"
+    selected = tmp_path / "selected"
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(ambient))
+    spec.state_dir = str(selected)
+    spec.label = "brains-serve-all-state-test"
+    path = selected / "service" / "BrainsServeAll-state-test.xml"
+    calls = []
+
+    def run(command):
+        assert path.read_text(encoding="utf-16") == windows.render_task_xml(spec)
+        calls.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(windows, "run_cmd", run)
+    report = windows.install(spec)
+    assert report["ok"] is True
+    assert report["started"] is True
+    assert report["definition"] == str(path)
+    assert calls == [
+        ["schtasks", "/Create", "/TN", "BrainsServeAll-state-test", "/XML", str(path), "/F"],
+        ["schtasks", "/Run", "/TN", "BrainsServeAll-state-test"],
+    ]
+    assert not ambient.exists()
 
 
 def test_windows_definition_path_under_state_dir(monkeypatch, tmp_path) -> None:
