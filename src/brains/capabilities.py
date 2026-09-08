@@ -57,6 +57,7 @@ CORE_MCP_TOOLS = frozenset(
         "inbox_wait",
         "file_help_request",
         "get_help_request",
+        "claim_help_request",
         "wait_help_request",
         "cancel_help_request",
         "release_help_request",

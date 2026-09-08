@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import importlib.metadata
 import importlib.util
 import json
 import os
+import plistlib
+import shlex
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path, PurePosixPath
+from unittest.mock import Mock
 
 import pytest
 import yaml
 
+from brains.service import linux, macos, windows
 from brains.service.common import ServiceSpec
 
 _NATIVE_EVIDENCE_PATH = Path(__file__).resolve().parents[1] / "scripts/native_evidence.py"
@@ -449,10 +455,158 @@ def test_explicit_runtime_tools_are_hashed_and_close_the_child_path(
         )
 
 
-@pytest.mark.parametrize("reuse_pid", [False, True])
+def _mock_native_response(system: str, identity: str, expected: dict, registered: bool) -> str:
+    if system == "Windows":
+        xml = None
+        if registered:
+            task = ET.fromstring(expected["content"])
+            ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+            principal = task.find(ns + "Principals/" + ns + "Principal")
+            actions = task.find(ns + "Actions")
+            trigger = task.find(ns + "Triggers/" + ns + "LogonTrigger")
+            assert principal is not None and actions is not None and trigger is not None
+            principal.set("id", "NormalizedPrincipal")
+            actions.set("Context", "NormalizedPrincipal")
+            trigger.set("id", "NormalizedTrigger")
+            enabled = trigger.find(ns + "Enabled")
+            if enabled is not None:
+                trigger.remove(enabled)  # Schema default is true.
+            ET.SubElement(trigger, ns + "ExecutionTimeLimit").text = "PT72H"
+            actions[0][:] = list(reversed(list(actions[0])))
+            for field in ("Command", "WorkingDirectory"):
+                node = actions[0].find(ns + field)
+                if node is not None and node.text:
+                    node.text = node.text.replace("/", "\\").upper()
+            xml = ET.tostring(task, encoding="unicode")
+        return json.dumps({"xml": xml, "principal_matches": True, "trigger_matches": True})
+    if system == "Linux":
+        unit = (
+            dict(
+                line.split("=", 1)
+                for line in expected["content"].splitlines()
+                if "=" in line and not line.startswith("#")
+            )
+            if expected
+            else {}
+        )
+        command = unit.get("ExecStart", "")
+        return "\n".join(
+            f"{key}={value}"
+            for key, value in {
+                "Id": identity,
+                "LoadState": "loaded" if registered else "not-found",
+                "ActiveState": "active" if registered else "inactive",
+                "FragmentPath": expected["definition_path"] if registered else "",
+                "ExecStart": (
+                    f"{{ path={shlex.split(command)[0]} ; argv[]={command} ; "
+                    "ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+                    "code=(null) ; status=0/0 }"
+                )
+                if registered
+                else "",
+                "Environment": unit.get("Environment", "") if registered else "",
+                "WorkingDirectory": unit.get("WorkingDirectory", "") if registered else "",
+                "DropInPaths": "",
+                "NeedDaemonReload": "no",
+            }.items()
+            if key != "ExecStart" or registered
+        )
+    if not registered:
+        return ""
+    plist = plistlib.loads(expected["content"].encode())
+    args = "\n".join(f"\t\t{arg}" for arg in plist["ProgramArguments"])
+    return (
+        f"gui/1000/{identity} = {{\n\tpath = {expected['definition_path']}\n"
+        f"\tprogram = {plist['ProgramArguments'][0]}\n\targuments = {{\n{args}\n\t}}\n"
+        f"\tworking directory = {plist['WorkingDirectory']}\n\tenvironment = {{\n"
+        f"\t\tBRAINS_STATE_DIR => {plist['EnvironmentVariables']['BRAINS_STATE_DIR']}\n\t}}\n}}\n"
+    )
+
+
+def _lifecycle_main(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    phase: str,
+    executable: Path,
+    provenance: dict | Exception,
+    *extra: str,
+    read_result: bool = True,
+) -> tuple[int, dict]:
+    monkeypatch.setattr(sys, "prefix", str(executable.parent.parent))
+    monkeypatch.setattr(
+        native_lifecycle,
+        "create_provenance",
+        Mock(side_effect=provenance)
+        if isinstance(provenance, Exception)
+        else lambda **_kw: provenance,
+    )
+    monkeypatch.setattr(native_lifecycle, "explicit_runtime_tools", lambda *_args, **_kw: ({}, ""))
+    monkeypatch.setattr(native_lifecycle.getpass, "getuser", lambda: "synthetic-operator")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+    output = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "probe_native_service_lifecycle.py",
+            phase,
+            "--candidate",
+            "1" * 40,
+            "--wheel",
+            str(tmp_path / "synthetic.whl"),
+            "--package-manifest",
+            str(tmp_path / "synthetic-manifest.json"),
+            "--git-executable",
+            str(tmp_path / "synthetic-git"),
+            "--adapter",
+            "codex",
+            "--output",
+            str(output),
+            *extra,
+        ],
+    )
+    code = native_lifecycle.main()
+    return code, json.loads(output.read_text(encoding="utf-8")) if read_result else {}
+
+
+@pytest.mark.parametrize("system", ["Windows", "Darwin", "Linux"])
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "success",
+        "reuse-pid",
+        "prepare-partial-install",
+        "prepare-partial-definition",
+        "manager-cycle-partial-install",
+        "config-drift",
+        "native-drift",
+        "windows-policy-drift",
+        "windows-policy-foreign-principal",
+        "verify-mid-step",
+        "verify-restoration",
+        "cleanup-config-drift",
+        "manager-cycle-cleanup",
+        "runtime-drift",
+        "runtime-marker-drift",
+        "runtime-directory-drift",
+        "runtime-link-drift",
+        "export-sanitize",
+        "export-write",
+        "export-cleanup-failure",
+        "export-foreign-drift",
+    ],
+)
 def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reuse_pid: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    system: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    if scenario.startswith("windows-policy-") and system != "Windows":
+        pytest.skip("Windows registered policy regression")
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
+    monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
     home = tmp_path / "home"
     home.mkdir()
     runtime = tmp_path / "runtime"
@@ -462,14 +616,121 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
     monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "a" * 64)
     monkeypatch.setattr(native_lifecycle, "_kill_owned_tree", lambda _pid: None)
+    clock = [0.0]
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        native_lifecycle.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+    ports = iter((24001, 24002))
+    monkeypatch.setattr(native_lifecycle, "_port", lambda: next(ports))
 
     config_path = home / ".codex/config.toml"
     baseline_content: bytes | None = None
     wired_content: bytes | None = None
     state = {"installed": False, "running": False}
+    expected_definition: dict = {}
+    export_failed = [False]
+    original_expected = native_lifecycle._expected_native_definition
+
+    def expected(plan: dict) -> dict:
+        expected_definition.update(original_expected(plan))
+        return dict(expected_definition)
+
+    def native_command(args: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
+        if system == "Windows" and "engine_pid_matches_recorded" in args[-1]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {
+                        "state": 4 if state["running"] else 3,
+                        "last_task_result": 0,
+                        "running_instances": 1 if state["running"] else 0,
+                        "engine_pid_matches_recorded": None,
+                    }
+                ),
+                "",
+            )
+        slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
+        identity = native_lifecycle.native_service_identity(
+            slug, "brains-serve-all-evidence-11111111"
+        )
+        registered = state["installed"] and (system != "Darwin" or state["running"])
+        content = _mock_native_response(system, identity, expected_definition, registered)
+        if registered and (
+            scenario == "native-drift" or (scenario == "export-foreign-drift" and export_failed[0])
+        ):
+            content = content.replace("serve-all", "foreign-command")
+        if scenario.startswith("windows-policy-") and registered:
+            payload = json.loads(content)
+            task = ET.fromstring(payload["xml"])
+            count = task.find("{*}Settings/{*}RestartOnFailure/{*}Count")
+            assert count is not None
+            count.text = "3"
+            payload["xml"] = ET.tostring(task, encoding="unicode")
+            payload["principal_matches"] = scenario != "windows-policy-foreign-principal"
+            content = json.dumps(payload)
+        missing = system == "Darwin" and not registered
+        return subprocess.CompletedProcess(
+            args,
+            113 if missing else 0,
+            content,
+            f'Could not find service "{identity}" in domain for user gui: 1000' if missing else "",
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_expected_native_definition", expected)
+    monkeypatch.setattr(native_lifecycle, "_native_command", native_command)
+    actions: list[list[str]] = []
 
     def fake_run(_executable: str, args: list[str], env: dict[str, str] | None = None) -> dict:
         nonlocal baseline_content, wired_content
+        actions.append(args)
+        if "--dry-run" in args:
+            slug, key = {
+                "Windows": ("windows", "xml"),
+                "Darwin": ("macos", "plist"),
+                "Linux": ("linux", "unit"),
+            }[native_lifecycle.platform.system()]
+            label = args[args.index("--label") + 1]
+            spec = ServiceSpec(
+                program="/synthetic/python",
+                args=[
+                    "-m",
+                    "brains",
+                    "serve-all",
+                    "--gateway-port",
+                    "24001",
+                    "--mcp-port",
+                    "24002",
+                ],
+                working_dir=str(home),
+                user="synthetic-user",
+                label=label,
+                state_dir=str(runtime / "state"),
+                gateway_port=24001,
+                mcp_port=24002,
+            )
+            identity = native_lifecycle.native_service_identity(slug, label)
+            definition_path = {
+                "Windows": runtime / "state/service" / f"{identity}.xml",
+                "Darwin": home / "Library/LaunchAgents" / f"{identity}.plist",
+                "Linux": home / ".config/systemd/user" / identity,
+            }[system]
+            content = {
+                "Windows": windows.render_task_xml,
+                "Darwin": macos.render_plist,
+                "Linux": linux.render_unit,
+            }[system](spec)
+            return {
+                "action": "would-install",
+                "platform": slug,
+                "label": native_lifecycle.native_service_identity(
+                    slug, args[args.index("--label") + 1]
+                ),
+                "definition": str(definition_path),
+                "command": spec.command_line,
+                key: content,
+            }
         if args[0] == "setup":
             sessions = runtime / "state/sessions"
             sessions.mkdir(parents=True, exist_ok=True)
@@ -485,16 +746,34 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             config_path.with_name("config.toml.bak-20260903-010102").write_bytes(wired_content)
             config_path.write_bytes(baseline_content)
         elif args[:2] == ["service", "install"]:
+            definition_path = Path(expected_definition["definition_path"])
+            definition_path.parent.mkdir(parents=True, exist_ok=True)
+            definition_path.write_text(
+                expected_definition["content"],
+                encoding="utf-16" if system == "Windows" else "utf-8",
+            )
+            if scenario == "prepare-partial-definition":
+                raise native_lifecycle.EvidenceFailure("synthetic registration failure")
             state.update(installed=True, running=True)
+            if scenario == "config-drift":
+                config_path.write_bytes(b"unexpected client edit")
+            if scenario in {
+                "prepare-partial-install",
+                "manager-cycle-partial-install",
+                "config-drift",
+                "native-drift",
+            }:
+                raise native_lifecycle.EvidenceFailure("synthetic partial install")
         elif args[:2] == ["service", "stop"]:
             state["running"] = False
         elif args[:2] in (["service", "start"], ["service", "restart"]):
             state["running"] = True
         elif args[:2] == ["service", "uninstall"]:
             state.update(installed=False, running=False)
+            Path(expected_definition["definition_path"]).unlink()
         return {"ok": True}
 
-    pids = iter((101, 101, 103, 104, 105) if reuse_pid else (101, 102, 103, 104, 105))
+    pids = iter((101, 101, 103, 104, 105) if scenario == "reuse-pid" else (101, 102, 103, 104, 105))
 
     def healthy(_executable: str, _label: str, timeout: float = 150) -> dict:
         pid = next(pids)
@@ -532,7 +811,7 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
                 _label,
             ),
             "state": "inactive",
-            "installed": state["installed"],
+            "installed": state["installed"] and (system != "Darwin" or state["running"]),
             "healthy": False,
             "runtime_classification": "stopped",
             "service_pid": {"pid": None, "confidence": "absent"},
@@ -546,19 +825,225 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     monkeypatch.setattr(native_lifecycle, "_wait_removed", status)
     provenance = {"binding_sha256": "f" * 64}
 
-    if reuse_pid:
-        with pytest.raises(native_lifecycle.EvidenceFailure, match="reused"):
-            native_lifecycle.prepare("synthetic-brains-ai", "1" * 40, "codex", provenance)
-        return
-    executable = tmp_path / "synthetic-brains-ai"
+    executable = (
+        tmp_path
+        / "venv"
+        / ("Scripts" if os.name == "nt" else "bin")
+        / ("brains-ai.exe" if os.name == "nt" else "brains-ai")
+    )
+    executable.parent.mkdir(parents=True)
     executable.write_bytes(b"synthetic executable")
-    prepared = native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
+    if scenario.startswith("export-"):
+        original_sanitize = native_lifecycle.assert_sanitized
+        original_write = native_lifecycle._write_result
+        exported = []
+
+        def fail_export() -> None:
+            export_failed[0] = True
+            if scenario == "export-cleanup-failure":
+                config_path.write_bytes(b"foreign config")
+                monkeypatch.setattr(
+                    native_lifecycle,
+                    "_uninstall_owned",
+                    Mock(
+                        side_effect=native_lifecycle.EvidenceFailure("systemd observation failed")
+                    ),
+                )
+            raise OSError("synthetic-private-export-error")
+
+        def sanitize(value, forbidden) -> None:
+            if scenario == "export-sanitize":
+                fail_export()
+            original_sanitize(value, forbidden)
+
+        def write(output, result, *, passed) -> None:
+            assert passed is True and result["phase"] == "prepare"
+            exported.append(result)
+            # ET.tostring in the Windows query fixture also calls ElementTree.write.
+            # Inject only during artifact export, not native observation/rollback.
+            with monkeypatch.context() as export_patch:
+                export_patch.setattr(native_lifecycle.ET.ElementTree, "write", xml_failure)
+                original_write(output, result, passed=passed)
+
+        def xml_failure(*_args, **_kwargs) -> None:
+            fail_export()
+
+        monkeypatch.setattr(native_lifecycle, "assert_sanitized", sanitize)
+        monkeypatch.setattr(native_lifecycle, "_write_result", write)
+        phase = "prepare" if scenario == "export-sanitize" else "manager-cycle"
+        code, _result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            phase,
+            executable,
+            provenance,
+            read_result=False,
+        )
+        assert code == 1 and export_failed[0]
+        assert len(exported) == (0 if scenario == "export-sanitize" else 1)
+        assert not (tmp_path / "result.json").exists()
+        assert all(result["passed"] is False for result in exported)
+        diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+        failures = [row for row in diagnostics if row["diagnostic"] == "native-service-failure"]
+        assert failures[0]["stage"] == "result-export"
+        assert failures[0]["error_type"] == "OSError"
+        assert failures[-1]["stage"] == "rollback-outcome"
+        if scenario in {"export-sanitize", "export-write"}:
+            assert failures[-1]["cleanup"] == {
+                "native_removed": True,
+                "configuration_removed": True,
+                "runtime_root_removed": True,
+            }
+            assert not runtime.exists() and not config_path.exists()
+            assert state["installed"] is False
+        elif scenario == "export-foreign-drift":
+            assert state["installed"] is True and runtime.exists()
+            assert not any(args[:2] == ["service", "uninstall"] for args in actions)
+            assert failures[-1]["cleanup"]["native_removed"] is False
+            assert failures[-1]["cleanup"]["configuration_removed"] is True
+        else:
+            assert [row["stage"] for row in failures] == [
+                "result-export",
+                "cleanup-native",
+                "cleanup-configuration",
+                "rollback-outcome",
+            ]
+            assert failures[1]["error_code"] == "systemd-observation-failed"
+            assert failures[2]["error_code"] == "synthetic-configuration-changed-before-removal"
+            assert state["installed"] is True and runtime.exists()
+            assert config_path.read_bytes() == b"foreign config"
+        assert "synthetic-private-export-error" not in json.dumps(diagnostics)
+        return
+    if scenario in {
+        "prepare-partial-install",
+        "prepare-partial-definition",
+        "manager-cycle-partial-install",
+        "config-drift",
+        "native-drift",
+        "windows-policy-drift",
+        "windows-policy-foreign-principal",
+    }:
+        phase = "manager-cycle" if scenario == "manager-cycle-partial-install" else "prepare"
+        code, result = _lifecycle_main(monkeypatch, tmp_path, phase, executable, provenance)
+        assert code == 1 and result["passed"] is False
+        rollback = result["failure_cleanup"]
+        if runtime.exists():
+            assert "plan_core_sha256" not in json.loads(native_lifecycle._plan_path().read_text())
+        if scenario in {"native-drift", "windows-policy-foreign-principal"}:
+            assert rollback["native_error_type"] == "EvidenceFailure"
+            assert state["installed"] is True
+            assert not any(args[:2] == ["service", "uninstall"] for args in actions)
+        else:
+            assert rollback["native_removed"] is True
+            assert state["installed"] is False
+        if scenario == "config-drift":
+            assert rollback["configuration_error_type"] == "EvidenceFailure"
+            assert config_path.read_bytes() == b"unexpected client edit"
+        else:
+            assert rollback["configuration_removed"] is True
+            assert not config_path.exists()
+        assert rollback["runtime_root_removed"] is (
+            scenario not in {"config-drift", "native-drift", "windows-policy-foreign-principal"}
+        )
+        assert runtime.exists() is (
+            scenario in {"config-drift", "native-drift", "windows-policy-foreign-principal"}
+        )
+        diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+        assert diagnostics[0]["phase"] == phase
+        assert diagnostics[0]["last_step"] == (
+            "installed" if scenario.startswith("windows-policy-") else "adapter-wired"
+        )
+        if scenario.startswith("windows-policy-"):
+            assert diagnostics[0]["task_recovery_policy"]["actual"]["restart_count"] == 3
+            assert diagnostics[0]["task_recovery_policy"]["expected"]["restart_count"] == 9999
+        assert diagnostics[-1]["stage"] == "rollback-outcome"
+        assert (
+            diagnostics[-1]["cleanup"]["runtime_root_removed"] == rollback["runtime_root_removed"]
+        )
+        assert "synthetic partial install" not in json.dumps(diagnostics)
+        return
+    if scenario == "reuse-pid":
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="reused"):
+            native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
+        return
+    if scenario == "manager-cycle-cleanup":
+        code, prepared = _lifecycle_main(
+            monkeypatch, tmp_path / "cycle", "manager-cycle", executable, provenance
+        )
+        assert code == 0 and prepared["passed"] is True
+    else:
+        prepared = native_lifecycle.prepare(str(executable), "1" * 40, "codex", provenance)
     assert prepared["boundary"]["boot_changed"] is False
     prepared["passed"] = True
     prepare_path = tmp_path / "native-service-prepare.json"
     prepare_path.write_text(json.dumps(prepared), encoding="utf-8")
     prepare_sha256 = hashlib.sha256(prepare_path.read_bytes()).hexdigest()
     original_plan = json.loads(native_lifecycle._plan_path().read_text(encoding="utf-8"))
+    recovery_diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    if system == "Windows":
+        assert len(recovery_diagnostics) == 1
+        assert recovery_diagnostics[0]["diagnostic"] == "native-windows-recovery"
+        assert recovery_diagnostics[0]["recovered"] is True
+    else:
+        assert recovery_diagnostics == []
+    assert "recovery_before" not in original_plan
+    if scenario == "manager-cycle-cleanup" or scenario.startswith("runtime-"):
+        if scenario == "runtime-marker-drift":
+            (runtime / "journey-owner.json").write_text("{}")
+        elif scenario == "runtime-directory-drift":
+            (runtime / "foreign-directory").mkdir()
+        elif scenario.startswith("runtime-"):
+            foreign = runtime / "foreign.txt"
+            foreign.write_bytes(b"unowned")
+            if scenario == "runtime-link-drift":
+                original_is_symlink = Path.is_symlink
+                monkeypatch.setattr(
+                    Path, "is_symlink", lambda self: self == foreign or original_is_symlink(self)
+                )
+        else:
+            (runtime / "state/brains.db").write_bytes(b"mutable database")
+            (runtime / "state/sessions/service.log.1").write_bytes(b"rotated log")
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "cleanup",
+            executable,
+            provenance,
+            "--prior-record",
+            str(prepare_path),
+        )
+        if scenario.startswith("runtime-"):
+            assert code == 1 and runtime.exists()
+            diagnostic = json.loads(capsys.readouterr().err)
+            assert diagnostic["stage"] == "cleanup"
+            assert diagnostic["cleanup"] == {
+                "native_removed": True,
+                "configuration_removed": True,
+                "runtime_root_removed": False,
+            }
+            if scenario in {"runtime-drift", "runtime-link-drift"}:
+                assert (runtime / "foreign.txt").read_bytes() == b"unowned"
+        else:
+            assert code == 0 and result["passed"] is True
+            assert result["cleanup"]["runtime_root_removed"] is True
+            assert not runtime.exists()
+        return
+    if scenario == "cleanup-config-drift":
+        config_path.write_bytes(b"unexpected client edit")
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "cleanup",
+            executable,
+            provenance,
+            "--prior-record",
+            str(prepare_path),
+        )
+        assert code == 1 and result["passed"] is False
+        assert state["installed"] is False
+        assert config_path.read_bytes() == b"unexpected client edit"
+        assert not any(args[0] == "unwire" for args in actions)
+        return
     for field, value in (
         ("boot_marker", "c" * 64),
         ("executable", str(tmp_path / "substituted-brains-ai")),
@@ -591,6 +1076,39 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             installed_executable=executable,
         )
     monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "b" * 64)
+    if scenario in {"verify-mid-step", "verify-restoration"}:
+        original_record = native_lifecycle._record
+
+        def interrupted_record(plan: dict, step: str, evidence: dict) -> None:
+            original_record(plan, step, evidence)
+            assert native_lifecycle._plan_path().read_bytes() == before
+            target = (
+                "boundary-verified" if scenario == "verify-mid-step" else "configuration-restored"
+            )
+            if step == target:
+                raise native_lifecycle.EvidenceFailure("synthetic interrupted verification")
+
+        monkeypatch.setattr(native_lifecycle, "_record", interrupted_record)
+        before = native_lifecycle._plan_path().read_bytes()
+        code, result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            "verify",
+            executable,
+            provenance,
+            "--prepare-record",
+            str(prepare_path),
+            "--prepare-record-sha256",
+            prepare_sha256,
+        )
+        assert code == 1
+        assert result["failure_cleanup"]["native_removed"] is True
+        assert result["failure_cleanup"]["configuration_removed"] is True
+        assert not runtime.exists()
+        assert (
+            native_lifecycle._validated_plan_digest(original_plan) == prepared["plan_core_sha256"]
+        )
+        return
     verified = native_lifecycle.verify(
         "1" * 40,
         adapter="codex",
@@ -624,17 +1142,1713 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         "login_transition_attestation": None,
     }
     assert verified["steps"][-1]["evidence"]["listeners_removed"] is True
-    cleanup = native_lifecycle.cleanup(
-        expected_executable=executable,
-        completed_restoration=next(
-            step["evidence"]
-            for step in verified["steps"]
-            if step["step"] == "configuration-restored"
-        ),
+    assert json.loads(native_lifecycle._plan_path().read_text()) == original_plan
+    verified["passed"] = True
+    verify_path = tmp_path / "native-service-verify.json"
+    native_lifecycle._write_result(verify_path, verified, passed=True)
+    prior = native_lifecycle._prior_normal_record(
+        verify_path, provenance["binding_sha256"], "1" * 40, "codex"
     )
-    assert cleanup["runtime_root_removed"] is True
+    assert prior["record"] == verified
+    verify_bytes = verify_path.read_bytes()
+    for mutation in (
+        "missing-binding",
+        "malformed-binding",
+        "unknown-key",
+        "sha",
+        "journey",
+        "plan",
+        "resealed-plan",
+    ):
+        changed = json.loads(json.dumps(verified))
+        if mutation == "missing-binding":
+            del changed["prepare_record_sha256"]
+        elif mutation == "malformed-binding":
+            changed["prepare_record_sha256"] = None
+        elif mutation == "unknown-key":
+            changed["unknown"] = True
+        elif mutation == "sha":
+            changed["prepare_record_sha256"] = "0" * 64
+        elif mutation == "journey":
+            changed["journey"] = native_lifecycle._journey("1" * 40, "codex", "f" * 64)
+        elif mutation == "plan":
+            changed["plan_core_sha256"] = "0" * 64
+        else:
+            tampered = json.loads(json.dumps(original_plan))
+            tampered["steps"].append({"unexpected": True})
+            tampered["plan_core_sha256"] = native_evidence.canonical_sha256(
+                {key: tampered[key] for key in native_lifecycle.PLAN_CORE_FIELDS}
+            )
+            native_lifecycle._plan_path().write_text(json.dumps(tampered))
+        verify_path.write_text(json.dumps(changed))
+        with monkeypatch.context() as patch:
+            fallback = Mock(side_effect=AssertionError("untrusted cleanup"))
+            patch.setattr(native_lifecycle, "cleanup", fallback)
+            patch.setattr(native_lifecycle, "_rollback", fallback)
+            code, rejected = _lifecycle_main(
+                patch,
+                tmp_path / mutation,
+                "cleanup",
+                executable,
+                provenance,
+                "--prior-record",
+                str(verify_path),
+                "--prepare-record",
+                str(prepare_path),
+                "--prepare-record-sha256",
+                prepare_sha256,
+            )
+            assert code == 1 and rejected["passed"] is False
+            fallback.assert_not_called()
+        native_lifecycle._plan_path().write_text(json.dumps(original_plan))
+    verify_path.write_bytes(verify_bytes)
+    code, result = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        "cleanup",
+        executable,
+        provenance,
+        "--prior-record",
+        str(verify_path),
+        "--prepare-record",
+        str(prepare_path),
+        "--prepare-record-sha256",
+        prepare_sha256,
+    )
+    assert code == 0 and result["passed"] is True
+    assert result["cleanup"]["definition_removed"] is True
+    assert result["cleanup"]["initial_client_home_restored"] is True
+    assert result["cleanup"]["runtime_root_removed"] is True
+    assert result["cleanup"]["prepare_record_sha256"] == prepare_sha256
+    assert result["plan_core_sha256"] == prepared["plan_core_sha256"]
+    assert sum(args[:2] == ["service", "uninstall"] for args in actions) == 1
     assert not runtime.exists()
     assert not config_path.exists()
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("phase", ["prepare", "verify"])
+def test_native_prior_record_requires_exact_phase_schema(tmp_path: Path, phase: str) -> None:
+    record = _service_record("1" * 40)
+    if phase == "prepare":
+        record = _prepare_record(record)
+    binding = record["provenance"]["binding_sha256"]
+    record["journey"] = native_lifecycle._journey("1" * 40, "codex", binding)
+    path = tmp_path / "prior.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    assert native_lifecycle._prior_normal_record(path, binding, "1" * 40, "codex")["phase"] == phase
+    mutations = [{key: value for key, value in record.items() if key != field} for field in record]
+    mutations.append({**record, "unknown": True})
+    if phase == "prepare":
+        mutations.append({**record, "prepare_record_sha256": "a" * 64})
+    else:
+        mutations.extend(
+            {**record, "prepare_record_sha256": value}
+            for value in (
+                None,
+                True,
+                123,
+                [],
+                {},
+                "",
+                "a" * 63,
+                "a" * 65,
+                "g" * 64,
+                "A" * 64,
+                "a" * 64 + "\n",
+            )
+        )
+    for changed in mutations:
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="not provenance-bound"):
+            native_lifecycle._prior_normal_record(path, binding, "1" * 40, "codex")
+
+
+@pytest.mark.parametrize("phase", ["prepare", "manager-cycle", "verify", "cleanup"])
+@pytest.mark.parametrize("failure", ["guard", "provenance"])
+def test_native_main_untrusted_failure_never_uses_preexisting_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    failure: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    plan_path = runtime / "journey-plan.json"
+    plan_path.write_text('{"executable":"foreign","label":"brains-serve-all"}')
+    before = plan_path.read_bytes()
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(runtime))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
+    if failure == "guard":
+        monkeypatch.delenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", raising=False)
+    else:
+        monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", native_lifecycle.ACKNOWLEDGEMENT)
+        monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    executable = (
+        tmp_path
+        / "venv"
+        / ("Scripts" if os.name == "nt" else "bin")
+        / ("brains-ai.exe" if os.name == "nt" else "brains-ai")
+    )
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"synthetic")
+    calls = Mock(side_effect=AssertionError("no native or config mutation authorized"))
+    for name in ("cleanup", "_rollback", "_run", "_native_observation", "_remove_synthetic_config"):
+        monkeypatch.setattr(native_lifecycle, name, calls)
+    code, result = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        phase,
+        executable,
+        native_lifecycle.EvidenceFailure("untrusted provenance"),
+    )
+    assert code == 1 and result["passed"] is False
+    assert "failure_cleanup" not in result
+    calls.assert_not_called()
+    assert plan_path.read_bytes() == before
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert captured.out == ""
+    assert diagnostic["phase"] == phase
+    assert diagnostic["stage"] == failure
+    assert diagnostic["error_type"] == "EvidenceFailure"
+    assert diagnostic["error_code"] == (
+        "disposable-host-acknowledgement-is-absent"
+        if failure == "guard"
+        else "unclassified-evidence-failure"
+    )
+    assert "untrusted provenance" not in captured.err
+
+
+def test_native_diagnostic_taxonomy_covers_all_owned_failure_literals() -> None:
+    for path, exception_name in (
+        (_LIFECYCLE_PATH, "EvidenceFailure"),
+        (_NATIVE_EVIDENCE_PATH, "ProvenanceFailure"),
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Raise)
+                and isinstance(node.exc, ast.Call)
+                and isinstance(node.exc.func, ast.Name)
+                and node.exc.func.id == exception_name
+            ):
+                message = node.exc.args[0]
+                assert isinstance(message, ast.Constant), "dynamic failure messages need review"
+                assert message.value in native_lifecycle._DIAGNOSTIC_CODES
+    assert len(native_lifecycle._DIAGNOSTIC_CODES) == len(native_lifecycle._DIAGNOSTIC_MESSAGES)
+    assert len(set(native_lifecycle._DIAGNOSTIC_CODES.values())) == len(
+        native_lifecycle._DIAGNOSTIC_CODES
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "code"),
+    [
+        ("Task Scheduler observation failed", "task-scheduler-observation-failed"),
+        ("launchd observation failed", "launchd-observation-failed"),
+        ("systemd observation failed", "systemd-observation-failed"),
+        ("client configuration already exists", "client-configuration-already-exists"),
+        ("unexpected runtime directory", "unexpected-runtime-directory"),
+        ("systemd observation failed /private/synthetic-token", "unclassified-evidence-failure"),
+    ],
+)
+def test_native_main_failure_diagnostics_are_allowlisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    message: str,
+    code: str,
+) -> None:
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(
+        native_lifecycle, "prepare", Mock(side_effect=native_lifecycle.EvidenceFailure(message))
+    )
+    executable = tmp_path / "venv" / "bin" / "synthetic"
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+    exit_code, record = _lifecycle_main(
+        monkeypatch, tmp_path, "manager-cycle", executable, {"binding_sha256": "f" * 64}
+    )
+    assert exit_code == 1
+    assert record == {"phase": "manager-cycle", "passed": False, "error_type": "EvidenceFailure"}
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "diagnostic": "native-service-failure",
+        "phase": "manager-cycle",
+        "stage": "lifecycle",
+        "operation": None,
+        "command": None,
+        "last_step": None,
+        "error_type": "EvidenceFailure",
+        "error_code": code,
+    }
+    assert "/private/synthetic-token" not in captured.err
+    assert str(tmp_path) not in captured.err
+
+
+@pytest.mark.parametrize("failure", ["stale-output", "provenance", "export", "unsafe-exception"])
+def test_native_main_diagnoses_preflight_provenance_and_export_without_leaks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    secret = "/private/synthetic-token\nBRAINS_MCP_BEARER_TOKEN=synthetic-secret"
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+    prepare = Mock(return_value={"phase": "prepare"})
+    monkeypatch.setattr(native_lifecycle, "prepare", prepare)
+    rollback = Mock(side_effect=AssertionError("no trusted rollback context"))
+    monkeypatch.setattr(native_lifecycle, "_rollback", rollback)
+    provenance = {"binding_sha256": "f" * 64}
+    if failure == "stale-output":
+        (tmp_path / "result.json").write_text('{"original":true}', encoding="utf-8")
+        expected = (
+            "output-preflight",
+            "ProvenanceFailure",
+            "native-evidence-output-already-exists",
+        )
+    elif failure == "provenance":
+        provenance = native_evidence.ProvenanceFailure("checked-out candidate is not clean")
+        expected = ("provenance", "ProvenanceFailure", "checked-out-candidate-is-not-clean")
+    elif failure == "export":
+        monkeypatch.setattr(native_lifecycle, "_write_result", Mock(side_effect=OSError(secret)))
+        expected = ("result-export", "OSError", "unexpected-error")
+    else:
+        prepare.side_effect = subprocess.CalledProcessError(2, secret, output=secret, stderr=secret)
+        expected = ("lifecycle", "CalledProcessError", "unexpected-error")
+    if failure == "export":
+        # The normal helper reads the record after main; leave that read synthetic
+        # because this case intentionally cannot write a record.
+        monkeypatch.setattr(native_lifecycle.Path, "read_text", lambda *_a, **_kw: "{}")
+    exit_code, result = _lifecycle_main(
+        monkeypatch, tmp_path, "manager-cycle", tmp_path / "venv/bin/synthetic", provenance
+    )
+    assert exit_code == 1
+    if failure == "stale-output":
+        assert result == {"original": True}
+    if failure in {"stale-output", "provenance"}:
+        prepare.assert_not_called()
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert (diagnostic["stage"], diagnostic["error_type"], diagnostic["error_code"]) == expected
+    assert captured.out == ""
+    assert "synthetic-token" not in captured.err
+    assert "synthetic-secret" not in captured.err
+    assert str(tmp_path) not in captured.err
+    rollback.assert_not_called()
+
+
+def test_native_diagnostics_redact_unknown_class_steps_and_cleanup_content(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    unsafe = "synthetic-secret"
+    error = type(unsafe, (RuntimeError,), {})(unsafe)
+    native_lifecycle._diagnose(
+        error,
+        phase=unsafe,
+        stage=unsafe,
+        context={"plan": {"steps": [{"step": unsafe}]}},
+        outcomes={"native_removed": True, "configuration_removed": unsafe, "unknown": unsafe},
+    )
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["phase"] == diagnostic["stage"] == "unknown"
+    assert diagnostic["error_type"] == "Exception"
+    assert diagnostic["error_code"] == "unexpected-error"
+    assert diagnostic["last_step"] is None
+    assert diagnostic["cleanup"] == {
+        "native_removed": True,
+        "configuration_removed": False,
+        "runtime_root_removed": False,
+    }
+    assert unsafe not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("failure", ["json-write", "publish"])
+def test_native_export_never_publishes_partial_passing_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    output = tmp_path / "result.json"
+    if failure == "json-write":
+        monkeypatch.setattr(native_lifecycle.json, "dumps", Mock(side_effect=OSError("synthetic")))
+    else:
+        monkeypatch.setattr(native_lifecycle.os, "link", Mock(side_effect=OSError("synthetic")))
+    with pytest.raises(OSError):
+        native_lifecycle._write_result(output, {"phase": "prepare", "passed": True}, passed=True)
+    assert not output.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_native_export_failure_does_not_repeat_prior_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+
+    def failed_prepare(*_args, rollback_context, **_kwargs):
+        rollback_context["plan"] = {"steps": []}
+        raise native_lifecycle.EvidenceFailure("native operational plan schema differs")
+
+    monkeypatch.setattr(native_lifecycle, "prepare", failed_prepare)
+    rollback = Mock(return_value={"runtime_root_removed": False})
+    monkeypatch.setattr(native_lifecycle, "_rollback", rollback)
+    monkeypatch.setattr(
+        native_lifecycle, "assert_sanitized", Mock(side_effect=OSError("synthetic"))
+    )
+    code, _ = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        "prepare",
+        tmp_path / "venv/bin/synthetic",
+        {},
+        read_result=False,
+    )
+    assert code == 1
+    rollback.assert_called_once()
+    diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [row["stage"] for row in diagnostics] == [
+        "lifecycle",
+        "rollback-outcome",
+        "result-export",
+    ]
+
+
+def test_native_rollback_reports_independent_errors_and_retains_uncertain_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context = {
+        "phase": "manager-cycle",
+        "native_armed": True,
+        "config_snapshot": {},
+        "config_directories": [],
+        "plan": {
+            "adapter": "codex",
+            "original_snapshot": {},
+            "steps": [{"step": "adapter-wired"}],
+        },
+    }
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_uninstall_owned",
+        Mock(side_effect=native_lifecycle.EvidenceFailure("systemd observation failed")),
+    )
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_remove_synthetic_config",
+        Mock(side_effect=PermissionError("/private/synthetic-secret")),
+    )
+    remove_runtime = Mock(side_effect=AssertionError("runtime removal not authorized"))
+    monkeypatch.setattr(native_lifecycle, "_remove_runtime", remove_runtime)
+    result = native_lifecycle._rollback(context)
+    remove_runtime.assert_not_called()
+    assert result == {
+        "native_error_type": "EvidenceFailure",
+        "configuration_error_type": "PermissionError",
+        "runtime_root_removed": False,
+    }
+    diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [item["stage"] for item in diagnostics] == ["cleanup-native", "cleanup-configuration"]
+    assert [item["error_code"] for item in diagnostics] == [
+        "systemd-observation-failed",
+        "unexpected-error",
+    ]
+    assert all(item["last_step"] == "adapter-wired" for item in diagnostics)
+    assert "synthetic-secret" not in json.dumps(diagnostics)
+
+
+@pytest.mark.parametrize("stdout", ["synthetic-secret", '{"ok":false}'])
+def test_native_command_diagnostic_reports_only_allowlisted_verb(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stdout: str,
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 2, stdout, "synthetic-secret")),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run(
+            "/private/synthetic-secret", ["service", "install", "synthetic-secret"]
+        )
+    native_lifecycle._diagnose(raised.value, phase="prepare", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["command"] == "service-install"
+    assert diagnostic["operation"] == "_run"
+    assert diagnostic["error_code"] == (
+        "command-returned-a-non-json-result"
+        if stdout == "synthetic-secret"
+        else "command-reported-failure"
+    )
+    if stdout == "synthetic-secret":
+        assert "service_error_code" not in diagnostic
+    else:
+        assert diagnostic["service_error_code"] == "unclassified-service-error"
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("action", ["stop", "uninstall", "restart"])
+@pytest.mark.parametrize("backend_code", sorted(native_lifecycle._SERVICE_ERROR_CODES))
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_native_command_diagnostic_preserves_allowlisted_service_error(
+    monkeypatch, capsys, action, backend_code, returncode
+) -> None:
+    secret = "/private/synthetic-secret\nBRAINS_API_KEY=synthetic-secret"
+    run = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            returncode,
+            json.dumps({"ok": False, "error_code": backend_code, "detail": secret}),
+            secret,
+        )
+    )
+    monkeypatch.setattr(native_lifecycle.subprocess, "run", run)
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run(secret, ["service", action, "--label", secret])
+    native_lifecycle._diagnose(
+        raised.value,
+        phase="manager-cycle",
+        stage="lifecycle",
+        context={"diagnostic_steps": [{"step": "installed"}]},
+    )
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert diagnostic["error_code"] == "command-reported-failure"
+    assert diagnostic["service_error_code"] == backend_code
+    assert diagnostic["command"] == "service-" + action
+    assert diagnostic["last_step"] == "installed"
+    assert "synthetic-secret" not in captured.err
+    assert captured.out == ""
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ok": False},
+        {"ok": False, "error_code": None},
+        {"ok": False, "error_code": "pidfile-changed /private/synthetic-secret"},
+        {"ok": False, "error_code": ["pidfile-changed", "synthetic-secret"]},
+        {"ok": False, "error_code": {"pidfile-changed": "synthetic-secret"}},
+        {"ok": False, "error_code": 1},
+        {"ok": False, "error_code": True},
+        {"ok": False, "detail": "pidfile-changed"},
+        {"ok": False, "rollback": {"error_code": "pidfile-changed"}},
+    ],
+)
+def test_native_command_diagnostic_rejects_unreviewed_service_error(
+    monkeypatch, capsys, payload
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess([], 1, json.dumps(payload), "synthetic-secret")
+        ),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic-secret", ["service", "stop"])
+    native_lifecycle._diagnose(raised.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["error_code"] == "command-reported-failure"
+    assert diagnostic["service_error_code"] == "unclassified-service-error"
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("args", [["wire"], ["service", "synthetic-secret"]])
+def test_native_command_diagnostic_does_not_attribute_nonservice_error(
+    monkeypatch, capsys, args
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, '{"ok": false, "error_code": "pidfile-changed"}', ""
+            )
+        ),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic", args)
+    native_lifecycle._diagnose(raised.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert "service_error_code" not in diagnostic
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("observation", ["unavailable", "foreign", "wrong-identity"])
+def test_native_prepare_requires_positive_absence_before_any_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, observation: str
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(runtime))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_DISPOSABLE", native_lifecycle.ACKNOWLEDGEMENT)
+    monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "a" * 64)
+    ports = iter((24001, 24002))
+    monkeypatch.setattr(native_lifecycle, "_port", lambda: next(ports))
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_native_command",
+        lambda *_args, **_kw: subprocess.CompletedProcess([], 2, "", "access denied"),
+    )
+    if observation != "unavailable":
+        monkeypatch.setattr(
+            native_lifecycle,
+            "_native_observation",
+            lambda _label: {
+                "label": "foreign",
+                "definition": "foreign" if observation == "foreign" else None,
+                "registered": True,
+            },
+        )
+    mutation = Mock(side_effect=AssertionError("mutation before ownership"))
+    monkeypatch.setattr(native_lifecycle, "_run", mutation)
+    monkeypatch.setattr(native_lifecycle, "_seed", mutation)
+    context: dict = {}
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle.prepare(
+            "synthetic", "1" * 40, "codex", {"binding_sha256": "f" * 64}, rollback_context=context
+        )
+    mutation.assert_not_called()
+    assert context == {}
+    assert not (home / ".codex").exists()
+
+
+@pytest.mark.parametrize("system", ["Windows", "Darwin", "Linux"])
+@pytest.mark.parametrize(
+    "case", ["absent", "owned", "unloaded", "error", "foreign", "local-drift", "identity"]
+)
+def test_native_observation_parses_manager_responses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, case: str
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
+    monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path / "runtime/state"))
+    label = "brains-serve-all-evidence-11111111"
+    slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
+    identity = native_lifecycle.native_service_identity(slug, label)
+    spec = ServiceSpec(
+        program="/synthetic/python",
+        label=label,
+        user="synthetic-user",
+        working_dir="/synthetic/home",
+        state_dir="/synthetic/state",
+    )
+    path = {
+        "Windows": tmp_path / "runtime/state/service" / f"{identity}.xml",
+        "Darwin": tmp_path / "Library/LaunchAgents" / f"{identity}.plist",
+        "Linux": tmp_path / ".config/systemd/user" / identity,
+    }[system]
+    content = {
+        "Windows": windows.render_task_xml,
+        "Darwin": macos.render_plist,
+        "Linux": linux.render_unit,
+    }[system](spec)
+    expected = {"label": identity, "definition_path": str(path), "content": content}
+    if case != "absent":
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            content + ("foreign" if case == "local-drift" else ""),
+            encoding="utf-16" if system == "Windows" else "utf-8",
+        )
+    registered = case not in {"absent", "unloaded"}
+    output = _mock_native_response(system, identity, expected, registered)
+    if case == "foreign":
+        if system == "Windows":
+            payload = json.loads(output)
+            payload["xml"] = payload["xml"].replace("SYNTHETIC", "FOREIGN")
+            output = json.dumps(payload)
+        else:
+            output = output.replace("/synthetic/python", "/foreign/python")
+    if case == "identity":
+        output = output.replace(identity, identity + "-foreign")
+    missing = system == "Darwin" and not registered
+    error = f'Could not find service "{identity}" in domain for user gui: 1000' if missing else ""
+    code = 113 if missing else 0
+    if case == "error":
+        code, error = 2, "access denied"
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_native_command",
+        lambda *_args, **_kw: subprocess.CompletedProcess([], code, output, error),
+    )
+    if case in {"error", "foreign", "local-drift", "identity"}:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._native_observation(label, expected)
+    else:
+        result = native_lifecycle._native_observation(label, expected)
+        assert result["registered"] is registered
+        assert result["definition"] == (None if case == "absent" else expected)
+        if case != "absent":
+            with pytest.raises(native_lifecycle.EvidenceFailure):
+                native_lifecycle._native_observation(label)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("normalized", None),
+        ("sid", None),
+        ("executable", "registered task executable differs"),
+        ("arguments", "registered task arguments differ"),
+        ("working-directory", "registered task working directory differs"),
+        ("missing-working-directory", "registered task working directory differs"),
+        ("extra-action", "registered task action structure differs"),
+        ("principal", "registered task principal or identity differs"),
+        ("trigger-principal", "registered task trigger principal differs"),
+        ("disabled-trigger", "registered task trigger definition differs"),
+        ("extra-trigger", "registered task trigger definition differs"),
+        ("trigger-limit", "registered task trigger definition differs"),
+        ("elevated", "registered task principal or identity differs"),
+        ("context", "registered task principal or identity differs"),
+    ],
+)
+def test_native_windows_semantic_definition_and_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+    message: str | None,
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-11111111"
+    identity = native_lifecycle.native_service_identity("windows", label)
+    spec = ServiceSpec(
+        program="C:/Synthetic Runtime/pythonw.exe",
+        args=["-m", "brains", "serve-all"],
+        label=label,
+        user="synthetic-user",
+        working_dir="C:/Synthetic Home",
+    )
+    content = windows.render_task_xml(spec)
+    path = tmp_path / "runtime/state/service" / f"{identity}.xml"
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-16")
+    expected = {"label": identity, "definition_path": str(path), "content": content}
+    payload = json.loads(_mock_native_response("Windows", identity, expected, True))
+    task = ET.fromstring(payload["xml"])
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    actions = task.find(ns + "Actions")
+    triggers = task.find(ns + "Triggers")
+    assert actions is not None and triggers is not None
+    if mutation in {"executable", "arguments", "working-directory"}:
+        field = {
+            "executable": "Command",
+            "arguments": "Arguments",
+            "working-directory": "WorkingDirectory",
+        }[mutation]
+        node = actions[0].find(ns + field)
+        assert node is not None
+        node.text = "synthetic-secret-foreign-value"
+    elif mutation == "missing-working-directory":
+        node = actions[0].find(ns + "WorkingDirectory")
+        assert node is not None
+        actions[0].remove(node)
+    elif mutation == "extra-action":
+        ET.SubElement(actions, ns + "Exec")
+    elif mutation == "extra-trigger":
+        ET.SubElement(triggers, ns + "BootTrigger")
+    elif mutation == "disabled-trigger":
+        ET.SubElement(triggers[0], ns + "Enabled").text = "false"
+    elif mutation == "trigger-limit":
+        node = triggers[0].find(ns + "ExecutionTimeLimit")
+        assert node is not None
+        node.text = "PT1H"
+    elif mutation == "elevated":
+        node = task.find(ns + "Principals/" + ns + "Principal/" + ns + "RunLevel")
+        assert node is not None
+        node.text = "HighestAvailable"
+    elif mutation == "context":
+        actions.set("Context", "ForeignPrincipal")
+    elif mutation in {"principal", "trigger-principal", "sid"}:
+        node = task.find(ns + "Principals/" + ns + "Principal/" + ns + "UserId")
+        trigger_user = triggers[0].find(ns + "UserId")
+        assert node is not None and trigger_user is not None
+        node.text = "S-1-5-21-100-200-300-1001"
+        trigger_user.text = "SYNTHETIC-DOMAIN\\synthetic-user"
+        payload["principal_matches"] = mutation != "principal"
+        payload["trigger_matches"] = mutation != "trigger-principal"
+    settings = task.find(ns + "Settings")
+    assert settings is not None
+    ET.SubElement(settings, ns + "UseUnifiedSchedulingEngine").text = "true"
+    payload["xml"] = ET.tostring(task, encoding="unicode")
+    commands = []
+
+    def query(args: list[str], *, env: dict) -> subprocess.CompletedProcess:
+        commands.append((args, env))
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    if message is None:
+        assert native_lifecycle._native_observation(label, expected)["registered"] is True
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure, match=message) as caught:
+            native_lifecycle._native_observation(label, expected)
+        native_lifecycle._diagnose(caught.value, phase="prepare", stage="lifecycle")
+        diagnostic = json.loads(capsys.readouterr().err)
+        assert diagnostic["error_code"] == native_lifecycle._DIAGNOSTIC_CODES[message]
+        assert "synthetic-secret" not in json.dumps(diagnostic)
+        assert str(tmp_path) not in json.dumps(diagnostic)
+    assert "trigger_matches=$triggerMatch" in commands[0][0][-1]
+    assert commands[0][1]["BRAINS_EVIDENCE_USER"] == "synthetic-user"
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "exit4",
+        "exit1",
+        "exit0-empty-array",
+        "explicit-empty-array",
+        "not-found-stderr",
+        "bus-error",
+        "empty",
+        "loaded-exit4",
+        "partial",
+        "active",
+        "wrong-id",
+        "reload",
+        "missing-fragment",
+        "unexpected-exit",
+        "duplicate-property",
+        "unexpected-load-state",
+        "loaded-missing-exec",
+    ],
+)
+def test_native_systemd_not_found_requires_authoritative_properties(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: str
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-11111111"
+    identity = native_lifecycle.native_service_identity("linux", label)
+    output = _mock_native_response("Linux", identity, {}, False)
+    code, error = (1 if case == "exit1" else 4), ""
+    if case == "exit0-empty-array":
+        code = 0
+    elif case == "explicit-empty-array":
+        output += "\nExecStart=\n"
+    if case == "bus-error":
+        error = "Failed to connect to bus: synthetic-private-detail"
+    elif case == "not-found-stderr":
+        error = f"Unit {identity} could not be found."
+    elif case == "empty":
+        output = ""
+    elif case == "loaded-exit4":
+        output = output.replace("LoadState=not-found", "LoadState=loaded")
+    elif case == "partial":
+        output = "LoadState=not-found\n"
+    elif case == "active":
+        output = output.replace("ActiveState=inactive", "ActiveState=active")
+    elif case == "wrong-id":
+        output = output.replace(identity, identity + "-foreign")
+    elif case == "reload":
+        output = output.replace("NeedDaemonReload=no", "NeedDaemonReload=yes")
+    elif case == "missing-fragment":
+        output = output.replace("FragmentPath=\n", "")
+    elif case == "unexpected-exit":
+        code = 2
+    elif case == "duplicate-property":
+        output += "\nLoadState=not-found\n"
+    elif case == "unexpected-load-state":
+        output = output.replace("LoadState=not-found", "LoadState=synthetic-private-detail")
+    elif case == "loaded-missing-exec":
+        code = 0
+        output = output.replace("LoadState=not-found", "LoadState=loaded")
+    command = Mock(return_value=subprocess.CompletedProcess([], code, output, error))
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_native_command",
+        command,
+    )
+    if case in {"exit4", "exit1", "exit0-empty-array", "explicit-empty-array", "not-found-stderr"}:
+        assert native_lifecycle._native_observation(label) == {
+            "label": identity,
+            "definition": None,
+            "registered": False,
+        }
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure) as caught:
+            native_lifecycle._native_observation(label)
+        native_lifecycle._diagnose(caught.value, phase="prepare", stage="lifecycle")
+        diagnostic = json.loads(capsys.readouterr().err)
+        assert diagnostic["error_code"] != "systemd-observation-failed"
+        assert diagnostic["systemd_query"]["properties_present"]["ExecStart"] is False
+        assert "synthetic-private-detail" not in json.dumps(diagnostic)
+        assert str(tmp_path) not in json.dumps(diagnostic)
+        if case == "bus-error":
+            assert diagnostic["systemd_query"]["stderr"] == "bus-failure"
+        if case == "unexpected-exit":
+            assert diagnostic["systemd_query"]["return_code"] == "other"
+    assert "--all" in command.call_args.args[0]
+
+
+def test_native_systemd_query_diagnostics_never_expose_property_values() -> None:
+    secret = "synthetic-private-path-token"
+    result = subprocess.CompletedProcess(
+        [],
+        123,
+        "\n".join(
+            [
+                f"Id={secret}",
+                f"LoadState={secret}",
+                f"ActiveState={secret}",
+                f"ExecStart={secret}",
+                f"Environment={secret}",
+                f"{secret}={secret}",
+            ]
+        ),
+        secret,
+    )
+    diagnostic = native_lifecycle._systemd_query_diagnostic(result, "synthetic-unit")
+    assert diagnostic["return_code"] == diagnostic["stderr"] == "other"
+    assert diagnostic["load_state"] == diagnostic["active_state"] == "other"
+    assert diagnostic["identity_matches"] is False
+    assert diagnostic["properties_present"]["ExecStart"] is True
+    assert secret not in json.dumps(diagnostic)
+
+
+def test_native_workflow_queries_linux_shape_before_lifecycle() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/native-service-evidence.yml").read_text())
+    steps = workflow["jobs"]["manager-cycle"]["steps"]
+    diagnostic = next(
+        step for step in steps if step.get("name") == "Diagnose Linux native unit query shape"
+    )
+    lifecycle = next(
+        step
+        for step in steps
+        if step.get("name") == "Exercise native manager lifecycle without login claim"
+    )
+    assert steps.index(diagnostic) < steps.index(lifecycle)
+    assert diagnostic["if"] == "runner.os == 'Linux'"
+    assert "for show_all in (False, True)" in diagnostic["run"]
+    assert "_systemd_query_diagnostic(result, identity)" in diagnostic["run"]
+    assert "capture_output=True" in diagnostic["run"]
+    assert "print(result" not in diagnostic["run"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "Enabled",
+        "MultipleInstancesPolicy",
+        "ExecutionTimeLimit",
+        "RestartOnFailure/Interval",
+        "RestartOnFailure/Count",
+    ],
+)
+@pytest.mark.parametrize("mutation", ["missing", "changed", "duplicate"])
+def test_native_windows_rejects_missing_or_changed_recovery_settings(
+    field: str, mutation: str
+) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    parts = field.split("/")
+    parent = actual.find("/".join(ns + part for part in ["Settings", *parts[:-1]]))
+    assert parent is not None
+    node = parent.find(ns + parts[-1])
+    assert node is not None
+    if mutation == "missing":
+        parent.remove(node)
+    elif mutation == "changed":
+        node.text = "synthetic-foreign-setting"
+    else:
+        parent.append(ET.fromstring(ET.tostring(node)))
+    identity = native_lifecycle.native_service_identity("windows", spec.label)
+    if mutation == "missing" and field in {"Enabled", "MultipleInstancesPolicy"}:
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+        return
+    message = {
+        "Enabled": "registered task recovery enabled differs",
+        "MultipleInstancesPolicy": "registered task recovery multiple instances differs",
+        "ExecutionTimeLimit": "registered task recovery execution limit differs",
+        "RestartOnFailure/Interval": "registered task recovery restart interval differs",
+        "RestartOnFailure/Count": "registered task recovery restart count differs",
+    }[field]
+    with pytest.raises(native_lifecycle.EvidenceFailure, match=message):
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+    native_lifecycle._check_task_xml(actual, wanted, identity, check_recovery=False)
+
+
+@pytest.mark.parametrize("zero", ["PT0S", "PT0H", "P0D", "P0DT0H0M0.000000S"])
+def test_native_windows_accepts_equivalent_recovery_interval_and_harmless_defaults(
+    zero: str,
+) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    settings = actual.find(ns + "Settings")
+    assert settings is not None
+    interval = settings.find(ns + "RestartOnFailure/" + ns + "Interval")
+    enabled = settings.find(ns + "Enabled")
+    assert interval is not None and enabled is not None
+    interval.text = "P0DT0H1M0S"
+    settings.remove(enabled)
+    multiple = settings.find(ns + "MultipleInstancesPolicy")
+    assert multiple is not None
+    settings.remove(multiple)
+    execution = settings.find(ns + "ExecutionTimeLimit")
+    count = settings.find(ns + "RestartOnFailure/" + ns + "Count")
+    assert execution is not None and count is not None
+    execution.text = zero
+    count.text = "+0009999"
+    trigger_limit = ET.SubElement(
+        actual.find(ns + "Triggers/" + ns + "LogonTrigger"), ns + "ExecutionTimeLimit"
+    )
+    trigger_limit.text = "P3D"
+    ET.SubElement(settings, ns + "UseUnifiedSchedulingEngine").text = "true"
+    native_lifecycle._check_task_xml(
+        actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "seconds"),
+    [
+        ("PT0S", 0),
+        ("PT0H", 0),
+        ("P0D", 0),
+        ("PT60S", 60),
+        ("PT1M", 60),
+        ("P3D", 259200),
+        ("PT72H", 259200),
+        ("PT0.000001S", 0.000001),
+        ("P", None),
+        ("PT", None),
+        ("P0DT", None),
+        ("P1Y", None),
+        ("P1M", None),
+        ("P1W", None),
+        ("-PT1S", None),
+        ("PTNaNS", None),
+        ("PT1e2S", None),
+        ("PT0.0000001S", None),
+        ("P999999999D", None),
+        ("synthetic-secret", None),
+    ],
+)
+def test_native_task_duration_is_finite_and_semantic(
+    value: str, seconds: int | float | None
+) -> None:
+    assert native_lifecycle._duration_seconds(value) == seconds
+
+
+@pytest.mark.parametrize("limit", ["P3D", "PT72H", "PT0.000001S", "PT1S"])
+def test_native_task_nonzero_execution_limit_fails_policy_but_not_ownership(limit: str) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    node = actual.find("{*}Settings/{*}ExecutionTimeLimit")
+    assert node is not None
+    node.text = limit
+    identity = native_lifecycle.native_service_identity("windows", spec.label)
+    with pytest.raises(native_lifecycle.EvidenceFailure, match="recovery execution limit differs"):
+        native_lifecycle._check_task_xml(actual, wanted, identity)
+    native_lifecycle._check_task_xml(actual, wanted, identity, check_recovery=False)
+
+
+def test_native_recovery_policy_reports_all_normalized_values_without_secrets(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    changes = {
+        "Enabled": "false",
+        "MultipleInstancesPolicy": "Queue",
+        "ExecutionTimeLimit": "P3D",
+        "RestartOnFailure/Interval": "PT2M",
+        "RestartOnFailure/Count": "3",
+    }
+    for field, value in changes.items():
+        node = actual.find("/".join(ns + part for part in ("Settings/" + field).split("/")))
+        assert node is not None
+        node.text = value
+    ET.SubElement(actual, ns + "Data").text = "synthetic-secret"
+    with pytest.raises(native_lifecycle.EvidenceFailure) as caught:
+        native_lifecycle._check_task_xml(
+            actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
+        )
+    native_lifecycle._diagnose(caught.value, phase="prepare", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["error_code"] == "registered-task-recovery-enabled-differs"
+    assert diagnostic["task_recovery_policy"]["actual"] == {
+        "enabled": False,
+        "multiple_instances": "Queue",
+        "execution_limit_seconds": 259200,
+        "restart_interval_seconds": 120,
+        "restart_count": 3,
+    }
+    assert diagnostic["task_recovery_policy"]["expected"]["execution_limit_seconds"] == 0
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+    for field in changes:
+        node = actual.find("/".join(ns + part for part in ("Settings/" + field).split("/")))
+        assert node is not None
+        node.text = "synthetic-secret"
+    assert "synthetic-secret" not in json.dumps(native_lifecycle._task_recovery_policy(actual))
+
+
+@pytest.mark.parametrize("field", ["Command", "Arguments", "WorkingDirectory", "UserId", "Context"])
+def test_native_task_ownership_mode_never_accepts_foreign_identity(field: str) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    if field == "Context":
+        actual.find(ns + "Actions").set("Context", "foreign")
+    elif field == "UserId":
+        # Principal resolution itself is checked by _native_observation; an
+        # absent user cannot bypass the structural identity check either.
+        actual.find(ns + "Principals/" + ns + "Principal/" + ns + "UserId").text = ""
+    else:
+        actual.find(ns + "Actions/" + ns + "Exec/" + ns + field).text = "foreign"
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._check_task_xml(
+            actual,
+            wanted,
+            native_lifecycle.native_service_identity("windows", spec.label),
+            check_recovery=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "valid",
+        "unknown-state",
+        "string-result",
+        "bool-result",
+        "out-of-range",
+        "negative-count",
+        "extra-secret",
+        "bad-relation",
+        "non-json",
+        "query-failed",
+        "query-exception",
+    ],
+)
+def test_native_windows_failure_snapshot_validates_and_redacts(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    payload = {
+        "state": 4,
+        "last_task_result": 267009,
+        "running_instances": 1,
+        "engine_pid_matches_recorded": False,
+    }
+    if case == "unknown-state":
+        payload["state"] = "synthetic-secret"
+    elif case == "string-result":
+        payload["last_task_result"] = "synthetic-secret"
+    elif case == "bool-result":
+        payload["last_task_result"] = True
+    elif case == "out-of-range":
+        payload["last_task_result"] = 2**32
+    elif case == "negative-count":
+        payload["running_instances"] = -1
+    elif case == "extra-secret":
+        payload["command"] = "synthetic-secret"
+    elif case == "bad-relation":
+        payload["engine_pid_matches_recorded"] = "synthetic-secret"
+    query = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            2 if case == "query-failed" else 0,
+            "synthetic-secret" if case == "non-json" else json.dumps(payload),
+            "synthetic-secret",
+        )
+    )
+    if case == "query-exception":
+        query.side_effect = OSError("synthetic-secret")
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    result = native_lifecycle._windows_scheduler_status(
+        "brains-serve-all-evidence-test",
+        {"service_pid": {"pid": 123, "confidence": "verified"}},
+    )
+    assert result == (payload if case == "valid" else {"available": False})
+    assert "synthetic-secret" not in json.dumps(result)
+    assert query.call_args.kwargs["env"]["BRAINS_EVIDENCE_PID"] == "123"
+    assert query.call_args.kwargs["env"]["BRAINS_EVIDENCE_TASK"] == "BrainsServeAll-evidence-test"
+    command = query.call_args.args[0]
+    assert "EnginePID" in command[-1]
+    assert "brains-serve-all-evidence-test" not in command[-1]
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_native_windows_scheduler_snapshot_only_on_failed_health_wait(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], healthy: bool
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Windows")
+    label = "brains-serve-all-evidence-test"
+    report = {
+        "platform": "windows",
+        "label": native_lifecycle.native_service_identity("windows", label),
+        "state": "synthetic-secret",
+        "installed": True,
+        "healthy": healthy,
+        "listeners": {"gateway": healthy, "mcp": healthy},
+        "mcp_protocol": {"ready": healthy},
+        "service_pid": {"pid": 123, "confidence": "verified"},
+    }
+    monkeypatch.setattr(native_lifecycle, "_status", lambda *_args: report)
+    ticks = iter((0, 0, 2))
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(native_lifecycle.time, "sleep", lambda _delay: None)
+    snapshot = {
+        "state": 3,
+        "last_task_result": -1073741510,
+        "running_instances": 0,
+        "engine_pid_matches_recorded": False,
+    }
+    query = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(snapshot), ""))
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    if healthy:
+        assert native_lifecycle._wait_healthy("synthetic", label, timeout=1) == report
+        query.assert_not_called()
+        return
+    with pytest.raises(
+        native_lifecycle.EvidenceFailure, match="service did not become fully ready"
+    ) as caught:
+        native_lifecycle._wait_healthy("synthetic", label, timeout=1)
+    query.assert_called_once()
+    # The snapshot is already captured before main's failure diagnostic/rollback.
+    native_lifecycle._diagnose(caught.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["task_scheduler"] == snapshot
+    assert diagnostic["wait_status"]["pid_verified"] is True
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+    assert "123" not in json.dumps(diagnostic)
+
+
+def _task_event_xml(
+    identity: str, event_id: int = 201, timestamp: str = "2026-09-07T00:00:01Z"
+) -> str:
+    ns = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+    event = ET.Element(ns + "Event")
+    system = ET.SubElement(event, ns + "System")
+    ET.SubElement(system, ns + "Provider", Name="Microsoft-Windows-TaskScheduler")
+    ET.SubElement(system, ns + "EventID").text = str(event_id)
+    ET.SubElement(system, ns + "TimeCreated", SystemTime=timestamp)
+    data = ET.SubElement(event, ns + "EventData")
+    for name, value in {
+        "TaskName": "\\" + identity,
+        "UserName": "synthetic-secret-user",
+        "ActionName": "C:/synthetic-secret-command",
+        "InstanceId": "synthetic-secret-guid",
+        "ResultCode": "1",
+        "ErrorCode": "0x80070002",
+        "ErrorValue": "synthetic-secret-error",
+    }.items():
+        ET.SubElement(data, ns + "Data", Name=name).text = value
+    return ET.tostring(event, encoding="unicode")
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+def test_windows_recovery_capture_emits_bounded_private_event_projection(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], recovered: bool
+) -> None:
+    start = 1788739200000  # 2026-09-07T00:00:00Z
+    identity = "BrainsServeAll-evidence-test"
+    snapshot = {"state": 3, "last_task_result": 1, "last_run_time_utc_ms": start - 1000}
+    event_ids = [100, 101, 102, 110, 111, 129, 200, 201, 202, 203, 322, 999]
+    rows = [_task_event_xml(identity, event_id) for event_id in event_ids]
+    rows += [
+        _task_event_xml(identity + "-foreign"),
+        _task_event_xml(identity, timestamp="2026-09-06T23:59:59Z"),
+        "malformed-secret",
+    ]
+    responses = iter(
+        [
+            {
+                "snapshot": snapshot,
+                "events": [],
+                "events_available": False,
+                "truncated": False,
+                "window_end_ms": start,
+            },
+            {
+                "snapshot": {
+                    **snapshot,
+                    "last_run_time_utc_ms": start + 1000 if recovered else start - 1000,
+                },
+                "events": rows,
+                "events_available": True,
+                "truncated": False,
+                "window_end_ms": start + 2000,
+            },
+        ]
+    )
+    commands = []
+
+    def query(args: list[str], *, env: dict) -> subprocess.CompletedProcess:
+        commands.append((args, env))
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps(next(responses)), "private-secret-stderr"
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    before = native_lifecycle._windows_recovery_capture("brains-serve-all-evidence-test")
+    native_lifecycle._emit_windows_recovery(
+        "brains-serve-all-evidence-test", before, start, recovered
+    )
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["recovered"] is recovered
+    assert diagnostic["observed_new_run"] is recovered
+    assert diagnostic["before"] == snapshot
+    timeline = diagnostic["timeline"]
+    assert timeline["source_count"] == 15 and timeline["matched_count"] == 12
+    assert timeline["invalid_count"] == 13
+    assert not timeline["events_unavailable"] and not timeline["truncated"]
+    assert [row["event_id"] for row in timeline["events"]] == event_ids
+    assert all(
+        row["result_codes"] == [1] and row["error_codes"] == [2147942402]
+        for row in timeline["events"]
+    )
+    encoded = json.dumps(diagnostic)
+    assert "secret" not in encoded and identity not in encoded
+    assert commands[0][1]["BRAINS_EVIDENCE_SINCE"] == ""
+    assert commands[1][1]["BRAINS_EVIDENCE_SINCE"] == str(start)
+    for args, _env in commands:
+        assert "-MaxEvents 257" in args[-1] and "600000" in args[-1]
+        assert identity not in args[-1]
+        for forbidden in (
+            "RegisterTask",
+            "Stop-ScheduledTask",
+            "Start-ScheduledTask",
+            "wevtutil",
+            ".Run(",
+        ):
+            assert forbidden not in args[-1]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "disabled",
+        "empty",
+        "truncated",
+        "oversized",
+        "bad-window",
+        "bad-snapshot",
+        "non-json",
+        "query-failed",
+        "exception",
+    ],
+)
+def test_windows_recovery_capture_reports_unavailable_and_truncation(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    start = 1788739200000
+    identity = "BrainsServeAll-evidence-test"
+    payload = {
+        "snapshot": {"state": 3, "last_task_result": 0, "last_run_time_utc_ms": start},
+        "events": [],
+        "events_available": True,
+        "truncated": False,
+        "window_end_ms": start + 2000,
+    }
+    if case == "disabled":
+        payload["events_available"] = False
+    elif case in {"truncated", "oversized"}:
+        payload["events"] = [_task_event_xml(identity)] * (257 if case == "truncated" else 258)
+    elif case == "bad-window":
+        payload["window_end_ms"] = start + 600001
+    elif case == "bad-snapshot":
+        payload["snapshot"] = {"state": "secret", "command": "secret"}
+    query = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            2 if case == "query-failed" else 0,
+            "secret" if case == "non-json" else json.dumps(payload),
+            "secret",
+        )
+    )
+    if case == "exception":
+        query.side_effect = subprocess.TimeoutExpired("secret", 30)
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    result = native_lifecycle._windows_recovery_capture("brains-serve-all-evidence-test", start)
+    assert "secret" not in json.dumps(result)
+    if case == "truncated":
+        assert result["truncated"] is True and len(result["events"]) == 256
+        assert result["source_count"] == result["matched_count"] == 257
+    elif case in {"empty", "bad-snapshot"}:
+        assert result["events_unavailable"] is False and result["source_count"] == 0
+    else:
+        assert result["events_unavailable"] is True
+    if case == "bad-snapshot":
+        assert result["snapshot"] is None
+
+
+def test_windows_recovery_diagnostics_surround_unchanged_kill_and_wait() -> None:
+    tree = ast.parse(_LIFECYCLE_PATH.read_text(encoding="utf-8"))
+    prepare = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "prepare"
+    )
+    capture = next(
+        node
+        for node in ast.walk(prepare)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_windows_recovery_capture"
+    )
+    guarded = next(
+        node
+        for node in ast.walk(prepare)
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_kill_owned_tree"
+            for call in ast.walk(node)
+        )
+    )
+    calls = [
+        node
+        for node in ast.walk(guarded)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    kill = next(node for node in calls if node.func.id == "_kill_owned_tree")
+    wait = next(node for node in calls if node.func.id == "_wait_healthy")
+    emit = next(node for node in calls if node.func.id == "_emit_windows_recovery")
+    assert capture.lineno < kill.lineno < wait.lineno < emit.lineno
+    assert isinstance(kill.args[0], ast.Name) and kill.args[0].id == "old_pid"
+    assert len(wait.args) == 2 and not wait.keywords
+    assert any(node is emit for stmt in guarded.finalbody for node in ast.walk(stmt))
+    assert not any(node.func.id in {"_run", "_write_plan", "_record"} for node in calls)
+
+
+def test_native_config_removal_preserves_drift_links_and_unexpected_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "codex"
+    root.mkdir()
+    path = root / "config.toml"
+    path.write_bytes(b"owned")
+    monkeypatch.setattr(native_lifecycle, "_config_root", lambda _tool: root)
+    snapshot = native_lifecycle._config_snapshot("codex")
+    path.write_bytes(b"foreign")
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert path.read_bytes() == b"foreign"
+    path.write_bytes(b"owned")
+    unexpected = root / "unowned-empty"
+    unexpected.mkdir()
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert unexpected.is_dir()
+    assert path.read_bytes() == b"owned"
+    path.write_bytes(b"owned")
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self == path or original_is_symlink(self))
+    with pytest.raises(native_lifecycle.EvidenceFailure):
+        native_lifecycle._remove_synthetic_config("codex", snapshot)
+    assert path.read_bytes() == b"owned"
+
+
+@pytest.mark.parametrize("tool", ["opencode", "claude-code"])
+@pytest.mark.parametrize("drift", [False, True])
+def test_native_cleanup_accounts_real_wire_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, drift: bool
+) -> None:
+    from brains import wire
+
+    home = tmp_path / "home"
+    home.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+    monkeypatch.setattr(native_lifecycle.Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(state))
+    monkeypatch.setattr(
+        wire, "_opencode_compatibility", lambda: (wire.OPENCODE_SUPPORTED_VERSION, "synthetic")
+    )
+    # All file generation/removal below uses the real wire implementation. Only
+    # external binary discovery/execution and permission hardening are mocked.
+    monkeypatch.setattr(
+        wire.subprocess, "run", Mock(side_effect=AssertionError("external execution"))
+    )
+    monkeypatch.setattr(wire, "_harden", lambda _path: None)
+    clock = ["20260907-010101"]
+    monkeypatch.setattr(wire, "_timestamp", lambda: clock[0])
+    monkeypatch.setattr(native_lifecycle.time, "strftime", lambda *_args: clock[0])
+    prior = home / ".claude.json.bak-20260901-010101"
+    if tool == "claude-code":
+        prior.write_bytes(b"preexisting backup")
+    original = native_lifecycle._config_snapshot(tool)
+    native_lifecycle._seed(native_lifecycle._config_path(tool), tool)
+    baseline = native_lifecycle._config_snapshot(tool)
+    native_lifecycle._check_backup_collision(tool)
+    context = wire.WireContext(
+        api_key="synthetic-credential",
+        url="http://127.0.0.1:24002/mcp",
+        db_url="sqlite:///" + (state / "brains.db").as_posix(),
+    )
+    report = wire.wire(home, context, tools=[tool], force=True, rules=False)
+    assert report["ok"] is True
+    wired = native_lifecycle._config_snapshot(tool)
+    directories = native_lifecycle._config_directories(tool)
+    if tool == "opencode":
+        assert directories == [".", "plugins"]
+        assert (home / ".config/opencode/plugins/brains-lifecycle.js").is_file()
+    clock[0] = "20260907-010102"
+    native_lifecycle._check_backup_collision(tool)
+    report = wire.unwire(home, tools=[tool], rules=False)
+    assert report["tools"][0]["mcp"]["action"] == "remove"
+    restored = native_lifecycle._config_snapshot(tool)
+    backups = native_evidence.account_managed_backups(baseline, wired, restored)
+    assert len(backups) == 2
+    if tool == "claude-code":
+        secret_backup = home / ".claude.json.bak-20260907-010102"
+        assert b"synthetic-credential" in secret_backup.read_bytes()
+        assert prior.read_bytes() == b"preexisting backup"
+    else:
+        assert (home / ".config/opencode/plugins").is_dir()
+        assert not (home / ".config/opencode/plugins/brains-lifecycle.js").exists()
+    if drift:
+        unexpected = (
+            home / ".claude.json.bak-20260907-010103"
+            if tool == "claude-code"
+            else home / ".config/opencode/foreign"
+        )
+        if tool == "claude-code":
+            unexpected.write_bytes(b"foreign backup")
+        else:
+            unexpected.mkdir()
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._remove_synthetic_config(
+                tool, restored, directories=directories, original=original
+            )
+        assert unexpected.exists()
+        assert native_lifecycle._config_path(tool).exists()
+        return
+    native_lifecycle._remove_synthetic_config(
+        tool, restored, directories=directories, original=original
+    )
+    assert native_lifecycle._config_snapshot(tool) == original
+    assert not native_lifecycle._config_root(tool).exists()
+    if tool == "claude-code":
+        assert list(home.glob(".claude.json.bak-*")) == [prior]
+        clock[0] = "20260901-010101"
+        with pytest.raises(native_lifecycle.EvidenceFailure, match="already exists"):
+            native_lifecycle._check_backup_collision(tool)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "stable",
+        "disabled",
+        "respawn",
+        "scheduler-running",
+        "scheduler-queued",
+        "scheduler-instance",
+        "unavailable",
+        "ownership-drift",
+        "never-stops",
+    ],
+)
+def test_native_windows_stop_observes_full_backoff_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    from brains.service.windows_runner import RESTART_INTERVAL_SECONDS
+
+    assert native_lifecycle.WINDOWS_STOP_OBSERVATION_SECONDS == 65
+    assert native_lifecycle.WINDOWS_STOP_OBSERVATION_SECONDS > RESTART_INTERVAL_SECONDS
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-test"
+    clock = [0.0]
+    ownership_polls = []
+    status_polls = []
+    scheduler_polls = []
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        native_lifecycle.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    def ownership(_plan: dict) -> bool:
+        ownership_polls.append(clock[0])
+        if outcome == "ownership-drift" and clock[0] >= 60:
+            raise native_lifecycle.EvidenceFailure("native definition is not owned by this journey")
+        return True
+
+    def status(*_args: str) -> dict:
+        status_polls.append(clock[0])
+        active = outcome == "never-stops" or (outcome == "respawn" and clock[0] >= 60)
+        return {
+            "platform": "windows",
+            "label": native_lifecycle.native_service_identity("windows", label),
+            "state": "Ready",
+            "installed": True,
+            "healthy": active,
+            "runtime_classification": "installed-owned-ready" if active else "stopped",
+            "service_pid": {
+                "pid": 456 if active else None,
+                "confidence": "verified" if active else "absent",
+            },
+            "listeners": {"gateway": active, "mcp": active},
+            "mcp_protocol": {"ready": active},
+        }
+
+    def scheduler(*_args, **_kwargs) -> subprocess.CompletedProcess:
+        scheduler_polls.append(clock[0])
+        failed = outcome == "unavailable" and clock[0] >= 60
+        state = (
+            4
+            if outcome == "scheduler-running" and clock[0] >= 60
+            else (
+                2
+                if outcome == "scheduler-queued" and clock[0] >= 60
+                else (1 if outcome == "disabled" else 3)
+            )
+        )
+        return subprocess.CompletedProcess(
+            [],
+            2 if failed else 0,
+            json.dumps(
+                {
+                    "state": state,
+                    "last_task_result": 0,
+                    "running_instances": int(outcome == "scheduler-instance" and clock[0] >= 60),
+                    "engine_pid_matches_recorded": None,
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_assert_native_ownership", ownership)
+    monkeypatch.setattr(native_lifecycle, "_status", status)
+    monkeypatch.setattr(native_lifecycle, "_native_command", scheduler)
+    plan = {"label": label, "executable": "synthetic"}
+    if outcome in {"stable", "disabled"}:
+        evidence = native_lifecycle._wait_stopped(plan)
+        assert evidence["owned_process"]["confidence"] == "absent"
+        assert clock[0] == 65
+        assert len(status_polls) == 131
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._wait_stopped(plan)
+        assert clock[0] == (30 if outcome == "never-stops" else 60)
+    assert scheduler_polls == status_polls
+    assert ownership_polls[: len(status_polls)] == status_polls
+
+
+@pytest.mark.parametrize("outcome", ["stopped", "timeout", "ownership-drift"])
+def test_native_macos_stop_waits_for_quiescence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Darwin")
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-11111111"
+    plan = {"label": label, "executable": "synthetic"}
+    polls: list[str] = []
+
+    def ownership(_plan: dict) -> bool:
+        polls.append("ownership")
+        if outcome == "ownership-drift" and polls.count("ownership") == 2:
+            raise native_lifecycle.EvidenceFailure("foreign definition")
+        return True
+
+    def status(_executable: str, _label: str) -> dict:
+        polls.append("status")
+        stopped = outcome == "stopped" and polls.count("status") == 2
+        return {
+            "platform": "macos",
+            "label": native_lifecycle.native_service_identity("macos", label),
+            "state": "not-loaded",
+            "installed": False,
+            "healthy": False,
+            "runtime_classification": "stopped",
+            "service_pid": {
+                "pid": None if stopped else 123,
+                "confidence": "absent" if stopped else "verified",
+            },
+            "listeners": {"gateway": not stopped, "mcp": not stopped},
+            "mcp_protocol": {"ready": not stopped},
+        }
+
+    monkeypatch.setattr(native_lifecycle, "_assert_native_ownership", ownership)
+    monkeypatch.setattr(native_lifecycle, "_status", status)
+    ticks = iter((0, 0, 0.5, 1))
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(native_lifecycle.time, "sleep", lambda _delay: None)
+    if outcome == "stopped":
+        evidence = native_lifecycle._wait_stopped(plan, timeout=1)
+        assert evidence["owned_process"]["confidence"] == "absent"
+        assert polls == ["ownership", "status", "ownership", "status"]
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._wait_stopped(plan, timeout=1)
+        assert polls.count("status") == (1 if outcome == "ownership-drift" else 2)
+
+
+@pytest.mark.parametrize("operation", ["_wait_healthy", "_wait_stopped", "_wait_removed"])
+def test_native_timeout_diagnostics_include_only_bounded_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    operation: str,
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Darwin")
+    label = "brains-serve-all-evidence-11111111"
+    secret = "synthetic-private-command-and-credential"
+    report = {
+        "platform": "macos",
+        "label": native_lifecycle.native_service_identity("macos", label),
+        "state": secret,
+        "installed": False,
+        "healthy": False,
+        "listeners": {"gateway": True, "mcp": False},
+        "mcp_protocol": {"ready": False, "detail": secret},
+        "service_pid": {"pid": 123, "confidence": "verified", "reason": secret},
+        "runtime_classification": secret,
+        "detail": secret,
+    }
+    monkeypatch.setattr(native_lifecycle, "_status", lambda *_args: report)
+    monkeypatch.setattr(native_lifecycle, "_assert_native_ownership", lambda _plan: True)
+    ticks = iter((0, 0, 2))
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(native_lifecycle.time, "sleep", lambda _delay: None)
+    with pytest.raises(native_lifecycle.EvidenceFailure) as caught:
+        if operation == "_wait_stopped":
+            native_lifecycle._wait_stopped({"executable": str(tmp_path), "label": label}, timeout=1)
+        else:
+            getattr(native_lifecycle, operation)(str(tmp_path), label, timeout=1)
+    native_lifecycle._diagnose(caught.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["operation"] == operation
+    assert diagnostic["wait_status"] == {
+        "installed": False,
+        "healthy": False,
+        "gateway_listening": True,
+        "mcp_listening": False,
+        "mcp_ready": False,
+        "pid_present": True,
+        "pid_verified": True,
+        "pid_absent": False,
+        "runtime_stopped": False,
+    }
+    assert secret not in json.dumps(diagnostic)
+    assert str(tmp_path) not in json.dumps(diagnostic)
+    assert "123" not in json.dumps(diagnostic)
 
 
 def test_native_readiness_wait_rejects_partial_listener_state(
@@ -754,6 +2968,10 @@ def test_native_cleanup_rejects_tampered_operational_plan(field: str) -> None:
         "baseline_snapshot": {"config": {"size": 1, "sha256": "b" * 64}},
         "wired_snapshot": {"config": {"size": 2, "sha256": "c" * 64}},
         "steps": [],
+        "native_definition": {},
+        "runtime_owner": {},
+        "runtime_inventory": {},
+        "config_directories": [],
     }
     plan["plan_core_sha256"] = native_evidence.canonical_sha256(
         {key: plan[key] for key in native_lifecycle.PLAN_CORE_FIELDS}
@@ -797,7 +3015,7 @@ def test_native_workflows_declare_full_matrix_and_success_only_upload() -> None:
         provision = next(
             step for step in steps if step.get("name") == "Provision pinned supported OpenCode"
         )
-        assert provision["run"] == "npm install --global opencode-ai@1.18.25"
+        assert provision["run"].strip().endswith("npm install --global opencode-ai@1.18.25")
         verifier = next(
             step for step in steps if "verify_native_evidence.py" in str(step.get("run", ""))
         )
@@ -805,6 +3023,7 @@ def test_native_workflows_declare_full_matrix_and_success_only_upload() -> None:
             step
             for step in steps
             if "probe_native_" in str(step.get("run", ""))
+            and "--package-manifest" in str(step.get("run", ""))
             and "verify_native_evidence.py" not in str(step.get("run", ""))
         )
         upload = next(
@@ -1462,4 +3681,7 @@ def test_native_manager_probe_refuses_personal_state_before_provenance_or_manage
     assert json.loads(output.read_text(encoding="utf-8"))["error_type"] == "EvidenceFailure"
     assert not runtime.exists()
     assert result.stdout == ""
-    assert result.stderr == ""
+    diagnostic = json.loads(result.stderr)
+    assert diagnostic["error_code"] == "the-real-user-already-has-brains-state"
+    assert diagnostic["stage"] == "guard"
+    assert str(tmp_path) not in result.stderr

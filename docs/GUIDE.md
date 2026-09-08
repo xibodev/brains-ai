@@ -127,16 +127,43 @@ When an agent needs something from a peer, it files a help request instead of gu
 
 ```text
 brains-ai help-file --subject "Does the readiness probe cover listeners?" \
-  --question "I need to know before I change the contract."
+  --question "I need to know before I change the contract." \
+  --from-session <requester-id> --to-session <peer-id> --timeout-ms 300000
 ```
 
-Another agent blocks on the unified inbox until there is mail or claimable peer work:
+Another agent waits until there is claimable peer work:
 
 ```text
 brains-ai inbox-wait --session <id>
 ```
 
-That is one call, not a polling loop. It returns when something arrives.
+The call waits for peer help or times out. Durable mailbox messages are read separately
+through the mailbox tools; this wait does not subscribe to mail delivery.
+
+Inspect the returned help code, then accept that specific request:
+
+```text
+brains-ai help-get HR-example --session <peer-id>
+brains-ai help-claim-code HR-example --session <peer-id>
+```
+
+`help-claim-code` never substitutes another request. Retrying as the same live owner
+does not extend the claim. The existing `help-claim --session <peer-id>` instead waits
+for and claims the oldest eligible request. The MCP equivalent of exact acceptance is
+`claim_help_request(code, session_id)`.
+
+Use a Session-only target for one peer or a Workspace-slug-only target for any peer in
+that Workspace. Supplying both matches either target. Filing timeout is request lifetime;
+wait timeout only bounds waiting. Defaults remain 30 seconds open and 600 seconds of
+claim grace. Choose an explicit filing lifetime appropriate for an interactive peer.
+
+For the peer-help lifecycle operations, the authenticated operator must own the supplied
+Session; knowing its ID alone is not authority to act as another operator. The separate
+`inbox_wait` notification wait checks liveness rather than ownership and does not accept
+work. Historical ownerless Sessions in lifecycle operations are restricted to
+bootstrap admin. Sessions sharing an operator credential are not isolated from that
+operator. Discuss scope changes or decline/defer in durable mail. Cancel and replace a
+request when its agreed scope changes; acceptance does not take over the peer's CLI.
 
 Answers require evidence — a file, a line, a command output — so a peer answer is
 checkable rather than an assertion.

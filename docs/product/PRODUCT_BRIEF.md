@@ -55,7 +55,7 @@ It is not a team server. It has no multi-user model today.
 - **Operations** — readiness reporting, queue diagnosis, backup, restore, and rollback
   against SQLite.
 - **Surfaces** — a browser console at `/app`, a native `/v1` control-plane API, a CLI, and
-  73 MCP tools across four supported harnesses.
+  74 MCP tools across four supported harnesses.
 - **Repository lookup** — bounded text search. Not semantic.
 
 ## Not in scope

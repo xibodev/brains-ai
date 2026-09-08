@@ -65,6 +65,7 @@ from brains.control.help import (
     answer_request,
     ask_peer,
     cancel_help_request,
+    claim_help_request,
     file_help_request,
     get_help_request,
     list_open_help_requests,
@@ -1607,6 +1608,14 @@ def file_help_request_tool(
 def get_help_request_tool(code: str, session_id: str | None = None):
     """Read one visible peer-help request without blocking."""
     return get_help_request(code, session_id=session_id)
+
+
+def claim_help_request_tool(code: str, *, session_id: str) -> dict:
+    """Claim exactly one peer-help request by code without blocking.
+
+    A same-owner retry does not renew deadlines. No queue fallback or process launch.
+    """
+    return claim_help_request(code, session_id=session_id)
 
 
 def wait_help_request_tool(

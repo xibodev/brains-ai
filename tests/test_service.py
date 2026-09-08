@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
+import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -299,8 +303,161 @@ def test_windows_task_xml_encodes_policy(spec: ServiceSpec) -> None:
     assert "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>" in xml
     assert spec.program.endswith("pythonw.exe")
     assert spec.program in xml
-    assert "-m brains serve-all" in xml
+    arguments = ET.fromstring(xml).findtext(".//{*}Arguments")
+    bootstrap = (
+        "import os,runpy; "
+        f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
+        "runpy.run_module('brains.service.windows_runner',run_name='__main__',alter_sys=True)"
+    )
+    assert arguments == subprocess.list2cmdline(["-c", bootstrap, spec.program, "serve-all"])
     assert "USER-PC\\user" in xml
+
+
+@pytest.mark.parametrize(
+    "state_root",
+    [
+        r"C:\private state\brains",
+        'C:\\private "quoted" & state\\brains',
+        "C:\\private\\\u96ea\u00e9\\brains",
+        "C:\\private state\\brains\\",
+        "C:\\private\\'; raise RuntimeError('not code'); #",
+    ],
+)
+@pytest.mark.parametrize("inherited_state", [None, r"C:\different state"])
+@pytest.mark.parametrize(
+    "gateway_host", ["", "with spaces", 'with "quotes" & \u96ea', "C:\\trailing space\\"]
+)
+def test_windows_bootstrap_sets_only_state_before_dispatch(
+    spec, state_root, inherited_state, gateway_host, monkeypatch
+) -> None:
+    spec.state_dir = state_root
+    spec.program = r"C:\Python & tools\pythonw.exe"
+    spec.working_dir = r"C:\neutral & work"
+    spec.args = [
+        "-m",
+        "brains",
+        "serve-all",
+        "--gateway-host",
+        gateway_host,
+        "--gateway-port",
+        "8877",
+        "--mcp-port",
+        "9988",
+    ]
+    original_args = spec.args.copy()
+    canary = "synthetic-secret-do-not-persist-8392"
+    monkeypatch.setenv("BRAINS_API_KEY", canary)
+    monkeypatch.setenv("BRAINS_DB_URL", "sqlite:///synthetic-external.db")
+    monkeypatch.setenv("BRAINS_STATE_DIR", r"C:\installing shell state")
+    encoded: list[list[str]] = []
+    list2cmdline = subprocess.list2cmdline
+
+    def encode(arguments):
+        encoded.append(arguments.copy())
+        return list2cmdline(arguments)
+
+    monkeypatch.setattr(windows.subprocess, "list2cmdline", encode)
+    xml = windows.render_task_xml(spec)
+    root = ET.fromstring(xml)
+    assert len(encoded) == 1
+    action = encoded[0]
+    assert action[0] == "-c"
+    assert action[2:] == [spec.program, *original_args[2:]]
+    assert root.findtext(".//{*}Arguments") == list2cmdline(action)
+    assert root.findtext(".//{*}Command") == spec.program
+    assert root.findtext(".//{*}WorkingDirectory") == spec.working_dir
+    assert "&amp;" in xml
+    assert canary not in xml
+    assert "BRAINS_API_KEY" not in xml
+    assert "BRAINS_DB_URL" not in xml
+    assert "synthetic-external.db" not in xml
+    assert spec.args == original_args
+    assert os.environ["BRAINS_STATE_DIR"] == r"C:\installing shell state"
+
+    if inherited_state is None:
+        monkeypatch.delenv("BRAINS_STATE_DIR")
+    else:
+        monkeypatch.setenv("BRAINS_STATE_DIR", inherited_state)
+    environment = dict(os.environ)
+    # Python -c supplies this argv; run_module(alter_sys=True) replaces argv[0].
+    monkeypatch.setattr(sys, "argv", ["-c", *action[2:]])
+    dispatched = []
+
+    def dispatch(module, *, run_name, alter_sys):
+        assert dict(os.environ) == {**environment, "BRAINS_STATE_DIR": state_root}
+        assert sys.argv == ["-c", spec.program, *original_args[2:]]
+        dispatched.append((module, run_name, alter_sys))
+
+    monkeypatch.setattr(runpy, "run_module", dispatch)
+    exec(action[1], {})
+    assert dispatched == [("brains.service.windows_runner", "__main__", True)]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [[], ["-m"], ["serve-all"], ["-m", "other"], ["-c", "pass"], ["-I", "-m", "brains"]],
+)
+def test_windows_renderer_rejects_unsupported_arguments(spec, arguments) -> None:
+    spec.args = arguments
+    with pytest.raises(ValueError, match="must start with '-m brains'"):
+        windows.render_task_xml(spec)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [[], ["service", "stop"], ["serve-all", "--daemon"], ["serve-all", "--gateway-port"]],
+)
+def test_windows_renderer_rejects_non_foreground_supervisor(spec, tail) -> None:
+    spec.args = ["-m", "brains", *tail]
+    with pytest.raises(ValueError):
+        windows.render_task_xml(spec)
+
+
+def test_windows_render_and_dry_run_are_write_free(spec, monkeypatch, tmp_path) -> None:
+    ambient = tmp_path / "ambient"
+    selected = tmp_path / "selected"
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(ambient))
+    spec.state_dir = str(selected)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("rendering and dry-run must not write or invoke the service manager")
+
+    monkeypatch.setattr(Path, "mkdir", forbidden)
+    monkeypatch.setattr(Path, "write_text", forbidden)
+    monkeypatch.setattr(windows, "run_cmd", forbidden)
+    xml = windows.render_task_xml(spec)
+    report = windows.install(spec, dry_run=True)
+    assert report["xml"] == xml
+    assert report["definition"] == str(selected / "service" / "BrainsServeAll.xml")
+    assert report["action"] == "would-install"
+    assert not selected.exists()
+    assert not ambient.exists()
+
+
+def test_windows_install_writes_definition_to_spec_state_dir(spec, monkeypatch, tmp_path) -> None:
+    ambient = tmp_path / "ambient"
+    selected = tmp_path / "selected"
+    monkeypatch.setenv("BRAINS_STATE_DIR", str(ambient))
+    spec.state_dir = str(selected)
+    spec.label = "brains-serve-all-state-test"
+    path = selected / "service" / "BrainsServeAll-state-test.xml"
+    calls = []
+
+    def run(command):
+        assert path.read_text(encoding="utf-16") == windows.render_task_xml(spec)
+        calls.append(command)
+        return 0, "ok", ""
+
+    monkeypatch.setattr(windows, "run_cmd", run)
+    report = windows.install(spec)
+    assert report["ok"] is True
+    assert report["started"] is True
+    assert report["definition"] == str(path)
+    assert calls == [
+        ["schtasks", "/Create", "/TN", "BrainsServeAll-state-test", "/XML", str(path), "/F"],
+        ["schtasks", "/Run", "/TN", "BrainsServeAll-state-test"],
+    ]
+    assert not ambient.exists()
 
 
 def test_windows_definition_path_under_state_dir(monkeypatch, tmp_path) -> None:
@@ -619,12 +776,18 @@ def test_windows_stop_tree_kills_a_verified_pid(monkeypatch, tmp_path) -> None:
 
     def _fake_run_cmd(cmd, **_kw):
         calls.append(cmd)
+        if cmd[0] == "taskkill":
+            monkeypatch.setattr(service_common, "_read_process_identity", lambda _pid: None)
         return 0, "", ""
 
     monkeypatch.setattr(windows, "run_cmd", _fake_run_cmd)
     report = windows.stop()
     assert report["ok"] is True
-    assert any(cmd[0] == "taskkill" for cmd in calls)
+    assert calls == [
+        ["schtasks", "/End", "/TN", "BrainsServeAll"],
+        ["taskkill", "/PID", str(os.getpid()), "/T", "/F"],
+    ]
+    assert not (tmp_path / "sessions" / "service.pid").exists()
 
 
 def test_windows_stop_reports_failed_tree_kill(monkeypatch, tmp_path) -> None:
@@ -641,6 +804,22 @@ def test_windows_stop_reports_failed_tree_kill(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(windows, "run_cmd", _fake_run_cmd)
     assert windows.stop()["ok"] is False
+
+
+def test_windows_stop_does_not_kill_child_if_runner_cannot_be_ended(monkeypatch) -> None:
+    record = {"pid": 4242}
+    monkeypatch.setattr(windows, "read_pidfile_record", lambda: record)
+    monkeypatch.setattr(
+        windows, "verify_pid", lambda _record: pytest.fail("runner is still allowed to respawn")
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows, "run_cmd", lambda command: calls.append(command) or (1, "", "end refused")
+    )
+    report = windows.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "native-stop-failed"
+    assert calls == [["schtasks", "/End", "/TN", "BrainsServeAll"]]
 
 
 def test_windows_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
@@ -671,59 +850,472 @@ def test_windows_stop_refuses_unverified_legacy_pid(monkeypatch, tmp_path) -> No
     assert pidfile.exists()
 
 
-def test_macos_stop_skips_signal_for_stale_pid(monkeypatch, tmp_path) -> None:
+@pytest.fixture
+def macos_stop_state(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=999999)
-    monkeypatch.setattr(service_common, "_read_process_identity", lambda pid: None)
+    state = SimpleNamespace(
+        elapsed=0.0,
+        exit_at=None,
+        identity={"exe": "python", "start_time": 1000.0},
+        after_exit=None,
+        calls=[],
+        signal_result=(0, "", ""),
+        unload_result=(0, "", ""),
+        pidfile=tmp_path / "sessions" / "service.pid",
+    )
 
-    calls: list[list[str]] = []
+    def identity(pid):
+        assert pid == 4242
+        if state.exit_at is not None and state.elapsed >= state.exit_at:
+            return state.after_exit
+        return state.identity
 
-    def _fake_run_cmd(cmd, **_kw):
-        calls.append(cmd)
-        return 0, "", ""
+    def sleep(seconds):
+        assert 0 < seconds <= macos._STOP_POLL_SECONDS
+        state.elapsed += seconds
 
-    monkeypatch.setattr(macos, "run_cmd", _fake_run_cmd)
+    def run(cmd):
+        state.calls.append(cmd)
+        if cmd[0] == "/bin/kill":
+            assert cmd == ["/bin/kill", "-TERM", "4242"]
+            return state.signal_result
+        assert cmd[0] == "launchctl" and cmd[1] in {"bootout", "unload"}
+        return state.unload_result
+
+    monkeypatch.setattr(service_common, "_read_process_identity", identity)
+    monkeypatch.setattr(macos, "run_cmd", run)
+    monkeypatch.setattr(
+        macos, "time", SimpleNamespace(monotonic=lambda: state.elapsed, sleep=sleep)
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    write_pidfile(state.pidfile, pid=4242)
+    return state
+
+
+@pytest.mark.parametrize("reused", [False, True])
+def test_macos_stop_skips_signal_for_stale_pid(macos_stop_state, reused) -> None:
+    state = macos_stop_state
+    state.identity = {"exe": "foreign", "start_time": 5000.0} if reused else None
+    report = macos.stop()
+    assert report["ok"] is (not reused)
+    assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
+    assert "stale" in report["detail"]
+    assert state.pidfile.exists() is reused
+
+
+@pytest.mark.parametrize("confidence", ["degraded", "unverified"])
+def test_macos_stop_refuses_uncertain_pid(macos_stop_state, confidence) -> None:
+    state = macos_stop_state
+    if confidence == "degraded":
+        state.identity = {}
+    else:
+        state.pidfile.write_text("4242", encoding="utf-8")
+    report = macos.stop()
+    assert report["ok"] is False
+    assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
+    assert confidence in report["detail"]
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_reports_failed_signal(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.signal_result = (1, "", "failed")
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "failed" in report["detail"]
+    assert state.pidfile.exists()
+    assert state.elapsed == 0
+
+
+@pytest.mark.parametrize("exit_at", [0.2, 1.0, 35.0])
+def test_macos_stop_waits_for_exit_and_cleans_pid_after_term(macos_stop_state, exit_at) -> None:
+    state = macos_stop_state
+    state.exit_at = exit_at
+    assert macos.stop()["ok"] is True
+    assert exit_at <= state.elapsed < exit_at + macos._STOP_POLL_SECONDS + 0.001
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_does_not_signal_reused_pid_after_term(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+    state.after_exit = {"exe": "foreign", "start_time": 5000.0}
+    assert macos.stop()["ok"] is False
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_retains_pid_when_identity_degrades_after_term(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+    state.after_exit = {}
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "degraded" in report["detail"]
+    assert state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+
+
+@pytest.mark.parametrize("gone", [False, True])
+def test_macos_stop_keeps_identity_if_unload_removes_pidfile(
+    macos_stop_state, monkeypatch, gone
+) -> None:
+    state = macos_stop_state
+
+    def unload(_label):
+        state.pidfile.unlink()
+        state.exit_at = 0 if gone else 0.4
+        return 0, "unloaded", ""
+
+    monkeypatch.setattr(macos, "_unload", unload)
+    assert macos.stop()["ok"] is True
+    assert state.elapsed == (0 if gone else 0.4)
+    assert len(state.calls) == (0 if gone else 1)
+
+
+@pytest.mark.parametrize("disappearance", ["verify", "current-read", "cleanup"])
+def test_macos_stop_accepts_pidfile_disappearance_after_observed_exit(
+    macos_stop_state, monkeypatch, disappearance
+) -> None:
+    state = macos_stop_state
+    state.identity = None
+    verify = macos.verify_pid
+    read = macos.read_pidfile_record
+    cleanup = macos.cleanup_stale_pidfile
+
+    def verified(record):
+        check = verify(record)
+        if disappearance == "verify":
+            state.pidfile.unlink()
+        return check
+
+    reads = 0
+
+    def current():
+        nonlocal reads
+        reads += 1
+        if disappearance == "current-read" and reads == 2:
+            state.pidfile.unlink()
+        return read()
+
+    def cleaned():
+        if disappearance == "cleanup":
+            state.pidfile.unlink()
+        return cleanup()
+
+    monkeypatch.setattr(macos, "verify_pid", verified)
+    monkeypatch.setattr(macos, "read_pidfile_record", current)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
     report = macos.stop()
     assert report["ok"] is True
-    assert not any(cmd[0] == "/bin/kill" for cmd in calls)
-    assert "stale" in report["detail"]
-    assert not (tmp_path / "sessions" / "service.pid").exists()
+    assert report["error_code"] is None
+    assert not state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout"]
 
 
-def test_macos_stop_refuses_degraded_pid(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=os.getpid())
-    monkeypatch.setattr(service_common, "_read_process_identity", lambda pid: {})
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        macos,
-        "run_cmd",
-        lambda cmd, **_kw: calls.append(cmd) or (0, "", ""),
-    )
+@pytest.mark.parametrize("identity", [{"exe": "python", "start_time": 1000.0}, {}])
+def test_macos_stop_disappearance_does_not_hide_live_captured_pid(
+    macos_stop_state, monkeypatch, identity
+) -> None:
+    state = macos_stop_state
+
+    def unloaded(_label):
+        state.pidfile.unlink()
+        state.identity = identity
+        return 0, "unloaded", ""
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
     report = macos.stop()
-    assert not any(cmd[0] == "/bin/kill" for cmd in calls)
-    assert "degraded" in report["detail"]
+    assert report["ok"] is False
+    assert report["error_code"] == ("pid-still-running" if identity else "pid-identity-unsafe")
+    assert not state.pidfile.exists()
 
 
-def test_macos_stop_reports_failed_child_kill(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(
-        service_common,
-        "_read_process_identity",
-        lambda pid: {"exe": "python", "start_time": 1000.0},
-    )
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=os.getpid())
+def test_macos_stop_rechecks_identity_after_unload(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
 
-    def _fake_run_cmd(cmd, **_kw):
-        if cmd[:2] == ["/bin/launchctl", "bootout"]:
-            return 0, "", ""
-        return (1, "", "failed") if cmd[0] == "/bin/kill" else (0, "", "")
+    def unload(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 0, "unloaded", ""
 
-    monkeypatch.setattr(macos, "run_cmd", _fake_run_cmd)
+    monkeypatch.setattr(macos, "_unload", unload)
     assert macos.stop()["ok"] is False
+    assert not state.calls
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_accepts_signal_exit_race(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    run = macos.run_cmd
+
+    def exited(cmd):
+        if cmd[0] == "/bin/kill":
+            state.identity = None
+            state.signal_result = (1, "", "no such process")
+        return run(cmd)
+
+    monkeypatch.setattr(macos, "run_cmd", exited)
+    assert macos.stop()["ok"] is True
+    assert not state.pidfile.exists()
+
+
+@pytest.mark.parametrize("action", ["stop", "uninstall"])
+def test_macos_stop_cutoff_retains_definition_and_pid(macos_stop_state, action) -> None:
+    state = macos_stop_state
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    report = getattr(macos, action)()
+    assert report["ok"] is False
+    assert "has not exited" in report["detail"]
+    assert state.elapsed == macos._STOP_TIMEOUT_SECONDS
+    assert state.pidfile.exists()
+    assert definition.read_text(encoding="utf-8") == "owned"
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+
+
+def test_macos_uninstall_removes_definition_only_after_exit(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.4
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    unlink = Path.unlink
+
+    def after_exit(path, **kwargs):
+        assert state.elapsed >= state.exit_at
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", after_exit)
+    assert macos.uninstall()["ok"] is True
+    assert not definition.exists()
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_retains_replacement_pidfile(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    replacement = {"format": 2, "pid": 4343, "exe": "python", "start_time": 2000.0}
+
+    def sleep(_seconds):
+        state.identity = None
+        state.pidfile.write_text(json.dumps(replacement), encoding="utf-8")
+
+    monkeypatch.setattr(macos.time, "sleep", sleep)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "pidfile changed" in report["detail"]
+    assert read_pidfile_record(state.pidfile) == replacement
+
+
+def test_macos_stop_reports_pidfile_cleanup_failure(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+
+    def denied(_path, **_kwargs):
+        raise PermissionError("synthetic denial")
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "cleanup incomplete" in report["detail"]
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_does_not_signal_when_unload_fails(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.unload_result = (1, "", "manager refused")
+    assert macos.stop()["ok"] is False
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "unload"]
+    assert state.pidfile.exists()
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+def test_macos_start_never_force_restarts_supervisor(monkeypatch, loaded) -> None:
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        return (1, "", "not loaded") if cmd[1] == "kickstart" and not loaded else (0, "", "")
+
+    monkeypatch.setattr(macos, "run_cmd", run)
+    assert macos.start()["ok"] is True
+    assert calls[0] == ["launchctl", "kickstart", f"{macos._domain()}/com.brains.serve-all"]
+    assert [cmd[1] for cmd in calls] == (["kickstart"] if loaded else ["kickstart", "bootstrap"])
 
 
 def test_macos_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
     monkeypatch.setattr(macos, "stop", lambda *_args: {"ok": False, "detail": "failed"})
     monkeypatch.setattr(macos, "start", lambda: pytest.fail("start must not run"))
     assert macos.restart()["ok"] is False
+
+
+@pytest.fixture(params=[windows, macos], ids=["windows", "macos"])
+def native_stop_state(request, macos_stop_state, monkeypatch):
+    state = macos_stop_state
+    backend = request.param
+    if backend is windows:
+
+        def run(cmd):
+            state.calls.append(cmd)
+            if cmd[0] == "taskkill":
+                assert cmd == ["taskkill", "/PID", "4242", "/T", "/F"]
+                return state.signal_result
+            assert cmd[:2] == ["schtasks", "/End"]
+            return state.unload_result
+
+        monkeypatch.setattr(windows, "run_cmd", run)
+        monkeypatch.setattr(windows, "time", macos.time)
+    return backend, state
+
+
+def test_native_stop_waits_for_observed_exit_and_removes_stale_pid(native_stop_state) -> None:
+    backend, state = native_stop_state
+    state.exit_at = 0.4
+    assert backend.stop()["ok"] is True
+    assert state.elapsed == 0.4
+    assert not state.pidfile.exists()
+
+
+@pytest.mark.parametrize("identity", [{}, {"exe": "foreign", "start_time": 5000.0}])
+def test_native_stop_preserves_degraded_or_reused_pid_after_kill(
+    native_stop_state, identity
+) -> None:
+    backend, state = native_stop_state
+    state.exit_at = 0.2
+    state.after_exit = identity
+    before = state.pidfile.read_bytes()
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-identity-unsafe"
+    assert state.pidfile.read_bytes() == before
+    assert len(state.calls) == 2
+
+
+@pytest.mark.parametrize("replacement", ["{broken", '{"format": 2, "pid": 4343}'])
+def test_native_stop_preserves_changed_pidfile(native_stop_state, monkeypatch, replacement) -> None:
+    backend, state = native_stop_state
+
+    def sleep(_seconds):
+        state.identity = None
+        state.pidfile.write_text(replacement, encoding="utf-8")
+
+    monkeypatch.setattr(backend.time, "sleep", sleep)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-changed"
+    assert state.pidfile.read_text(encoding="utf-8") == replacement
+
+
+def test_native_stop_successful_command_does_not_prove_exit(native_stop_state) -> None:
+    backend, state = native_stop_state
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-still-running"
+    assert state.elapsed == backend._STOP_TIMEOUT_SECONDS
+    assert state.pidfile.exists()
+
+
+def test_native_stop_confirms_cleanup_despite_helper_removed_flag(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    state.identity = None
+
+    def denied(_path, **_kwargs):
+        raise PermissionError("synthetic denial")
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-cleanup-incomplete"
+    assert state.pidfile.exists()
+
+
+def test_native_stop_keeps_identity_when_manager_removes_pidfile(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    run = backend.run_cmd
+
+    def ended(cmd):
+        if cmd[1] in {"/End", "bootout"}:
+            state.pidfile.unlink()
+            state.exit_at = 0.4
+        return run(cmd)
+
+    monkeypatch.setattr(backend, "run_cmd", ended)
+    assert backend.stop()["ok"] is True
+    assert state.elapsed == 0.4
+    assert len(state.calls) == 2
+
+
+def test_macos_already_unloaded_rechecks_pid_after_listing(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.identity = None
+    state.unload_result = (3, "", "not loaded")
+    run = macos.run_cmd
+
+    def listed(cmd):
+        if cmd == ["launchctl", "list"]:
+            state.identity = {"exe": "python", "start_time": 1000.0}
+            return 0, "PID Status Label", ""
+        return run(cmd)
+
+    monkeypatch.setattr(macos, "run_cmd", listed)
+    assert macos.stop()["ok"] is False
+    assert state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "unload"]
+
+
+def test_native_stop_retains_pid_if_cleanup_identity_degrades(
+    native_stop_state, monkeypatch
+) -> None:
+    backend, state = native_stop_state
+    state.identity = None
+    cleanup = backend.cleanup_stale_pidfile
+
+    def degraded():
+        state.identity = {}
+        return cleanup()
+
+    monkeypatch.setattr(backend, "cleanup_stale_pidfile", degraded)
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pidfile-cleanup-incomplete"
+    assert state.pidfile.exists()
+
+
+def test_native_stop_never_signals_or_removes_initial_reused_pid(native_stop_state) -> None:
+    backend, state = native_stop_state
+    state.identity = {"exe": "foreign", "start_time": 5000.0}
+    before = state.pidfile.read_bytes()
+    report = backend.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "pid-identity-unsafe"
+    assert state.pidfile.read_bytes() == before
+    assert len(state.calls) == 1
+
+
+def test_macos_uninstall_reports_definition_cleanup_failure(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.identity = None
+    state.unload_result = (0, "unloaded", "")
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    unlink = Path.unlink
+
+    def denied(path, **kwargs):
+        if path == definition:
+            raise PermissionError("synthetic private failure")
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = macos.uninstall()
+    assert report["ok"] is False
+    assert report["error_code"] == "definition-cleanup-incomplete"
+    assert "definition could not be removed" in report["detail"]
+    assert "synthetic private failure" not in report["detail"]
+    assert definition.exists()
+    assert not state.pidfile.exists()

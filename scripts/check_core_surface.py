@@ -1057,6 +1057,7 @@ def violations(snapshot: dict[str, Any]) -> list[str]:
         "ask_human",
         "inbox_wait",
         "file_help_request",
+        "claim_help_request",
         "release_help_request",
     ):
         contract = snapshot["mcp_contracts"].get(name, {})

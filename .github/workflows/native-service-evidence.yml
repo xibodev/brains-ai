@@ -88,22 +88,61 @@ jobs:
           path: ${{ runner.temp }}/native-service-dist
       - name: Provision pinned supported OpenCode
         if: matrix.adapter == 'opencode'
-        run: npm install --global opencode-ai@1.18.25
-      - name: Build and install the exact candidate in a fresh private environment
         shell: bash
         run: |
           set -euo pipefail
-          artifact="$RUNNER_TEMP/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
-          runtime="$RUNNER_TEMP/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
-          venv="$RUNNER_TEMP/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          provisioning="$(mktemp -d "$temp_dir/native-service-opencode-provision.XXXXXX")"
+          # The installer runs --version. Isolate its side effects, not the probe's
+          # real home. Create parents only; never precreate or remove a client root.
+          mkdir "$provisioning/config" "$provisioning/data" "$provisioning/cache" "$provisioning/state"
+          if command -v cygpath >/dev/null 2>&1; then
+            provisioning="$(cygpath -w "$provisioning")"
+          fi
+          export XDG_CONFIG_HOME="$provisioning/config"
+          export XDG_DATA_HOME="$provisioning/data"
+          export XDG_CACHE_HOME="$provisioning/cache"
+          export XDG_STATE_HOME="$provisioning/state"
+          export OPENCODE_CONFIG_DIR="$provisioning/config/opencode"
+          npm install --global opencode-ai@1.18.25
+      - name: Build and install the exact candidate in a fresh private environment
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.package.outputs.manifest-sha256 }}
+        run: |
+          set -euo pipefail
+          # Normalise Windows paths for MSYS tools; use Python hashing on macOS.
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          artifact="$temp_dir/native-service-artifact-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          runtime="$temp_dir/native-service-runtime-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
+          venv="$temp_dir/native-service-venv-${{ matrix.host.manager }}-${{ matrix.python }}-${{ matrix.adapter }}"
           test ! -e "$artifact"
           test ! -e "$runtime"
           test ! -e "$venv"
           mkdir "$artifact"
-          wheel_count="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
+          wheel_count="$(find "$temp_dir/native-service-dist" -maxdepth 1 -name '*.whl' -type f | wc -l | tr -d ' ')"
           test "$wheel_count" = 1
-          test "$(sha256sum "$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" | cut -d' ' -f1)" = "${{ needs.package.outputs.manifest-sha256 }}"
-          wheel="$(find "$RUNNER_TEMP/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
+          python - <<'PY'
+          import hashlib
+          import os
+          import pathlib
+
+          dist = pathlib.Path(os.environ["RUNNER_TEMP"]) / "native-service-dist"
+          manifest = dist / "native-wakeup-package-provenance.json"
+          digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+          expected = os.environ["EXPECTED_MANIFEST_SHA256"]
+          if digest != expected:
+              raise SystemExit("candidate package provenance does not match the built manifest")
+          PY
+          wheel="$(find "$temp_dir/native-service-dist" -maxdepth 1 -name '*.whl' -type f -print -quit)"
           python -m venv "$venv"
           if test -x "$venv/Scripts/python.exe"; then
             probe_python="$venv/Scripts/python.exe"
@@ -125,13 +164,105 @@ jobs:
           tool_paths="$("$probe_python" -c 'import json,os,shutil; names=os.environ["BRAINS_REQUIRED_NATIVE_TOOLS"].split(","); values={n:shutil.which(n) for n in names}; assert all(values.values()); print(json.dumps(values,separators=(",",":")))')"
           echo "BRAINS_NATIVE_PROBE_PYTHON=$probe_python" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_WHEEL=$wheel" >> "$GITHUB_ENV"
-          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$RUNNER_TEMP/native-service-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
+          echo "BRAINS_NATIVE_PACKAGE_MANIFEST=$temp_dir/native-service-dist/native-wakeup-package-provenance.json" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_PROBE_GIT=$git_executable" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_TOOL_PATHS=$tool_paths" >> "$GITHUB_ENV"
+          # Python reads these environment paths directly, without MSYS argv conversion.
+          if command -v cygpath >/dev/null 2>&1; then
+            runtime="$(cygpath -w "$runtime")"
+          fi
           echo "BRAINS_NATIVE_EVIDENCE_ROOT=$runtime" >> "$GITHUB_ENV"
           echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"
+      - name: Preflight real Linux user manager
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$BRAINS_NATIVE_EVIDENCE_DISPOSABLE" = disposable-native-service-host
+          # Hosted VM setup only, not evidence of login or reboot persistence.
+          # Let systemd create its runtime directory; never fabricate a user bus.
+          uid="$(id -u)"
+          if ! sudo -n systemctl start "user@$uid.service" >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-start-failed'
+            exit 1
+          fi
+          if ! sudo -n systemctl is-active --quiet "user@$uid.service" >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-inactive'
+            exit 1
+          fi
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          if ! test -d "$XDG_RUNTIME_DIR" || ! test -O "$XDG_RUNTIME_DIR" || test -L "$XDG_RUNTIME_DIR"; then
+            echo '::error::native-preflight: runtime-directory-unavailable-or-unowned'
+            exit 1
+          fi
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          if ! systemctl --user start dbus.socket >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-bus-start-failed'
+            exit 1
+          fi
+          if ! test -S "$XDG_RUNTIME_DIR/bus" || ! test -O "$XDG_RUNTIME_DIR/bus" || test -L "$XDG_RUNTIME_DIR/bus"; then
+            echo '::error::native-preflight: user-bus-socket-unavailable-or-unowned'
+            exit 1
+          fi
+          if ! systemctl --user show --property=Version --value >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-query-failed'
+            exit 1
+          fi
+          echo 'native-preflight: user-manager-active bus-socket-owned manager-query-ok'
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+      - name: Diagnose Linux native unit query shape
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          "$BRAINS_NATIVE_PROBE_PYTHON" - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from probe_native_service_lifecycle import _systemd_query_diagnostic
+
+          identity = "brains-serve-all-evidence-" + os.environ["GITHUB_SHA"][:8] + ".service"
+          properties = "Id,LoadState,ActiveState,FragmentPath,ExecStart,Environment,WorkingDirectory,DropInPaths,NeedDaemonReload"
+          for show_all in (False, True):
+              try:
+                  result = subprocess.run(
+                      ["systemctl", "--user", "show", identity, "--no-pager",
+                       *(["--all"] if show_all else []), "--property=" + properties],
+                      capture_output=True, text=True, timeout=30, check=False,
+                  )
+                  summary = _systemd_query_diagnostic(result, identity)
+              except Exception:
+                  summary = {"query_failed": True}
+              print(json.dumps({"diagnostic": "systemd-query-shape", "show_all": show_all, **summary}))
+          PY
+      - name: Enable disposable Windows task event diagnostics
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:BRAINS_NATIVE_EVIDENCE_DISPOSABLE -ne 'disposable-native-service-host') {
+            exit 1
+          }
+          try {
+            & wevtutil.exe sl Microsoft-Windows-TaskScheduler/Operational /e:true *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'enable-failed' }
+            $enabled = (Get-WinEvent -ListLog Microsoft-Windows-TaskScheduler/Operational).IsEnabled
+            if (-not $enabled) { throw 'enable-unverified' }
+            '{"diagnostic":"task-operational-log","enabled":true}'
+          } catch {
+            '{"diagnostic":"task-operational-log","enabled":false}'
+            exit 1
+          }
       - name: Exercise native manager lifecycle without login claim
+        # The probe emits allowlisted failure diagnostics directly to stderr.
+        # Do not dump private plans, failed records, or native command output.
         shell: bash
         run: >-
           "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py manager-cycle
@@ -167,6 +298,7 @@ jobs:
           --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-prepare.json"
           --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
       - name: Upload sanitized native evidence
+        # Failure diagnostics stay in job logs, never in qualification artifacts.
         if: success()
         uses: actions/upload-artifact@v4
         with:
