@@ -201,16 +201,36 @@ def stop(label: str = SERVICE_LABEL) -> dict:
     pid = check["pid"]
     error_code = None
     deadline = time.monotonic() + _STOP_TIMEOUT_SECONDS
-    if rc == 0 and pid is not None and check["confidence"] == "verified":
-        krc, kout, kerr = run_cmd(["/bin/kill", "-TERM", str(pid)])
-        detail = f"{detail}; signal pid {pid}: {kout or kerr}".strip("; ")
-        check = verify_pid(record)
-        while krc == 0 and check["confidence"] == "verified":
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(_STOP_POLL_SECONDS, remaining))
+    krc = None
+    while rc == 0 and pid is not None:
+        current = read_pidfile_record()
+        if current != record and (current is not None or default_pidfile_path().exists()):
+            return {
+                "platform": "macos",
+                "action": "stop",
+                "ok": False,
+                "detail": f"{detail}; pidfile changed during stop; retained for review".strip("; "),
+                "error_code": "pidfile-changed",
+            }
+        if check["confidence"] not in ("verified", "degraded", "unverified"):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if check["confidence"] == "verified" and krc is None:
             check = verify_pid(record)
+            if check["confidence"] != "verified":
+                continue
+            krc, kout, kerr = run_cmd(["/bin/kill", "-TERM", str(pid)])
+            detail = f"{detail}; signal pid {pid}: {kout or kerr}".strip("; ")
+            check = verify_pid(record)
+            continue
+        if check["confidence"] == "verified" and krc != 0:
+            break
+        # Separate ps probes can lose identity fields during launchd shutdown.
+        # Wait read-only while uncertain; never signal using the earlier identity.
+        time.sleep(min(_STOP_POLL_SECONDS, remaining))
+        check = verify_pid(record)
 
     stopped = check["confidence"] in ("stale", "absent") and not check["running"]
     if stopped:

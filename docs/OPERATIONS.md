@@ -227,14 +227,37 @@ authorize cleanup from a preexisting plan. Abrupt process death before sealing r
 operator review, not automatic recovery from unsealed evidence. Native probes require a
 disposable single-writer account and a proven service launch environment. Windows task
 XML persists the service spec's `state_dir` in a standard-library `pythonw -c` bootstrap
-that sets `BRAINS_STATE_DIR` before importing Brains, then runs `-m brains` in the same
-process with the remaining arguments preserved. Other interpreter argument shapes are
-refused. The XML definition is stored under that spec's state directory; rendering and
-dry-run installation write nothing. Reinstall an existing task to persist its chosen
-state root. Only `BRAINS_STATE_DIR` is captured, not the installing shell's other
+that sets `BRAINS_STATE_DIR` before importing Brains, including service-package config
+imports. It dispatches `brains.service.windows_runner`, which launches the foreground
+`-m brains serve-all` child using the exact verified `pythonw.exe` path from the spec,
+not a redirector's potentially different `sys.executable`. The child inherits the bound
+state and the validated serve-all arguments. Alternate commands, daemon flags, and
+unsupported interpreter argument shapes are refused. The XML definition is stored under
+that spec's state directory; rendering and dry-run installation write nothing. Reinstall
+an existing task to acquire the runner and persist its chosen state root.
+Only `BRAINS_STATE_DIR` is captured, not the installing shell's other
 environment values or secrets. An explicit `BRAINS_DB_URL` in the launch environment
 can still select a different database; state-root persistence does not override all
 external configuration or establish real login/reboot persistence.
+
+Windows supervisor recovery is a task-owned restart loop supervised by Task Scheduler,
+not reliance on Scheduler retrying a failed supervisor action. The runner waits for one
+child at a time; a nonzero exit or launch failure waits 60 seconds before another attempt,
+with at most 9999 restarts after the initial launch per action lifetime. Exit zero stops
+without restarting. Exhaustion exits nonzero. Scheduler's separate `RestartOnFailure`
+policy remains configured at one minute and 9999 retries for action failure; configuration
+alone does not prove Scheduler performed a retry. The runner has no service-duration
+deadline and no detached worker or PID file. Its child wait lasts for the supervisor's
+lifetime, and its failure budget bounds retries rather than healthy service uptime.
+
+Only the supervisor writes `service.pid`. Windows stop captures that record, ends the
+task with `/End` to stop the runner (including during backoff), then verifies and kills
+the captured supervisor's owned PID tree. Failure to end the action refuses child cleanup
+because a surviving runner could respawn it. Exit and unchanged-record checks still gate
+PID cleanup and uninstall. Killing only the recorded supervisor tree deliberately leaves
+the task-owned runner alive to recover it; it is not a service stop. Native lifecycle
+qualification must prove both recovery and no respawn after stop, including any venv
+launcher/redirector process chain.
 
 ```text
 brains-ai service status

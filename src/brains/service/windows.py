@@ -3,8 +3,8 @@
 Why a Scheduled Task and not a true Windows Service? A real service requires
 either a service-aware binary (the SCM kills plain executables that don't
 answer its control protocol) or a third-party wrapper like NSSM. A Scheduled
-Task is dependency-free, ships with every Windows install, and supports
-everything we need: start at logon, run hidden, restart on failure, and run
+Task is dependency-free, ships with every Windows install, and can start at
+logon, run hidden, supervise a task-owned restart loop, and run
 **as the logged-in user** (an interactive-token principal, so HOME / OAuth /
 the canonical DB all resolve and no password is stored).
 
@@ -46,20 +46,29 @@ def render_task_xml(spec: ServiceSpec) -> str:
     """Render a Task Scheduler 1.2 XML document for the serve-all task.
 
     Encodes: LogonTrigger for ``spec.user``; an interactive-token principal at
-    least-privilege; restart-on-failure (every 1 minute, up to 9999 times); no
+    least-privilege; action restart-on-failure (every 1 minute, up to 9999 times); no
     execution time limit; hidden; single-instance; and the verified windowless
     ``pythonw`` action with a neutral working directory. A standard-library
-    bootstrap sets the persisted state root before importing Brains in-process.
+    bootstrap sets the persisted state root before importing the task-owned
+    runner, which restarts failed supervisors without waiting for a new task run.
     """
+    from brains.service.windows_runner import (
+        RESTART_COUNT,
+        RESTART_INTERVAL_SECONDS,
+        validate_args,
+    )
+
     if tuple(spec.args[:2]) != ("-m", "brains"):
         raise ValueError("Windows service arguments must start with '-m brains'")
+    runner_args = [spec.program, *spec.args[2:]]
+    validate_args(spec.args[2:])
     # Task Scheduler does not inherit the installing shell's environment.
     bootstrap = (
         "import os,runpy; "
         f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
-        "runpy.run_module('brains',run_name='__main__',alter_sys=True)"
+        "runpy.run_module('brains.service.windows_runner',run_name='__main__',alter_sys=True)"
     )
-    arguments = subprocess.list2cmdline(["-c", bootstrap, *spec.args[2:]])
+    arguments = subprocess.list2cmdline(["-c", bootstrap, *runner_args])
     user = escape(spec.user)
     task_name = native_service_identity("windows", spec.label)
     return f"""<?xml version="1.0" encoding="UTF-16"?>
@@ -100,8 +109,8 @@ def render_task_xml(spec: ServiceSpec) -> str:
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
     <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>9999</Count>
+      <Interval>PT{RESTART_INTERVAL_SECONDS // 60}M</Interval>
+      <Count>{RESTART_COUNT}</Count>
     </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
@@ -197,8 +206,7 @@ def start(label: str = SERVICE_LABEL) -> dict:
 def stop(label: str = SERVICE_LABEL) -> dict:
     """End the task, then reap the supervisor tree.
 
-    ``schtasks /End`` only stops the task's action process; the gateway /
-    dashboard / MCP children it spawned are orphaned. We additionally kill the
+    ``schtasks /End`` stops the task-owned restart loop first. We then kill the
     process tree rooted at the supervisor PID recorded in ``service.pid`` -
     but only after :func:`verify_pid` confirms that PID still names the
     supervisor we recorded. A PID the OS has since reused for an unrelated
@@ -209,6 +217,14 @@ def stop(label: str = SERVICE_LABEL) -> dict:
     record = read_pidfile_record()
     rc, out, err = run_cmd(["schtasks", "/End", "/TN", task_name])
     detail = out or err
+    if rc != 0:
+        return {
+            "platform": "windows",
+            "action": "stop",
+            "ok": False,
+            "detail": detail,
+            "error_code": "native-stop-failed",
+        }
     check = verify_pid(record)
     pid = check["pid"]
     deadline = time.monotonic() + _STOP_TIMEOUT_SECONDS

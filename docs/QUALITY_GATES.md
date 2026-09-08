@@ -94,6 +94,24 @@ importing Brains; previously installed tasks require reinstallation. An explicit
 `BRAINS_DB_URL` remains a separate override. Mocked bootstrap and cleanup tests do not
 substitute for native launch-state qualification.
 
+On Windows, the task-owned runner must recover a killed recorded supervisor tree after
+its 60-second backoff, with a new verified supervisor PID and restored protocol readiness.
+This recovery occurs within the running task action; a changed Scheduler `LastRunTime`
+or a new task-run event is not required and must not be claimed without observation.
+The unchanged manager-cycle probe's supervisor-kill and readiness checks remain required.
+Stop must end the task-owned runner before captured-child cleanup and leave no respawn,
+listener, or launcher/redirector process behind. The Windows probe first permits a bounded
+30-second stop transition, then requires 65 seconds of continuously sampled quiescence,
+longer than the runner's 60-second backoff. Every sample rechecks native ownership,
+absent supervisor PID/listeners, and Scheduler Ready/Disabled state with zero instances.
+Unknown/unavailable Scheduler state or any observed respawn fails qualification. This is
+a finite no-respawn observation, not proof of permanent process containment or complete
+ancestor disappearance. It does not separately exercise stopping during crash backoff.
+Unit tests of the bounded 9999-restart
+budget, clean exit, launch failure, cancellation, and state/argument binding are not a
+substitute for this native evidence. Scheduler's configured action-failure retry policy
+is separate and is not proof that Scheduler retried a failed supervisor.
+
 ## Recurring release conditions
 
 Backlog completion does not qualify a particular candidate. Before a release, all of the

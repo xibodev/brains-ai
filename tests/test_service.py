@@ -307,9 +307,9 @@ def test_windows_task_xml_encodes_policy(spec: ServiceSpec) -> None:
     bootstrap = (
         "import os,runpy; "
         f"os.environ['BRAINS_STATE_DIR']={str(spec.state_dir)!r}; "
-        "runpy.run_module('brains',run_name='__main__',alter_sys=True)"
+        "runpy.run_module('brains.service.windows_runner',run_name='__main__',alter_sys=True)"
     )
-    assert arguments == subprocess.list2cmdline(["-c", bootstrap, "serve-all"])
+    assert arguments == subprocess.list2cmdline(["-c", bootstrap, spec.program, "serve-all"])
     assert "USER-PC\\user" in xml
 
 
@@ -324,8 +324,11 @@ def test_windows_task_xml_encodes_policy(spec: ServiceSpec) -> None:
     ],
 )
 @pytest.mark.parametrize("inherited_state", [None, r"C:\different state"])
+@pytest.mark.parametrize(
+    "gateway_host", ["", "with spaces", 'with "quotes" & \u96ea', "C:\\trailing space\\"]
+)
 def test_windows_bootstrap_sets_only_state_before_dispatch(
-    spec, state_root, inherited_state, monkeypatch
+    spec, state_root, inherited_state, gateway_host, monkeypatch
 ) -> None:
     spec.state_dir = state_root
     spec.program = r"C:\Python & tools\pythonw.exe"
@@ -335,15 +338,11 @@ def test_windows_bootstrap_sets_only_state_before_dispatch(
         "brains",
         "serve-all",
         "--gateway-host",
-        "127.0.0.1",
+        gateway_host,
         "--gateway-port",
         "8877",
         "--mcp-port",
         "9988",
-        "",
-        "with spaces",
-        'with "quotes" & \u96ea',
-        "C:\\trailing space\\",
     ]
     original_args = spec.args.copy()
     canary = "synthetic-secret-do-not-persist-8392"
@@ -363,7 +362,7 @@ def test_windows_bootstrap_sets_only_state_before_dispatch(
     assert len(encoded) == 1
     action = encoded[0]
     assert action[0] == "-c"
-    assert action[2:] == original_args[2:]
+    assert action[2:] == [spec.program, *original_args[2:]]
     assert root.findtext(".//{*}Arguments") == list2cmdline(action)
     assert root.findtext(".//{*}Command") == spec.program
     assert root.findtext(".//{*}WorkingDirectory") == spec.working_dir
@@ -386,12 +385,12 @@ def test_windows_bootstrap_sets_only_state_before_dispatch(
 
     def dispatch(module, *, run_name, alter_sys):
         assert dict(os.environ) == {**environment, "BRAINS_STATE_DIR": state_root}
-        assert sys.argv == ["-c", *original_args[2:]]
+        assert sys.argv == ["-c", spec.program, *original_args[2:]]
         dispatched.append((module, run_name, alter_sys))
 
     monkeypatch.setattr(runpy, "run_module", dispatch)
     exec(action[1], {})
-    assert dispatched == [("brains", "__main__", True)]
+    assert dispatched == [("brains.service.windows_runner", "__main__", True)]
 
 
 @pytest.mark.parametrize(
@@ -401,6 +400,16 @@ def test_windows_bootstrap_sets_only_state_before_dispatch(
 def test_windows_renderer_rejects_unsupported_arguments(spec, arguments) -> None:
     spec.args = arguments
     with pytest.raises(ValueError, match="must start with '-m brains'"):
+        windows.render_task_xml(spec)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [[], ["service", "stop"], ["serve-all", "--daemon"], ["serve-all", "--gateway-port"]],
+)
+def test_windows_renderer_rejects_non_foreground_supervisor(spec, tail) -> None:
+    spec.args = ["-m", "brains", *tail]
+    with pytest.raises(ValueError):
         windows.render_task_xml(spec)
 
 
@@ -774,7 +783,10 @@ def test_windows_stop_tree_kills_a_verified_pid(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(windows, "run_cmd", _fake_run_cmd)
     report = windows.stop()
     assert report["ok"] is True
-    assert any(cmd[0] == "taskkill" for cmd in calls)
+    assert calls == [
+        ["schtasks", "/End", "/TN", "BrainsServeAll"],
+        ["taskkill", "/PID", str(os.getpid()), "/T", "/F"],
+    ]
     assert not (tmp_path / "sessions" / "service.pid").exists()
 
 
@@ -792,6 +804,22 @@ def test_windows_stop_reports_failed_tree_kill(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(windows, "run_cmd", _fake_run_cmd)
     assert windows.stop()["ok"] is False
+
+
+def test_windows_stop_does_not_kill_child_if_runner_cannot_be_ended(monkeypatch) -> None:
+    record = {"pid": 4242}
+    monkeypatch.setattr(windows, "read_pidfile_record", lambda: record)
+    monkeypatch.setattr(
+        windows, "verify_pid", lambda _record: pytest.fail("runner is still allowed to respawn")
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows, "run_cmd", lambda command: calls.append(command) or (1, "", "end refused")
+    )
+    report = windows.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == "native-stop-failed"
+    assert calls == [["schtasks", "/End", "/TN", "BrainsServeAll"]]
 
 
 def test_windows_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:

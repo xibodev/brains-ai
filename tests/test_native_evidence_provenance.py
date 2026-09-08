@@ -611,6 +611,11 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     monkeypatch.setenv("BRAINS_STATE_DIR", str(runtime / "state"))
     monkeypatch.setattr(native_lifecycle, "_boot_marker", lambda: "a" * 64)
     monkeypatch.setattr(native_lifecycle, "_kill_owned_tree", lambda _pid: None)
+    clock = [0.0]
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        native_lifecycle.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
     ports = iter((24001, 24002))
     monkeypatch.setattr(native_lifecycle, "_port", lambda: next(ports))
 
@@ -626,6 +631,20 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         return dict(expected_definition)
 
     def native_command(args: list[str], *, env: dict | None = None) -> subprocess.CompletedProcess:
+        if system == "Windows" and "engine_pid_matches_recorded" in args[-1]:
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                json.dumps(
+                    {
+                        "state": 4 if state["running"] else 3,
+                        "last_task_result": 0,
+                        "running_instances": 1 if state["running"] else 0,
+                        "engine_pid_matches_recorded": None,
+                    }
+                ),
+                "",
+            )
         slug = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}[system]
         identity = native_lifecycle.native_service_identity(
             slug, "brains-serve-all-evidence-11111111"
@@ -2489,6 +2508,106 @@ def test_native_cleanup_accounts_real_wire_artifacts(
         clock[0] = "20260901-010101"
         with pytest.raises(native_lifecycle.EvidenceFailure, match="already exists"):
             native_lifecycle._check_backup_collision(tool)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "stable",
+        "disabled",
+        "respawn",
+        "scheduler-running",
+        "scheduler-queued",
+        "scheduler-instance",
+        "unavailable",
+        "ownership-drift",
+        "never-stops",
+    ],
+)
+def test_native_windows_stop_observes_full_backoff_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str
+) -> None:
+    from brains.service.windows_runner import RESTART_INTERVAL_SECONDS
+
+    assert native_lifecycle.WINDOWS_STOP_OBSERVATION_SECONDS == 65
+    assert native_lifecycle.WINDOWS_STOP_OBSERVATION_SECONDS > RESTART_INTERVAL_SECONDS
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("BRAINS_NATIVE_EVIDENCE_ROOT", str(tmp_path / "runtime"))
+    label = "brains-serve-all-evidence-test"
+    clock = [0.0]
+    ownership_polls = []
+    status_polls = []
+    scheduler_polls = []
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        native_lifecycle.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay)
+    )
+
+    def ownership(_plan: dict) -> bool:
+        ownership_polls.append(clock[0])
+        if outcome == "ownership-drift" and clock[0] >= 60:
+            raise native_lifecycle.EvidenceFailure("native definition is not owned by this journey")
+        return True
+
+    def status(*_args: str) -> dict:
+        status_polls.append(clock[0])
+        active = outcome == "never-stops" or (outcome == "respawn" and clock[0] >= 60)
+        return {
+            "platform": "windows",
+            "label": native_lifecycle.native_service_identity("windows", label),
+            "state": "Ready",
+            "installed": True,
+            "healthy": active,
+            "runtime_classification": "installed-owned-ready" if active else "stopped",
+            "service_pid": {
+                "pid": 456 if active else None,
+                "confidence": "verified" if active else "absent",
+            },
+            "listeners": {"gateway": active, "mcp": active},
+            "mcp_protocol": {"ready": active},
+        }
+
+    def scheduler(*_args, **_kwargs) -> subprocess.CompletedProcess:
+        scheduler_polls.append(clock[0])
+        failed = outcome == "unavailable" and clock[0] >= 60
+        state = (
+            4
+            if outcome == "scheduler-running" and clock[0] >= 60
+            else (
+                2
+                if outcome == "scheduler-queued" and clock[0] >= 60
+                else (1 if outcome == "disabled" else 3)
+            )
+        )
+        return subprocess.CompletedProcess(
+            [],
+            2 if failed else 0,
+            json.dumps(
+                {
+                    "state": state,
+                    "last_task_result": 0,
+                    "running_instances": int(outcome == "scheduler-instance" and clock[0] >= 60),
+                    "engine_pid_matches_recorded": None,
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_assert_native_ownership", ownership)
+    monkeypatch.setattr(native_lifecycle, "_status", status)
+    monkeypatch.setattr(native_lifecycle, "_native_command", scheduler)
+    plan = {"label": label, "executable": "synthetic"}
+    if outcome in {"stable", "disabled"}:
+        evidence = native_lifecycle._wait_stopped(plan)
+        assert evidence["owned_process"]["confidence"] == "absent"
+        assert clock[0] == 65
+        assert len(status_polls) == 131
+    else:
+        with pytest.raises(native_lifecycle.EvidenceFailure):
+            native_lifecycle._wait_stopped(plan)
+        assert clock[0] == (30 if outcome == "never-stops" else 60)
+    assert scheduler_polls == status_polls
+    assert ownership_polls[: len(status_polls)] == status_polls
 
 
 @pytest.mark.parametrize("outcome", ["stopped", "timeout", "ownership-drift"])

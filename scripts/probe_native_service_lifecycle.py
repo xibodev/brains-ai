@@ -53,6 +53,7 @@ from brains.service.common import native_service_identity
 ACKNOWLEDGEMENT = "disposable-native-service-host"
 TOOLS = ("copilot-cli", "claude-code", "codex", "opencode")
 FORBIDDEN_PORTS = {9876, 9877}
+WINDOWS_STOP_OBSERVATION_SECONDS = 65
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 PLAN_CORE_FIELDS = {
     "candidate",
@@ -112,6 +113,8 @@ _DIAGNOSTIC_MESSAGES = (
     "service readiness evidence is incomplete",
     "native service did not reach the stopped state",
     "native service did not reach the stopped state before timeout",
+    "Windows stopped service respawned during observation",
+    "Windows stopped task observation unavailable",
     "synthetic configuration changed before removal",
     "client configuration directory inventory differs",
     "preexisting client configuration changed",
@@ -407,7 +410,7 @@ def _diagnose(
                         else None,
                     }.items()
                 }
-        if name == "_wait_healthy":
+        if name in {"_wait_healthy", "_wait_stopped"}:
             scheduler = trace.tb_frame.f_locals.get("scheduler_status")
             if type(scheduler) is dict:
                 scheduler_status = _validated_scheduler_status(scheduler)
@@ -886,22 +889,43 @@ def _assert_stopped(evidence: dict[str, Any]) -> None:
 
 def _wait_stopped(plan: dict[str, Any], timeout: float = 30) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
+    windows = platform.system() == "Windows"
+    stable_since: float | None = None
     report: dict[str, Any] = {}
-    while time.monotonic() < deadline:
+    while stable_since is not None or time.monotonic() < deadline:
         _assert_native_ownership(plan)
         report = _status(plan["executable"], plan["label"])
         _status_identity(report, plan["label"])
-        if (
+        quiescent = (
             report.get("healthy") is False
             and report.get("listeners") == {"gateway": False, "mcp": False}
             and report.get("mcp_protocol", {}).get("ready") is False
             and report.get("service_pid", {}).get("pid") is None
             and report.get("service_pid", {}).get("confidence") == "absent"
             and report.get("runtime_classification") == "stopped"
-        ):
+        )
+        if windows:
+            scheduler_status = _windows_scheduler_status(plan["label"], report)
+            if scheduler_status.get("available") is False or scheduler_status.get("state") == 0:
+                raise EvidenceFailure("Windows stopped task observation unavailable")
+            # TASK_STATE_DISABLED/READY are idle; QUEUED is not quiescence.
+            quiescent = (
+                quiescent
+                and scheduler_status["state"] in {1, 3}
+                and scheduler_status["running_instances"] == 0
+            )
+        if stable_since is not None and not quiescent:
+            raise EvidenceFailure("Windows stopped service respawned during observation")
+        if quiescent:
             evidence = _status_evidence(report, plan["label"])
             _assert_stopped(evidence)
-            return evidence
+            if not windows:
+                return evidence
+            now = time.monotonic()
+            if stable_since is None:
+                stable_since = now
+            if now - stable_since >= WINDOWS_STOP_OBSERVATION_SECONDS:
+                return evidence
         time.sleep(0.5)
     raise EvidenceFailure("native service did not reach the stopped state before timeout")
 
@@ -980,7 +1004,7 @@ def _validated_scheduler_status(payload: Any) -> dict[str, Any]:
 
 
 def _windows_scheduler_status(label: str, report: dict[str, Any]) -> dict[str, Any]:
-    """Best-effort read-only failure context; never a readiness/ownership proof."""
+    """Read-only scheduler state; unavailable data never proves quiescence or ownership."""
     try:
         identity = native_service_identity("windows", label)
         process = report.get("service_pid")
