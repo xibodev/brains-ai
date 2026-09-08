@@ -330,6 +330,7 @@ def _diagnose(
     wait_status = None
     systemd_status = None
     service_error_code = None
+    service_pid_identity = {}
     scheduler_status = None
     recovery_policy = None
     trace = exc.__traceback__ if exc is not None else None
@@ -383,6 +384,26 @@ def _diagnose(
                                     and backend_code in _SERVICE_ERROR_CODES
                                     else "unclassified-service-error"
                                 )
+                                if type(payload) is dict:
+                                    for key, allowed in {
+                                        "pid_confidence": {
+                                            "absent",
+                                            "stale",
+                                            "unverified",
+                                            "degraded",
+                                            "verified",
+                                        },
+                                        "pid_identity_evidence": {
+                                            "executable-and-start-time-mismatch",
+                                            "process-absent",
+                                            "identity-not-proven",
+                                            "identity-matching",
+                                            "no-record",
+                                        },
+                                    }.items():
+                                        value = payload.get(key)
+                                        if type(value) is str and value in allowed:
+                                            service_pid_identity[key] = value
         if name in {"_wait_healthy", "_wait_stopped", "_wait_removed"}:
             report = trace.tb_frame.f_locals.get("report" if name != "_wait_removed" else "last")
             if type(report) is dict:
@@ -469,6 +490,8 @@ def _diagnose(
         record["systemd_query"] = systemd_status
     if service_error_code is not None:
         record["service_error_code"] = service_error_code
+    if service_pid_identity:
+        record["service_pid_identity"] = service_pid_identity
     if scheduler_status is not None:
         record["task_scheduler"] = scheduler_status
     if recovery_policy is not None:

@@ -292,6 +292,149 @@ def test_managed_backup_accounting_requires_exact_primary_and_known_states() -> 
         native_evidence.account_managed_backups(baseline, wired, unexpected)
 
 
+@pytest.mark.parametrize(
+    ("stdout", "returncode", "category", "character_class", "offset", "parse_category"),
+    [
+        ("", 0, "non-json", "empty", 0, "expected-value"),
+        ("", 1, "non-json", "empty", 0, "expected-value"),
+        (" \n", 1, "non-json", "whitespace", 2, "expected-value"),
+        ("synthetic-secret", 2, "non-json", "letter", 0, "expected-value"),
+        ('{"ok": true}', 3, "nonzero-exit", "json-container", None, None),
+        ('{"ok": false}', 0, "reported-failure", "json-container", None, None),
+        ('noise {"ok": true}', 0, "non-json", "letter", 0, "expected-value"),
+        ('{"ok": true} noise', 0, "non-json", "json-container", 13, "extra-data"),
+        ('{"ok": true}\n{"ok": true}', 0, "non-json", "json-container", 13, "extra-data"),
+        ("[]", 0, "non-object-json", "json-container", None, None),
+        ('"synthetic-secret"', 0, "non-object-json", "quote", None, None),
+        ('{"synthetic-secret":}', 0, "non-json", "json-container", 20, "expected-value"),
+    ],
+)
+def test_installation_original_failure_diagnostic_is_content_free(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stdout: str,
+    returncode: int,
+    category: str,
+    character_class: str,
+    offset: int | None,
+    parse_category: str | None,
+) -> None:
+    stderr = "Traceback (most recent call last):\nsynthetic-secret private-path env-locals"
+    run = Mock(return_value=subprocess.CompletedProcess([], returncode, stdout, stderr))
+    monkeypatch.setattr(native_installation.subprocess, "run", run)
+    with pytest.raises(native_evidence.ProvenanceFailure) as raised:
+        native_installation._run(
+            Path("private-executable"),
+            {"PRIVATE_ENV": "private-value"},
+            "private-argument",
+            stage=native_installation.InstallationStage.WIRE_APPLY,
+        )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "diagnostic": "native-installation-failure",
+        "stage": "wire-apply",
+        "category": category,
+        "returncode": returncode,
+        "parse_error_offset": offset,
+        "parse_error_category": parse_category,
+        "stdout_length": len(stdout),
+        "stdout_length_unit": "chars",
+        "stdout_first_character_class": character_class,
+        "stderr_length": len(stderr),
+        "stderr_length_unit": "chars",
+        "stderr_first_character_class": "letter",
+        "stderr_signatures": ["traceback"],
+    }
+    for private in ("synthetic-secret", "private-", "PRIVATE_ENV", "env-locals", "Traceback"):
+        assert private not in captured.err + str(raised.value)
+    assert raised.value.__suppress_context__ or raised.value.__context__ is None
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize("stage", list(native_installation.InstallationStage))
+@pytest.mark.parametrize("outer_timeout", [False, True])
+def test_installation_timeout_origin_and_stderr_signatures_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stage: native_installation.InstallationStage,
+    outer_timeout: bool,
+) -> None:
+    stderr = (
+        "Traceback: subprocess.TimeoutExpired: Command "
+        "['icacls.exe', 'powershell.exe', 'whoami', 'synthetic-secret'] timed out"
+    )
+    if outer_timeout:
+        run = Mock(
+            side_effect=subprocess.TimeoutExpired(
+                ["private-command"], 120, output=b"synthetic-secret", stderr=stderr.encode()
+            )
+        )
+    else:
+        run = Mock(return_value=subprocess.CompletedProcess([], 1, "synthetic-secret", stderr))
+    monkeypatch.setattr(native_installation.subprocess, "run", run)
+    with pytest.raises(native_evidence.ProvenanceFailure) as raised:
+        native_installation._run(Path("private-executable"), {}, "wire", stage=stage)
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert captured.out == ""
+    assert diagnostic["stage"] == stage.value
+    assert diagnostic["category"] == ("subprocess-timeout" if outer_timeout else "non-json")
+    assert diagnostic["returncode"] == (None if outer_timeout else 1)
+    assert diagnostic["parse_error_offset"] == (None if outer_timeout else 0)
+    assert diagnostic["parse_error_category"] == (None if outer_timeout else "expected-value")
+    assert diagnostic["stdout_length"] == len("synthetic-secret")
+    assert diagnostic["stderr_length"] == len(stderr)
+    assert diagnostic["stderr_length_unit"] == ("bytes" if outer_timeout else "chars")
+    assert diagnostic["stderr_signatures"] == [
+        "timeout-expired",
+        "traceback",
+        "icacls",
+        "powershell",
+        "whoami",
+    ]
+    assert "synthetic-secret" not in captured.err + str(raised.value)
+    assert "private-" not in captured.err + str(raised.value)
+    assert raised.value.__suppress_context__
+    run.assert_called_once()
+
+
+def test_installation_success_remains_strict_json_and_silent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run = Mock(return_value=subprocess.CompletedProcess([], 0, ' \n{"ok": true}\n', ""))
+    monkeypatch.setattr(native_installation.subprocess, "run", run)
+    assert native_installation._run(
+        Path("synthetic-executable"),
+        {},
+        "wire",
+        "--status",
+        stage=native_installation.InstallationStage.WIRE_STATUS,
+    ) == {"ok": True}
+    assert capsys.readouterr() == ("", "")
+    run.assert_called_once()
+
+
+def test_installation_call_sites_use_six_distinct_explicit_stages() -> None:
+    tree = ast.parse(_INSTALLATION_PATH.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_run"
+    ]
+    stages = [next(item.value for item in node.keywords if item.arg == "stage") for node in calls]
+    assert len(stages) == 6
+    assert all(
+        isinstance(stage, ast.Attribute)
+        and isinstance(stage.value, ast.Name)
+        and stage.value.id == "InstallationStage"
+        for stage in stages
+    )
+    assert {stage.attr for stage in stages} == {
+        stage.name for stage in native_installation.InstallationStage
+    }
+
+
 def test_installation_definition_and_setup_evidence_rejects_false_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1682,6 +1825,47 @@ def test_native_command_diagnostic_does_not_attribute_nonservice_error(
     assert "synthetic-secret" not in json.dumps(diagnostic)
 
 
+@pytest.mark.parametrize(
+    "confidence,evidence,expected",
+    [
+        ("stale", "executable-and-start-time-mismatch", True),
+        ("degraded", "identity-not-proven", True),
+        ("stale", "process-absent", True),
+        ("/private/synthetic-secret", "synthetic-secret", False),
+        (["stale"], {"detail": "synthetic-secret"}, False),
+        (None, True, False),
+    ],
+)
+def test_native_diagnostic_allowlists_pid_identity(
+    monkeypatch, capsys, confidence, evidence, expected
+):
+    payload = {
+        "ok": False,
+        "error_code": "pid-identity-unsafe",
+        "pid_confidence": confidence,
+        "pid_identity_evidence": evidence,
+        "detail": "synthetic-secret",
+    }
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 1, json.dumps(payload), "")),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic", ["service", "uninstall"])
+    native_lifecycle._diagnose(raised.value, phase="cleanup", stage="cleanup-native")
+    output = capsys.readouterr().err
+    diagnostic = json.loads(output)
+    assert "synthetic-secret" not in output
+    if expected:
+        assert diagnostic["service_pid_identity"] == {
+            "pid_confidence": confidence,
+            "pid_identity_evidence": evidence,
+        }
+    else:
+        assert "service_pid_identity" not in diagnostic
+
+
 @pytest.mark.parametrize("observation", ["unavailable", "foreign", "wrong-identity"])
 def test_native_prepare_requires_positive_absence_before_any_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, observation: str
@@ -3034,6 +3218,20 @@ def test_native_workflows_declare_full_matrix_and_success_only_upload() -> None:
         assert upload["if"] == "success()"
         assert upload["with"]["if-no-files-found"] == "error"
         if filename == "ci.yml":
+            assert (
+                sum("probe_native_installation.py" in str(step.get("run", "")) for step in steps)
+                == 1
+            )
+            assert not any(
+                step.get("name")
+                in {
+                    "Report the installed executable output",
+                    "Report the bounded native installation failure type",
+                }
+                for step in steps
+            )
+            assert "subprocess.run" not in str(steps)
+            assert not probe.get("continue-on-error", False)
             environment = next(step for step in steps if step.get("id") == "native-environment")
             assert 'echo "python=$probe_python" >> "$GITHUB_OUTPUT"' in environment["run"]
             assert "steps.native-environment.outputs.python" in str(steps)

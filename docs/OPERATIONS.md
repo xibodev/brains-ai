@@ -275,7 +275,14 @@ On macOS, ordinary start uses `launchctl kickstart` without force-restarting an
 already-running supervisor. Stop unloads the job and sends TERM only to a verified
 recorded process instance, then polls that same identity for up to 60 seconds. A
 successful unload or signal alone is not a completed stop. Stale PID files are cleaned
-after exit; reused or unverifiable PIDs are not signalled by number. A changed PID
+after exit; reused or unverifiable PIDs are not signalled by number. macOS samples PID,
+start time, and executable together. If the captured identity was verified before a
+successful unload and both executable and start time subsequently contradict it, stop
+can remove only the unchanged captured stale record while leaving the foreign process
+alone. A timestamp-only or executable-only contradiction does not prove exit; uncertain
+samples get bounded read-only polling, not a signal. Cleanup rechecks identity and exact
+file bytes before unlinking and requires file absence afterward. This cooperative
+readback is not an atomic fence against a concurrent writer. A changed PID
 record, unresolved exit, or failed cleanup reports failure, and uninstall retains the
 plist. This bounds the exit polling, not the native command runtime, and does not
 independently prove that detached descendants have exited.

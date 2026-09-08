@@ -10,16 +10,17 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import itertools
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import urllib.parse
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -42,27 +43,113 @@ OPENCODE_VERSION = "1.18.25"
 FORBIDDEN_PORTS = {9876, 9877}
 
 
-def _run(executable: Path, env: dict[str, str], *args: str) -> dict[str, Any]:
-    completed = subprocess.run(
-        [str(executable), *args],
-        check=False,
-        capture_output=True,
-        env=env,
-        text=True,
-        timeout=120,
-    )
-    # Name the subcommand so a failing host says which call broke. Only the
-    # leading literal words are used, never an argument value, so no path or
-    # host detail reaches the public record.
-    command = " ".join(itertools.takewhile(lambda item: not item.startswith("-"), args))
+class InstallationStage(Enum):
+    SETUP_INITIAL = "setup-initial"
+    SERVICE_RENDER = "service-render"
+    WIRE_APPLY = "wire-apply"
+    WIRE_STATUS = "wire-status"
+    UNWIRE = "unwire"
+    SETUP_REPEAT = "setup-repeat"
+
+
+def _run(
+    executable: Path, env: dict[str, str], *args: str, stage: InstallationStage
+) -> dict[str, Any]:
+    if not isinstance(stage, InstallationStage):
+        raise ProvenanceFailure("installed executable stage is invalid")
+
+    def diagnose(
+        category: str,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        returncode: int | None,
+        parse_error: json.JSONDecodeError | None = None,
+    ) -> None:
+        diagnostic: dict[str, Any] = {
+            "diagnostic": "native-installation-failure",
+            "stage": stage.value,
+            "category": category,
+            "returncode": returncode,
+            "parse_error_offset": parse_error.pos if parse_error is not None else None,
+            "parse_error_category": None,
+        }
+        if parse_error is not None:
+            diagnostic["parse_error_category"] = {
+                "Expecting value": "expected-value",
+                "Extra data": "extra-data",
+                "Expecting property name enclosed in double quotes": "expected-property",
+                "Expecting ':' delimiter": "expected-colon",
+                "Expecting ',' delimiter": "expected-comma",
+            }.get(parse_error.msg, "invalid-json")
+        for name, content in (("stdout", stdout), ("stderr", stderr)):
+            diagnostic[f"{name}_length"] = len(content) if content is not None else 0
+            diagnostic[f"{name}_length_unit"] = "bytes" if isinstance(content, bytes) else "chars"
+            text = (
+                content.decode("utf-8", errors="replace") if isinstance(content, bytes) else content
+            )
+            # Inspect a character class, never echo the character or any fragment.
+            first = (text or "").lstrip()[:1]
+            if not content:
+                character_class = "empty"
+            elif not first:
+                character_class = "whitespace"
+            elif first in "{[":
+                character_class = "json-container"
+            elif first == '"':
+                character_class = "quote"
+            elif first.isalpha():
+                character_class = "letter"
+            elif first.isdigit() or first == "-":
+                character_class = "number"
+            else:
+                character_class = "other"
+            diagnostic[f"{name}_first_character_class"] = character_class
+            if name == "stderr":
+                # Presence hints only, not root-cause claims or extracted command lines.
+                diagnostic["stderr_signatures"] = [
+                    label
+                    for label, pattern in (
+                        ("timeout-expired", r"\bTimeoutExpired\b"),
+                        ("traceback", r"\bTraceback\b"),
+                        ("permission-error", r"\bPermissionError\b"),
+                        ("icacls", r"\bicacls(?:\.exe)?\b"),
+                        ("powershell", r"\bpowershell(?:\.exe)?\b"),
+                        ("whoami", r"\bwhoami(?:\.exe)?\b"),
+                    )
+                    if re.search(pattern, text or "", re.IGNORECASE)
+                ]
+        print(json.dumps(diagnostic, sort_keys=True), file=sys.stderr, flush=True)
+
+    try:
+        completed = subprocess.run(
+            [str(executable), *args],
+            check=False,
+            capture_output=True,
+            env=env,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        diagnose("subprocess-timeout", exc.stdout, exc.stderr, None)
+        raise ProvenanceFailure(f"installed executable timed out for {stage.value!r}") from None
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
+        diagnose("non-json", completed.stdout, completed.stderr, completed.returncode, exc)
         raise ProvenanceFailure(
-            f"installed executable returned a non-JSON result for {command!r}"
-        ) from exc
-    if completed.returncode != 0 or payload.get("ok") is False:
-        raise ProvenanceFailure(f"installed executable reported failure for {command!r}")
+            f"installed executable returned a non-JSON result for {stage.value!r}"
+        ) from None
+    if completed.returncode != 0:
+        diagnose("nonzero-exit", completed.stdout, completed.stderr, completed.returncode)
+        raise ProvenanceFailure(f"installed executable reported failure for {stage.value!r}")
+    if not isinstance(payload, dict):
+        diagnose("non-object-json", completed.stdout, completed.stderr, completed.returncode)
+        raise ProvenanceFailure(
+            f"installed executable returned non-object JSON for {stage.value!r}"
+        )
+    if payload.get("ok") is False:
+        diagnose("reported-failure", completed.stdout, completed.stderr, completed.returncode)
+        raise ProvenanceFailure(f"installed executable reported failure for {stage.value!r}")
     return payload
 
 
@@ -318,7 +405,16 @@ def run_probe(
         )
         record("harness", _verify_harness(tool))
 
-        first = _run(executable, env, "setup", "--path", str(workspace), "--no-wire", "--json")
+        first = _run(
+            executable,
+            env,
+            "setup",
+            "--path",
+            str(workspace),
+            "--no-wire",
+            "--json",
+            stage=InstallationStage.SETUP_INITIAL,
+        )
         gateway_port, mcp_port = _port(), _port()
         while mcp_port == gateway_port:
             mcp_port = _port()
@@ -332,6 +428,7 @@ def run_probe(
             str(gateway_port),
             "--mcp-port",
             str(mcp_port),
+            stage=InstallationStage.SERVICE_RENDER,
         )
         record(
             "manager-definition",
@@ -355,10 +452,11 @@ def run_probe(
             "streamable-http",
             "--port",
             str(mcp_port),
+            stage=InstallationStage.WIRE_APPLY,
         )
         if wired.get("ok") is not True:
             raise ProvenanceFailure("adapter wire failed")
-        status = _run(executable, env, "wire", "--status")
+        status = _run(executable, env, "wire", "--status", stage=InstallationStage.WIRE_STATUS)
         selected_rows = [row for row in status.get("tools", []) if row.get("tool") == tool]
         wired_rows = [row for row in wired.get("tools", []) if row.get("tool") == tool]
         if len(selected_rows) != 1 or len(wired_rows) != 1 or len(wired.get("tools", [])) != 1:
@@ -385,12 +483,23 @@ def run_probe(
             },
         )
 
-        _run(executable, env, "unwire", "--tool", tool, "--no-rules")
+        _run(
+            executable, env, "unwire", "--tool", tool, "--no-rules", stage=InstallationStage.UNWIRE
+        )
         restored = snapshot_files(config_roots)
         managed_backups = account_managed_backups(baseline, wired_snapshot, restored)
         setup_roots = (("state", state), ("workspace", workspace))
         before_second_setup = snapshot_files(setup_roots)
-        second = _run(executable, env, "setup", "--path", str(workspace), "--no-wire", "--json")
+        second = _run(
+            executable,
+            env,
+            "setup",
+            "--path",
+            str(workspace),
+            "--no-wire",
+            "--json",
+            stage=InstallationStage.SETUP_REPEAT,
+        )
         after_second_setup = snapshot_files(setup_roots)
         _assert_setup_idempotent(first, second, before_second_setup, after_second_setup)
         _remove_synthetic_root(config_root)

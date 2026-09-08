@@ -325,7 +325,7 @@ def test_macos_stop_signals_only_after_identity_recovers(macos_exit_observation)
 
 
 @pytest.mark.parametrize("after_wait", [False, True])
-def test_macos_stop_rejects_positive_pid_reuse_without_waiting_again(
+def test_macos_stop_cleans_owned_record_after_positive_pid_reuse_without_signal(
     macos_exit_observation, after_wait
 ) -> None:
     state = macos_exit_observation
@@ -334,13 +334,13 @@ def test_macos_stop_rejects_positive_pid_reuse_without_waiting_again(
         state.next_identity = foreign
     else:
         state.after_unload = foreign
-    before = state.pidfile.read_bytes()
     report = macos.stop()
-    assert report["ok"] is False
-    assert report["error_code"] == "pid-identity-unsafe"
+    assert report["ok"] is True
+    assert report["error_code"] is None
     assert state.elapsed == (macos._STOP_POLL_SECONDS if after_wait else 0)
     assert [cmd[1] for cmd in state.calls] == ["bootout"]
-    assert state.pidfile.read_bytes() == before
+    assert not state.pidfile.exists()
+    assert state.identity == foreign
 
 
 @pytest.mark.parametrize("replacement", ['{"format": 2, "pid": 4343}', "{broken"])

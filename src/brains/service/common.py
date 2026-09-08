@@ -28,6 +28,7 @@ import contextlib
 import csv
 import getpass
 import json
+import math
 import os
 import re
 import socket
@@ -635,19 +636,21 @@ def _linux_identity(pid: int) -> dict[str, Any] | None:
 
 
 def _macos_identity(pid: int) -> dict[str, Any] | None:
-    rc, out, _ = run_cmd(["ps", "-p", str(pid), "-o", "pid="])
-    if rc != 0 or not out.strip():
-        return None
-    exe: str | None = None
-    rc2, out2, _ = run_cmd(["ps", "-p", str(pid), "-o", "comm="])
-    if rc2 == 0 and out2.strip():
-        exe = out2.strip()
+    # One process-table row, not independently sampled comm/lstart values from
+    # opposite sides of exit/PID reuse. Keep comm last: executable paths have spaces.
+    rc, out, err = run_cmd(["ps", "-ww", "-p", str(pid), "-o", "pid=,lstart=,comm="])
+    if rc == 1 and not out.strip() and not err.strip():
+        return None  # ps found no selected process
+    unknown = {"exe": None, "start_time": None}
+    if rc != 0 or len(out.splitlines()) != 1:
+        return unknown
+    fields = out.split(maxsplit=6)
+    if len(fields) != 7 or fields[0] != str(pid):
+        return unknown
     start_time: float | None = None
-    rc3, out3, _ = run_cmd(["ps", "-p", str(pid), "-o", "lstart="])
-    if rc3 == 0 and out3.strip():
-        with contextlib.suppress(ValueError):
-            start_time = time.mktime(time.strptime(out3.strip(), "%a %b %d %H:%M:%S %Y"))
-    return {"exe": exe, "start_time": start_time}
+    with contextlib.suppress(ValueError, OverflowError):
+        start_time = time.mktime(time.strptime(" ".join(fields[1:6]), "%a %b %d %H:%M:%S %Y"))
+    return {"exe": fields[6], "start_time": start_time}
 
 
 def _parse_wmi_datetime(value: str) -> float | None:
@@ -742,7 +745,7 @@ def _read_process_identity(pid: int) -> dict[str, Any] | None:
         if plat == "windows":
             return _windows_identity(pid)
     except Exception:  # pragma: no cover - defensive; never raise from a probe
-        return None
+        return {"exe": None, "start_time": None} if plat == "macos" else None
     return None
 
 
@@ -787,7 +790,7 @@ def read_pidfile_record(path: Path | None = None) -> dict[str, Any] | None:
     target = path or default_pidfile_path()
     try:
         raw = target.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeError):
         return None
     if not raw:
         return None
@@ -854,7 +857,7 @@ def verify_pid(record: dict[str, Any] | int | None) -> dict[str, Any]:
             "reason": "no pidfile recorded",
         }
     pid = record.get("pid")
-    if not isinstance(pid, int) or pid <= 0:
+    if type(pid) is not int or pid <= 0:
         return {
             "pid": pid,
             "running": False,
@@ -891,8 +894,16 @@ def verify_pid(record: dict[str, Any] | int | None) -> dict[str, Any]:
         and "brains" in cmdline_live
         and "serve-all" in cmdline_live
     )
-    exe_checked = bool(exe_recorded and exe_live)
-    start_checked = isinstance(start_recorded, int | float) and isinstance(start_live, int | float)
+    exe_checked = all(
+        isinstance(value, str) and bool(_normalize_exe(value)) for value in (exe_recorded, exe_live)
+    )
+    start_checked = all(
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+        for value in (start_recorded, start_live)
+    )
     if not exe_checked and not start_checked:
         return {
             "pid": pid,
@@ -940,24 +951,64 @@ def verify_pid(record: dict[str, Any] | int | None) -> dict[str, Any]:
         "running": True,
         "identity_verified": False,
         "confidence": CONFIDENCE_STALE,
+        # Both fields must independently contradict a complete recorded identity.
+        # A comm-only change can be exec/normalization, not the old process exiting;
+        # a timestamp-only change can be clock/rounding drift. Neither proves reuse.
+        "identity_mismatch": bool(
+            exe_checked and start_checked and not exe_match and not start_match
+        ),
         "reason": "pid is running but its executable/start-time no longer match the recorded "
         "service — this pid was almost certainly reused by an unrelated process",
     }
 
 
-def cleanup_stale_pidfile(path: Path | None = None) -> dict[str, Any]:
-    """Remove ``path`` when it records a stale or absent PID; leave a
+def cleanup_stale_pidfile(
+    path: Path | None = None,
+    *,
+    expected_content: bytes | None = None,
+    allow_identity_mismatch: bool = True,
+) -> dict[str, Any]:
+    """Remove ``path`` when it records a stale PID; leave a
     verified/unverifiable-but-running one alone. Returns the driving
-    :func:`verify_pid` result plus a ``removed`` bool."""
+    :func:`verify_pid` result plus a ``removed`` bool.
+
+    A complete executable AND start-time contradiction permits removal of the
+    stale record, never a signal to the process now using its PID. Read back the
+    bytes after probing, and optionally bind them to a caller's captured snapshot.
+    This is a cooperative readback guard, not an atomic compare-and-unlink.
+    """
     target = path or default_pidfile_path()
+    try:
+        content = target.read_bytes()
+    except OSError:
+        content = None
+    if expected_content is not None and content is not None and content != expected_content:
+        return {**verify_pid(None), "removed": False}
     record = read_pidfile_record(target)
+    if content is not None:
+        try:
+            if target.read_bytes() != content:
+                record = None
+        except OSError:
+            record = None
     result = verify_pid(record)
-    if result["confidence"] in (CONFIDENCE_STALE, CONFIDENCE_ABSENT) and target.exists():
-        with contextlib.suppress(OSError):
+    result["removed"] = False
+    if (
+        record is not None
+        and content is not None
+        and result["confidence"] == CONFIDENCE_STALE
+        and (
+            not result["running"]
+            or (allow_identity_mismatch and result.get("identity_mismatch") is True)
+        )
+    ):
+        try:
+            if target.is_symlink() or target.read_bytes() != content:
+                return result
             target.unlink()
-        result["removed"] = True
-    else:
-        result["removed"] = False
+            result["removed"] = True
+        except OSError:
+            pass
     return result
 
 
