@@ -65,16 +65,22 @@ jobs:
         timeout-minutes: 8
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY_ID: ${{ github.repository_id }}
         run: |
           set -euo pipefail
           target="$(git -C site rev-parse HEAD)"
           [[ "$target" =~ ^[0-9a-f]{40}$ ]]
           builds="repos/${GITHUB_REPOSITORY}/pages/builds"
           prefix="https://api.github.com/${builds}/"
+          [[ "$GH_REPOSITORY_ID" =~ ^[0-9]+$ ]]
+          id_prefix="https://api.github.com/repositories/${GH_REPOSITORY_ID}/pages/builds/"
           build_path() {
             local url="$1" id
-            [[ "$url" == "$prefix"* ]] || return 1
-            id="${url#"$prefix"}"
+            case "$url" in
+              "$prefix"*) id="${url#"$prefix"}" ;;
+              "$id_prefix"*) id="${url#"$id_prefix"}" ;;
+              *) return 1 ;;
+            esac
             [[ "$id" =~ ^[0-9]+$ || ( "${2:-}" == latest && "$id" == latest ) ]] || return 1
             printf '%s/%s' "$builds" "$id"
           }
@@ -89,7 +95,8 @@ jobs:
             created="$(jq -er '.created_at' <<< "$build")"
             [[ "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]
             # The latest alias may still show the old build immediately after POST.
-            if jq -e --arg url "$url" 'index($url) != null' <<< "$previous" > /dev/null || [[ "$created" < "$requested_at" ]]; then
+            if jq -e --arg named "$prefix${pinned##*/}" --arg numbered "$id_prefix${pinned##*/}" \
+              'index($named) != null or index($numbered) != null' <<< "$previous" > /dev/null || [[ "$created" < "$requested_at" ]]; then
               sleep 5
               continue
             fi
