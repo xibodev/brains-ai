@@ -1942,14 +1942,26 @@ def _kill_owned_tree(pid: int) -> None:
 
 
 def _write_result(output: Path, result: dict[str, Any], *, passed: bool) -> None:
-    with output.open("x", encoding="utf-8") as stream:
-        stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
     suite = ET.Element("testsuite", name="native-service-lifecycle", tests="1")
     case = ET.SubElement(suite, "testcase", name=result.get("phase", "unknown"))
     if not passed:
         ET.SubElement(case, "failure", message="native lifecycle evidence failed")
     with output.with_suffix(".xml").open("x", encoding="utf-8") as stream:
         ET.ElementTree(suite).write(stream, encoding="unicode", xml_declaration=True)
+    # Publish JSON last, complete and without replacing an existing artifact.
+    # A partial JSON/XML write must never authorize later cleanup as passed.
+    temporary = output.with_name(f".{output.name}.{secrets.token_hex(16)}.tmp")
+    created = False
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            created = True
+            stream.write(json.dumps(result, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+        os.link(temporary, output)
+    finally:
+        if created:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
 
 
 def _journey(candidate: str, adapter: str, provenance_sha256: str) -> dict[str, Any]:
@@ -2665,6 +2677,7 @@ def main() -> int:
     executable = str(executable_path)
     result: dict[str, Any] = {"phase": args.phase}
     rollback_context: dict[str, Any] = {}
+    rollback_attempted = False
     cleanup_outcomes: dict[str, Any] = {}
     stage = "guard"
     try:
@@ -2828,6 +2841,7 @@ def main() -> int:
             outcomes=cleanup_outcomes if args.phase == "cleanup" else None,
         )
         if rollback_context:
+            rollback_attempted = True
             rollback_context["phase"] = args.phase
             result["failure_cleanup"] = _rollback(rollback_context)
             _diagnose(
@@ -2855,7 +2869,24 @@ def main() -> int:
         )
         _write_result(args.output, result, passed=passed)
     except Exception as exc:  # noqa: BLE001 - export failures must not leak record contents
-        _diagnose(exc, phase=args.phase, stage="result-export", context=rollback_context)
+        result["passed"] = False
+        _diagnose(
+            exc,
+            phase=args.phase,
+            stage="result-export",
+            context=rollback_context,
+            outcomes=cleanup_outcomes if args.phase == "cleanup" else None,
+        )
+        if rollback_context and not rollback_attempted:
+            rollback_context["phase"] = args.phase
+            result["failure_cleanup"] = _rollback(rollback_context)
+            _diagnose(
+                None,
+                phase=args.phase,
+                stage="rollback-outcome",
+                context=rollback_context,
+                outcomes=result["failure_cleanup"],
+            )
         return 1
     return 0 if passed else 1
 

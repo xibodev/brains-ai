@@ -530,6 +530,7 @@ def _lifecycle_main(
     executable: Path,
     provenance: dict | Exception,
     *extra: str,
+    read_result: bool = True,
 ) -> tuple[int, dict]:
     monkeypatch.setattr(sys, "prefix", str(executable.parent.parent))
     monkeypatch.setattr(
@@ -565,7 +566,7 @@ def _lifecycle_main(
         ],
     )
     code = native_lifecycle.main()
-    return code, json.loads(output.read_text(encoding="utf-8"))
+    return code, json.loads(output.read_text(encoding="utf-8")) if read_result else {}
 
 
 @pytest.mark.parametrize("system", ["Windows", "Darwin", "Linux"])
@@ -589,6 +590,10 @@ def _lifecycle_main(
         "runtime-marker-drift",
         "runtime-directory-drift",
         "runtime-link-drift",
+        "export-sanitize",
+        "export-write",
+        "export-cleanup-failure",
+        "export-foreign-drift",
     ],
 )
 def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
@@ -624,6 +629,7 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     wired_content: bytes | None = None
     state = {"installed": False, "running": False}
     expected_definition: dict = {}
+    export_failed = [False]
     original_expected = native_lifecycle._expected_native_definition
 
     def expected(plan: dict) -> dict:
@@ -651,7 +657,9 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         )
         registered = state["installed"] and (system != "Darwin" or state["running"])
         content = _mock_native_response(system, identity, expected_definition, registered)
-        if scenario == "native-drift" and registered:
+        if registered and (
+            scenario == "native-drift" or (scenario == "export-foreign-drift" and export_failed[0])
+        ):
             content = content.replace("serve-all", "foreign-command")
         if scenario.startswith("windows-policy-") and registered:
             payload = json.loads(content)
@@ -825,6 +833,87 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     )
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b"synthetic executable")
+    if scenario.startswith("export-"):
+        original_sanitize = native_lifecycle.assert_sanitized
+        original_write = native_lifecycle._write_result
+        exported = []
+
+        def fail_export() -> None:
+            export_failed[0] = True
+            if scenario == "export-cleanup-failure":
+                config_path.write_bytes(b"foreign config")
+                monkeypatch.setattr(
+                    native_lifecycle,
+                    "_uninstall_owned",
+                    Mock(
+                        side_effect=native_lifecycle.EvidenceFailure("systemd observation failed")
+                    ),
+                )
+            raise OSError("synthetic-private-export-error")
+
+        def sanitize(value, forbidden) -> None:
+            if scenario == "export-sanitize":
+                fail_export()
+            original_sanitize(value, forbidden)
+
+        def write(output, result, *, passed) -> None:
+            assert passed is True and result["phase"] == "prepare"
+            exported.append(result)
+            # ET.tostring in the Windows query fixture also calls ElementTree.write.
+            # Inject only during artifact export, not native observation/rollback.
+            with monkeypatch.context() as export_patch:
+                export_patch.setattr(native_lifecycle.ET.ElementTree, "write", xml_failure)
+                original_write(output, result, passed=passed)
+
+        def xml_failure(*_args, **_kwargs) -> None:
+            fail_export()
+
+        monkeypatch.setattr(native_lifecycle, "assert_sanitized", sanitize)
+        monkeypatch.setattr(native_lifecycle, "_write_result", write)
+        phase = "prepare" if scenario == "export-sanitize" else "manager-cycle"
+        code, _result = _lifecycle_main(
+            monkeypatch,
+            tmp_path,
+            phase,
+            executable,
+            provenance,
+            read_result=False,
+        )
+        assert code == 1 and export_failed[0]
+        assert len(exported) == (0 if scenario == "export-sanitize" else 1)
+        assert not (tmp_path / "result.json").exists()
+        assert all(result["passed"] is False for result in exported)
+        diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+        failures = [row for row in diagnostics if row["diagnostic"] == "native-service-failure"]
+        assert failures[0]["stage"] == "result-export"
+        assert failures[0]["error_type"] == "OSError"
+        assert failures[-1]["stage"] == "rollback-outcome"
+        if scenario in {"export-sanitize", "export-write"}:
+            assert failures[-1]["cleanup"] == {
+                "native_removed": True,
+                "configuration_removed": True,
+                "runtime_root_removed": True,
+            }
+            assert not runtime.exists() and not config_path.exists()
+            assert state["installed"] is False
+        elif scenario == "export-foreign-drift":
+            assert state["installed"] is True and runtime.exists()
+            assert not any(args[:2] == ["service", "uninstall"] for args in actions)
+            assert failures[-1]["cleanup"]["native_removed"] is False
+            assert failures[-1]["cleanup"]["configuration_removed"] is True
+        else:
+            assert [row["stage"] for row in failures] == [
+                "result-export",
+                "cleanup-native",
+                "cleanup-configuration",
+                "rollback-outcome",
+            ]
+            assert failures[1]["error_code"] == "systemd-observation-failed"
+            assert failures[2]["error_code"] == "synthetic-configuration-changed-before-removal"
+            assert state["installed"] is True and runtime.exists()
+            assert config_path.read_bytes() == b"foreign config"
+        assert "synthetic-private-export-error" not in json.dumps(diagnostics)
+        return
     if scenario in {
         "prepare-partial-install",
         "prepare-partial-definition",
@@ -1314,6 +1403,8 @@ def test_native_main_diagnoses_preflight_provenance_and_export_without_leaks(
     monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
     prepare = Mock(return_value={"phase": "prepare"})
     monkeypatch.setattr(native_lifecycle, "prepare", prepare)
+    rollback = Mock(side_effect=AssertionError("no trusted rollback context"))
+    monkeypatch.setattr(native_lifecycle, "_rollback", rollback)
     provenance = {"binding_sha256": "f" * 64}
     if failure == "stale-output":
         (tmp_path / "result.json").write_text('{"original":true}', encoding="utf-8")
@@ -1350,6 +1441,7 @@ def test_native_main_diagnoses_preflight_provenance_and_export_without_leaks(
     assert "synthetic-token" not in captured.err
     assert "synthetic-secret" not in captured.err
     assert str(tmp_path) not in captured.err
+    rollback.assert_not_called()
 
 
 def test_native_diagnostics_redact_unknown_class_steps_and_cleanup_content(
@@ -1375,6 +1467,55 @@ def test_native_diagnostics_redact_unknown_class_steps_and_cleanup_content(
         "runtime_root_removed": False,
     }
     assert unsafe not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("failure", ["json-write", "publish"])
+def test_native_export_never_publishes_partial_passing_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    output = tmp_path / "result.json"
+    if failure == "json-write":
+        monkeypatch.setattr(native_lifecycle.json, "dumps", Mock(side_effect=OSError("synthetic")))
+    else:
+        monkeypatch.setattr(native_lifecycle.os, "link", Mock(side_effect=OSError("synthetic")))
+    with pytest.raises(OSError):
+        native_lifecycle._write_result(output, {"phase": "prepare", "passed": True}, passed=True)
+    assert not output.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_native_export_failure_does_not_repeat_prior_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+
+    def failed_prepare(*_args, rollback_context, **_kwargs):
+        rollback_context["plan"] = {"steps": []}
+        raise native_lifecycle.EvidenceFailure("native operational plan schema differs")
+
+    monkeypatch.setattr(native_lifecycle, "prepare", failed_prepare)
+    rollback = Mock(return_value={"runtime_root_removed": False})
+    monkeypatch.setattr(native_lifecycle, "_rollback", rollback)
+    monkeypatch.setattr(
+        native_lifecycle, "assert_sanitized", Mock(side_effect=OSError("synthetic"))
+    )
+    code, _ = _lifecycle_main(
+        monkeypatch,
+        tmp_path,
+        "prepare",
+        tmp_path / "venv/bin/synthetic",
+        {},
+        read_result=False,
+    )
+    assert code == 1
+    rollback.assert_called_once()
+    diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [row["stage"] for row in diagnostics] == [
+        "lifecycle",
+        "rollback-outcome",
+        "result-export",
+    ]
 
 
 def test_native_rollback_reports_independent_errors_and_retains_uncertain_runtime(
