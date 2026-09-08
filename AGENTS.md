@@ -13,7 +13,10 @@ placeholder-only `*.example` files and synthetic test data.
 - Behavior is documented in [GUIDE.md](docs/GUIDE.md) and [MCP.md](docs/MCP.md). The
   supported surface itself is defined in code, by `CORE_MCP_TOOLS` and the `WITHDRAWN_*`
   sets in `src/brains/capabilities.py`, and enforced by `scripts/check_core_surface.py`.
-- Open work is tracked in the repository's issues, not in a backlog document.
+- [GitHub Issues](https://github.com/xibodev/brains-ai/issues) own open work: outcomes,
+  acceptance criteria, dependencies, and delivery evidence. Keep priority, order, and
+  status only in the [Brains Project](https://github.com/orgs/xibodev/projects/1).
+  Do not maintain Markdown backlog documents or external shadow copies.
 - Distinguish implemented behavior from intent. Retained compatibility code does not make
   a capability supported, and an unbuilt capability is not advertised.
 

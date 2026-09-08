@@ -175,7 +175,7 @@ states or automatic worker launch are implied. Evidence is mandatory, not proof 
 ## What is not here
 
 There are no MCP tools for model routing, semantic retrieval, code graphs, runtime
-execution, or chat bridges. Those are outside what Brains does — see the
+execution, or chat bridges. Those are outside the current supported surface — see the
 [product brief](product/PRODUCT_BRIEF.md).
 
 Calling a tool that is not on the allowlist fails closed. It is not hidden behind a flag.

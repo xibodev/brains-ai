@@ -679,4 +679,5 @@ restoration before discarding the environment.
 
 Candidate-specific validation follows [Quality gates](QUALITY_GATES.md). Work that is
 intended but unbuilt is tracked in the repository's issues; the
-[Product Brief](product/PRODUCT_BRIEF.md) states what is deliberately out of scope.
+[Product Brief](product/PRODUCT_BRIEF.md) distinguishes current support, intended
+direction, and non-goals.
