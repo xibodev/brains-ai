@@ -101,3 +101,96 @@ def test_native_service_workflow_keeps_failure_logs_separate_from_qualification(
     assert steps.index(verifier) < steps.index(uploads[0])
     assert verifier.get("if", "success()") == "success()"
     assert "continue-on-error" not in verifier
+
+
+def test_opencode_provisioning_creates_only_isolated_parents() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/native-service-evidence.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["manager-cycle"]["steps"]
+    step = next(step for step in steps if step.get("name") == "Provision pinned supported OpenCode")
+    script = step["run"]
+    assert step["if"] == "matrix.adapter == 'opencode'"
+    assert step["shell"] == "bash"
+    assert (
+        'provisioning="$(mktemp -d "$temp_dir/native-service-opencode-provision.XXXXXX")"' in script
+    )
+    assert 'temp_dir="$(cygpath -u "$RUNNER_TEMP")"' in script
+    mkdir = next(line.strip() for line in script.splitlines() if line.strip().startswith("mkdir "))
+    assert mkdir == (
+        'mkdir "$provisioning/config" "$provisioning/data" '
+        '"$provisioning/cache" "$provisioning/state"'
+    )
+    assert script.index(mkdir) < script.index('provisioning="$(cygpath -w "$provisioning")"')
+    for name, directory in (
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("XDG_STATE_HOME", "state"),
+        ("OPENCODE_CONFIG_DIR", "config/opencode"),
+    ):
+        export = f'export {name}="$provisioning/{directory}"'
+        assert script.index('provisioning="$(cygpath -w "$provisioning")"') < script.index(export)
+        assert script.index(export) < script.index("npm install --global opencode-ai@1.18.25")
+    for forbidden in ("GITHUB_ENV", "$HOME", "rm ", "rmdir", "--ignore-scripts"):
+        assert forbidden not in script
+    assert sum(line.strip().startswith("mkdir ") for line in script.splitlines()) == 1
+    probe = next(step for step in steps if step.get("name", "").startswith("Exercise native"))
+    assert steps.index(step) < steps.index(probe)
+
+
+def test_linux_preflight_requires_real_user_manager_and_owned_bus() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/native-service-evidence.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["manager-cycle"]
+    linux = [
+        host for host in job["strategy"]["matrix"]["host"] if host["manager"] == "systemd-user"
+    ]
+    assert linux == [{"os": "ubuntu-24.04", "manager": "systemd-user"}]
+    steps = job["steps"]
+    step = next(step for step in steps if step.get("name") == "Preflight real Linux user manager")
+    assert step["if"] == "runner.os == 'Linux'"
+    assert step["shell"] == "bash"
+    assert step["timeout-minutes"] == 2
+    assert "continue-on-error" not in step
+    script = step["run"]
+    required = (
+        "set -euo pipefail",
+        'test "$BRAINS_NATIVE_EVIDENCE_DISPOSABLE" = disposable-native-service-host',
+        'uid="$(id -u)"',
+        'sudo -n systemctl start "user@$uid.service"',
+        'sudo -n systemctl is-active --quiet "user@$uid.service"',
+        'export XDG_RUNTIME_DIR="/run/user/$uid"',
+        'test -d "$XDG_RUNTIME_DIR"',
+        'test -O "$XDG_RUNTIME_DIR"',
+        'test -L "$XDG_RUNTIME_DIR"',
+        'export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"',
+        "systemctl --user start dbus.socket",
+        'test -S "$XDG_RUNTIME_DIR/bus"',
+        'test -O "$XDG_RUNTIME_DIR/bus"',
+        'test -L "$XDG_RUNTIME_DIR/bus"',
+        "systemctl --user show --property=Version --value",
+        'echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"',
+        'echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"',
+    )
+    positions = [script.index(command) for command in required]
+    assert positions == sorted(positions)
+    assert script.count("::error::native-preflight:") == script.count("exit 1") == 6
+    for forbidden in (
+        "mkdir",
+        "dbus-run-session",
+        "dbus-launch",
+        "enable-linger",
+        "journalctl",
+        "printenv",
+        "show-environment",
+        "systemctl status",
+        "set -x",
+        "|| true",
+    ):
+        assert forbidden not in script
+    probe = next(step for step in steps if step.get("name", "").startswith("Exercise native"))
+    assert steps.index(step) < steps.index(probe)

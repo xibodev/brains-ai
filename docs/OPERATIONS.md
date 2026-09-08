@@ -248,6 +248,15 @@ same `--label`. Labels outside that namespace are refused. The default remains
 `brains-serve-all`. Linux installation does not change the account's independent linger
 policy. Failed deregistration retains the native definition for diagnosis and retry.
 
+On macOS, ordinary start uses `launchctl kickstart` without force-restarting an
+already-running supervisor. Stop unloads the job and sends TERM only to a verified
+recorded process instance, then polls that same identity for up to 60 seconds. A
+successful unload or signal alone is not a completed stop. Stale PID files are cleaned
+after exit; reused or unverifiable PIDs are not signalled by number. A changed PID
+record, unresolved exit, or failed cleanup reports failure, and uninstall retains the
+plist. This bounds the exit polling, not the native command runtime, and does not
+independently prove that detached descendants have exited.
+
 `brains-ai service install` preflights the requested loopback gateway port. An
 explicit unavailable port is refused. When no port is supplied and the default
 cannot be bound, the installer selects a bindable fallback, writes it into the

@@ -18,6 +18,7 @@ import copy
 import getpass
 import hashlib
 import json
+import ntpath
 import os
 import platform
 import plistlib
@@ -123,6 +124,11 @@ _DIAGNOSTIC_MESSAGES = (
     "Task Scheduler observation schema differs",
     "registered task definition is incomplete",
     "registered task action or trigger differs",
+    "registered task action structure differs",
+    "registered task executable differs",
+    "registered task arguments differ",
+    "registered task working directory differs",
+    "registered task trigger definition differs",
     "registered task principal or identity differs",
     "registered task trigger principal differs",
     "systemd observation failed",
@@ -294,6 +300,7 @@ def _diagnose(
         code = _DIAGNOSTIC_CODES.get(message, "unclassified-evidence-failure")
     operation = None
     command = None
+    wait_status = None
     trace = exc.__traceback__ if exc is not None else None
     while trace is not None:
         name = trace.tb_frame.f_code.co_name
@@ -302,6 +309,7 @@ def _diagnose(
             "_guard",
             "_boot_marker",
             "_native_observation",
+            "_check_task_xml",
             "_expected_native_definition",
             "_wait_healthy",
             "_wait_stopped",
@@ -333,6 +341,33 @@ def _diagnose(
                             "uninstall",
                         }:
                             command = "service-" + action
+        if name in {"_wait_healthy", "_wait_stopped", "_wait_removed"}:
+            report = trace.tb_frame.f_locals.get("report" if name != "_wait_removed" else "last")
+            if type(report) is dict:
+                listeners = report.get("listeners")
+                protocol = report.get("mcp_protocol")
+                process = report.get("service_pid")
+                listeners = listeners if type(listeners) is dict else {}
+                protocol = protocol if type(protocol) is dict else {}
+                process = process if type(process) is dict else {}
+                wait_status = {
+                    key: value if type(value) is bool else None
+                    for key, value in {
+                        "installed": report.get("installed"),
+                        "healthy": report.get("healthy"),
+                        "gateway_listening": listeners.get("gateway"),
+                        "mcp_listening": listeners.get("mcp"),
+                        "mcp_ready": protocol.get("ready"),
+                        "pid_present": process["pid"] is not None if "pid" in process else None,
+                        "pid_verified": process.get("confidence") == "verified"
+                        if process
+                        else None,
+                        "pid_absent": process.get("confidence") == "absent" if process else None,
+                        "runtime_stopped": report.get("runtime_classification") == "stopped"
+                        if "runtime_classification" in report
+                        else None,
+                    }.items()
+                }
         trace = trace.tb_next
     record: dict[str, Any] = {
         "diagnostic": "native-service-failure",
@@ -367,6 +402,8 @@ def _diagnose(
             key: outcomes.get(key) is True
             for key in ("native_removed", "configuration_removed", "runtime_root_removed")
         }
+    if wait_status is not None:
+        record["wait_status"] = wait_status
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
@@ -522,6 +559,7 @@ def _status_identity(report: dict[str, Any], label: str) -> tuple[str, str]:
 
 def _wait_healthy(executable: str, label: str, timeout: float = 150) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
+    report: dict[str, Any] = {}
     while time.monotonic() < deadline:
         report = _status(executable, label)
         _status_identity(report, label)
@@ -777,6 +815,7 @@ def _assert_stopped(evidence: dict[str, Any]) -> None:
 
 def _wait_stopped(plan: dict[str, Any], timeout: float = 30) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
+    report: dict[str, Any] = {}
     while time.monotonic() < deadline:
         _assert_native_ownership(plan)
         report = _status(plan["executable"], plan["label"])
@@ -849,6 +888,106 @@ def _native_command(
     return subprocess.run(args, capture_output=True, text=True, timeout=30, check=False, env=env)
 
 
+def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> None:
+    # Scheduler serialization can reorder fields, assign IDs and materialize
+    # schema defaults. None changes the action or the account allowed to run it.
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    for document in (actual, wanted):
+        if document.tag != ns + "Task" or any(
+            len(document.findall(ns + name)) != 1 for name in ("Actions", "Triggers", "Principals")
+        ):
+            raise EvidenceFailure("registered task definition is incomplete")
+    actions, expected_actions = actual.find(ns + "Actions"), wanted.find(ns + "Actions")
+    assert actions is not None and expected_actions is not None
+    if (
+        len(actions) != 1
+        or actions[0].tag != ns + "Exec"
+        or len(expected_actions) != 1
+        or expected_actions[0].tag != ns + "Exec"
+    ):
+        raise EvidenceFailure("registered task action structure differs")
+    for action in (actions[0], expected_actions[0]):
+        if (
+            len(action.findall(ns + "Command")) != 1
+            or len({child.tag for child in action}) != len(action)
+            or any(
+                child.tag
+                not in {ns + name for name in ("Command", "Arguments", "WorkingDirectory")}
+                or len(child)
+                for child in action
+            )
+        ):
+            raise EvidenceFailure("registered task action structure differs")
+    # Do not expand variables, strip quotes or accept missing nonempty paths:
+    # those can change the executable or working directory Scheduler uses.
+    executable = actions[0].findtext(ns + "Command", "")
+    expected_executable = expected_actions[0].findtext(ns + "Command", "")
+    if not executable or ntpath.normcase(executable) != ntpath.normcase(expected_executable):
+        raise EvidenceFailure("registered task executable differs")
+    if actions[0].findtext(ns + "Arguments", "") != expected_actions[0].findtext(
+        ns + "Arguments", ""
+    ):
+        raise EvidenceFailure("registered task arguments differ")
+    if ntpath.normcase(actions[0].findtext(ns + "WorkingDirectory", "")) != ntpath.normcase(
+        expected_actions[0].findtext(ns + "WorkingDirectory", "")
+    ):
+        raise EvidenceFailure("registered task working directory differs")
+    principals = actual.find(ns + "Principals")
+    assert principals is not None
+    if (
+        len(principals) != 1
+        or principals[0].tag != ns + "Principal"
+        or len({child.tag for child in principals[0]}) != len(principals[0])
+        or any(
+            child.tag
+            not in {ns + name for name in ("UserId", "DisplayName", "LogonType", "RunLevel")}
+            or len(child)
+            for child in principals[0]
+        )
+        or not principals[0].findtext(ns + "UserId")
+        or principals[0].findtext(ns + "LogonType") != "InteractiveToken"
+        or principals[0].findtext(ns + "RunLevel", "LeastPrivilege") != "LeastPrivilege"
+        or actions.get("Context") != principals[0].get("id")
+        or not principals[0].get("id")
+        or actual.findtext(ns + "RegistrationInfo/" + ns + "URI") != f"\\{identity}"
+    ):
+        raise EvidenceFailure("registered task principal or identity differs")
+    triggers, expected_triggers = actual.find(ns + "Triggers"), wanted.find(ns + "Triggers")
+    assert triggers is not None and expected_triggers is not None
+    if (
+        len(triggers) != 1
+        or triggers[0].tag != ns + "LogonTrigger"
+        or len(expected_triggers) != 1
+        or expected_triggers[0].tag != ns + "LogonTrigger"
+    ):
+        raise EvidenceFailure("registered task trigger definition differs")
+    trigger, expected_trigger = triggers[0], expected_triggers[0]
+    if len({child.tag for child in trigger}) != len(trigger) or not trigger.findtext(ns + "UserId"):
+        raise EvidenceFailure("registered task trigger principal differs")
+    # Task Scheduler's trigger schema defaults are Enabled=true and
+    # ExecutionTimeLimit=PT72H. Boundaries/delay/repetition are not ignored.
+    fields = {child.tag for child in trigger} | {child.tag for child in expected_trigger}
+    for field in fields - {ns + "UserId"}:
+        if field == ns + "Enabled":
+            if trigger.findtext(field, "true") not in {"true", "1"} or expected_trigger.findtext(
+                field, "true"
+            ) not in {"true", "1"}:
+                raise EvidenceFailure("registered task trigger definition differs")
+        elif field == ns + "ExecutionTimeLimit":
+            if trigger.findtext(field, "PT72H") != expected_trigger.findtext(field, "PT72H"):
+                raise EvidenceFailure("registered task trigger definition differs")
+        else:
+            left, right = trigger.find(field), expected_trigger.find(field)
+            if (
+                left is None
+                or right is None
+                or len(left)
+                or len(right)
+                or (left.text or "") != (right.text or "")
+            ):
+                raise EvidenceFailure("registered task trigger definition differs")
+
+
 def _native_observation(label: str, expected: dict[str, Any] | None = None) -> dict[str, Any]:
     """Read registration and local definition independently; errors are not absence."""
     system = platform.system()
@@ -889,15 +1028,21 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
             "try {$t=$f.GetTask($env:BRAINS_EVIDENCE_TASK)} catch {"
             "$e=$_.Exception; while ($e.InnerException) {$e=$e.InnerException};"
             "if ($e.HResult -eq -2147024894) {"
-            "@{xml=$null;principal_matches=$true}|ConvertTo-Json -Compress; exit 0}; throw};"
-            "$match=$false; if ($env:BRAINS_EVIDENCE_USER) {"
+            "@{xml=$null;principal_matches=$true;trigger_matches=$true}|ConvertTo-Json -Compress; exit 0}; throw};"
+            "$match=$false; $triggerMatch=$false; if ($env:BRAINS_EVIDENCE_USER) {"
             "$u=$t.Definition.Principal.UserId;"
+            "if ($env:BRAINS_EVIDENCE_USER -match '^S-1-') {$sid=$env:BRAINS_EVIDENCE_USER} else {"
             "$a=New-Object System.Security.Principal.NTAccount($env:BRAINS_EVIDENCE_USER);"
-            "$sid=$a.Translate([System.Security.Principal.SecurityIdentifier]).Value;"
+            "$sid=$a.Translate([System.Security.Principal.SecurityIdentifier]).Value};"
             "if ($u -match '^S-1-') {$match=$u -eq $sid} else {"
             "$b=New-Object System.Security.Principal.NTAccount($u);"
-            "$match=$b.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sid}};"
-            "@{xml=$t.Xml;principal_matches=$match}|ConvertTo-Json -Compress"
+            "$match=$b.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sid};"
+            "$tr=$t.Definition.Triggers; if ($tr.Count -eq 1 -and $tr.Item(1).Type -eq 9) {"
+            "$u=$tr.Item(1).UserId; if ($u) {"
+            "if ($u -match '^S-1-') {$triggerMatch=$u -eq $sid} else {"
+            "$b=New-Object System.Security.Principal.NTAccount($u);"
+            "$triggerMatch=$b.Translate([System.Security.Principal.SecurityIdentifier]).Value -eq $sid}}}};"
+            "@{xml=$t.Xml;principal_matches=$match;trigger_matches=$triggerMatch}|ConvertTo-Json -Compress"
             "} catch {exit 2}"
         )
         result = _native_command(
@@ -907,37 +1052,17 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
         if result.returncode != 0:
             raise EvidenceFailure("Task Scheduler observation failed")
         payload = json.loads(result.stdout)
-        if set(payload) != {"xml", "principal_matches"}:
+        if set(payload) != {"xml", "principal_matches", "trigger_matches"}:
             raise EvidenceFailure("Task Scheduler observation schema differs")
         registered = payload["xml"] is not None
         if registered and expected is not None:
             actual = ET.fromstring(payload["xml"])
             wanted = ET.fromstring(expected["content"])
 
-            def fields(node: ET.Element) -> list[tuple[str, str]]:
-                return [
-                    (item.tag.rsplit("}", 1)[-1], (item.text or "").strip()) for item in node.iter()
-                ]
-
-            for field in ("Actions", "Triggers"):
-                left, right = actual.find(f"{{*}}{field}"), wanted.find(f"{{*}}{field}")
-                if left is None or right is None:
-                    raise EvidenceFailure("registered task definition is incomplete")
-                # Task Scheduler may canonicalize the trigger's user to a SID.
-                if [item for item in fields(left) if item[0] != "UserId"] != [
-                    item for item in fields(right) if item[0] != "UserId"
-                ]:
-                    raise EvidenceFailure("registered task action or trigger differs")
-            if (
-                payload["principal_matches"] is not True
-                or actual.findtext("{*}RegistrationInfo/{*}URI") != f"\\{identity}"
-                or actual.findtext("{*}Principals/{*}Principal/{*}LogonType") != "InteractiveToken"
-                or actual.findtext("{*}Principals/{*}Principal/{*}RunLevel") != "LeastPrivilege"
-            ):
+            _check_task_xml(actual, wanted, identity)
+            if payload["principal_matches"] is not True:
                 raise EvidenceFailure("registered task principal or identity differs")
-            triggers = actual.findall("{*}Triggers/{*}LogonTrigger/{*}UserId")
-            principal = actual.findtext("{*}Principals/{*}Principal/{*}UserId")
-            if len(triggers) != 1 or triggers[0].text not in {principal, user}:
+            if payload["trigger_matches"] is not True:
                 raise EvidenceFailure("registered task trigger principal differs")
     elif system == "Linux":
         result = _native_command(
@@ -965,20 +1090,31 @@ def _native_observation(label: str, expected: dict[str, Any] | None = None) -> d
         if (
             set(properties) != required
             or properties["Id"] != identity
-            or result.returncode not in (0, 1)
+            or result.returncode not in (0, 1, 4)
             or result.stderr.strip()
+            not in (
+                {"", f"Unit {identity} could not be found."}
+                if properties.get("LoadState") == "not-found"
+                else {""}
+            )
         ):
             raise EvidenceFailure("systemd observation failed")
         registered = properties["LoadState"] != "not-found"
+        if registered and result.returncode != 0:
+            raise EvidenceFailure("systemd observation failed")
         if not registered:
-            if properties["ActiveState"] != "inactive" or any(
-                properties[key]
-                for key in (
-                    "FragmentPath",
-                    "ExecStart",
-                    "Environment",
-                    "WorkingDirectory",
-                    "DropInPaths",
+            if (
+                properties["ActiveState"] != "inactive"
+                or properties["NeedDaemonReload"] != "no"
+                or any(
+                    properties[key]
+                    for key in (
+                        "FragmentPath",
+                        "ExecStart",
+                        "Environment",
+                        "WorkingDirectory",
+                        "DropInPaths",
+                    )
                 )
             ):
                 raise EvidenceFailure("systemd absence is ambiguous")

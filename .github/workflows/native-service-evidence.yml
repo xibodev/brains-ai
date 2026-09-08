@@ -88,7 +88,27 @@ jobs:
           path: ${{ runner.temp }}/native-service-dist
       - name: Provision pinned supported OpenCode
         if: matrix.adapter == 'opencode'
-        run: npm install --global opencode-ai@1.18.25
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v cygpath >/dev/null 2>&1; then
+            temp_dir="$(cygpath -u "$RUNNER_TEMP")"
+          else
+            temp_dir="$RUNNER_TEMP"
+          fi
+          provisioning="$(mktemp -d "$temp_dir/native-service-opencode-provision.XXXXXX")"
+          # The installer runs --version. Isolate its side effects, not the probe's
+          # real home. Create parents only; never precreate or remove a client root.
+          mkdir "$provisioning/config" "$provisioning/data" "$provisioning/cache" "$provisioning/state"
+          if command -v cygpath >/dev/null 2>&1; then
+            provisioning="$(cygpath -w "$provisioning")"
+          fi
+          export XDG_CONFIG_HOME="$provisioning/config"
+          export XDG_DATA_HOME="$provisioning/data"
+          export XDG_CACHE_HOME="$provisioning/cache"
+          export XDG_STATE_HOME="$provisioning/state"
+          export OPENCODE_CONFIG_DIR="$provisioning/config/opencode"
+          npm install --global opencode-ai@1.18.25
       - name: Build and install the exact candidate in a fresh private environment
         shell: bash
         env:
@@ -154,6 +174,45 @@ jobs:
           echo "BRAINS_NATIVE_EVIDENCE_ROOT=$runtime" >> "$GITHUB_ENV"
           echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"
+      - name: Preflight real Linux user manager
+        if: runner.os == 'Linux'
+        shell: bash
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          test "$BRAINS_NATIVE_EVIDENCE_DISPOSABLE" = disposable-native-service-host
+          # Hosted VM setup only, not evidence of login or reboot persistence.
+          # Let systemd create its runtime directory; never fabricate a user bus.
+          uid="$(id -u)"
+          if ! sudo -n systemctl start "user@$uid.service" >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-start-failed'
+            exit 1
+          fi
+          if ! sudo -n systemctl is-active --quiet "user@$uid.service" >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-inactive'
+            exit 1
+          fi
+          export XDG_RUNTIME_DIR="/run/user/$uid"
+          if ! test -d "$XDG_RUNTIME_DIR" || ! test -O "$XDG_RUNTIME_DIR" || test -L "$XDG_RUNTIME_DIR"; then
+            echo '::error::native-preflight: runtime-directory-unavailable-or-unowned'
+            exit 1
+          fi
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          if ! systemctl --user start dbus.socket >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-bus-start-failed'
+            exit 1
+          fi
+          if ! test -S "$XDG_RUNTIME_DIR/bus" || ! test -O "$XDG_RUNTIME_DIR/bus" || test -L "$XDG_RUNTIME_DIR/bus"; then
+            echo '::error::native-preflight: user-bus-socket-unavailable-or-unowned'
+            exit 1
+          fi
+          if ! systemctl --user show --property=Version --value >/dev/null 2>&1; then
+            echo '::error::native-preflight: user-manager-query-failed'
+            exit 1
+          fi
+          echo 'native-preflight: user-manager-active bus-socket-owned manager-query-ok'
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
       - name: Exercise native manager lifecycle without login claim
         # The probe emits allowlisted failure diagnostics directly to stderr.
         # Do not dump private plans, failed records, or native command output.

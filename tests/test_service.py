@@ -15,6 +15,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -818,56 +819,240 @@ def test_windows_stop_refuses_unverified_legacy_pid(monkeypatch, tmp_path) -> No
     assert pidfile.exists()
 
 
-def test_macos_stop_skips_signal_for_stale_pid(monkeypatch, tmp_path) -> None:
+@pytest.fixture
+def macos_stop_state(monkeypatch, tmp_path):
     monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=999999)
-    monkeypatch.setattr(service_common, "_read_process_identity", lambda pid: None)
+    state = SimpleNamespace(
+        elapsed=0.0,
+        exit_at=None,
+        identity={"exe": "python", "start_time": 1000.0},
+        after_exit=None,
+        calls=[],
+        signal_result=(0, "", ""),
+        unload_result=(0, "", ""),
+        pidfile=tmp_path / "sessions" / "service.pid",
+    )
 
-    calls: list[list[str]] = []
+    def identity(pid):
+        assert pid == 4242
+        if state.exit_at is not None and state.elapsed >= state.exit_at:
+            return state.after_exit
+        return state.identity
 
-    def _fake_run_cmd(cmd, **_kw):
-        calls.append(cmd)
-        return 0, "", ""
+    def sleep(seconds):
+        assert 0 < seconds <= macos._STOP_POLL_SECONDS
+        state.elapsed += seconds
 
-    monkeypatch.setattr(macos, "run_cmd", _fake_run_cmd)
+    def run(cmd):
+        state.calls.append(cmd)
+        if cmd[0] == "/bin/kill":
+            assert cmd == ["/bin/kill", "-TERM", "4242"]
+            return state.signal_result
+        assert cmd[0] == "launchctl" and cmd[1] in {"bootout", "unload"}
+        return state.unload_result
+
+    monkeypatch.setattr(service_common, "_read_process_identity", identity)
+    monkeypatch.setattr(macos, "run_cmd", run)
+    monkeypatch.setattr(
+        macos, "time", SimpleNamespace(monotonic=lambda: state.elapsed, sleep=sleep)
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    write_pidfile(state.pidfile, pid=4242)
+    return state
+
+
+@pytest.mark.parametrize("reused", [False, True])
+def test_macos_stop_skips_signal_for_stale_pid(macos_stop_state, reused) -> None:
+    state = macos_stop_state
+    state.identity = {"exe": "foreign", "start_time": 5000.0} if reused else None
     report = macos.stop()
     assert report["ok"] is True
-    assert not any(cmd[0] == "/bin/kill" for cmd in calls)
+    assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
     assert "stale" in report["detail"]
-    assert not (tmp_path / "sessions" / "service.pid").exists()
+    assert not state.pidfile.exists()
 
 
-def test_macos_stop_refuses_degraded_pid(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=os.getpid())
-    monkeypatch.setattr(service_common, "_read_process_identity", lambda pid: {})
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        macos,
-        "run_cmd",
-        lambda cmd, **_kw: calls.append(cmd) or (0, "", ""),
-    )
+@pytest.mark.parametrize("confidence", ["degraded", "unverified"])
+def test_macos_stop_refuses_uncertain_pid(macos_stop_state, confidence) -> None:
+    state = macos_stop_state
+    if confidence == "degraded":
+        state.identity = {}
+    else:
+        state.pidfile.write_text("4242", encoding="utf-8")
     report = macos.stop()
-    assert not any(cmd[0] == "/bin/kill" for cmd in calls)
+    assert report["ok"] is False
+    assert not any(cmd[0] == "/bin/kill" for cmd in state.calls)
+    assert confidence in report["detail"]
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_reports_failed_signal(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.signal_result = (1, "", "failed")
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "failed" in report["detail"]
+    assert state.pidfile.exists()
+    assert state.elapsed == 0
+
+
+@pytest.mark.parametrize("exit_at", [0.2, 1.0, 35.0])
+def test_macos_stop_waits_for_exit_and_cleans_pid_after_term(macos_stop_state, exit_at) -> None:
+    state = macos_stop_state
+    state.exit_at = exit_at
+    assert macos.stop()["ok"] is True
+    assert exit_at <= state.elapsed < exit_at + macos._STOP_POLL_SECONDS + 0.001
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_does_not_signal_reused_pid_after_term(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+    state.after_exit = {"exe": "foreign", "start_time": 5000.0}
+    assert macos.stop()["ok"] is True
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_retains_pid_when_identity_degrades_after_term(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+    state.after_exit = {}
+    report = macos.stop()
+    assert report["ok"] is False
     assert "degraded" in report["detail"]
+    assert state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
 
 
-def test_macos_stop_reports_failed_child_kill(monkeypatch, tmp_path) -> None:
-    monkeypatch.setenv("BRAINS_STATE_DIR", str(tmp_path))
-    monkeypatch.setattr(
-        service_common,
-        "_read_process_identity",
-        lambda pid: {"exe": "python", "start_time": 1000.0},
-    )
-    write_pidfile(tmp_path / "sessions" / "service.pid", pid=os.getpid())
+@pytest.mark.parametrize("gone", [False, True])
+def test_macos_stop_keeps_identity_if_unload_removes_pidfile(
+    macos_stop_state, monkeypatch, gone
+) -> None:
+    state = macos_stop_state
 
-    def _fake_run_cmd(cmd, **_kw):
-        if cmd[:2] == ["/bin/launchctl", "bootout"]:
-            return 0, "", ""
-        return (1, "", "failed") if cmd[0] == "/bin/kill" else (0, "", "")
+    def unload(_label):
+        state.pidfile.unlink()
+        state.exit_at = 0 if gone else 0.4
+        return 0, "unloaded", ""
 
-    monkeypatch.setattr(macos, "run_cmd", _fake_run_cmd)
+    monkeypatch.setattr(macos, "_unload", unload)
+    assert macos.stop()["ok"] is True
+    assert state.elapsed == (0 if gone else 0.4)
+    assert len(state.calls) == (0 if gone else 1)
+
+
+def test_macos_stop_rechecks_identity_after_unload(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+
+    def unload(_label):
+        state.identity = {"exe": "foreign", "start_time": 5000.0}
+        return 0, "unloaded", ""
+
+    monkeypatch.setattr(macos, "_unload", unload)
+    assert macos.stop()["ok"] is True
+    assert not state.calls
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_accepts_signal_exit_race(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    run = macos.run_cmd
+
+    def exited(cmd):
+        if cmd[0] == "/bin/kill":
+            state.identity = None
+            state.signal_result = (1, "", "no such process")
+        return run(cmd)
+
+    monkeypatch.setattr(macos, "run_cmd", exited)
+    assert macos.stop()["ok"] is True
+    assert not state.pidfile.exists()
+
+
+@pytest.mark.parametrize("action", ["stop", "uninstall"])
+def test_macos_stop_cutoff_retains_definition_and_pid(macos_stop_state, action) -> None:
+    state = macos_stop_state
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    report = getattr(macos, action)()
+    assert report["ok"] is False
+    assert "has not exited" in report["detail"]
+    assert state.elapsed == macos._STOP_TIMEOUT_SECONDS
+    assert state.pidfile.exists()
+    assert definition.read_text(encoding="utf-8") == "owned"
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "-TERM"]
+
+
+def test_macos_uninstall_removes_definition_only_after_exit(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.4
+    definition = macos.plist_path()
+    definition.parent.mkdir(parents=True)
+    definition.write_text("owned", encoding="utf-8")
+    unlink = Path.unlink
+
+    def after_exit(path, **kwargs):
+        assert state.elapsed >= state.exit_at
+        return unlink(path, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", after_exit)
+    assert macos.uninstall()["ok"] is True
+    assert not definition.exists()
+    assert not state.pidfile.exists()
+
+
+def test_macos_stop_retains_replacement_pidfile(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    replacement = {"format": 2, "pid": 4343, "exe": "python", "start_time": 2000.0}
+
+    def sleep(_seconds):
+        state.identity = None
+        state.pidfile.write_text(json.dumps(replacement), encoding="utf-8")
+
+    monkeypatch.setattr(macos.time, "sleep", sleep)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "pidfile changed" in report["detail"]
+    assert read_pidfile_record(state.pidfile) == replacement
+
+
+def test_macos_stop_reports_pidfile_cleanup_failure(macos_stop_state, monkeypatch) -> None:
+    state = macos_stop_state
+    state.exit_at = 0.2
+
+    def denied(_path, **_kwargs):
+        raise PermissionError("synthetic denial")
+
+    monkeypatch.setattr(Path, "unlink", denied)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert "cleanup incomplete" in report["detail"]
+    assert state.pidfile.exists()
+
+
+def test_macos_stop_does_not_signal_when_unload_fails(macos_stop_state) -> None:
+    state = macos_stop_state
+    state.unload_result = (1, "", "manager refused")
     assert macos.stop()["ok"] is False
+    assert [cmd[1] for cmd in state.calls] == ["bootout", "unload"]
+    assert state.pidfile.exists()
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+def test_macos_start_never_force_restarts_supervisor(monkeypatch, loaded) -> None:
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        return (1, "", "not loaded") if cmd[1] == "kickstart" and not loaded else (0, "", "")
+
+    monkeypatch.setattr(macos, "run_cmd", run)
+    assert macos.start()["ok"] is True
+    assert calls[0] == ["launchctl", "kickstart", f"{macos._domain()}/com.brains.serve-all"]
+    assert [cmd[1] for cmd in calls] == (["kickstart"] if loaded else ["kickstart", "bootstrap"])
 
 
 def test_macos_restart_refuses_start_after_incomplete_stop(monkeypatch) -> None:
