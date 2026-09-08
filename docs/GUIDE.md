@@ -22,7 +22,7 @@ brains-ai serve-all
 that key private. `serve-all` runs the console and the MCP server in the foreground:
 
 - console: `http://127.0.0.1:8787/app`
-- MCP: `http://127.0.0.1:8788/mcp`
+- MCP: `http://127.0.0.1:9877/mcp`
 
 Connect your agent tools:
 

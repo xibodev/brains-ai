@@ -71,6 +71,12 @@ These are decisions, not gaps. Each has a reason:
 | Managed skills and prompt libraries | Each harness has its own. Brains does not compete with them. |
 | Autonomous outward action | Anything that reaches the outside world stays behind an explicit human decision. |
 
+These scope decisions do not mean every internal activation path is absent. Session
+registration still reaches best-effort graph/embedding prewarm, and welcome hints can
+mention withdrawn tools. Those tools remain unavailable through MCP. See
+[Operations](../OPERATIONS.md#scope-and-proof-boundary) for the prewarm conditions and
+the existing setting that suppresses that path.
+
 ## Intended, not built
 
 Multi-operator access, GitHub event linkage, scheduled recurring work, and external
@@ -101,7 +107,8 @@ Brains is working when:
 5. The operator can answer asks, approve or refuse governed actions, and tell a governed
    effect apart from an external claim.
 6. SQLite state can be diagnosed, backed up, restored, and rolled back.
-7. Anything not in scope has no activation path in the installed product.
+7. Withdrawn public surfaces remain unavailable, and residual internal activation paths
+   are documented as limitations rather than supported capabilities.
 
 Current work is tracked in the repository's issues.
 
