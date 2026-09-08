@@ -871,6 +871,14 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     prepare_path.write_text(json.dumps(prepared), encoding="utf-8")
     prepare_sha256 = hashlib.sha256(prepare_path.read_bytes()).hexdigest()
     original_plan = json.loads(native_lifecycle._plan_path().read_text(encoding="utf-8"))
+    recovery_diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    if system == "Windows":
+        assert len(recovery_diagnostics) == 1
+        assert recovery_diagnostics[0]["diagnostic"] == "native-windows-recovery"
+        assert recovery_diagnostics[0]["recovered"] is True
+    else:
+        assert recovery_diagnostics == []
+    assert "recovery_before" not in original_plan
     if scenario == "manager-cycle-cleanup" or scenario.startswith("runtime-"):
         if scenario == "runtime-marker-drift":
             (runtime / "journey-owner.json").write_text("{}")
@@ -2169,6 +2177,203 @@ def test_native_windows_scheduler_snapshot_only_on_failed_health_wait(
     assert diagnostic["wait_status"]["pid_verified"] is True
     assert "synthetic-secret" not in json.dumps(diagnostic)
     assert "123" not in json.dumps(diagnostic)
+
+
+def _task_event_xml(
+    identity: str, event_id: int = 201, timestamp: str = "2026-09-07T00:00:01Z"
+) -> str:
+    ns = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+    event = ET.Element(ns + "Event")
+    system = ET.SubElement(event, ns + "System")
+    ET.SubElement(system, ns + "Provider", Name="Microsoft-Windows-TaskScheduler")
+    ET.SubElement(system, ns + "EventID").text = str(event_id)
+    ET.SubElement(system, ns + "TimeCreated", SystemTime=timestamp)
+    data = ET.SubElement(event, ns + "EventData")
+    for name, value in {
+        "TaskName": "\\" + identity,
+        "UserName": "synthetic-secret-user",
+        "ActionName": "C:/synthetic-secret-command",
+        "InstanceId": "synthetic-secret-guid",
+        "ResultCode": "1",
+        "ErrorCode": "0x80070002",
+        "ErrorValue": "synthetic-secret-error",
+    }.items():
+        ET.SubElement(data, ns + "Data", Name=name).text = value
+    return ET.tostring(event, encoding="unicode")
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+def test_windows_recovery_capture_emits_bounded_private_event_projection(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], recovered: bool
+) -> None:
+    start = 1788739200000  # 2026-09-07T00:00:00Z
+    identity = "BrainsServeAll-evidence-test"
+    snapshot = {"state": 3, "last_task_result": 1, "last_run_time_utc_ms": start - 1000}
+    event_ids = [100, 101, 102, 110, 111, 129, 200, 201, 202, 203, 322, 999]
+    rows = [_task_event_xml(identity, event_id) for event_id in event_ids]
+    rows += [
+        _task_event_xml(identity + "-foreign"),
+        _task_event_xml(identity, timestamp="2026-09-06T23:59:59Z"),
+        "malformed-secret",
+    ]
+    responses = iter(
+        [
+            {
+                "snapshot": snapshot,
+                "events": [],
+                "events_available": False,
+                "truncated": False,
+                "window_end_ms": start,
+            },
+            {
+                "snapshot": {
+                    **snapshot,
+                    "last_run_time_utc_ms": start + 1000 if recovered else start - 1000,
+                },
+                "events": rows,
+                "events_available": True,
+                "truncated": False,
+                "window_end_ms": start + 2000,
+            },
+        ]
+    )
+    commands = []
+
+    def query(args: list[str], *, env: dict) -> subprocess.CompletedProcess:
+        commands.append((args, env))
+        return subprocess.CompletedProcess(
+            args, 0, json.dumps(next(responses)), "private-secret-stderr"
+        )
+
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    before = native_lifecycle._windows_recovery_capture("brains-serve-all-evidence-test")
+    native_lifecycle._emit_windows_recovery(
+        "brains-serve-all-evidence-test", before, start, recovered
+    )
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["recovered"] is recovered
+    assert diagnostic["observed_new_run"] is recovered
+    assert diagnostic["before"] == snapshot
+    timeline = diagnostic["timeline"]
+    assert timeline["source_count"] == 15 and timeline["matched_count"] == 12
+    assert timeline["invalid_count"] == 13
+    assert not timeline["events_unavailable"] and not timeline["truncated"]
+    assert [row["event_id"] for row in timeline["events"]] == event_ids
+    assert all(
+        row["result_codes"] == [1] and row["error_codes"] == [2147942402]
+        for row in timeline["events"]
+    )
+    encoded = json.dumps(diagnostic)
+    assert "secret" not in encoded and identity not in encoded
+    assert commands[0][1]["BRAINS_EVIDENCE_SINCE"] == ""
+    assert commands[1][1]["BRAINS_EVIDENCE_SINCE"] == str(start)
+    for args, _env in commands:
+        assert "-MaxEvents 257" in args[-1] and "600000" in args[-1]
+        assert identity not in args[-1]
+        for forbidden in (
+            "RegisterTask",
+            "Stop-ScheduledTask",
+            "Start-ScheduledTask",
+            "wevtutil",
+            ".Run(",
+        ):
+            assert forbidden not in args[-1]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "disabled",
+        "empty",
+        "truncated",
+        "oversized",
+        "bad-window",
+        "bad-snapshot",
+        "non-json",
+        "query-failed",
+        "exception",
+    ],
+)
+def test_windows_recovery_capture_reports_unavailable_and_truncation(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    start = 1788739200000
+    identity = "BrainsServeAll-evidence-test"
+    payload = {
+        "snapshot": {"state": 3, "last_task_result": 0, "last_run_time_utc_ms": start},
+        "events": [],
+        "events_available": True,
+        "truncated": False,
+        "window_end_ms": start + 2000,
+    }
+    if case == "disabled":
+        payload["events_available"] = False
+    elif case in {"truncated", "oversized"}:
+        payload["events"] = [_task_event_xml(identity)] * (257 if case == "truncated" else 258)
+    elif case == "bad-window":
+        payload["window_end_ms"] = start + 600001
+    elif case == "bad-snapshot":
+        payload["snapshot"] = {"state": "secret", "command": "secret"}
+    query = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            2 if case == "query-failed" else 0,
+            "secret" if case == "non-json" else json.dumps(payload),
+            "secret",
+        )
+    )
+    if case == "exception":
+        query.side_effect = subprocess.TimeoutExpired("secret", 30)
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    result = native_lifecycle._windows_recovery_capture("brains-serve-all-evidence-test", start)
+    assert "secret" not in json.dumps(result)
+    if case == "truncated":
+        assert result["truncated"] is True and len(result["events"]) == 256
+        assert result["source_count"] == result["matched_count"] == 257
+    elif case in {"empty", "bad-snapshot"}:
+        assert result["events_unavailable"] is False and result["source_count"] == 0
+    else:
+        assert result["events_unavailable"] is True
+    if case == "bad-snapshot":
+        assert result["snapshot"] is None
+
+
+def test_windows_recovery_diagnostics_surround_unchanged_kill_and_wait() -> None:
+    tree = ast.parse(_LIFECYCLE_PATH.read_text(encoding="utf-8"))
+    prepare = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "prepare"
+    )
+    capture = next(
+        node
+        for node in ast.walk(prepare)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_windows_recovery_capture"
+    )
+    guarded = next(
+        node
+        for node in ast.walk(prepare)
+        if isinstance(node, ast.Try)
+        and any(
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "_kill_owned_tree"
+            for call in ast.walk(node)
+        )
+    )
+    calls = [
+        node
+        for node in ast.walk(guarded)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    kill = next(node for node in calls if node.func.id == "_kill_owned_tree")
+    wait = next(node for node in calls if node.func.id == "_wait_healthy")
+    emit = next(node for node in calls if node.func.id == "_emit_windows_recovery")
+    assert capture.lineno < kill.lineno < wait.lineno < emit.lineno
+    assert isinstance(kill.args[0], ast.Name) and kill.args[0].id == "old_pid"
+    assert len(wait.args) == 2 and not wait.keywords
+    assert any(node is emit for stmt in guarded.finalbody for node in ast.walk(stmt))
+    assert not any(node.func.id in {"_run", "_write_plan", "_record"} for node in calls)
 
 
 def test_native_config_removal_preserves_drift_links_and_unexpected_directories(

@@ -6,8 +6,8 @@ requires an explicit disposable-host acknowledgement. ``prepare`` leaves the
 service installed for an optional reboot boundary; ``verify`` validates that
 boundary and removes owned service/configuration. Cleanup removes the private runtime
 only after ownership and quiescence checks. ``manager-cycle`` does not claim reboot evidence.
-Failures emit allowlisted JSON diagnostics to stderr, never command output or
-exception text. These diagnostics are not qualification evidence.
+Failures and Windows recovery attempts emit allowlisted JSON diagnostics to stderr,
+never command output or exception text. These diagnostics are not qualification evidence.
 """
 
 from __future__ import annotations
@@ -32,8 +32,9 @@ import subprocess
 import sys
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from native_evidence import (
     SHA1_RE,
@@ -1006,6 +1007,199 @@ def _windows_scheduler_status(label: str, report: dict[str, Any]) -> dict[str, A
         return _validated_scheduler_status(json.loads(result.stdout))
     except Exception:  # noqa: BLE001 - diagnostic failure cannot replace lifecycle failure
         return {"available": False}
+
+
+def _windows_recovery_capture(label: str, since_ms: int | None = None) -> dict[str, Any]:
+    """Read at most 257 Operational records over at most ten minutes, privately."""
+    unavailable: dict[str, Any] = {
+        "snapshot": None,
+        "events": [],
+        "events_unavailable": True,
+        "source_count": 0,
+        "matched_count": 0,
+        "invalid_count": 0,
+        "truncated": False,
+        "window_end_utc_ms": None,
+    }
+    try:
+        identity = native_service_identity("windows", label)
+        command = (
+            "$ErrorActionPreference='Stop'; $snapshot=$null; $events=@(); $available=$false;"
+            "$truncated=$false; $end=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();"
+            "try {$s=New-Object -ComObject Schedule.Service; $s.Connect();"
+            "$t=$s.GetFolder('\\').GetTask($env:BRAINS_EVIDENCE_TASK);"
+            "$snapshot=@{state=[int]$t.State;last_task_result=[long]$t.LastTaskResult;"
+            "last_run_time_utc_ms=([DateTimeOffset]$t.LastRunTime.ToUniversalTime()).ToUnixTimeMilliseconds()}}"
+            "catch {}; if ($env:BRAINS_EVIDENCE_SINCE) {try {"
+            "$start=[long]$env:BRAINS_EVIDENCE_SINCE;"
+            "if ($end -gt ($start+600000)) {$end=$start+600000; $truncated=$true};"
+            "$log='Microsoft-Windows-TaskScheduler/Operational';"
+            "if ((Get-WinEvent -ListLog $log).IsEnabled) {"
+            "try {$rows=@(Get-WinEvent -FilterHashtable @{LogName=$log;"
+            "StartTime=[DateTimeOffset]::FromUnixTimeMilliseconds($start).UtcDateTime;"
+            "EndTime=[DateTimeOffset]::FromUnixTimeMilliseconds($end).UtcDateTime} -MaxEvents 257);"
+            "$available=$true} catch {if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') "
+            "{$rows=@(); $available=$true} else {throw}};"
+            "$truncated=$truncated -or ($rows.Count -ge 257);"
+            "$events=@($rows | ForEach-Object {$_.ToXml()})}} catch {}};"
+            "@{snapshot=$snapshot;events=$events;events_available=$available;"
+            "truncated=$truncated;window_end_ms=$end}|ConvertTo-Json -Depth 4 -Compress"
+        )
+        result = _native_command(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            env={
+                **os.environ,
+                "BRAINS_EVIDENCE_TASK": identity,
+                "BRAINS_EVIDENCE_SINCE": str(since_ms) if since_ms is not None else "",
+            },
+        )
+        if result.returncode != 0 or len(result.stdout) > 2_000_000:
+            return unavailable
+        return _parse_windows_recovery_capture(json.loads(result.stdout), identity, since_ms)
+    except Exception:  # noqa: BLE001 - diagnostics cannot change the recovery outcome
+        return unavailable
+
+
+def _parse_windows_recovery_capture(
+    payload: Any, identity: str, since_ms: int | None
+) -> dict[str, Any]:
+    """Project private XML into numbers only; unknown event IDs remain visible."""
+    result: dict[str, Any] = {
+        "snapshot": None,
+        "events": [],
+        "events_unavailable": True,
+        "source_count": 0,
+        "matched_count": 0,
+        "invalid_count": 0,
+        "truncated": False,
+        "window_end_utc_ms": None,
+    }
+    if type(payload) is not dict:
+        return result
+    snapshot = payload.get("snapshot")
+    if (
+        type(snapshot) is dict
+        and set(snapshot) == {"state", "last_task_result", "last_run_time_utc_ms"}
+        and type(snapshot["state"]) is int
+        and snapshot["state"] in range(5)
+        and type(snapshot["last_task_result"]) is int
+        and -(2**31) <= snapshot["last_task_result"] <= 2**32 - 1
+        and type(snapshot["last_run_time_utc_ms"]) is int
+        and -2209161600000 <= snapshot["last_run_time_utc_ms"] <= 253402300799999
+    ):
+        result["snapshot"] = dict(snapshot)
+    events = payload.get("events")
+    end = payload.get("window_end_ms")
+    if (
+        since_ms is None
+        or type(events) is not list
+        or len(events) > 257
+        or type(end) is not int
+        or not since_ms <= end <= since_ms + 600000
+        or type(payload.get("truncated")) is not bool
+        or payload.get("events_available") is not True
+    ):
+        return result
+    result.update(
+        events_unavailable=False,
+        source_count=len(events),
+        window_end_utc_ms=end,
+        truncated=payload["truncated"] or len(events) >= 257,
+    )
+    ns = "{http://schemas.microsoft.com/win/2004/08/events/event}"
+    for raw in events:
+        try:
+            if type(raw) is not str or len(raw) > 65536:
+                raise ValueError
+            event = ET.fromstring(raw)
+            if event.tag != ns + "Event":
+                raise ValueError
+            provider = event.find(ns + "System/" + ns + "Provider")
+            if provider is None or provider.get("Name") != "Microsoft-Windows-TaskScheduler":
+                raise ValueError
+            data = event.findall(ns + "EventData/" + ns + "Data")
+            names = [node.text for node in data if node.get("Name") == "TaskName"]
+            if len(names) != 1:
+                result["invalid_count"] += 1
+                continue
+            if names != ["\\" + identity]:
+                continue
+            event_id = event.findtext(ns + "System/" + ns + "EventID", "")
+            created = event.find(ns + "System/" + ns + "TimeCreated")
+            if (
+                not re.fullmatch(r"[0-9]{1,5}", event_id)
+                or int(event_id) > 65535
+                or created is None
+            ):
+                raise ValueError
+            timestamp = datetime.fromisoformat(created.get("SystemTime", "").replace("Z", "+00:00"))
+            if timestamp.utcoffset() is None:
+                raise ValueError
+            timestamp_ms = int(timestamp.timestamp() * 1000)
+            if not since_ms <= timestamp_ms <= end:
+                continue
+            row: dict[str, Any] = {
+                "event_id": int(event_id),
+                "timestamp_utc_ms": timestamp_ms,
+                "result_codes": [],
+                "error_codes": [],
+            }
+            for node in data:
+                if node.get("Name") not in {"ResultCode", "Result", "ErrorCode", "ErrorValue"}:
+                    continue
+                value = (node.text or "").strip()
+                if not re.fullmatch(r"(?:-?[0-9]{1,10}|0[xX][0-9a-fA-F]{1,8})", value):
+                    result["invalid_count"] += 1
+                    continue
+                number = int(value, 16 if value.lower().startswith("0x") else 10)
+                if not -(2**31) <= number <= 2**32 - 1:
+                    result["invalid_count"] += 1
+                    continue
+                row[
+                    "error_codes"
+                    if cast(str, node.get("Name")).startswith("Error")
+                    else "result_codes"
+                ].append(number)
+            result["matched_count"] += 1
+            if len(result["events"]) < 256:
+                result["events"].append(row)
+            else:
+                result["truncated"] = True
+        except (ValueError, TypeError, OverflowError, OSError, ET.ParseError):
+            result["invalid_count"] += 1
+    result["events"].sort(key=lambda row: row["timestamp_utc_ms"])
+    return result
+
+
+def _emit_windows_recovery(
+    label: str, before: dict[str, Any], since_ms: int, recovered: bool
+) -> None:
+    after = _windows_recovery_capture(label, since_ms)
+    pre, post = before["snapshot"], after["snapshot"]
+    print(
+        json.dumps(
+            {
+                "diagnostic": "native-windows-recovery",
+                "recovered": recovered,
+                "window_start_utc_ms": since_ms,
+                "before": pre,
+                "after": post,
+                "snapshot_unavailable": pre is None or post is None,
+                "last_run_changed": post["last_run_time_utc_ms"] != pre["last_run_time_utc_ms"]
+                if pre is not None and post is not None
+                else None,
+                "observed_new_run": (
+                    post["last_run_time_utc_ms"] > pre["last_run_time_utc_ms"]
+                    and post["last_run_time_utc_ms"] >= since_ms
+                )
+                if pre is not None and post is not None
+                else None,
+                "timeline": {key: value for key, value in after.items() if key != "snapshot"},
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
 
 
 def _systemd_query_diagnostic(result: subprocess.CompletedProcess, identity: str) -> dict[str, Any]:
@@ -2127,11 +2321,20 @@ def prepare(
     _record(plan, "restarted", restarted)
     old_pid = restarted_incarnation[0]
     _assert_native_ownership(plan)
-    _kill_owned_tree(old_pid)
-    recovered = _status_evidence(_wait_healthy(executable, label), label)
-    recovered_incarnation = _ready_incarnation(recovered)
-    if recovered_incarnation[0] == old_pid:
-        raise EvidenceFailure("native manager did not establish a new owned incarnation")
+    recovery_start_ms = time.time_ns() // 1_000_000
+    recovery_before = _windows_recovery_capture(label) if platform.system() == "Windows" else None
+    recovery_passed = False
+    try:
+        _kill_owned_tree(old_pid)
+        recovered = _status_evidence(_wait_healthy(executable, label), label)
+        recovered_incarnation = _ready_incarnation(recovered)
+        if recovered_incarnation[0] == old_pid:
+            raise EvidenceFailure("native manager did not establish a new owned incarnation")
+        recovery_passed = True
+    finally:
+        if recovery_before is not None:
+            with contextlib.suppress(Exception):
+                _emit_windows_recovery(label, recovery_before, recovery_start_ms, recovery_passed)
     _record(plan, "manager-recovered-owned-process", recovered)
     _assert_native_ownership(plan, check_recovery=True)
     _record(

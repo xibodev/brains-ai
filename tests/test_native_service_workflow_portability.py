@@ -194,3 +194,30 @@ def test_linux_preflight_requires_real_user_manager_and_owned_bus() -> None:
         assert forbidden not in script
     probe = next(step for step in steps if step.get("name", "").startswith("Exercise native"))
     assert steps.index(step) < steps.index(probe)
+
+
+def test_windows_operational_log_is_enabled_only_on_disposable_runner() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/native-service-evidence.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["manager-cycle"]
+    steps = job["steps"]
+    step = next(
+        row
+        for row in steps
+        if row.get("name") == "Enable disposable Windows task event diagnostics"
+    )
+    assert step["if"] == "runner.os == 'Windows'"
+    assert step["shell"] == "pwsh" and step["timeout-minutes"] == 2
+    script = step["run"]
+    assert script.index("disposable-native-service-host") < script.index("wevtutil.exe")
+    assert "/e:true *> $null" in script
+    assert "Get-WinEvent -ListLog" in script
+    assert "$_" not in script and "Format-List" not in script
+    assert '"enabled":true' in script and '"enabled":false' in script
+    assert "continue-on-error" not in step
+    assert steps.index(step) < next(
+        i for i, row in enumerate(steps) if row.get("name", "").startswith("Exercise native")
+    )
+    assert len(job["strategy"]["matrix"]["host"]) == 3

@@ -241,6 +241,25 @@ jobs:
                   summary = {"query_failed": True}
               print(json.dumps({"diagnostic": "systemd-query-shape", "show_all": show_all, **summary}))
           PY
+      - name: Enable disposable Windows task event diagnostics
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:BRAINS_NATIVE_EVIDENCE_DISPOSABLE -ne 'disposable-native-service-host') {
+            exit 1
+          }
+          try {
+            & wevtutil.exe sl Microsoft-Windows-TaskScheduler/Operational /e:true *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'enable-failed' }
+            $enabled = (Get-WinEvent -ListLog Microsoft-Windows-TaskScheduler/Operational).IsEnabled
+            if (-not $enabled) { throw 'enable-unverified' }
+            '{"diagnostic":"task-operational-log","enabled":true}'
+          } catch {
+            '{"diagnostic":"task-operational-log","enabled":false}'
+            exit 1
+          }
       - name: Exercise native manager lifecycle without login claim
         # The probe emits allowlisted failure diagnostics directly to stderr.
         # Do not dump private plans, failed records, or native command output.
