@@ -124,6 +124,14 @@ following must hold for the exact commit proposed for the tag:
    only through its configured protected environment. A passing earlier commit or a
    Docker-only substitute does not qualify the tag.
 
+Both PyPI and GHCR publication jobs use the `pypi` environment; GitHub Release creation
+waits for both. Before tagging, inspect that environment's required reviewers, self-review
+prevention and administrator-bypass settings. Environment protection is repository
+configuration, not enforced by the YAML alone. With self-review prevention enabled, a
+workflow initiator cannot approve their own deployment; a sole reviewer who also initiates
+the run blocks publication. Sharing an approval environment does not make the two uploads
+atomic, and already-published packages cannot be rolled back by rejecting the other job.
+
 Conditions 1, 3, and 4 are human-run and are not enforced by the release workflow.
 
 These are recurring release conditions, not backlog items or a dated evidence diary.
