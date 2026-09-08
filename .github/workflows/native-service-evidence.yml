@@ -155,6 +155,8 @@ jobs:
           echo "BRAINS_STATE_DIR=$runtime/state" >> "$GITHUB_ENV"
           echo "BRAINS_NATIVE_ARTIFACT_ROOT=$artifact" >> "$GITHUB_ENV"
       - name: Exercise native manager lifecycle without login claim
+        # The probe emits allowlisted failure diagnostics directly to stderr.
+        # Do not dump private plans, failed records, or native command output.
         shell: bash
         run: >-
           "$BRAINS_NATIVE_PROBE_PYTHON" scripts/probe_native_service_lifecycle.py manager-cycle
@@ -190,6 +192,7 @@ jobs:
           --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-prepare.json"
           --input "$BRAINS_NATIVE_ARTIFACT_ROOT/native-service-cleanup.json"
       - name: Upload sanitized native evidence
+        # Failure diagnostics stay in job logs, never in qualification artifacts.
         if: success()
         uses: actions/upload-artifact@v4
         with:

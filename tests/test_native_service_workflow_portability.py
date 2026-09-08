@@ -67,3 +67,37 @@ def test_native_service_workflow_checks_manifest_bytes(
     else:
         with pytest.raises(FileNotFoundError):
             exec(code, {})
+
+
+def test_native_service_workflow_keeps_failure_logs_separate_from_qualification() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/native-service-evidence.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["manager-cycle"]["steps"]
+    probes = [step for step in steps if "probe_native_service_lifecycle.py" in step.get("run", "")]
+    assert len(probes) == 2
+    assert probes[1]["if"] == "always()"
+    for step in probes:
+        assert "continue-on-error" not in step
+        assert "2>" not in step["run"]
+        assert "||" not in step["run"]
+        assert "tee " not in step["run"]
+    uploads = [step for step in steps if step.get("uses") == "actions/upload-artifact@v4"]
+    assert len(uploads) == 1
+    assert uploads[0]["if"] == "success()"
+    assert all(
+        path.endswith(
+            (
+                "/native-service-prepare.json",
+                "/native-service-prepare.xml",
+                "/native-service-cleanup.json",
+                "/native-service-cleanup.xml",
+            )
+        )
+        for path in uploads[0]["with"]["path"].splitlines()
+    )
+    verifier = next(step for step in steps if "verify_native_evidence.py" in step.get("run", ""))
+    assert steps.index(verifier) < steps.index(uploads[0])
+    assert verifier.get("if", "success()") == "success()"
+    assert "continue-on-error" not in verifier

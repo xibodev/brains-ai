@@ -6,6 +6,8 @@ requires an explicit disposable-host acknowledgement. ``prepare`` leaves the
 service installed for an optional reboot boundary; ``verify`` validates that
 boundary and removes owned service/configuration. Cleanup removes the private runtime
 only after ownership and quiescence checks. ``manager-cycle`` does not claim reboot evidence.
+Failures emit allowlisted JSON diagnostics to stderr, never command output or
+exception text. These diagnostics are not qualification evidence.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from typing import Any
 
 from native_evidence import (
     SHA1_RE,
+    ProvenanceFailure,
     account_managed_backups,
     assert_sanitized,
     canonical_sha256,
@@ -73,6 +76,298 @@ PLAN_FIELDS = set(PLAN_CORE_FIELDS)
 
 class EvidenceFailure(RuntimeError):
     pass
+
+
+# Only these reviewed literals may become diagnostic codes. Never normalize an
+# exception's arbitrary text, command output, paths, or environment into a log.
+_DIAGNOSTIC_MESSAGES = (
+    "fresh private evidence root is absent",
+    "private evidence root must be absolute",
+    "evidence paths may not traverse links",
+    "unexpected client configuration resource",
+    "unexpected Claude backup resource",
+    "unexpected client configuration directory",
+    "configuration backup name already exists",
+    "command returned a non-JSON result",
+    "command reported failure",
+    "unsupported service status platform",
+    "native service status identity differs",
+    "service did not become fully ready",
+    "native identity or listener survived bounded uninstall",
+    "disposable-host acknowledgement is absent",
+    "synthetic state must be confined to the fresh evidence root",
+    "fresh private evidence root already exists",
+    "the real user already has Brains state",
+    "client configuration already exists",
+    "the prepared evidence plan is absent",
+    "unsupported native evidence platform",
+    "OS boot marker is unavailable",
+    "native operational plan schema differs",
+    "native operational plan digest is invalid",
+    "native operational plan digest differs",
+    "native runtime classification differs",
+    "healthy service lacks complete readiness evidence",
+    "service readiness evidence is incomplete",
+    "native service did not reach the stopped state",
+    "native service did not reach the stopped state before timeout",
+    "synthetic configuration changed before removal",
+    "client configuration directory inventory differs",
+    "preexisting client configuration changed",
+    "synthetic configuration snapshot path differs",
+    "Claude backup path differs",
+    "synthetic configuration changed at removal",
+    "native definition is not a regular file",
+    "local native definition differs",
+    "native definition has unexpected hard links",
+    "Task Scheduler observation failed",
+    "Task Scheduler observation schema differs",
+    "registered task definition is incomplete",
+    "registered task action or trigger differs",
+    "registered task principal or identity differs",
+    "registered task trigger principal differs",
+    "systemd observation failed",
+    "systemd absence is ambiguous",
+    "loaded systemd definition differs",
+    "unexpected native enablement link",
+    "unexpected native enablement resource",
+    "launchd observation failed",
+    "loaded launchd definition differs",
+    "preexisting or unaccounted native definition",
+    "expected native definition is unavailable",
+    "native cleanup executable or state identity differs",
+    "native ownership identity differs",
+    "owned native definition is absent",
+    "native definition is not owned by this journey",
+    "native registration changed during cleanup",
+    "runtime ownership marker differs",
+    "unexpected runtime directory",
+    "unexpected or changed runtime file",
+    "unexpected runtime resource",
+    "inventoried runtime file disappeared",
+    "runtime plan changed before removal",
+    "runtime file changed at removal",
+    "runtime ownership marker changed at removal",
+    "runtime plan changed at removal",
+    "owned Windows process tree could not be terminated",
+    "prior normal-cycle evidence is absent",
+    "prior normal-cycle evidence is unreadable",
+    "prior normal-cycle evidence is not provenance-bound",
+    "prepared cleanup journey differs from normal evidence",
+    "immutable prepare evidence is absent",
+    "immutable prepare evidence digest differs",
+    "immutable prepare evidence is unreadable",
+    "immutable prepare evidence identity differs",
+    "candidate must be a full Git commit SHA",
+    "native identity and definition are not positively absent",
+    "synthetic adapter home was not initially empty",
+    "synthetic state admin key is absent",
+    "client home appeared before seeding",
+    "native start reused the installed process identity",
+    "native restart reused the prior process identity",
+    "native manager did not establish a new owned incarnation",
+    "candidate differs from the prepared native journey",
+    "installed provenance differs across the native boundary",
+    "native journey binding differs across the boundary",
+    "prepared executable differs from current provenance",
+    "runtime plan differs from immutable prepare evidence",
+    "adapter differs from the prepared native journey",
+    "native boundary has no machine-observed reboot",
+    "managed client configuration changed across the boundary",
+    "client configuration directories changed across the boundary",
+    "bounded supervisor lifecycle log evidence is absent",
+    "native identity or listener survived teardown",
+    "synthetic client home was not exactly restored",
+    "native runtime root is absent before cleanup",
+    "native operational plan is absent",
+    "cleanup plan differs from validated evidence",
+    "native operational plan is unreadable",
+    "native operational plan cleanup identity differs",
+    "cleanup executable differs from current provenance",
+    "native cleanup snapshots are invalid",
+    "managed client configuration changed before cleanup",
+    "client configuration directories changed before cleanup",
+    "client home changed after completed restoration",
+    "completed restoration evidence differs",
+    "native cleanup did not restore the initial client home",
+    "installed brains-ai executable is unavailable",
+    "cleanup prior record is required",
+    "prepared cleanup evidence chain differs",
+    "verified cleanup requires immutable prepare evidence",
+    "verified cleanup evidence chain differs",
+    "immutable prepare evidence is required for verification",
+    "native cleanup runtime removal is incomplete",
+    # Shared provenance helpers also raise only reviewed, exact static messages.
+    "candidate repository validation failed",
+    "candidate must be a full Git SHA-1 commit id",
+    "explicit Git executable identity differs",
+    "candidate does not equal the checked-out commit",
+    "checked-out candidate is not clean",
+    "installed distribution has no direct wheel provenance",
+    "installed direct wheel provenance is malformed",
+    "installed distribution did not originate from a local wheel",
+    "installed distribution references a different wheel",
+    "installed distribution wheel hash does not match",
+    "wheel contains an unsafe member path",
+    "candidate wheel is unreadable",
+    "candidate wheel has no verifiable payload",
+    "wheel distribution identity is ambiguous",
+    "wheel RECORD verification failed",
+    "package provenance is unreadable",
+    "package provenance does not match candidate wheel",
+    "package provenance output already exists",
+    "package source identity differs",
+    "probe interpreter or executable is outside its environment",
+    "native evidence requires a fresh virtual environment",
+    "installed brains-ai distribution is absent",
+    "installed distribution identity differs",
+    "installed console entry point differs",
+    "installed payload differs from the candidate wheel",
+    "installed distribution reports a path outside its environment",
+    "installed RECORD uses an unsupported hash",
+    "installed file differs from its RECORD hash",
+    "installed file differs from its RECORD size",
+    "installed distribution manifest is empty",
+    "installed RECORD does not cover the wheel payload",
+    "explicit native tool map is malformed",
+    "explicit native tool map differs from the required set",
+    "native tool path is not absolute",
+    "native tool executable identity differs",
+    "native tool resolution differs from hashed executable",
+    "synthetic configuration root may not be a symlink",
+    "synthetic configuration tree may not contain symlinks",
+    "primary client configuration was not exactly restored",
+    "unexpected managed configuration artifact remains",
+    "managed backup does not preserve a known lifecycle state",
+    "native evidence output already exists",
+    "native evidence contains a forbidden host value",
+)
+_DIAGNOSTIC_CODES = {message: message.lower().replace(" ", "-") for message in _DIAGNOSTIC_MESSAGES}
+_DIAGNOSTIC_STEPS = {
+    "provenance",
+    "manager-identity",
+    "endpoint-contract",
+    "adapter-wired",
+    "installed",
+    "stopped",
+    "started",
+    "restarted",
+    "manager-recovered-owned-process",
+    "boundary-prepared",
+    "boundary-verified",
+    "configuration-restored",
+    "teardown",
+}
+
+
+def _diagnose(
+    exc: Exception | None,
+    *,
+    phase: str,
+    stage: str,
+    context: dict[str, Any] | None = None,
+    outcomes: dict[str, Any] | None = None,
+) -> None:
+    """Emit failure-only diagnostics separately from qualification records."""
+    context = context or {}
+    steps = context.get("diagnostic_steps", context.get("plan", {}).get("steps", []))
+    last_step = steps[-1].get("step") if steps and isinstance(steps[-1], dict) else None
+    error_types = (
+        EvidenceFailure,
+        ProvenanceFailure,
+        FileNotFoundError,
+        FileExistsError,
+        PermissionError,
+        OSError,
+        json.JSONDecodeError,
+        ET.ParseError,
+        ValueError,
+        TypeError,
+        KeyError,
+        RuntimeError,
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+    )
+    error_type = next((kind.__name__ for kind in error_types if type(exc) is kind), "Exception")
+    code = "unexpected-error"
+    if exc is not None and type(exc) in (EvidenceFailure, ProvenanceFailure):
+        message = exc.args[0] if len(exc.args) == 1 and type(exc.args[0]) is str else ""
+        code = _DIAGNOSTIC_CODES.get(message, "unclassified-evidence-failure")
+    operation = None
+    command = None
+    trace = exc.__traceback__ if exc is not None else None
+    while trace is not None:
+        name = trace.tb_frame.f_code.co_name
+        if name in {
+            "_run",
+            "_guard",
+            "_boot_marker",
+            "_native_observation",
+            "_expected_native_definition",
+            "_wait_healthy",
+            "_wait_stopped",
+            "_wait_removed",
+            "_assert_native_ownership",
+            "_remove_synthetic_config",
+            "_remove_runtime",
+            "_record",
+            "_seal_plan",
+            "_prior_normal_record",
+            "_read_prepare_record",
+            "_kill_owned_tree",
+        }:
+            operation = name
+        if name == "_run":
+            arguments = trace.tb_frame.f_locals.get("args")
+            if type(arguments) is list and arguments:
+                verb = arguments[0]
+                if type(verb) is str and verb in {"setup", "wire", "unwire", "service"}:
+                    command = verb
+                    if verb == "service" and len(arguments) > 1:
+                        action = arguments[1]
+                        if type(action) is str and action in {
+                            "install",
+                            "status",
+                            "stop",
+                            "start",
+                            "restart",
+                            "uninstall",
+                        }:
+                            command = "service-" + action
+        trace = trace.tb_next
+    record: dict[str, Any] = {
+        "diagnostic": "native-service-failure",
+        "phase": phase if phase in {"prepare", "verify", "manager-cycle", "cleanup"} else "unknown",
+        "stage": stage
+        if stage
+        in {
+            "output-preflight",
+            "guard",
+            "runtime-tools",
+            "provenance",
+            "lifecycle",
+            "cleanup-binding",
+            "cleanup",
+            "cleanup-native",
+            "cleanup-configuration",
+            "cleanup-runtime",
+            "rollback-outcome",
+            "result-export",
+        }
+        else "unknown",
+        "operation": operation,
+        "command": command,
+        "last_step": last_step
+        if type(last_step) is str and last_step in _DIAGNOSTIC_STEPS
+        else None,
+        "error_type": error_type if exc is not None else None,
+        "error_code": code if exc is not None else None,
+    }
+    if outcomes is not None:
+        record["cleanup"] = {
+            key: outcomes.get(key) is True
+            for key in ("native_removed", "configuration_removed", "runtime_root_removed")
+        }
+    print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
 def _evidence_root() -> Path:
@@ -197,9 +492,9 @@ def _run(executable: str, args: list[str], env: dict[str, str] | None = None) ->
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise EvidenceFailure(f"{args[0]} returned a non-JSON result") from exc
+        raise EvidenceFailure("command returned a non-JSON result") from exc
     if completed.returncode != 0 or payload.get("ok") is False:
-        raise EvidenceFailure(f"{args[0]} reported failure")
+        raise EvidenceFailure("command reported failure")
     return payload
 
 
@@ -290,7 +585,7 @@ def _guard(phase: str) -> None:
             raise EvidenceFailure("the real user already has Brains state")
         occupied = [path for path in map(_config_root, TOOLS) if path.exists() or path.is_symlink()]
         if occupied:
-            raise EvidenceFailure(f"client configuration already exists (count={len(occupied)})")
+            raise EvidenceFailure("client configuration already exists")
         root.mkdir(parents=True, mode=0o700)
     else:
         _assert_plain_path(_plan_path())
@@ -955,6 +1250,9 @@ def _rollback(context: dict[str, Any]) -> dict[str, Any]:
             result["native_removed"] = True
     except Exception as exc:  # noqa: BLE001 - cleanup failures remain visible, content-free
         result["native_error_type"] = type(exc).__name__
+        _diagnose(
+            exc, phase=context.get("phase", "unknown"), stage="cleanup-native", context=context
+        )
     try:
         if "config_snapshot" in context:
             _remove_synthetic_config(
@@ -966,6 +1264,12 @@ def _rollback(context: dict[str, Any]) -> dict[str, Any]:
             result["configuration_removed"] = True
     except Exception as exc:  # noqa: BLE001 - independent of native cleanup
         result["configuration_error_type"] = type(exc).__name__
+        _diagnose(
+            exc,
+            phase=context.get("phase", "unknown"),
+            stage="cleanup-configuration",
+            context=context,
+        )
     result["runtime_root_removed"] = False
     if result.get("native_removed") and result.get("configuration_removed"):
         try:
@@ -973,6 +1277,9 @@ def _rollback(context: dict[str, Any]) -> dict[str, Any]:
             result["runtime_root_removed"] = True
         except Exception as exc:  # noqa: BLE001 - retain uncertain partial effects
             result["runtime_error_type"] = type(exc).__name__
+            _diagnose(
+                exc, phase=context.get("phase", "unknown"), stage="cleanup-runtime", context=context
+            )
     return result
 
 
@@ -1492,6 +1799,7 @@ def verify(
     if rollback_context is not None:
         rollback_context.update(
             plan=copy.deepcopy(plan),
+            diagnostic_steps=plan["steps"],
             native_armed=True,
             config_snapshot=copy.deepcopy(plan["wired_snapshot"]),
             config_directories=list(plan["config_directories"]),
@@ -1601,6 +1909,7 @@ def cleanup(
     trusted_plan: dict[str, Any],
     expected_executable: Path,
     completed_restoration: dict[str, Any] | None = None,
+    diagnostic_outcomes: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Perform bounded cleanup and return only directly measured evidence."""
     root = _evidence_root()
@@ -1633,6 +1942,8 @@ def cleanup(
     _uninstall_owned(plan)
     removed = _status_evidence(_wait_removed(str(resolved_executable), label), label)
     _assert_native_ownership(plan, absent=True)
+    if diagnostic_outcomes is not None:
+        diagnostic_outcomes["native_removed"] = True
     if completed_restoration is None:
         if _config_snapshot(adapter) != wired:
             raise EvidenceFailure("managed client configuration changed before cleanup")
@@ -1675,6 +1986,8 @@ def cleanup(
     initial_restored = _config_snapshot(adapter) == plan["original_snapshot"]
     if not initial_restored:
         raise EvidenceFailure("native cleanup did not restore the initial client home")
+    if diagnostic_outcomes is not None:
+        diagnostic_outcomes["configuration_removed"] = True
     result = {
         "final_status": removed,
         **restoration,
@@ -1684,6 +1997,8 @@ def cleanup(
     }
     _remove_runtime(plan)
     result["runtime_root_removed"] = not root.exists()
+    if diagnostic_outcomes is not None:
+        diagnostic_outcomes["runtime_root_removed"] = result["runtime_root_removed"]
     return result
 
 
@@ -1703,13 +2018,16 @@ def main() -> int:
     args = parser.parse_args()
     try:
         require_fresh_output(args.output)
-    except Exception:  # noqa: BLE001 - never overwrite or echo stale-output details
+    except Exception as exc:  # noqa: BLE001 - never overwrite or echo stale-output details
+        _diagnose(exc, phase=args.phase, stage="output-preflight")
         return 1
     executable_name = "brains-ai.exe" if os.name == "nt" else "brains-ai"
     executable_path = Path(sys.prefix) / ("Scripts" if os.name == "nt" else "bin") / executable_name
     executable = str(executable_path)
     result: dict[str, Any] = {"phase": args.phase}
     rollback_context: dict[str, Any] = {}
+    cleanup_outcomes: dict[str, Any] = {}
+    stage = "guard"
     try:
         if not SHA1_RE.fullmatch(args.candidate.casefold()):
             raise EvidenceFailure("candidate must be a full Git commit SHA")
@@ -1721,12 +2039,14 @@ def main() -> int:
             raise EvidenceFailure("disposable-host acknowledgement is absent")
         if not executable_path.is_file():
             raise EvidenceFailure("installed brains-ai executable is unavailable")
+        stage = "runtime-tools"
         runtime_tools, controlled_path = explicit_runtime_tools(
             os.environ.get("BRAINS_NATIVE_TOOL_PATHS", "{}"),
             required=_required_runtime_tools(args.adapter),
             prepend_paths=(Path(sys.executable).parent,),
         )
         os.environ["PATH"] = controlled_path
+        stage = "provenance"
         provenance = create_provenance(
             candidate=args.candidate,
             repo=args.repo,
@@ -1736,7 +2056,9 @@ def main() -> int:
             git_executable=args.git_executable,
             runtime_tools=runtime_tools,
         )
+        stage = "lifecycle"
         if args.phase == "cleanup":
+            stage = "cleanup-binding"
             _guard("cleanup")
             if args.prior_record is None:
                 raise EvidenceFailure("cleanup prior record is required")
@@ -1802,10 +2124,12 @@ def main() -> int:
                     for step in prior["record"]["steps"]
                     if step["step"] == "configuration-restored"
                 )
+            stage = "cleanup"
             cleanup_evidence = cleanup(
                 trusted_plan=plan,
                 expected_executable=executable_path,
                 completed_restoration=completed_restoration,
+                diagnostic_outcomes=cleanup_outcomes,
             )
             result = {
                 "schema": "brains.native-service-evidence.v1",
@@ -1857,22 +2181,43 @@ def main() -> int:
                 rollback_context=rollback_context,
             )
     except Exception as exc:  # noqa: BLE001 - artifact exposes type only
+        _diagnose(
+            exc,
+            phase=args.phase,
+            stage=stage,
+            context=rollback_context,
+            outcomes=cleanup_outcomes if args.phase == "cleanup" else None,
+        )
         if rollback_context:
+            rollback_context["phase"] = args.phase
             result["failure_cleanup"] = _rollback(rollback_context)
+            _diagnose(
+                None,
+                phase=args.phase,
+                stage="rollback-outcome",
+                context=rollback_context,
+                outcomes=result["failure_cleanup"],
+            )
         result.update({"passed": False, "error_type": type(exc).__name__})
+        passed = False
+    else:
+        passed = args.phase != "cleanup" or result["cleanup"]["runtime_root_removed"] is True
+        if not passed:
+            _diagnose(
+                EvidenceFailure("native cleanup runtime removal is incomplete"),
+                phase=args.phase,
+                stage="cleanup",
+            )
+    result["passed"] = passed
+    try:
         assert_sanitized(
             result,
             (str(Path.home()), os.environ.get("USERPROFILE", ""), getpass.getuser()),
         )
-        _write_result(args.output, result, passed=False)
+        _write_result(args.output, result, passed=passed)
+    except Exception as exc:  # noqa: BLE001 - export failures must not leak record contents
+        _diagnose(exc, phase=args.phase, stage="result-export", context=rollback_context)
         return 1
-    passed = args.phase != "cleanup" or result["cleanup"]["runtime_root_removed"] is True
-    result["passed"] = passed
-    assert_sanitized(
-        result,
-        (str(Path.home()), os.environ.get("USERPROFILE", ""), getpass.getuser()),
-    )
-    _write_result(args.output, result, passed=passed)
     return 0 if passed else 1
 
 

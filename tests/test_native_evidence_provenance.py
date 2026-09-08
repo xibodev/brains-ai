@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import base64
 import hashlib
 import importlib.metadata
@@ -568,7 +569,11 @@ def _lifecycle_main(
     ],
 )
 def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str, system: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: str,
+    system: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(native_lifecycle.platform, "system", lambda: system)
     monkeypatch.setattr(native_lifecycle.os, "getuid", lambda: 1000, raising=False)
@@ -797,6 +802,14 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
             scenario not in {"config-drift", "native-drift"}
         )
         assert runtime.exists() is (scenario in {"config-drift", "native-drift"})
+        diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+        assert diagnostics[0]["phase"] == phase
+        assert diagnostics[0]["last_step"] == "adapter-wired"
+        assert diagnostics[-1]["stage"] == "rollback-outcome"
+        assert (
+            diagnostics[-1]["cleanup"]["runtime_root_removed"] == rollback["runtime_root_removed"]
+        )
+        assert "synthetic partial install" not in json.dumps(diagnostics)
         return
     if scenario == "reuse-pid":
         with pytest.raises(native_lifecycle.EvidenceFailure, match="reused"):
@@ -842,6 +855,13 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
         )
         if scenario.startswith("runtime-"):
             assert code == 1 and runtime.exists()
+            diagnostic = json.loads(capsys.readouterr().err)
+            assert diagnostic["stage"] == "cleanup"
+            assert diagnostic["cleanup"] == {
+                "native_removed": True,
+                "configuration_removed": True,
+                "runtime_root_removed": False,
+            }
             if scenario in {"runtime-drift", "runtime-link-drift"}:
                 assert (runtime / "foreign.txt").read_bytes() == b"unowned"
         else:
@@ -1045,6 +1065,7 @@ def test_native_lifecycle_executes_ordered_transitions_and_exact_teardown(
     assert sum(args[:2] == ["service", "uninstall"] for args in actions) == 1
     assert not runtime.exists()
     assert not config_path.exists()
+    assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize("phase", ["prepare", "verify"])
@@ -1087,7 +1108,11 @@ def test_native_prior_record_requires_exact_phase_schema(tmp_path: Path, phase: 
 @pytest.mark.parametrize("phase", ["prepare", "manager-cycle", "verify", "cleanup"])
 @pytest.mark.parametrize("failure", ["guard", "provenance"])
 def test_native_main_untrusted_failure_never_uses_preexisting_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str, failure: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    failure: str,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -1126,6 +1151,231 @@ def test_native_main_untrusted_failure_never_uses_preexisting_plan(
     assert "failure_cleanup" not in result
     calls.assert_not_called()
     assert plan_path.read_bytes() == before
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert captured.out == ""
+    assert diagnostic["phase"] == phase
+    assert diagnostic["stage"] == failure
+    assert diagnostic["error_type"] == "EvidenceFailure"
+    assert diagnostic["error_code"] == (
+        "disposable-host-acknowledgement-is-absent"
+        if failure == "guard"
+        else "unclassified-evidence-failure"
+    )
+    assert "untrusted provenance" not in captured.err
+
+
+def test_native_diagnostic_taxonomy_covers_all_owned_failure_literals() -> None:
+    for path, exception_name in (
+        (_LIFECYCLE_PATH, "EvidenceFailure"),
+        (_NATIVE_EVIDENCE_PATH, "ProvenanceFailure"),
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Raise)
+                and isinstance(node.exc, ast.Call)
+                and isinstance(node.exc.func, ast.Name)
+                and node.exc.func.id == exception_name
+            ):
+                message = node.exc.args[0]
+                assert isinstance(message, ast.Constant), "dynamic failure messages need review"
+                assert message.value in native_lifecycle._DIAGNOSTIC_CODES
+    assert len(native_lifecycle._DIAGNOSTIC_CODES) == len(native_lifecycle._DIAGNOSTIC_MESSAGES)
+    assert len(set(native_lifecycle._DIAGNOSTIC_CODES.values())) == len(
+        native_lifecycle._DIAGNOSTIC_CODES
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "code"),
+    [
+        ("Task Scheduler observation failed", "task-scheduler-observation-failed"),
+        ("launchd observation failed", "launchd-observation-failed"),
+        ("systemd observation failed", "systemd-observation-failed"),
+        ("client configuration already exists", "client-configuration-already-exists"),
+        ("unexpected runtime directory", "unexpected-runtime-directory"),
+        ("systemd observation failed /private/synthetic-token", "unclassified-evidence-failure"),
+    ],
+)
+def test_native_main_failure_diagnostics_are_allowlisted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    message: str,
+    code: str,
+) -> None:
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(
+        native_lifecycle, "prepare", Mock(side_effect=native_lifecycle.EvidenceFailure(message))
+    )
+    executable = tmp_path / "venv" / "bin" / "synthetic"
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+    exit_code, record = _lifecycle_main(
+        monkeypatch, tmp_path, "manager-cycle", executable, {"binding_sha256": "f" * 64}
+    )
+    assert exit_code == 1
+    assert record == {"phase": "manager-cycle", "passed": False, "error_type": "EvidenceFailure"}
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "diagnostic": "native-service-failure",
+        "phase": "manager-cycle",
+        "stage": "lifecycle",
+        "operation": None,
+        "command": None,
+        "last_step": None,
+        "error_type": "EvidenceFailure",
+        "error_code": code,
+    }
+    assert "/private/synthetic-token" not in captured.err
+    assert str(tmp_path) not in captured.err
+
+
+@pytest.mark.parametrize("failure", ["stale-output", "provenance", "export", "unsafe-exception"])
+def test_native_main_diagnoses_preflight_provenance_and_export_without_leaks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    secret = "/private/synthetic-token\nBRAINS_MCP_BEARER_TOKEN=synthetic-secret"
+    monkeypatch.setattr(native_lifecycle, "_guard", lambda _phase: None)
+    monkeypatch.setattr(native_lifecycle.Path, "is_file", lambda _path: True)
+    prepare = Mock(return_value={"phase": "prepare"})
+    monkeypatch.setattr(native_lifecycle, "prepare", prepare)
+    provenance = {"binding_sha256": "f" * 64}
+    if failure == "stale-output":
+        (tmp_path / "result.json").write_text('{"original":true}', encoding="utf-8")
+        expected = (
+            "output-preflight",
+            "ProvenanceFailure",
+            "native-evidence-output-already-exists",
+        )
+    elif failure == "provenance":
+        provenance = native_evidence.ProvenanceFailure("checked-out candidate is not clean")
+        expected = ("provenance", "ProvenanceFailure", "checked-out-candidate-is-not-clean")
+    elif failure == "export":
+        monkeypatch.setattr(native_lifecycle, "_write_result", Mock(side_effect=OSError(secret)))
+        expected = ("result-export", "OSError", "unexpected-error")
+    else:
+        prepare.side_effect = subprocess.CalledProcessError(2, secret, output=secret, stderr=secret)
+        expected = ("lifecycle", "CalledProcessError", "unexpected-error")
+    if failure == "export":
+        # The normal helper reads the record after main; leave that read synthetic
+        # because this case intentionally cannot write a record.
+        monkeypatch.setattr(native_lifecycle.Path, "read_text", lambda *_a, **_kw: "{}")
+    exit_code, result = _lifecycle_main(
+        monkeypatch, tmp_path, "manager-cycle", tmp_path / "venv/bin/synthetic", provenance
+    )
+    assert exit_code == 1
+    if failure == "stale-output":
+        assert result == {"original": True}
+    if failure in {"stale-output", "provenance"}:
+        prepare.assert_not_called()
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert (diagnostic["stage"], diagnostic["error_type"], diagnostic["error_code"]) == expected
+    assert captured.out == ""
+    assert "synthetic-token" not in captured.err
+    assert "synthetic-secret" not in captured.err
+    assert str(tmp_path) not in captured.err
+
+
+def test_native_diagnostics_redact_unknown_class_steps_and_cleanup_content(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    unsafe = "synthetic-secret"
+    error = type(unsafe, (RuntimeError,), {})(unsafe)
+    native_lifecycle._diagnose(
+        error,
+        phase=unsafe,
+        stage=unsafe,
+        context={"plan": {"steps": [{"step": unsafe}]}},
+        outcomes={"native_removed": True, "configuration_removed": unsafe, "unknown": unsafe},
+    )
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["phase"] == diagnostic["stage"] == "unknown"
+    assert diagnostic["error_type"] == "Exception"
+    assert diagnostic["error_code"] == "unexpected-error"
+    assert diagnostic["last_step"] is None
+    assert diagnostic["cleanup"] == {
+        "native_removed": True,
+        "configuration_removed": False,
+        "runtime_root_removed": False,
+    }
+    assert unsafe not in json.dumps(diagnostic)
+
+
+def test_native_rollback_reports_independent_errors_and_retains_uncertain_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    context = {
+        "phase": "manager-cycle",
+        "native_armed": True,
+        "config_snapshot": {},
+        "config_directories": [],
+        "plan": {
+            "adapter": "codex",
+            "original_snapshot": {},
+            "steps": [{"step": "adapter-wired"}],
+        },
+    }
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_uninstall_owned",
+        Mock(side_effect=native_lifecycle.EvidenceFailure("systemd observation failed")),
+    )
+    monkeypatch.setattr(
+        native_lifecycle,
+        "_remove_synthetic_config",
+        Mock(side_effect=PermissionError("/private/synthetic-secret")),
+    )
+    remove_runtime = Mock(side_effect=AssertionError("runtime removal not authorized"))
+    monkeypatch.setattr(native_lifecycle, "_remove_runtime", remove_runtime)
+    result = native_lifecycle._rollback(context)
+    remove_runtime.assert_not_called()
+    assert result == {
+        "native_error_type": "EvidenceFailure",
+        "configuration_error_type": "PermissionError",
+        "runtime_root_removed": False,
+    }
+    diagnostics = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [item["stage"] for item in diagnostics] == ["cleanup-native", "cleanup-configuration"]
+    assert [item["error_code"] for item in diagnostics] == [
+        "systemd-observation-failed",
+        "unexpected-error",
+    ]
+    assert all(item["last_step"] == "adapter-wired" for item in diagnostics)
+    assert "synthetic-secret" not in json.dumps(diagnostics)
+
+
+@pytest.mark.parametrize("stdout", ["synthetic-secret", '{"ok":false}'])
+def test_native_command_diagnostic_reports_only_allowlisted_verb(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stdout: str,
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(return_value=subprocess.CompletedProcess([], 2, stdout, "synthetic-secret")),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run(
+            "/private/synthetic-secret", ["service", "install", "synthetic-secret"]
+        )
+    native_lifecycle._diagnose(raised.value, phase="prepare", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["command"] == "service-install"
+    assert diagnostic["operation"] == "_run"
+    assert diagnostic["error_code"] == (
+        "command-returned-a-non-json-result"
+        if stdout == "synthetic-secret"
+        else "command-reported-failure"
+    )
+    assert "synthetic-secret" not in json.dumps(diagnostic)
 
 
 @pytest.mark.parametrize("observation", ["unavailable", "foreign", "wrong-identity"])
@@ -2230,4 +2480,7 @@ def test_native_manager_probe_refuses_personal_state_before_provenance_or_manage
     assert json.loads(output.read_text(encoding="utf-8"))["error_type"] == "EvidenceFailure"
     assert not runtime.exists()
     assert result.stdout == ""
-    assert result.stderr == ""
+    diagnostic = json.loads(result.stderr)
+    assert diagnostic["error_code"] == "the-real-user-already-has-brains-state"
+    assert diagnostic["stage"] == "guard"
+    assert str(tmp_path) not in result.stderr
