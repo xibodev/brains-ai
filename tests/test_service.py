@@ -946,6 +946,64 @@ def test_macos_stop_keeps_identity_if_unload_removes_pidfile(
     assert len(state.calls) == (0 if gone else 1)
 
 
+@pytest.mark.parametrize("disappearance", ["verify", "current-read", "cleanup"])
+def test_macos_stop_accepts_pidfile_disappearance_after_observed_exit(
+    macos_stop_state, monkeypatch, disappearance
+) -> None:
+    state = macos_stop_state
+    state.identity = None
+    verify = macos.verify_pid
+    read = macos.read_pidfile_record
+    cleanup = macos.cleanup_stale_pidfile
+
+    def verified(record):
+        check = verify(record)
+        if disappearance == "verify":
+            state.pidfile.unlink()
+        return check
+
+    reads = 0
+
+    def current():
+        nonlocal reads
+        reads += 1
+        if disappearance == "current-read" and reads == 2:
+            state.pidfile.unlink()
+        return read()
+
+    def cleaned():
+        if disappearance == "cleanup":
+            state.pidfile.unlink()
+        return cleanup()
+
+    monkeypatch.setattr(macos, "verify_pid", verified)
+    monkeypatch.setattr(macos, "read_pidfile_record", current)
+    monkeypatch.setattr(macos, "cleanup_stale_pidfile", cleaned)
+    report = macos.stop()
+    assert report["ok"] is True
+    assert report["error_code"] is None
+    assert not state.pidfile.exists()
+    assert [cmd[1] for cmd in state.calls] == ["bootout"]
+
+
+@pytest.mark.parametrize("identity", [{"exe": "python", "start_time": 1000.0}, {}])
+def test_macos_stop_disappearance_does_not_hide_live_captured_pid(
+    macos_stop_state, monkeypatch, identity
+) -> None:
+    state = macos_stop_state
+
+    def unloaded(_label):
+        state.pidfile.unlink()
+        state.identity = identity
+        return 0, "unloaded", ""
+
+    monkeypatch.setattr(macos, "_unload", unloaded)
+    report = macos.stop()
+    assert report["ok"] is False
+    assert report["error_code"] == ("pid-still-running" if identity else "pid-identity-unsafe")
+    assert not state.pidfile.exists()
+
+
 def test_macos_stop_rechecks_identity_after_unload(macos_stop_state, monkeypatch) -> None:
     state = macos_stop_state
 

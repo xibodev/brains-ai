@@ -1396,6 +1396,99 @@ def test_native_command_diagnostic_reports_only_allowlisted_verb(
         if stdout == "synthetic-secret"
         else "command-reported-failure"
     )
+    if stdout == "synthetic-secret":
+        assert "service_error_code" not in diagnostic
+    else:
+        assert diagnostic["service_error_code"] == "unclassified-service-error"
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("action", ["stop", "uninstall", "restart"])
+@pytest.mark.parametrize("backend_code", sorted(native_lifecycle._SERVICE_ERROR_CODES))
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_native_command_diagnostic_preserves_allowlisted_service_error(
+    monkeypatch, capsys, action, backend_code, returncode
+) -> None:
+    secret = "/private/synthetic-secret\nBRAINS_API_KEY=synthetic-secret"
+    run = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            returncode,
+            json.dumps({"ok": False, "error_code": backend_code, "detail": secret}),
+            secret,
+        )
+    )
+    monkeypatch.setattr(native_lifecycle.subprocess, "run", run)
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run(secret, ["service", action, "--label", secret])
+    native_lifecycle._diagnose(
+        raised.value,
+        phase="manager-cycle",
+        stage="lifecycle",
+        context={"diagnostic_steps": [{"step": "installed"}]},
+    )
+    captured = capsys.readouterr()
+    diagnostic = json.loads(captured.err)
+    assert diagnostic["error_code"] == "command-reported-failure"
+    assert diagnostic["service_error_code"] == backend_code
+    assert diagnostic["command"] == "service-" + action
+    assert diagnostic["last_step"] == "installed"
+    assert "synthetic-secret" not in captured.err
+    assert captured.out == ""
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"ok": False},
+        {"ok": False, "error_code": None},
+        {"ok": False, "error_code": "pidfile-changed /private/synthetic-secret"},
+        {"ok": False, "error_code": ["pidfile-changed", "synthetic-secret"]},
+        {"ok": False, "error_code": {"pidfile-changed": "synthetic-secret"}},
+        {"ok": False, "error_code": 1},
+        {"ok": False, "error_code": True},
+        {"ok": False, "detail": "pidfile-changed"},
+        {"ok": False, "rollback": {"error_code": "pidfile-changed"}},
+    ],
+)
+def test_native_command_diagnostic_rejects_unreviewed_service_error(
+    monkeypatch, capsys, payload
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess([], 1, json.dumps(payload), "synthetic-secret")
+        ),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic-secret", ["service", "stop"])
+    native_lifecycle._diagnose(raised.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["error_code"] == "command-reported-failure"
+    assert diagnostic["service_error_code"] == "unclassified-service-error"
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("args", [["wire"], ["service", "synthetic-secret"]])
+def test_native_command_diagnostic_does_not_attribute_nonservice_error(
+    monkeypatch, capsys, args
+) -> None:
+    monkeypatch.setattr(
+        native_lifecycle.subprocess,
+        "run",
+        Mock(
+            return_value=subprocess.CompletedProcess(
+                [], 1, '{"ok": false, "error_code": "pidfile-changed"}', ""
+            )
+        ),
+    )
+    with pytest.raises(native_lifecycle.EvidenceFailure) as raised:
+        native_lifecycle._run("synthetic", args)
+    native_lifecycle._diagnose(raised.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert "service_error_code" not in diagnostic
     assert "synthetic-secret" not in json.dumps(diagnostic)
 
 
@@ -1757,6 +1850,170 @@ def test_native_workflow_queries_linux_shape_before_lifecycle() -> None:
     assert "_systemd_query_diagnostic(result, identity)" in diagnostic["run"]
     assert "capture_output=True" in diagnostic["run"]
     assert "print(result" not in diagnostic["run"]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "Enabled",
+        "MultipleInstancesPolicy",
+        "ExecutionTimeLimit",
+        "RestartOnFailure/Interval",
+        "RestartOnFailure/Count",
+    ],
+)
+@pytest.mark.parametrize("mutation", ["missing", "changed", "duplicate"])
+def test_native_windows_rejects_missing_or_changed_recovery_settings(
+    field: str, mutation: str
+) -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    parts = field.split("/")
+    parent = actual.find("/".join(ns + part for part in ["Settings", *parts[:-1]]))
+    assert parent is not None
+    node = parent.find(ns + parts[-1])
+    assert node is not None
+    if mutation == "missing":
+        parent.remove(node)
+    elif mutation == "changed":
+        node.text = "synthetic-foreign-setting"
+    else:
+        parent.append(ET.fromstring(ET.tostring(node)))
+    with pytest.raises(
+        native_lifecycle.EvidenceFailure, match="registered task recovery settings differ"
+    ):
+        native_lifecycle._check_task_xml(
+            actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
+        )
+
+
+def test_native_windows_accepts_equivalent_recovery_interval_and_harmless_defaults() -> None:
+    spec = ServiceSpec(program="C:/synthetic/pythonw.exe", label="brains-serve-all-evidence-test")
+    wanted = ET.fromstring(windows.render_task_xml(spec))
+    actual = ET.fromstring(ET.tostring(wanted))
+    ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    settings = actual.find(ns + "Settings")
+    assert settings is not None
+    interval = settings.find(ns + "RestartOnFailure/" + ns + "Interval")
+    enabled = settings.find(ns + "Enabled")
+    assert interval is not None and enabled is not None
+    interval.text = "PT60S"
+    enabled.text = "1"
+    ET.SubElement(settings, ns + "UseUnifiedSchedulingEngine").text = "true"
+    native_lifecycle._check_task_xml(
+        actual, wanted, native_lifecycle.native_service_identity("windows", spec.label)
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "valid",
+        "unknown-state",
+        "string-result",
+        "bool-result",
+        "out-of-range",
+        "negative-count",
+        "extra-secret",
+        "bad-relation",
+        "non-json",
+        "query-failed",
+        "query-exception",
+    ],
+)
+def test_native_windows_failure_snapshot_validates_and_redacts(
+    monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    payload = {
+        "state": 4,
+        "last_task_result": 267009,
+        "running_instances": 1,
+        "engine_pid_matches_recorded": False,
+    }
+    if case == "unknown-state":
+        payload["state"] = "synthetic-secret"
+    elif case == "string-result":
+        payload["last_task_result"] = "synthetic-secret"
+    elif case == "bool-result":
+        payload["last_task_result"] = True
+    elif case == "out-of-range":
+        payload["last_task_result"] = 2**32
+    elif case == "negative-count":
+        payload["running_instances"] = -1
+    elif case == "extra-secret":
+        payload["command"] = "synthetic-secret"
+    elif case == "bad-relation":
+        payload["engine_pid_matches_recorded"] = "synthetic-secret"
+    query = Mock(
+        return_value=subprocess.CompletedProcess(
+            [],
+            2 if case == "query-failed" else 0,
+            "synthetic-secret" if case == "non-json" else json.dumps(payload),
+            "synthetic-secret",
+        )
+    )
+    if case == "query-exception":
+        query.side_effect = OSError("synthetic-secret")
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    result = native_lifecycle._windows_scheduler_status(
+        "brains-serve-all-evidence-test",
+        {"service_pid": {"pid": 123, "confidence": "verified"}},
+    )
+    assert result == (payload if case == "valid" else {"available": False})
+    assert "synthetic-secret" not in json.dumps(result)
+    assert query.call_args.kwargs["env"]["BRAINS_EVIDENCE_PID"] == "123"
+    assert query.call_args.kwargs["env"]["BRAINS_EVIDENCE_TASK"] == "BrainsServeAll-evidence-test"
+    command = query.call_args.args[0]
+    assert "EnginePID" in command[-1]
+    assert "brains-serve-all-evidence-test" not in command[-1]
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_native_windows_scheduler_snapshot_only_on_failed_health_wait(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], healthy: bool
+) -> None:
+    monkeypatch.setattr(native_lifecycle.platform, "system", lambda: "Windows")
+    label = "brains-serve-all-evidence-test"
+    report = {
+        "platform": "windows",
+        "label": native_lifecycle.native_service_identity("windows", label),
+        "state": "synthetic-secret",
+        "installed": True,
+        "healthy": healthy,
+        "listeners": {"gateway": healthy, "mcp": healthy},
+        "mcp_protocol": {"ready": healthy},
+        "service_pid": {"pid": 123, "confidence": "verified"},
+    }
+    monkeypatch.setattr(native_lifecycle, "_status", lambda *_args: report)
+    ticks = iter((0, 0, 2))
+    monkeypatch.setattr(native_lifecycle.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(native_lifecycle.time, "sleep", lambda _delay: None)
+    snapshot = {
+        "state": 3,
+        "last_task_result": -1073741510,
+        "running_instances": 0,
+        "engine_pid_matches_recorded": False,
+    }
+    query = Mock(return_value=subprocess.CompletedProcess([], 0, json.dumps(snapshot), ""))
+    monkeypatch.setattr(native_lifecycle, "_native_command", query)
+    if healthy:
+        assert native_lifecycle._wait_healthy("synthetic", label, timeout=1) == report
+        query.assert_not_called()
+        return
+    with pytest.raises(
+        native_lifecycle.EvidenceFailure, match="service did not become fully ready"
+    ) as caught:
+        native_lifecycle._wait_healthy("synthetic", label, timeout=1)
+    query.assert_called_once()
+    # The snapshot is already captured before main's failure diagnostic/rollback.
+    native_lifecycle._diagnose(caught.value, phase="manager-cycle", stage="lifecycle")
+    diagnostic = json.loads(capsys.readouterr().err)
+    assert diagnostic["task_scheduler"] == snapshot
+    assert diagnostic["wait_status"]["pid_verified"] is True
+    assert "synthetic-secret" not in json.dumps(diagnostic)
+    assert "123" not in json.dumps(diagnostic)
 
 
 def test_native_config_removal_preserves_drift_links_and_unexpected_directories(

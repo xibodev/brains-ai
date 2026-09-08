@@ -131,6 +131,7 @@ _DIAGNOSTIC_MESSAGES = (
     "registered task trigger definition differs",
     "registered task principal or identity differs",
     "registered task trigger principal differs",
+    "registered task recovery settings differ",
     "systemd observation failed",
     "systemd query return code rejected",
     "systemd query stderr rejected",
@@ -253,6 +254,18 @@ _DIAGNOSTIC_MESSAGES = (
     "native evidence contains a forbidden host value",
 )
 _DIAGNOSTIC_CODES = {message: message.lower().replace(" ", "-") for message in _DIAGNOSTIC_MESSAGES}
+_SERVICE_ERROR_CODES = {
+    "native-unload-failed",
+    "native-stop-failed",
+    "native-tree-kill-failed",
+    "native-delete-failed",
+    "pidfile-changed",
+    "pidfile-cleanup-incomplete",
+    "pid-still-running",
+    "pid-identity-unsafe",
+    "definition-cleanup-incomplete",
+    "stop-incomplete",
+}
 _DIAGNOSTIC_STEPS = {
     "provenance",
     "manager-identity",
@@ -307,6 +320,8 @@ def _diagnose(
     command = None
     wait_status = None
     systemd_status = None
+    service_error_code = None
+    scheduler_status = None
     trace = exc.__traceback__ if exc is not None else None
     while trace is not None:
         name = trace.tb_frame.f_code.co_name
@@ -347,6 +362,17 @@ def _diagnose(
                             "uninstall",
                         }:
                             command = "service-" + action
+                            if code == "command-reported-failure":
+                                payload = trace.tb_frame.f_locals.get("payload")
+                                backend_code = (
+                                    payload.get("error_code") if type(payload) is dict else None
+                                )
+                                service_error_code = (
+                                    backend_code
+                                    if type(backend_code) is str
+                                    and backend_code in _SERVICE_ERROR_CODES
+                                    else "unclassified-service-error"
+                                )
         if name in {"_wait_healthy", "_wait_stopped", "_wait_removed"}:
             report = trace.tb_frame.f_locals.get("report" if name != "_wait_removed" else "last")
             if type(report) is dict:
@@ -374,6 +400,10 @@ def _diagnose(
                         else None,
                     }.items()
                 }
+        if name == "_wait_healthy":
+            scheduler = trace.tb_frame.f_locals.get("scheduler_status")
+            if type(scheduler) is dict:
+                scheduler_status = _validated_scheduler_status(scheduler)
         if name == "_native_observation" and trace.tb_frame.f_locals.get("system") == "Linux":
             result = trace.tb_frame.f_locals.get("result")
             identity = trace.tb_frame.f_locals.get("identity")
@@ -417,6 +447,10 @@ def _diagnose(
         record["wait_status"] = wait_status
     if systemd_status is not None:
         record["systemd_query"] = systemd_status
+    if service_error_code is not None:
+        record["service_error_code"] = service_error_code
+    if scheduler_status is not None:
+        record["task_scheduler"] = scheduler_status
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
@@ -587,6 +621,11 @@ def _wait_healthy(executable: str, label: str, timeout: float = 150) -> dict[str
         ):
             return report
         time.sleep(1)
+    # Capture the failure before rollback changes Scheduler's state. EnginePID
+    # belongs to Scheduler's engine, not necessarily the task action process.
+    scheduler_status = (  # noqa: F841 - consumed by the allowlisted traceback diagnostic
+        _windows_scheduler_status(label, report) if platform.system() == "Windows" else None
+    )
     raise EvidenceFailure("service did not become fully ready")
 
 
@@ -901,6 +940,56 @@ def _native_command(
     return subprocess.run(args, capture_output=True, text=True, timeout=30, check=False, env=env)
 
 
+def _validated_scheduler_status(payload: Any) -> dict[str, Any]:
+    keys = {"state", "last_task_result", "running_instances", "engine_pid_matches_recorded"}
+    if (
+        type(payload) is not dict
+        or set(payload) != keys
+        or type(payload["state"]) is not int
+        or payload["state"] not in range(5)
+        or type(payload["last_task_result"]) is not int
+        or not -(2**31) <= payload["last_task_result"] <= 2**32 - 1
+        or type(payload["running_instances"]) is not int
+        or not 0 <= payload["running_instances"] <= 65535
+        or (
+            payload["engine_pid_matches_recorded"] is not None
+            and type(payload["engine_pid_matches_recorded"]) is not bool
+        )
+    ):
+        return {"available": False}
+    return dict(payload)
+
+
+def _windows_scheduler_status(label: str, report: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort read-only failure context; never a readiness/ownership proof."""
+    try:
+        identity = native_service_identity("windows", label)
+        process = report.get("service_pid")
+        pid = process.get("pid") if type(process) is dict else None
+        recorded = str(pid) if type(pid) is int and 0 < pid <= 2**32 - 1 else ""
+        command = (
+            "$ErrorActionPreference='Stop'; try {"
+            "$s=New-Object -ComObject Schedule.Service; $s.Connect();"
+            "$t=$s.GetFolder('\\').GetTask($env:BRAINS_EVIDENCE_TASK);"
+            "$instances=$t.GetInstances(0); $matches=$null;"
+            "if ($env:BRAINS_EVIDENCE_PID) {$matches=$false;"
+            "foreach ($i in $instances) {if ([uint32]$i.EnginePID -eq "
+            "[uint32]$env:BRAINS_EVIDENCE_PID) {$matches=$true}}};"
+            "@{state=[int]$t.State;last_task_result=[long]$t.LastTaskResult;"
+            "running_instances=[int]$instances.Count;engine_pid_matches_recorded=$matches}"
+            "|ConvertTo-Json -Compress} catch {exit 2}"
+        )
+        result = _native_command(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            env={**os.environ, "BRAINS_EVIDENCE_TASK": identity, "BRAINS_EVIDENCE_PID": recorded},
+        )
+        if result.returncode != 0:
+            return {"available": False}
+        return _validated_scheduler_status(json.loads(result.stdout))
+    except Exception:  # noqa: BLE001 - diagnostic failure cannot replace lifecycle failure
+        return {"available": False}
+
+
 def _systemd_query_diagnostic(result: subprocess.CompletedProcess, identity: str) -> dict[str, Any]:
     """Summarize query shape without emitting property values, paths or stderr."""
     properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
@@ -944,6 +1033,21 @@ def _check_task_xml(actual: ET.Element, wanted: ET.Element, identity: str) -> No
     # Scheduler serialization can reorder fields, assign IDs and materialize
     # schema defaults. None changes the action or the account allowed to run it.
     ns = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    critical = {
+        "Enabled": {"true", "1"},
+        "MultipleInstancesPolicy": {"IgnoreNew"},
+        "ExecutionTimeLimit": {"PT0S"},
+        "RestartOnFailure/Interval": {"PT1M", "PT60S"},
+        "RestartOnFailure/Count": {"9999"},
+    }
+    for document in (actual, wanted):
+        settings = document.findall(ns + "Settings")
+        if len(settings) != 1 or len(settings[0].findall(ns + "RestartOnFailure")) != 1:
+            raise EvidenceFailure("registered task recovery settings differ")
+        for field, values in critical.items():
+            nodes = settings[0].findall("/".join(ns + part for part in field.split("/")))
+            if len(nodes) != 1 or len(nodes[0]) or (nodes[0].text or "").strip() not in values:
+                raise EvidenceFailure("registered task recovery settings differ")
     for document in (actual, wanted):
         if document.tag != ns + "Task" or any(
             len(document.findall(ns + name)) != 1 for name in ("Actions", "Triggers", "Principals")
