@@ -198,5 +198,6 @@ jobs:
     permissions:
       contents: write
       pages: write
+      id-token: write
     # Releases created with GITHUB_TOKEN do not dispatch release-event workflows.
     uses: ./.github/workflows/sync-release-site.yml

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Brains | Local-First Coordination for AI Coding Agents</title>
+<meta name="description" content="Give your AI coding agents shared tasks, durable handoffs and local mailboxes. Brains is a local-first, human-governed control plane backed by SQLite.">
+<link rel="canonical" href="https://xibodev.github.io/brains-ai/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Brains | Local-First Coordination for AI Coding Agents">
+<meta property="og:description" content="Shared tasks, durable handoffs and local mailboxes for AI coding agents. Local-first, human-governed, backed by SQLite.">
+<meta property="og:url" content="https://xibodev.github.io/brains-ai/">
+<meta property="og:site_name" content="Brains">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Brains | Local-First Coordination for AI Coding Agents">
+<meta name="twitter:description" content="Shared context for your coding agents. Decisions stay with you.">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://xibodev.github.io/brains-ai/#website","url":"https://xibodev.github.io/brains-ai/","name":"Brains","inLanguage":"en"},{"@type":"SoftwareApplication","name":"Brains","url":"https://xibodev.github.io/brains-ai/","description":"A local-first control plane for coordinating AI coding agents through shared Workspaces, durable work, local mailboxes and human approvals.","applicationCategory":"DeveloperApplication","operatingSystem":"Windows, macOS, Linux","license":"https://github.com/xibodev/brains-ai/blob/v1.5.0/LICENSE","isAccessibleForFree":true}]}</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header"><div class="wrap header-row"><a class="brand" href="index.html" aria-label="Brains home"><img src="assets/favicon.svg" alt="" width="30" height="30">Brains <span class="tag">alpha</span></a><nav class="primary-nav" aria-label="Primary"><a href="index.html" aria-current="page">Product</a><a href="docs.html">Docs</a><a href="reference.html">Reference</a><a href="operations.html">Operations</a><a href="releases.html">Releases</a></nav><a class="source-link" href="https://github.com/xibodev/brains-ai">GitHub</a></div></header>
+<main id="main" tabindex="-1">
+<section class="hero"><div class="wrap"><div class="hero-grid"><div><p class="eyebrow">Local-first / MCP-native / Human-governed</p><h1>Shared context for your agents.<br><span>Decisions stay with you.</span></h1><p class="lede">Brains gives AI coding agents one place to coordinate tasks, leave handoffs and ask for help. You see the work and answer the decisions that need a human.</p><div class="actions"><a class="button primary" href="quickstart.html">Start with Quickstart</a><a class="button" href="docs.html">Explore the docs</a></div><p class="small">Alpha software for one local operator. Open source, under the MIT License.</p></div><div class="terminal" id="install"><div class="terminal-label">First use / from your project directory</div><pre><code><span class="comment"># Python 3.11 or 3.12, with pipx installed</span>
+pipx install brains-ai
+brains-ai setup --path . --no-wire
+brains-ai wire --tool claude-code
+brains-ai serve-all</code></pre><p class="terminal-note">Open <code>http://127.0.0.1:8787/app</code>.<br>Keep the generated admin key private. <a href="quickstart.html">Complete setup guide</a></p></div></div><div class="facts"><span><strong>SQLite</strong> on your machine</span><span><strong>4 harnesses</strong> connected over MCP</span><span><strong><!-- brains:mcp-count:start -->74<!-- brains:mcp-count:end --> MCP tools</strong> in the supported core</span><span><strong>No model routing</strong> or provider proxy</span></div></div></section>
+<section class="home-section" id="why"><div class="wrap"><div class="section-heading"><h2>Agents start cold.<br>Your work shouldn't.</h2><p>A new terminal should not mean a new understanding of the project. Brains keeps coordination in a shared local store, rather than scattered across separate tool histories.</p></div><div class="three-col"><div class="feature" id="concepts"><h3>Keep the context</h3><p>Workspaces scope the work. Sessions, checkpoints and handoffs preserve what changed and what comes next.</p><a href="coordination.html#continuity">Continue with one agent</a></div><div class="feature" id="workflow"><h3>Split the work</h3><p>Claim before editing, ask a peer for review and attach evidence to the answer. Claims coordinate agents; they do not lock your filesystem.</p><a href="coordination.html#two-agents">Coordinate two agents</a></div><div class="feature" id="governance"><h3>Keep human authority</h3><p>Route questions and governed actions through explicit decisions. Inspect the audit chain without mistaking it for a security sandbox.</p><a href="coordination.html#approvals">Handle asks and approvals</a></div></div></div></section>
+<section class="home-section" id="docs"><div class="wrap"><div class="section-heading"><h2>One store.<br>The tools you already use.</h2><p>Connect Claude Code, Copilot CLI, Codex or OpenCode. Brains coordinates their work; each harness still owns its model connection and execution.</p></div><div class="three-col"><div class="feature" id="cli"><h3>At the command line</h3><p>The <code>brains-ai</code> executable handles setup, coordination and local operations.</p><a href="cli.html">CLI reference</a></div><div class="feature" id="mcp"><h3>Inside your agent</h3><p>The <code>brains_</code> tools share tasks, knowledge, peer help and proof-bound local mail.</p><a href="mcp.html">MCP tool inventory</a></div><div class="feature" id="console"><h3>In your browser</h3><p>The local console at <code>/app</code> lets you inspect Workspaces, coordination and governance.</p><a href="quickstart.html#verify">Open and verify the console</a></div></div><p class="small" id="operations" style="margin-top:28px">Running this day to day? Read <a href="operations.html">Operations</a> for trust boundaries, upgrades, Windows service reinstallation and verified backups.</p></div></section>
+<section class="home-section" id="releases"><div class="wrap"><div class="section-heading"><h2>Latest release</h2><p>What changed in the published product. The complete recent history now has <a href="releases.html">its own release page</a>.</p></div>
+<!-- brains:release-summary:start -->
+<div class="release-summary"><p class="release-summary-meta"><a href="releases.html#release-v1-5-0">Latest release: v1.5.0</a> <time datetime="2026-09-08">Sep 8, 2026</time></p><ul><li>Exact peer-help acceptance: claim_help_request and the brains-ai help-claim-code CLI accept one specified request with atomic ownership checks. Same-owner retries return the existing claim without renewing its deadline or accepting different work.</li><li>Windows background services bind BRAINS_STATE_DIR before importing Brains and use task-owned supervisor recovery. Stop ends the runner before owned-child cleanup, with native qualification checking that the service stays stopped through the recovery window.</li></ul><a class="release-link" href="releases.html">All release notes</a></div>
+<!-- brains:release-summary:end -->
+</div></section>
+</main>
+<footer class="site-footer"><div class="wrap footer-row"><p>Brains / <code>brains-ai</code> / MIT License</p><nav class="footer-links" aria-label="Footer"><a href="docs.html">Docs</a><a href="https://github.com/xibodev/brains-ai">Source</a><a href="https://github.com/xibodev/brains-ai/blob/v1.5.0/SECURITY.md">Security</a><a href="https://pypi.org/project/brains-ai/">PyPI</a></nav></div></footer>
+</body></html>

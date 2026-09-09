@@ -574,7 +574,9 @@ Record such effects as external/unverified rather than governed.
 ## Website maintenance
 
 The [public website](https://xibodev.github.io/brains-ai/) serves static HTML from
-`gh-pages`. GitHub Releases are the canonical release history; the browser does not
+`site/` on `main`, deployed through GitHub Actions at the same URL. The website is
+not included in the Python wheel or source distribution. GitHub Releases are the
+canonical release history; the browser does not
 fetch release data. `scripts/sync_release_site.py --site site` accepts a directory
 and changes only marked regions in the exact root-level allowlist `index.html`,
 `quickstart.html`, `mcp.html`, and `releases.html`:
@@ -591,11 +593,10 @@ markers fail validation. Symlinks and Windows reparse points in the input path o
 among its immediate directory entries are rejected; subdirectories are not traversed.
 Copy and markup outside managed regions are preserved byte for byte.
 
-The deployed single-page format remains supported: `--site site/index.html` requires
+The legacy single-page format remains supported: `--site site/index.html` requires
 one history pair and one or two pairs each for version and count, without a summary.
 A directory whose only root HTML file is `index.html` with history markers uses this
-same legacy schema. Deploy the automation to `main` first and verify it against the
-legacy site before transitioning `gh-pages` to the multi-page schema.
+same legacy schema. The checked-in site uses the multi-page schema.
 
 The latest version is the highest published stable `vX.Y.Z`, excluding drafts,
 prereleases, and nonstable tags. It appears first; up to five other stable releases
@@ -626,40 +627,49 @@ checkout after fixing the cause. Identical output preserves file bytes and mtime
 `.github/workflows/sync-release-site.yml` runs manually and on release publication or
 edits. `release.yml` also calls it explicitly after GitHub Release creation, because
 events created by `GITHUB_TOKEN` do not start another event-triggered workflow. The
-sync checks out trusted automation from `main`, fetches all release pages and the
-selected tag's sources, and invokes directory mode. It derives the commit path list
-from tracked files within the four-page allowlist, so absent legacy pages do not
-break `git commit --only`; unrelated files are never included. Publication is
+sync checks out trusted automation and `site/` together from `main`, fetches all
+release pages and the selected tag's sources, and invokes directory mode. It derives
+the commit path list from tracked files within the four-page `site/` allowlist, so
+absent legacy pages do not break `git commit --only`; unrelated files are never
+included. Generated changes are committed and pushed to `main`. Publication is
 serialized, never force-pushes, and a concurrent branch change fails visibly rather
 than overwriting another edit. Rerun after resolving a conflict.
 
-The workflow needs `contents: write` and `pages: write`. It explicitly requests a
-legacy Pages build after a successful push, including unchanged manual repair runs:
-`GITHUB_TOKEN` pushes alone do not trigger branch-based Pages builds. It does not
-change Pages settings. The repository must already use `gh-pages` as its Pages source;
-a rejected build request is a visible workflow failure, not successful deployment.
-After requesting a build, the workflow polls at most 60 times, five seconds apart,
-with a 20-second API-call timeout and an eight-minute step deadline. The API's
-`latest` alias is accepted only until a new build is identified: its URL must be on
-`api.github.com` under this repository's Pages builds, its creation time must be at
-or after the request, and it must not be in the pre-request build list. Both
-named-repository and numeric repository-ID API URLs identify the same build;
-the numeric repository ID comes from the trusted workflow context. Its commit
-must equal the published site checkout's exact SHA. Polling then pins the numeric
-build URL and succeeds only on `built` for that SHA; failure, another revision,
-changed build identity, or timeout fails the workflow. Workflow concurrency does
-not serialize unrelated Pages publishers, and a verified build does not prevent
-a later external deployment from replacing the site.
+`.github/workflows/site-deploy.yml` deploys pushes to `main` that change `site/**`
+or that workflow, and supports manual repair on `main`. It checks out trusted
+`main`, configures Pages, uploads `site/` as a Pages artifact, and deploys it with
+`actions/deploy-pages` in the `github-pages` environment. No Jekyll or application
+build runs. Both publishing workflows share the `pages` concurrency group without
+cancelling a running deployment. GitHub may replace an older pending run; these
+workflows are not a FIFO queue or a lock against external publishers.
+
+The sync job needs `contents: write` to commit the four allowed pages. Artifact
+preparation needs `pages: read`; only the deployment jobs receive `pages: write`
+and `id-token: write`. Release callers grant those permissions to the reusable
+sync workflow. Token-authored commits do not trigger another workflow, so sync
+uploads and deploys its own generated artifact after a successful push, even when
+unchanged. A generation or push failure prevents deployment. Deployment status is
+reported by `actions/deploy-pages`, not by legacy Pages build polling.
+
+The operator must select **GitHub Actions** as the repository's Pages source and
+review the `github-pages` environment protection rules, including release-tag
+callers. The workflows do not enable Pages or change its settings automatically.
+Do not delete the previous Pages source branch until an Actions deployment and the
+live URLs are verified. A workflow success does not prevent a later external
+deployment from replacing the site.
 
 Repair and verify with GitHub CLI:
 
 ```text
 gh workflow run sync-release-site.yml --ref main --repo xibodev/brains-ai
 gh run list --workflow sync-release-site.yml --repo xibodev/brains-ai
-gh api repos/xibodev/brains-ai/pages/builds/latest
+gh run list --workflow site-deploy.yml --repo xibodev/brains-ai
+gh api repos/xibodev/brains-ai/pages --jq '{build_type, html_url}'
 ```
 
-A healthy result is a successful sync run and a Pages build with `status: built`.
+A healthy result is `build_type: workflow`, the unchanged public URL, and a
+successful artifact deployment job in the selected Actions run. To redeploy source
+without regenerating release facts, dispatch `site-deploy.yml` on `main` instead.
 Review the live site's marked version/count against the selected release's tagged
 sources. For an offline generation check with downloaded inputs:
 

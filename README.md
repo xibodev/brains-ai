@@ -78,3 +78,7 @@ see [Operations](docs/OPERATIONS.md) before relying on a background service.
 
 See [Contributing](CONTRIBUTING.md), [Security](SECURITY.md), the
 [Code of Conduct](CODE_OF_CONDUCT.md), and the [MIT License](LICENSE).
+
+The website source lives in [`site/`](site/README.md) on `main` and is deployed by
+GitHub Actions. See [website maintenance](docs/OPERATIONS.md#website-maintenance)
+for release synchronization and deployment checks.

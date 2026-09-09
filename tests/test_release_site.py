@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -587,16 +586,18 @@ def test_workflow_release_hook_permissions_and_pages_repair():
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers) == {"workflow_call", "workflow_dispatch", "release"}
     assert triggers["release"]["types"] == ["published", "edited"]
-    assert workflow["permissions"] == {"contents": "write", "pages": "write"}
-    assert workflow["concurrency"] == {"group": "release-site-publish", "cancel-in-progress": False}
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {"group": "pages", "cancel-in-progress": False}
+    assert workflow["jobs"]["sync"]["permissions"] == {"contents": "write", "pages": "read"}
+    assert workflow["jobs"]["sync"]["if"] == (
+        "github.ref == 'refs/heads/main' || github.event_name == 'release' || "
+        "(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))"
+    )
     steps = workflow["jobs"]["sync"]["steps"]
     checkouts = [
         step["with"] for step in steps if step.get("uses", "").startswith("actions/checkout@")
     ]
-    assert checkouts == [
-        {"ref": "main", "persist-credentials": False},
-        {"ref": "gh-pages", "path": "site"},
-    ]
+    assert checkouts == [{"ref": "main"}]
     fetch = next(
         step["run"] for step in steps if step.get("name") == "Fetch published release facts"
     )
@@ -605,28 +606,62 @@ def test_workflow_release_hook_permissions_and_pages_repair():
     assert "?ref=${tag}" in fetch
     assert "base64 --decode" in fetch
     push = next(step for step in steps if step.get("name") == "Publish only generated site facts")
-    assert push["working-directory"] == "site"
+    assert "working-directory" not in push
     generate = next(step for step in steps if step.get("name") == "Generate static release history")
     assert "--site site \\\n" in generate["run"]
-    assert "git ls-files -- index.html quickstart.html mcp.html releases.html" in push["run"]
+    assert (
+        "git ls-files -- site/index.html site/quickstart.html site/mcp.html site/releases.html"
+        in push["run"]
+    )
     assert 'mapfile -t pages <<< "$tracked"' in push["run"]
     assert 'git diff --quiet -- "${pages[@]}"' in push["run"]
     assert "commit --only -m" in push["run"]
     assert '-- "${pages[@]}"' in push["run"]
-    assert "git push origin HEAD:gh-pages" in push["run"]
+    assert "git push origin HEAD:main" in push["run"]
     assert "--force" not in push["run"]
-    poll = steps[-1]["run"]
-    assert 'gh api --method POST "$builds"' in poll
-    assert "git -C site rev-parse HEAD" in poll
-    assert "for attempt in {1..60}" in poll
-    assert 'endpoint="$pinned"' in poll
-    assert steps[-1]["timeout-minutes"] == 8
+    assert steps[-2]["uses"] == "actions/configure-pages@v5"
+    assert "enablement" not in steps[-2].get("with", {})
+    assert steps[-1]["uses"] == "actions/upload-pages-artifact@v3"
+    assert steps[-1]["with"] == {"path": "site"}
     assert "if" not in steps[-1]
     release_workflow = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
     hook = release_workflow["jobs"]["site"]
     assert hook["needs"] == "release"
     assert hook["uses"] == "./.github/workflows/sync-release-site.yml"
-    assert hook["permissions"] == workflow["permissions"]
+    assert hook["permissions"] == {"contents": "write", "pages": "write", "id-token": "write"}
+
+
+def test_site_deploy_uses_trusted_main_and_serialized_artifact_deployment():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/site-deploy.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers) == {"push", "workflow_dispatch"}
+    assert triggers["push"] == {
+        "branches": ["main"],
+        "paths": ["site/**", ".github/workflows/site-deploy.yml"],
+    }
+    assert workflow["permissions"] == {"contents": "read"}
+    build = workflow["jobs"]["build"]
+    assert build["if"] == "github.ref == 'refs/heads/main'"
+    assert build["permissions"] == {"contents": "read", "pages": "read"}
+    assert build["steps"] == [
+        {"uses": "actions/checkout@v4", "with": {"ref": "main", "persist-credentials": False}},
+        {"uses": "actions/configure-pages@v5"},
+        {"uses": "actions/upload-pages-artifact@v3", "with": {"path": "site"}},
+    ]
+    for filename, dependency in [("site-deploy.yml", "build"), ("sync-release-site.yml", "sync")]:
+        publisher = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())
+        assert publisher["concurrency"] == {"group": "pages", "cancel-in-progress": False}
+        deploy = publisher["jobs"]["deploy"]
+        assert deploy["needs"] == dependency
+        assert "if" not in deploy
+        assert deploy["permissions"] == {"pages": "write", "id-token": "write"}
+        assert deploy["environment"] == {
+            "name": "github-pages",
+            "url": "${{ steps.deployment.outputs.page_url }}",
+        }
+        assert deploy["steps"] == [
+            {"name": "Deploy GitHub Pages", "id": "deployment", "uses": "actions/deploy-pages@v4"}
+        ]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="requires Linux bash")
@@ -652,7 +687,7 @@ elif args[0] == "diff":
     sys.exit(int(os.environ["CHANGED"]))
 """)
     executable.chmod(0o755)
-    pages = list(sync.SITE_PAGES) if modern else ["index.html"]
+    pages = [f"site/{name}" for name in sync.SITE_PAGES] if modern else ["site/index.html"]
     calls_path = tmp_path / "calls"
     result = subprocess.run(
         ["bash", "-c", script],
@@ -669,7 +704,7 @@ elif args[0] == "diff":
     )
     assert result.returncode == 0, result.stderr
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()]
-    assert calls[0] == ["ls-files", "--", *sync.SITE_PAGES]
+    assert calls[0] == ["ls-files", "--", *(f"site/{name}" for name in sync.SITE_PAGES)]
     assert calls[1] == ["diff", "--quiet", "--", *pages]
     if changed:
         assert len(calls) == 4
@@ -681,109 +716,6 @@ elif args[0] == "diff":
             "--",
             *pages,
         ]
-        assert calls[3] == ["push", "origin", "HEAD:gh-pages"]
+        assert calls[3] == ["push", "origin", "HEAD:main"]
     else:
         assert len(calls) == 2
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" or not shutil.which("jq"), reason="requires Linux bash and jq"
-)
-@pytest.mark.parametrize(
-    "scenario,success",
-    [
-        ("built", True),
-        ("unique", True),
-        ("repository_id_post", True),
-        ("repository_id_get", True),
-        ("repository_id_stale", True),
-        ("stale_then_built", True),
-        ("wrong_commit", False),
-        ("failed", False),
-        ("timeout", False),
-        ("old_timestamp", False),
-        ("untrusted_post", False),
-        ("untrusted_get", False),
-        ("wrong_repo", False),
-        ("wrong_repository_id", False),
-        ("wrong_repository_id_get", False),
-        ("identity_changed", False),
-    ],
-)
-def test_pages_poll_executes_fail_closed(tmp_path, scenario, success):
-    workflow = yaml.safe_load((ROOT / ".github/workflows/sync-release-site.yml").read_text())
-    script = workflow["jobs"]["sync"]["steps"][-1]["run"]
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    programs = {
-        "git": '#!/bin/sh\nprintf "%040d\\n" 1\n',
-        "date": "#!/bin/sh\necho 2026-09-08T12:00:00Z\n",
-        "sleep": "#!/bin/sh\nexit 0\n",
-        "timeout": '#!/bin/sh\nshift\nexec "$@"\n',
-        "gh": """#!/usr/bin/env python3
-import json, os, sys
-from pathlib import Path
-root = Path(os.environ["MOCK_ROOT"])
-scenario = os.environ["SCENARIO"]
-prefix = "https://api.github.com/repos/xibodev/brains-ai/pages/builds/"
-id_prefix = "https://api.github.com/repositories/123/pages/builds/"
-args = sys.argv[1:]
-with (root / "calls").open("a") as handle:
-    handle.write(json.dumps(args) + "\\n")
-if "POST" in args:
-    url = prefix + ("2" if scenario == "unique" else "latest")
-    if scenario == "untrusted_post": url = "https://evil.test/builds/latest"
-    if scenario == "wrong_repo": url = prefix.replace("xibodev", "other") + "latest"
-    if scenario.startswith("repository_id_"): url = id_prefix + "latest"
-    if scenario == "wrong_repository_id": url = id_prefix.replace("123", "456") + "latest"
-    print(json.dumps({"url": url, "status": "queued"}))
-elif "--jq" in args:
-    print(json.dumps([(id_prefix if scenario == "repository_id_stale" else prefix) + "1"]))
-else:
-    count_path = root / "count"
-    count = int(count_path.read_text()) + 1 if count_path.exists() else 1
-    count_path.write_text(str(count))
-    stale = scenario in ("stale_then_built", "repository_id_stale") and count == 1
-    url = prefix + ("1" if stale else "2")
-    if scenario == "repository_id_get": url = id_prefix + "2"
-    if scenario == "wrong_repository_id_get": url = id_prefix.replace("123", "456") + "2"
-    if scenario == "untrusted_get": url = "https://evil.test/builds/2"
-    if scenario == "identity_changed" and count > 1: url = prefix + "3"
-    status = "building" if count == 1 or scenario == "timeout" else "built"
-    if scenario == "failed": status = "errored"
-    print(json.dumps({"url": url, "status": status,
-        "commit": "0" * 39 + ("2" if scenario == "wrong_commit" else "1"),
-        "created_at": "2026-09-07T12:00:00Z" if scenario == "old_timestamp" or (stale and scenario != "repository_id_stale") else "2026-09-08T12:00:00Z"}))
-""",
-    }
-    for name, source in programs.items():
-        executable = bin_dir / name
-        executable.write_text(source)
-        executable.chmod(0o755)
-    result = subprocess.run(
-        ["bash", "-c", script],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-        env={
-            **os.environ,
-            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-            "MOCK_ROOT": str(tmp_path),
-            "SCENARIO": scenario,
-            "GITHUB_REPOSITORY": REPOSITORY,
-            "GH_REPOSITORY_ID": "123",
-        },
-    )
-    assert (result.returncode == 0) is success, result.stdout + result.stderr
-    calls = [json.loads(line) for line in (tmp_path / "calls").read_text().splitlines()]
-    assert all(
-        not any("evil.test" in arg or "repos/other/" in arg for arg in call) for call in calls
-    )
-    assert all(not any("repositories/456/" in arg for arg in call) for call in calls)
-    if success:
-        assert "Pages built verified commit" in result.stdout
-        assert calls[-1] == ["api", "repos/xibodev/brains-ai/pages/builds/2"]
-    if scenario in ("timeout", "old_timestamp"):
-        assert len(calls) == 62
-        assert "Timed out" in result.stdout

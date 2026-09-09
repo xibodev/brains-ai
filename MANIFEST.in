@@ -1,1 +1,2 @@
 include scripts/sync_release_site.py
+prune site
