@@ -1,49 +1,42 @@
-"""Generate Brains surface inventories from code and check them against the docs.
+"""Generate Brains surface inventories and check code-level consistency.
 
 ``check_docs.py`` validates the *shape* of the canonical documentation set:
-presence, freshness headers, links, prohibited history, and the stable ID
-vocabulary. It cannot tell whether the documented surfaces still exist.
+required files, links, prohibited history, and absence of stale manual
+verification metadata.
 
-Every inventory below is derived from
-source at run time and compared against the canonical contract, so a new route,
-client call, entity, migration, journey spec, or acceptance criterion that no
-document knows about fails the gate, and a document that describes a surface
-the code no longer has fails it too.
+This checker compares source-derived routes, client calls, entities, and
+migrations with their code registries and implementations. It does not validate
+documentation prose, GitHub issue acceptance criteria, or journey/test IDs.
 
 Checks
 ------
 
 ``spa``
-    Routes declared in ``frontend/src/App.tsx`` against the route inventory in
-    ``TRACEABILITY.md``, the required-route list in ``check_docs.py``, the
-    component modules the routes name, and whether each route parameter is
-    consumed by its component.
+    Routes declared in ``frontend/src/App.tsx`` against ``REQUIRED_SPA_ROUTES``
+    in this script, the component modules the routes name, redirect targets,
+    and whether each route parameter is consumed by its component.
 
 ``client``
     ``frontend/src/api/client.ts`` calls against the methods and paths actually
-    mounted on the FastAPI application. A call whose path is not a literal is
-    an error rather than a silent omission.
+    mounted on the FastAPI application, excluding paths withdrawn by
+    ``brains.capabilities``. A call whose path is not a literal is an error
+    rather than a silent omission.
 
 ``server``
-    Every mounted route against the documented API family inventory, plus the
-    Copilot bare-path aliases against their rewrite targets.
+    Copilot bare-path aliases against their mounted rewrite targets. The core
+    composition supplies an empty alias inventory; API family documentation
+    is not checked.
 
 ``entities``
     ``brains.storage.models`` tables against the frozen per-backend baseline DDL
     and the numbered migration deltas.
 
 ``migrations``
-    The migration registry corpus against the files on disk and against the
-    migration numbers the traceability document claims.
+    The migration registry corpus against the files on disk, including stable
+    ordering, duplicate IDs, and explicit ledger-marker exemptions.
 
-``markers``
-    Journey specs and acceptance tests against the stable ``J*``/``F*`` IDs they
-    encode, and every referenced ``AC-*`` against the acceptance criteria the
-    feature contract declares.
-
-Every intentional legacy, external, or dynamic exception is an explicit
-allowlist entry below. Allowlists are checked in both directions: an entry that
-no longer describes a real exception fails the gate rather than rotting.
+Route-parameter and client-call allowlists are checked for stale entries as
+well as missing exceptions.
 
 Usage::
 
@@ -63,8 +56,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-
-#: Documents whose ``AC-*`` references must resolve to a declared criterion.
 
 #: The SPA route surface. A route added to ``frontend/src/App.tsx`` must be
 #: added here too, so the browser surface cannot grow silently.
@@ -87,9 +78,8 @@ REQUIRED_SPA_ROUTES = (
 SPA_BASENAME = "/app"
 
 #: Route parameters that are declared by the router but deliberately not read by
-#: the screen yet (traceability mismatch UM-04). Each entry must also be stated
-#: as a gap in the route's ``TRACEABILITY.md`` row. Removing the gap in code
-#: without removing the entry here fails the gate.
+#: the screen. Consuming a parameter without removing its exception here fails
+#: the gate, as does an entry for a route or parameter that no longer exists.
 UNCONSUMED_ROUTE_PARAMS: dict[str, tuple[str, ...]] = {}
 
 #: Client calls whose literal path is intentionally not mounted by this server
@@ -98,14 +88,14 @@ UNCONSUMED_ROUTE_PARAMS: dict[str, tuple[str, ...]] = {}
 #: match it to a route, so it must stay a literal.
 CLIENT_CALL_ALLOWLIST: dict[tuple[str, str], str] = {}
 
-#: Families in the documented API inventory that are not FastAPI routes.
+#: Retained API family metadata; not used by the repository check.
 NON_ROUTE_FAMILIES = {
     # A cross-cutting dependency layer, not a mount point.
     "Identity/authorization",
 }
 
-#: Mounted-route prefix rules, in order. The first match wins. A mounted route
-#: that matches no rule is an undocumented server surface.
+#: Retained route-family lookup rules, in order. The first match wins; the
+#: repository check does not enforce this inventory against mounted routes.
 SERVER_ROUTE_FAMILIES: tuple[tuple[str, str], ...] = (
     ("/health", "Health"),
     ("/admin", "Admin"),
@@ -153,12 +143,11 @@ SERVER_ROUTE_FAMILIES: tuple[tuple[str, str], ...] = (
 #: any migration can run.
 LEDGER_MANAGED_TABLES = frozenset({"schema_versions"})
 
-#: Migration IDs the traceability document is not required to name: the frozen
-#: baseline and the historical no-op ledger markers that never had a delta.
+#: Migration IDs exempt from requiring a delta file: the frozen baseline and
+#: historical no-op ledger markers.
 MIGRATION_DOC_EXEMPT = frozenset({"0000_baseline", "0001_initial", "0002_schema_versions"})
 
-#: Core features with no acceptance test in ``tests/test_acceptance_brains.py``.
-#: Each entry is a declared evidence gap, not permission to skip coverage.
+#: Retained acceptance metadata; not used by the repository check.
 ACCEPTANCE_COVERAGE_GAPS: dict[str, str] = {}
 
 
@@ -174,8 +163,7 @@ _ROUTE_PARAM_RE = re.compile(r":([A-Za-z0-9_]+)")
 
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
 
-#: Core features declare criteria as table rows; supporting capabilities declare
-#: them as list items. Both shapes are declarations.
+#: Retained legacy criterion parser; not used by the repository check.
 _AC_DECLARATION_RE = re.compile(
     r"(?m)^(?:\|\s*(?P<row>AC-(?:F\d{1,2}|B\d)-\d{2})\s*\||-\s*(?P<item>AC-(?:F\d{1,2}|B\d)-\d{2}):)"
 )
@@ -638,7 +626,7 @@ def check_client_server(
 
 
 # --------------------------------------------------------------------------
-# server routes and documented families
+# server routes and retained family lookup
 # --------------------------------------------------------------------------
 
 
@@ -662,7 +650,7 @@ def collect_server_routes(app: object) -> tuple[ServerRoute, ...]:
 
 
 def route_family(path: str) -> str | None:
-    """The documented family a mounted path belongs to, or ``None``."""
+    """The retained family a mounted path belongs to, or ``None``."""
 
     normalized = normalize_path(path)
     for prefix, family in SERVER_ROUTE_FAMILIES:

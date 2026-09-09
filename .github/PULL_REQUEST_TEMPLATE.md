@@ -4,10 +4,10 @@
 
 ## Contract mapping
 
-- Feature/backend IDs (`F*` / `B*`):
-- Personas and journeys (`P*` / `J*`):
-- Acceptance criteria (`AC-*`):
-- Core backlog item, if applicable:
+- Linked issue:
+- Acceptance criteria addressed:
+
+<!-- Keep priority, order, and status in the Brains Project: https://github.com/orgs/xibodev/projects/1. Do not duplicate them here. -->
 
 ## Current and target behavior
 

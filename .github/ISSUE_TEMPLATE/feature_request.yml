@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Start with the [Product Brief](../../docs/product/PRODUCT_BRIEF.md). It lists what
+        Start with the [Product Brief](https://github.com/xibodev/brains-ai/blob/main/docs/product/PRODUCT_BRIEF.md). It lists what
         is available now, what is deliberately not in scope and why, and what is intended
         but unbuilt. Requests that reopen an out-of-scope decision should say what changed.
 
@@ -57,7 +57,7 @@ body:
     attributes:
       label: Pre-flight
       options:
-        - label: I read the Product Brief and this is not something Brains deliberately leaves out.
+        - label: I read the Product Brief and explained what changed if I am asking to reconsider a scope decision.
           required: true
         - label: I searched existing issues and discussions.
           required: true

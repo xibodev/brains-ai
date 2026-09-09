@@ -58,7 +58,7 @@ body:
     id: expected
     attributes:
       label: Expected behavior
-      description: Include a Feature, Journey, or acceptance ID when known.
+      description: Link a related issue, documented contract, or existing test reference when known.
     validations:
       required: true
 
