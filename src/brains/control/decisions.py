@@ -287,15 +287,60 @@ def file_decision_request(
         refresh_views(workspace.path)
     except Exception:
         pass
-    # ASKs deserve email: best-effort operator copy when the mailer is
-    # configured. Never blocks or fails the ask (durable row is authoritative).
+    # One owner-opted-in notification, after commit. SMTP credentials alone
+    # are not consent; notification failure must not fail the durable ASK.
     try:
         from brains.control.mailer import notify_ask
 
-        notify_ask(code, title, workspace.slug)
+        outcome = notify_ask(
+            code, title, workspace.slug, session_id=session_id, workspace_id=workspace.id
+        )
+        # Only bounded notification facts cross the filing boundary. Never
+        # expose recipient/configuration or free-form exception text here.
+        notification = {
+            "status": outcome["status"],
+            "attempted": outcome["attempted"],
+            "sent": outcome["sent"],
+        }
+        if notification["status"] not in {
+            "disabled",
+            "attempted",
+            "smtp_accepted",
+            "failed",
+            "uncertain",
+        } or any(type(notification[key]) is not bool for key in ("attempted", "sent")):
+            raise ValueError("invalid notification outcome")
+        for key, allowed in (
+            (
+                "error",
+                {
+                    "incomplete_configuration",
+                    "smtp_uncertain",
+                    "smtp_failed",
+                    "notification_failed",
+                },
+            ),
+            ("audit_error", {"outcome_record_failed"}),
+        ):
+            if isinstance(outcome.get(key), str) and outcome[key] in allowed:
+                notification[key] = outcome[key]
+        if type(outcome.get("title_truncated")) is bool:
+            notification["title_truncated"] = outcome["title_truncated"]
     except Exception:
-        pass
-    return {"code": code, "status": "open", "workspace": workspace.slug}
+        # The hook may have failed after an outward attempt. Unknown is not
+        # evidence of no attempt, rejection, acceptance, or inbox delivery.
+        notification = {
+            "status": "uncertain",
+            "attempted": None,
+            "sent": False,
+            "error": "notification_failed",
+        }
+    return {
+        "code": code,
+        "status": "open",
+        "workspace": workspace.slug,
+        "notification": notification,
+    }
 
 
 def _routing_to_dict(

@@ -1616,6 +1616,56 @@ def read_mailbox_inbox(
     return result
 
 
+def wait_mailbox(
+    session_id: str,
+    binding_secret: str,
+    *,
+    address: str | None = None,
+    timeout_ms: int = 25_000,
+    after_delivery_id: int | None = None,
+    limit: int = 50,
+    principal: Principal | None = None,
+) -> dict[str, Any]:
+    """Wait for unread durable mail without consuming it or renewing the Session.
+
+    Every poll revalidates current agent proof through the inbox reader and closes
+    its transaction before sleeping. The timeout bounds polling, not database work;
+    limit bounds returned messages, not the reader's authorization scan.
+    next_after_delivery_id is the greatest returned delivery ID, or the supplied
+    floor (zero if omitted) when empty. It never advances the attachment cursor.
+    """
+    if type(timeout_ms) is not int or not 0 <= timeout_ms <= 25_000:
+        raise MailboxValidationError("timeout_ms must be an integer between 0 and 25000")
+    if type(limit) is not int or not 1 <= limit <= 200:
+        raise MailboxValidationError("limit must be an integer between 1 and 200")
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        result = read_mailbox_inbox(
+            address=address,
+            session_id=session_id,
+            binding_secret=binding_secret,
+            mark_read=False,
+            include_read=False,
+            after_delivery_id=after_delivery_id,
+            limit=limit,
+            require_agent_proof=True,
+            principal=principal,
+        )
+        available = bool(result["messages"])
+        remaining = deadline - time.monotonic()
+        if available or remaining <= 0:
+            return {
+                **result,
+                "mail_available": available,
+                "wait_timed_out": not available,
+                "next_after_delivery_id": max(
+                    (message["inbox_delivery"]["cursor"] for message in result["messages"]),
+                    default=max(0, int(after_delivery_id or 0)),
+                ),
+            }
+        time.sleep(min(0.2, remaining))
+
+
 def read_mailbox_sent(
     *,
     address: str | None = None,
@@ -1764,4 +1814,5 @@ __all__ = [
     "settle_mailbox_notification",
     "take_mailbox_notification",
     "unread_mailbox_count_in_transaction",
+    "wait_mailbox",
 ]

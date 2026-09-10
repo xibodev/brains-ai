@@ -137,9 +137,9 @@ Migration 150 reserves the durable-mailbox data boundary. Its active core rows c
 - non-destructive classification of legacy `mailbox_messages` and
   `tool_session_links` rows present when the migration runs as unverified.
 
-SMTP consent and outbox rows also exist in the migration corpus so newer historical
-stores can be opened. They are compatibility inventory, not an advertised delivery
-path.
+Historical SMTP consent and outbox rows are preserved. Local operator-mail delivery can
+still enqueue a copy under a qualifying historical verified destination and copy mode;
+this is compatibility behavior, not an advertised external delivery path.
 
 The migration itself creates no mailbox, infers no address or owner, copies no message
 body, and changes no existing row. The current control/API/CLI/MCP layer now creates one
@@ -187,8 +187,27 @@ platform before publication.
 Brains does not retain a generic live model-input channel.
 
 Migration 152 preserves the reserved per-operator SMTP setting and outbox schema for
-historical-store compatibility. Core exposes no SMTP configuration, does not lease its
-outbox, and performs no external mail delivery.
+historical-store compatibility. Core does not schedule or lease that outbox. Its retained
+processor can be called manually or externally through unsupported paths, so this is
+not a claim that it is universally stopped. ASK email opt-in neither activates that
+worker nor replays pending copies. Historical SMTP configuration routes stay withdrawn.
+
+`mailbox_wait` adds a proof-bound CLI/MCP read loop over the existing inbox reader, with
+current Session/attachment/binding validation on every poll. Transactions close before
+sleeping. Its 0–25000 ms budget bounds polling, not database work; the 1–200 limit bounds
+returned messages, not the authorization scan. It returns unread messages and a
+`next_after_delivery_id` continuation floor, distinct from message IDs and the unchanged
+attachment cursor. It never marks read, advances persisted cursors, renews leases,
+settles notifications, or accepts work. This adds no migration, HTTP route or frontend.
+
+MCP registration applies `StrictInt` to the wait's integer parameters, rejecting booleans,
+and offloads the blocking loop with `anyio.to_thread.run_sync`. Request-local authority
+is copied into the worker; concurrent sends can proceed on the event loop. Workers use
+AnyIO's shared default capacity limiter, with no per-request pool or unlimited thread
+allocation. `abandon_on_cancel=False` waits for an active worker to complete its bounded
+poll; database work and capacity waiting prevent a hard 25-second completion guarantee.
+Direct CLI/core calls remain blocking. Client-wait cancellation supplies no job-cancellation
+evidence.
 
 Durable-mail readiness is a bootstrap-admin-only count projection over active core
 rows. It checks registration shape, live attachment consistency, unread age, and
@@ -199,7 +218,11 @@ does not affect normal-product readiness, and the migration's explicit unverifie
 inventory is reported without being mistaken for a broken active registration.
 
 Operational readiness aggregates only current mailbox registration, attachment, unread,
-and local notification state. It is not behavioral analytics and makes no claim
+and local notification state. Historical SMTP diagnostics are separately count-only:
+`affects_local_readiness: false`, `processor_state: not_scheduled_by_core`. Open outbox
+rows derive a `blocked` SMTP state and `processor_not_scheduled_by_core` reason without
+mutating their stored status or inferring external-worker liveness. SMTP issues alone
+do not degrade local readiness. This is not behavioral analytics and makes no claim
 about adoption, task success, or product value. Ordinary feedback, automated contracts,
 and isolated validation drive engineering revision.
 
@@ -255,7 +278,7 @@ attempts. `checkout_ref`, `links`, and specification `tool` are inert; acceptanc
 launches a process nor reads, creates, or owns a checkout. No universal process-control
 or containment guarantee follows from the state machine.
 
-Seven CLI/MCP operations expose this foundation within the 88-tool current-main MCP surface.
+Seven CLI/MCP operations expose this foundation within the 89-tool current-main MCP surface.
 There are no assignment native HTTP routes, frontend components, or browser controls;
 the SPA route inventory is unchanged. [MCP](MCP.md#local-work-assignments) defines the
 public fields. Remote runners and specialist execution remain planned; this local
@@ -326,7 +349,8 @@ submission and replacement are refused. Cancellation changes protocol state only
 neither cancels a work assignment nor stops a process nor sends/cancels mail.
 
 Seven core/lean MCP tools and matching CLI commands expose this local part of
-[#38](https://github.com/xibodev/brains-ai/issues/38), bringing current-main MCP to 88.
+[#38](https://github.com/xibodev/brains-ai/issues/38). With the separate `mailbox_wait`
+addition, current-main MCP has 89 tools.
 There is no native HTTP API, frontend component, browser control, or proposal-specific
 readiness promise. Worker panels, multi-day execution and checkout management remain
 outside this implementation. The local assignment foundation of
@@ -458,9 +482,36 @@ gate cannot contain an external harness that bypasses it. Both limits remain exp
 
 ## External boundary
 
-Core has no external integration boundary. GitHub linkage, generic webhooks, public
-relay, SMTP copies, model gateways, telemetry exporters, and messaging bridges are not
-mounted or packaged as normal-install capabilities.
+The default local service requires no external integration. Optional ASK email is one
+narrow outward path: `file_decision_request` commits the ASK before calling `notify_ask`.
+The owner must explicitly enable `BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED` (default false)
+through environment settings sources; YAML, admin overlays and encrypted-setting mutation
+cannot enable it. The flag is read locally at server/process startup, not enabled through
+an API or agent tool. Existing SMTP configuration alone is not consent. Standing consent
+permits one notification per newly filed ASK, not approval of the underlying action.
+
+Only the configured owner address is accepted, never a recipient supplied by the filing
+agent. Content is limited to a validated ASK code (at most 32 ASCII characters), a
+whitespace-normalized title preview capped at 200 Unicode scalars including the ellipsis
+(at most 800 UTF-8 bytes), and the fixed local console URL. CR/LF in the original title
+rejects email before SMTP, leaving the stored ASK title/body unchanged. The bounded
+preview can still disclose private information. The sender hardcodes
+`http://127.0.0.1:8787/app`, without adapting to custom gateway ports. Loopback opens the
+recipient's computer and is useful on the same owner's local-app host; it is not a public
+or credential-bearing link.
+An attributed ledger attempt precedes SMTP. Failure, uncertain acceptance and known SMTP
+acceptance remain distinct; acceptance proves neither recipient delivery nor reading.
+The filing response includes allowlisted notification facts alongside the durable ASK
+identity/status. Unexpected hook failure or a malformed outcome yields `status: uncertain`,
+`attempted: null`, `sent: false`, and `error: notification_failed` in that object.
+Optional `title_truncated: true` reports actual preview capping, not confidentiality filtering.
+There are no hidden retries, queue activation or historical replay. See
+[Operations](OPERATIONS.md#optional-ask-email-notifications) for result and setup details.
+
+GitHub linkage, generic webhooks, public relay, historical mailbox SMTP-copy delivery,
+model gateways, telemetry exporters, and messaging bridges remain outside the supported
+surface. The retained generic sender does not expose a public arbitrary-recipient send;
+`mail_send` remains withdrawn.
 
 ## Recovery boundary
 

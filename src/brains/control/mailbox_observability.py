@@ -66,7 +66,7 @@ def mailbox_health_report(
     now: datetime | None = None,
     aged_unread_hours: int = AGED_UNREAD_HOURS,
 ) -> dict[str, Any]:
-    """Return count-only mailbox readiness without identities or message content."""
+    """Return local readiness and separate, count-only historical SMTP diagnostics."""
     if aged_unread_hours <= 0:
         raise ValueError("aged_unread_hours must be positive")
     observed_at = now or utc_now()
@@ -227,12 +227,21 @@ def mailbox_health_report(
         "aged_unread_delivery": aged_unread,
         "stalled_notification": stalled_notifications,
         "wakeup_failure": wakeup_failures,
+    }
+    smtp_issue_counts = {
         "aged_smtp_backlog": aged_smtp_open,
         "expired_smtp_claim": expired_smtp_claims,
         "smtp_failed": smtp_counts.get("failed", 0),
         "smtp_uncertain": smtp_counts.get("uncertain", 0),
     }
     reasons = [code for code, count in issue_counts.items() if count]
+    smtp_reasons = [code for code, count in smtp_issue_counts.items() if count]
+    smtp_open = sum(smtp_counts.get(status, 0) for status in ("queued", "retry", "sending"))
+    # This describes the core scheduling contract, not external/manual worker liveness.
+    # Pending copies remain durable; observing them neither sends nor settles them.
+    smtp_blocked_reason = "processor_not_scheduled_by_core" if smtp_open else None
+    if smtp_blocked_reason:
+        smtp_reasons.insert(0, smtp_blocked_reason)
     return {
         "state": "degraded" if reasons else "ready",
         "observed_at": observed_at.isoformat(),
@@ -271,6 +280,11 @@ def mailbox_health_report(
             "stalled": stalled_notifications,
         },
         "smtp": {
+            "core_scheduler_enabled": False,
+            "processor_state": "not_scheduled_by_core",
+            "delivery_blocked_reason": smtp_blocked_reason,
+            "state": "blocked" if smtp_open else "degraded" if smtp_reasons else "ready",
+            "affects_local_readiness": False,
             "queued": smtp_counts.get("queued", 0),
             "sending": smtp_counts.get("sending", 0),
             "retry": smtp_counts.get("retry", 0),
@@ -280,6 +294,8 @@ def mailbox_health_report(
             "cancelled": smtp_counts.get("cancelled", 0),
             "aged_open": aged_smtp_open,
             "expired_claims": expired_smtp_claims,
+            "issue_count": sum(smtp_issue_counts.values()),
+            "reasons": smtp_reasons,
         },
         "issue_count": sum(issue_counts.values()),
         "reasons": reasons,

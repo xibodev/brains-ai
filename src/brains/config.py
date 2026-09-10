@@ -342,7 +342,11 @@ class Settings(BaseSettings):
     smtp_from: str = Field(default="")  # e.g. "Brains <brains@example.com>"
     smtp_use_starttls: bool = Field(default=True)
     smtp_timeout_seconds: float = Field(default=15.0)
-    # Operator notify address: ASKs are emailed here when the mailer is on.
+    # Explicit owner consent, sourced from BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED.
+    # Deliberately absent from admin overlays and encrypted-setting allowlists:
+    # pre-existing SMTP credentials and recipient configuration are not consent.
+    ask_email_notifications_enabled: bool = Field(default=False)
+    # Sole recipient for opted-in ASK notifications (including secure config).
     operator_notify_email: str = Field(default="")
     # GitHub Copilot provider (proxies api.githubcopilot.com via an
     # OAuth-resolved session token). See ``brains.auth.copilot`` for the

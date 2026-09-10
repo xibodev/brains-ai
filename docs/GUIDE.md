@@ -177,8 +177,9 @@ Another agent waits until there is claimable peer work:
 brains-ai inbox-wait --session <id>
 ```
 
-The call waits for peer help or times out. Durable mailbox messages are read separately
-through the mailbox tools; this wait does not subscribe to mail delivery.
+The call waits for peer help or times out. For durable mail use the separate
+[`mailbox wait`](#waiting-for-durable-mail) command; `inbox-wait` does not subscribe to
+mail delivery.
 
 Inspect the returned help code, then accept that specific request:
 
@@ -220,6 +221,40 @@ If work should move to someone else mid-flight, hand it off rather than abandoni
 ```text
 brains-ai task-handoff --from-task TASK-015 --title "Finish the readiness contract"
 ```
+
+### Waiting for durable mail
+
+Use the existing live Session and its adapter-owned binding file. These are placeholders,
+not binding-secret values:
+
+```text
+brains-ai mailbox wait --session <session-id> --binding-file <binding-file-path> --timeout-ms 25000 --limit 50
+```
+
+The wait returns unread messages without marking them read. `--timeout-ms` accepts
+0–25000 (default 25000); zero performs one immediate poll. Database work can outlast
+the polling budget, so 25 seconds is not a hard wall-clock limit. `--limit` accepts
+1–200. Current attachment and binding proof are revalidated on every poll; the wait
+does not renew the Session lease.
+
+The CLI blocks while waiting. Registered MCP waits use AnyIO's shared, capacity-limited
+worker threads so concurrent sends can proceed on the event loop; MCP integer parameters
+reject JSON booleans. Cancelling the client wait does not establish job cancellation:
+an active poll worker finishes under its polling budget and existing database timeouts.
+
+Inspect `mail_available`, `wait_timed_out`, and `messages`. To continue past a returned
+batch, pass its `next_after_delivery_id` as `--after-delivery-id`. This is a delivery-ID
+floor, not a message ID or the unchanged attachment `cursor`. With no messages it is
+the supplied floor, or zero. Repeating without a floor can return the same unread mail.
+To record a read explicitly, pull the inbox with `--mark-read`:
+
+```text
+brains-ai mailbox inbox --session <session-id> --binding-file <binding-file-path> --mark-read
+```
+
+Waiting neither settles adapter notifications nor claims, accepts, or cancels work.
+Local delivery, a notification attempt, a read, work acceptance, and result approval
+are separate facts. See [MCP](MCP.md#waiting-for-durable-mail) for the response contract.
 
 ## Local work assignments
 
@@ -412,9 +447,40 @@ brains-ai decision-resolve --code DEC-0007 --chosen "yes"
 
 A Session cannot resolve the ask it filed. That separation is enforced, not a convention.
 
+### Optional owner email
+
+ASK email is **off by default**, including after an upgrade with SMTP settings already
+present. The owner can opt in with `BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED=true`, plus
+their recipient address and SMTP setup. This is environment-only consent, excluded from
+YAML configuration and admin mutation; restart the affected service/processes to load it.
+See [Operations](OPERATIONS.md#optional-ask-email-notifications) for setup and disabling.
+
+Standing owner consent allows one courtesy notification per newly filed ASK without a
+second per-notification decision. It never approves the ASK's requested action. Agents
+cannot choose the email recipient: it is always the configured owner. Email includes
+only the validated ASK code, a whitespace-normalized title preview, and a server-chosen
+local console URL, not the body, proposed answer, Workspace, or Session context. The
+preview is capped at 200 Unicode scalars including the ellipsis (at most 800 UTF-8 bytes).
+CR or LF in the original title rejects the email before SMTP; the stored title/body stay
+unchanged. This bound does not remove confidential information from the preview.
+
+The link `http://127.0.0.1:8787/app` opens on the **recipient's computer**. It is useful
+on the same owner's host running the local app; it is not a publicly reachable link to
+the sender's host and contains no credentials. This link currently hardcodes port 8787
+and `/app`; if your gateway uses another port, open your configured console directly.
+The filing response includes a `notification` object separately from the ASK's
+`status: open`. With email disabled it is
+`{"status":"disabled","attempted":false,"sent":false}`. Unexpected hook failure
+returns `{"status":"uncertain","attempted":null,"sent":false,"error":"notification_failed"}`:
+the attempt is unknown. `title_truncated: true`, when present, reports an actually capped
+preview. The ASK remains durable if email fails. SMTP acceptance does not prove inbox
+delivery or reading, and notifications have no hidden retries. See
+[MCP](MCP.md#human-decisions) for the full response contract.
+
 ## Where your state lives
 
-Everything is local:
+Coordination state is local; explicitly enabled ASK email sends its minimal notification
+through the configured SMTP service:
 
 - database and state: `~/.brains`
 - Workspace registration: the path you passed to `setup`

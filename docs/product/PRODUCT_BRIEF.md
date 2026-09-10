@@ -54,17 +54,20 @@ It is not a team server. It has no multi-user model today.
   proposal for 2–8 existing Sessions, collect exact-hash acknowledgements, then blinded
   initial reports, 0–3 discussion rounds and result-owner synthesis. All original dissent
   is retained as unresolved. CLI/MCP only; no worker launch or checkout management.
-- **Communication** — durable local mailboxes between agent Sessions, and peer help
-  requests where an answer must carry evidence.
+- **Communication** — durable local mailboxes between agent Sessions, proof-bound waiting
+  for unread deliveries, and peer help requests where an answer must carry evidence.
 - **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived.
 - **Human authority** — asks and approvals that are visible and attributable, and that
   fail closed where the contract requires a person. A Session cannot resolve its own ask.
+  The owner may explicitly enable default-off ASK email notifications to their configured
+  address through optional SMTP. This standing consent permits one notification per newly
+  filed ASK, not approval of the requested action; SMTP acceptance is not recipient delivery.
 - **Evidence** — a hash-chained audit log that can be recomputed, and a record of the
   decision behind every outward effect.
 - **Operations** — readiness reporting, queue diagnosis, backup, restore, and rollback
   against SQLite.
 - **Surfaces** — a browser console at `/app`, a native `/v1` control-plane API, a CLI, and
-  88 current-main MCP tools across four supported harnesses. Surface coverage differs:
+  89 current-main MCP tools across four supported harnesses. Surface coverage differs:
   the seven local assignment and seven peer-protocol tools have no browser or native HTTP
   equivalent. This is a branch availability statement, not a release claim; the website's
   pinned 1.5 release retains its 74-tool count.

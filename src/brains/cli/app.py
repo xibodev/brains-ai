@@ -2864,6 +2864,38 @@ def mailbox_inbox_cli(
     )
 
 
+@mailbox_app.command("wait")
+def mailbox_wait_cli(
+    session: str = typer.Option(..., "--session"),
+    binding_file: Path = typer.Option(
+        ...,
+        "--binding-file",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+        resolve_path=True,
+    ),
+    address: str | None = typer.Option(None, "--address"),
+    timeout_ms: int = typer.Option(25_000, "--timeout-ms", min=0, max=25_000),
+    after_delivery_id: int | None = typer.Option(None, "--after-delivery-id", min=0),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    """Wait for unread durable mail without marking it read or renewing the Session."""
+    from brains.control.durable_mail import wait_mailbox
+
+    _print_json(
+        wait_mailbox(
+            session,
+            read_mailbox_binding_file(binding_file),
+            address=address,
+            timeout_ms=timeout_ms,
+            after_delivery_id=after_delivery_id,
+            limit=limit,
+        )
+    )
+
+
 @mailbox_app.command("sent")
 def mailbox_sent_cli(
     address: str | None = typer.Option(None, "--address"),

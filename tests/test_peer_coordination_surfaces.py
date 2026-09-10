@@ -392,7 +392,7 @@ def test_cli_reports_malformed_json(action, field):
 
 
 def test_mcp_exact_registration_signatures_and_schema(monkeypatch):
-    assert len(CORE_MCP_TOOLS) == 88
+    assert len(CORE_MCP_TOOLS) == 89
     assert NAMES <= CORE_MCP_TOOLS
     assert NAMES <= mcp_server.LEAN_TOOLS
     assert set(mcp_server.TOOL_REGISTRY) == CORE_MCP_TOOLS

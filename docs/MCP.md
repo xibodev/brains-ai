@@ -1,13 +1,13 @@
 # MCP surface
 
-Current main exposes 88 tools over the Model Context Protocol, all prefixed `brains_`. The
+Current main exposes 89 tools over the Model Context Protocol, all prefixed `brains_`. The
 registry is filtered against `CORE_MCP_TOOLS` in `src/brains/capabilities.py` at startup.
 Tools outside that allowlist are neither registered nor callable through MCP. Actionable
 Session welcome hints recommend supported tools only.
 
-This source contract includes seven local work-assignment tools and seven existing-peer
-coordination tools available in this branch; it is not a release claim. The website's
-pinned 1.5 release retains its 74-tool count.
+This source contract includes seven local work-assignment tools, seven existing-peer
+coordination tools, and `mailbox_wait` available in this branch; it is not a release claim.
+The website's pinned 1.5 release retains its 74-tool count.
 
 ## Connecting
 
@@ -337,8 +337,8 @@ Proposal codes fit 39 bytes. Mutation `version` is an integer 1–2147483647 and
 `expected_revision` is 0–9223372036854775806; booleans are not integers for these checks.
 Coordination MCP registration uses strict integer validation, including optional `version`
 and list `limit`, so JSON `true` cannot be coerced to revision/version `1` before dispatch.
-This validation and the transport identity fix preserve public tool signatures, wire
-schemas, and the 88-tool count.
+This validation and the transport identity fix preserve public tool signatures and wire
+schemas; the separate addition of `mailbox_wait` brings current main to 89 tools.
 Objective, context, and evidence expectations each fit 32768 bytes, and the **whole stored
 canonical specification**, including defaults, deadline and recorded tools, must fit that
 same 32 KiB cap. Canonicalization sorts participants by Session ID and JSON keys, uses
@@ -459,8 +459,9 @@ s = brains_coordination_submit(code=s.code, kind="final", payload={"summary":"Re
 
 ## Communication
 
-`inbox_wait` waits for claimable peer-help requests. It does not wait for durable mailbox
-messages; read those through `mailbox_inbox` and the adapter's supported notification path.
+`inbox_wait` waits for claimable peer-help requests. For unread durable mailbox messages,
+use `mailbox_wait` or read through `mailbox_inbox`. Adapter notifications remain a
+separate best-effort wakeup path.
 
 | Tool | Purpose |
 |---|---|
@@ -469,12 +470,52 @@ messages; read those through `mailbox_inbox` and the adapter's supported notific
 | `mailbox_send` / `mailbox_reply` / `mailbox_forward` | Send durable mail |
 | `mailbox_broadcast` | Send to a Workspace |
 | `mailbox_inbox` / `mailbox_sent` / `mailbox_thread` | Read |
+| `mailbox_wait` | Proof-bound wait for unread durable deliveries; no read marking or work acceptance |
 | `mailbox_phonebook` / `mailbox_lookup` | Discover addresses |
 | `mailbox_notification_take` / `mailbox_notification_settle` | Claim and settle a wake |
 | `mailbox_native_id` / `mailbox_binding_reconcile` | Identity and rebinding |
 | `mailbox_managed_create` / `mailbox_managed_rotate` / `mailbox_managed_recover` / `mailbox_managed_revoke` | Managed binding lifecycle |
 
 The durable store is authoritative. A live wake is best effort and never loses mail.
+
+### Waiting for durable mail
+
+`brains_mailbox_wait(session_id, binding_file, address=None, timeout_ms=25000,
+after_delivery_id=None, limit=50)` is a core/lean tool. It requires the current live agent
+Session attachment and adapter-held binding-file proof, revalidated on every poll.
+An address alone does not grant access; stale, revoked, detached, or invalid proof fails
+closed. The binding file is read under the same rules as `mailbox_inbox`.
+
+`timeout_ms` is an integer from 0 to 25000 inclusive; zero performs one immediate poll.
+The budget bounds polling, not database work, so it is not a hard 25-second wall-clock
+deadline. Transactions close before sleeping. `limit` is an integer from 1 to 200 and
+bounds returned messages, not the authorization scan.
+
+MCP registration uses `StrictInt` for `timeout_ms`, `limit`, and the optional
+`after_delivery_id`: JSON booleans are rejected rather than coerced to integers.
+The registered MCP handler runs the blocking poll through AnyIO's shared worker-thread
+facility, preserving request-local authority and allowing concurrent sends on the event
+loop. It uses AnyIO's default capacity limiter, not a per-request pool or unlimited
+threads. With `abandon_on_cancel=False`, cancellation waits for the worker's bounded poll
+to finish; database work and waiting for worker capacity can extend elapsed time beyond
+25 seconds. Client cancellation is not evidence that a job was cancelled. Direct CLI
+and core calls block their caller through the same bounded polling loop.
+
+The response retains the inbox envelope (`mailbox`, `cursor`, `unread_count`, `messages`)
+and adds:
+
+| Field | Meaning |
+|---|---|
+| `mail_available` | Whether this response contains unread messages. |
+| `wait_timed_out` | True when the poll budget ended without returned messages. |
+| `next_after_delivery_id` | Greatest returned `messages[].inbox_delivery.cursor` delivery ID; if empty, the supplied floor or zero. Pass as the next call's `after_delivery_id`. |
+
+The continuation is a delivery-ID floor, not a message ID or an advanced attachment
+cursor. The top-level `cursor` stays unchanged. Without a floor, repeated waits can
+return the same unread messages; an empty result does not prove the mailbox has no
+unread mail below an explicit floor. Waiting never marks read, advances stored cursors,
+renews leases, settles notifications, claims/cancels help, or accepts work. Explicit
+inbox read marking remains separate. No new HTTP route or browser control is added.
 
 ## Peer help
 
@@ -575,6 +616,55 @@ not make its content immutable or versioned.
 | `route_decision` / `escalate_decision` | Assign or raise |
 | `list_open_decisions` | What is waiting |
 
+`file_decision_request(workspace_path, title, body="", proposed_answer=None,
+session_id=None)` files a durable ASK. The owner may enable one courtesy email per newly
+filed ASK with the default-off, environment-only
+`BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED` flag and separately configured owner recipient
+and SMTP settings. YAML and admin mutation cannot enable consent. Existing SMTP setup
+alone does not send after upgrade. Standing notification consent is not approval of the
+requested action; no extra per-notification decision is filed.
+
+There is no recipient argument: email goes only to the configured owner and includes
+the validated ASK code and a whitespace-normalized title preview plus the server-chosen
+`http://127.0.0.1:8787/app` link. The preview is capped at 200 Unicode scalars including
+the ellipsis (at most 800 UTF-8 bytes). CR or LF anywhere in the original title rejects
+the email before SMTP; the stored ASK title/body are unchanged. Notification codes must
+match `ASK-[A-Za-z0-9]{1,28}` (at most 32 ASCII characters); normal generated ASK codes
+remain unchanged. Body, proposed answer, Workspace and Session context are excluded.
+The bounded preview is still user-supplied and can disclose confidential information.
+The fixed loopback link opens the recipient's computer, for the same owner's local-app
+host; it is neither public access to the sender's computer nor a credential-bearing
+login link. The sender currently hardcodes port 8787 and `/app`; custom gateway ports
+are not reflected in this link. The opt-in is loaded from local server/process settings
+at startup, with no API or agent tool to enable it or supply an arbitrary recipient.
+
+The filing wrapper returns `code`, `status: open`, `workspace`, and an allowlisted
+`notification` object after calling `notify_ask` following commit. For example, with
+notifications disabled (illustrative generated code and Workspace slug):
+
+```json
+{"code":"ASK-0001","status":"open","workspace":"example","notification":{"status":"disabled","attempted":false,"sent":false}}
+```
+
+The notification status allowlist is `disabled`, `attempted`, `failed`, `uncertain`,
+and `smtp_accepted`; the normal helper completes with a terminal status, while
+`attempted` is its pre-SMTP ledger state. `attempted`/`sent` are booleans for valid
+helper outcomes. Optional fields are bounded `error`/`audit_error` markers and boolean
+`title_truncated`; the helper emits `title_truncated: true` only when it caps the
+normalized preview. Its absence does not prove the title was processed, for example
+when notifications are disabled or content is rejected first.
+
+An unexpected hook exception or malformed outcome returns
+`{"status":"uncertain","attempted":null,"sent":false,"error":"notification_failed"}`
+inside `notification`. Here `attempted: null` means unknown, not no attempt.
+`status: open` describes the ASK, not email success. `smtp_accepted` is a status value,
+not an additional boolean; `sent: true` means observed SMTP acceptance only, never
+recipient delivery or reading. An interrupted send can be uncertain rather than failed,
+and no hidden retry follows.
+The local `decision_email_notification` ledger records attempted/outcome states when
+available. See [Operations](OPERATIONS.md#optional-ask-email-notifications) for exact
+markers, setup, disabling, and the historical-outbox boundary.
+
 ## Evidence
 
 | Tool | Purpose |
@@ -599,5 +689,8 @@ not make its content immutable or versioned.
 There are no MCP tools for model routing, semantic retrieval, code graphs, runtime
 execution, or chat bridges. Those are outside the current supported surface — see the
 [product brief](product/PRODUCT_BRIEF.md).
+
+`mail_send` remains withdrawn: optional configured-owner ASK notification is not a public
+arbitrary-recipient email tool.
 
 Calling a tool that is not on the allowlist fails closed. It is not hidden behind a flag.

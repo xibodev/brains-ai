@@ -9,7 +9,9 @@ without colliding, a restarted tool can resume real context instead of a transcr
 you keep the decisions that need a human.
 
 Brains is alpha software for one local operator. Everything runs on your machine against
-a local SQLite database. There is no account, no telemetry, and no external service.
+a local SQLite database. By default there is no account, no telemetry, and no external
+service. Optional owner-approved ASK email notifications use your configured SMTP service;
+see [setup and consent](docs/OPERATIONS.md#optional-ask-email-notifications).
 
 ## Install and run
 
@@ -44,17 +46,18 @@ New here? Start with the [guide](docs/GUIDE.md).
 - **Local work assignments** — create an immutable specification, accept it with an
   existing Session, and record an outcome with evidence and revision-fenced attempt history;
   no process launch or checkout management
-- **Communication** — durable mailboxes between agent Sessions, and peer help requests
-  whose answers must carry evidence
+- **Communication** — durable mailboxes between agent Sessions, proof-bound waiting for
+  unread mail, and peer help requests whose answers must carry evidence
 - **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived
-- **Human authority** — asks and approvals that fail closed where a person is required
+- **Human authority** — asks and approvals that fail closed where a person is required,
+  with optional, default-off email notifications to the configured owner
 - **Evidence** — a hash-chained audit log you can recompute, and the decision behind every
   outward effect
 - **Operations** — readiness, backup, restore, and rollback over SQLite
 
 Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
 
-Current-main documentation covers 88 MCP tools. Local work assignments are available
+Current-main documentation covers 89 MCP tools. Local work assignments are available
 in this branch through CLI/MCP only, with no native HTTP API or browser controls. This
 is the local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36), not a
 release claim or completion of remote-runner support. The website describes the pinned
@@ -75,7 +78,7 @@ backlogs or external copies. See [Contributing](CONTRIBUTING.md) before starting
 
 - [Website and release history](https://xibodev.github.io/brains-ai/) - published release overview
 - [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
-- [MCP surface](docs/MCP.md) — the 88 current-main tools agents can call
+- [MCP surface](docs/MCP.md) — the 89 current-main tools agents can call
 - [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together
 - [Operations](docs/OPERATIONS.md) — running the service, state, and recovery

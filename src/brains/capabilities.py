@@ -18,6 +18,7 @@ CORE_MCP_TOOLS = frozenset(
         "mailbox_reply",
         "mailbox_forward",
         "mailbox_inbox",
+        "mailbox_wait",
         "mailbox_sent",
         "mailbox_thread",
         "mailbox_notification_take",

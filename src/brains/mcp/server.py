@@ -7,9 +7,10 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from functools import wraps
+from functools import partial, wraps
 from typing import Any
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import StrictInt
@@ -90,6 +91,7 @@ _IMPLEMENTED_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "mailbox_reply": tools.mailbox_reply_tool,
     "mailbox_forward": tools.mailbox_forward_tool,
     "mailbox_inbox": tools.mailbox_inbox_tool,
+    "mailbox_wait": tools.mailbox_wait_tool,
     "mailbox_sent": tools.mailbox_sent_tool,
     "mailbox_thread": tools.mailbox_thread_tool,
     "mailbox_notification_take": tools.mailbox_notification_take_tool,
@@ -255,6 +257,7 @@ LEAN_TOOLS = frozenset(
         "mailbox_reply",
         "mailbox_forward",
         "mailbox_inbox",
+        "mailbox_wait",
         "mailbox_sent",
         "mailbox_thread",
         "mailbox_notification_take",
@@ -314,7 +317,7 @@ def _resolve_active_tools() -> list[str]:
 ACTIVE_TOOLS = _resolve_active_tools()
 
 
-def _coordination_sdk_wrapper(fn: Callable[..., Any]) -> Callable[..., Any]:
+def _strict_integer_sdk_wrapper(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Preserve core integer fences before FastMCP's coercive validation."""
 
     @wraps(fn)
@@ -332,12 +335,28 @@ def _coordination_sdk_wrapper(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapped
 
 
+def _mailbox_wait_sdk_wrapper(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Keep polling off the SDK event loop, preserving request-local authority."""
+    strict = _strict_integer_sdk_wrapper(fn)
+
+    @wraps(strict)
+    async def wrapped(**kwargs):
+        # AnyIO copies contextvars, including the authenticated principal slot.
+        # Cancellation waits for the bounded core poll instead of abandoning a
+        # worker. Database work retains the inbox reader's existing timeouts.
+        return await anyio.to_thread.run_sync(partial(strict, **kwargs), abandon_on_cancel=False)
+
+    return wrapped
+
+
 for name in ACTIVE_TOOLS:
     # Register each active tool with FastMCP dynamically under the brains_ namespace.
     # Note: FastMCP.tool takes a name argument.
     handler = TOOL_REGISTRY[name]
     if name.startswith("coordination_"):
-        handler = _coordination_sdk_wrapper(handler)
+        handler = _strict_integer_sdk_wrapper(handler)
+    elif name == "mailbox_wait":
+        handler = _mailbox_wait_sdk_wrapper(handler)
     mcp.tool(name=f"{TOOL_PREFIX}{name}")(handler)
 
 

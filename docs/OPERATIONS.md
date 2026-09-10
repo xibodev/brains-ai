@@ -85,6 +85,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `coordination-propose`, `coordination-get`, `coordination-list`, `coordination-accept`, `coordination-advance`, `coordination-submit`, `coordination-cancel` | Existing-peer proposal versions, acknowledgements, blinded initial collection, bounded discussion and final synthesis; local CLI/MCP state only. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
+| `mailbox wait` | Wait for unread durable mail with `--session` and `--binding-file`; no cursor advancement, read marking, lease renewal, or work acceptance. |
 | `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
 | knowledge commands | Maintain reusable Workspace knowledge. |
 | decision/governed/audit commands | Route human decisions and inspect governed effects. |
@@ -136,9 +137,9 @@ requires bootstrap-admin authentication plus the revision returned by GET, and r
 the resolved operator in the audit trail. Every write returns `restart_required` because
 the gateway may have multiple workers and MCP is a separate process; changing only the
 handling process would not establish stack convergence. Values take effect after a
-supervised-stack restart. A validation or apply failure restores the prior runtime overlay. Frozen and
-withdrawn provider, email, bridge, gateway-preamble, alternate-storage, and telemetry
-fields are neither returned nor accepted by this surface. The deleted legacy browser
+supervised-stack restart. A validation or apply failure restores the prior runtime overlay.
+Email settings and withdrawn provider, bridge, gateway-preamble, alternate-storage, and
+telemetry fields are neither returned nor accepted by this surface. The deleted legacy browser
 has no alternate configuration writer.
 
 Supported secret rules:
@@ -150,6 +151,93 @@ Supported secret rules:
   the environment;
 - errors, logs, audit summaries, and public defect proposals must not contain secret
   values.
+
+### Optional ASK email notifications
+
+ASK email is disabled by default. **Existing SMTP credentials and recipient settings do
+not imply consent after an upgrade.** The owner must explicitly set
+`BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED=true` in the environment of each process that
+files ASKs. This single opt-in supplies standing owner consent for one courtesy
+notification per newly filed ASK; it is not approval of the requested action and does
+not require another decision for each notification.
+
+The flag uses environment settings sources (including loaded `.env`/`secrets.env`),
+not YAML configuration, the runtime overlay, encrypted-setting allowlists, or admin
+mutation. It is read locally at server/process startup; no API or agent tool enables it.
+Recipient and SMTP setup are separate prerequisites. Existing encrypted SMTP
+and recipient settings remain usable, but cannot turn on consent. Configure these
+locally, outside the repository; all values below are placeholders:
+
+```dotenv
+BRAINS_ASK_EMAIL_NOTIFICATIONS_ENABLED=true
+BRAINS_OPERATOR_NOTIFY_EMAIL=owner@example.invalid
+BRAINS_SMTP_HOST=smtp.example.invalid
+BRAINS_SMTP_PORT=587
+BRAINS_SMTP_USERNAME=SMTP_USERNAME_PLACEHOLDER
+BRAINS_SMTP_PASSWORD=${LOCAL_SMTP_PASSWORD}
+BRAINS_SMTP_FROM=brains@example.invalid
+BRAINS_SMTP_USE_STARTTLS=true
+BRAINS_SMTP_TIMEOUT_SECONDS=15
+```
+
+Supply `LOCAL_SMTP_PASSWORD` privately in the process environment when authentication is
+required. The password reference syntax is `${NAME}`. Set one plain email address in
+`BRAINS_OPERATOR_NOTIFY_EMAIL`, not a display-name list or group. The filing agent cannot
+override it. No model or provider setup is involved. SMTP defaults are port 587, STARTTLS
+on, and a 15-second socket timeout; that timeout is not an end-to-end delivery guarantee.
+
+Restart affected long-lived processes after setting the flag; for an installed supervised
+stack use `brains-ai service restart` after configuring its environment. One-shot CLI and
+stdio processes must receive the setting too. To disable, set the flag to `false` (or
+remove it from every effective environment source) and restart. This does not recall an
+already attempted email or replay old ASKs.
+
+Only the validated ASK code, a bounded title preview, and the server-chosen
+`http://127.0.0.1:8787/app` link are included in ASK email. Notification codes must match
+`ASK-[A-Za-z0-9]{1,28}` (at most 32 ASCII characters); normal generated codes are unchanged.
+The title preview normalizes whitespace and caps at 200 Unicode scalars, including an
+ellipsis when truncated (at most 800 UTF-8 bytes). CR or LF anywhere in the original
+title rejects the email before SMTP; an unpaired surrogate in the preview is also
+rejected. The original stored ASK title/body remain unchanged. The ASK body, proposed
+answer, Workspace and Session context are excluded. This is a size bound, not a
+confidentiality filter: the allowed preview can still disclose private information.
+Loopback opens on the recipient's computer, for the same owner's local-app host, not
+public access to another machine. It carries no credentials and does not bypass normal
+console authentication. The sender hardcodes port 8787 and `/app`, without reading
+custom gateway settings; when using another port, open your configured console directly.
+
+The durable ASK is committed before the courtesy attempt. `notify_ask` records a
+`decision_email_notification` ledger event before network access and an outcome event,
+with local Session/Workspace attribution and code/status metadata, not email content or
+credentials. Invalid notification codes are recorded as null, never raw input. Failure
+to record the attempted event prevents SMTP. `file_decision_request` returns an
+allowlisted `notification` object alongside `code`, `status: open`, and `workspace`:
+
+| Result | Meaning |
+|---|---|
+| `status: disabled` | No opt-in; `attempted: false`, `sent: false`. |
+| `status: attempted` | Allowed by the filing wrapper; the helper records this pre-SMTP state, then returns a terminal outcome. It is not acceptance. |
+| `status: failed` | Incomplete/invalid setup, a local failure, or a conclusive SMTP failure. `attempted` indicates whether the recorded SMTP attempt began. |
+| `status: uncertain` | `attempted: true` when sending started but SMTP acceptance could not be established; `attempted: null` when the filing wrapper cannot establish the hook outcome. Both have `sent: false`; do not infer non-delivery. |
+| `status: smtp_accepted` | SMTP acknowledged acceptance; `attempted: true`, `sent: true`. Not recipient delivery or reading. |
+
+`sent` is a compatibility boolean, not a separate recipient-delivery receipt.
+Optional `error` values are bounded markers (`incomplete_configuration`,
+`notification_failed`, `smtp_failed`, `smtp_uncertain`).
+An unexpected hook exception or malformed result falls back to
+`{"status":"uncertain","attempted":null,"sent":false,"error":"notification_failed"}`;
+unknown attempt is not a claim of no attempt. Optional `title_truncated` is a boolean:
+the helper adds `true` only when it actually caps the normalized preview, including if
+a later setup or send step fails. Disabled or early-rejected notifications omit it;
+absence does not establish that the title was processed.
+`audit_error: outcome_record_failed` reports failure to record the terminal event without erasing known
+SMTP acceptance. A QUIT failure after acceptance also does not turn acceptance into
+failure. There are no hidden retries or ASK notification outbox replays. Check the
+durable decision and local ledger independently; SMTP configuration alone is no proof
+of an attempt. See [MCP](MCP.md#human-decisions) for the filing response boundary.
+
+This optional notification does not reactivate `mail_send`, generic external messaging,
+or the historical durable-mail SMTP worker described below.
 
 ## Authentication and authorization
 
@@ -415,8 +503,8 @@ Operational invariants:
 
 `inbox_wait` waits for claimable peer help, not durable mail or topic subscriptions. A
 timeout means no claimable request arrived during that wait, not that the request was
-cancelled. Read durable messages through the mailbox tools and use only the notification
-mode supported by the selected adapter.
+cancelled. Wait for durable messages through `mailbox wait`, read them through the mailbox
+tools, and use only the notification mode supported by the selected adapter.
 
 Queue health:
 
@@ -436,7 +524,7 @@ interaction outside Brains and record only what can be truthfully observed.
 ### Local assignment inspection and recovery
 
 This branch exposes local assignments through CLI and seven MCP tools, not through
-native HTTP routes or the frontend. The 88-tool current-main MCP count does not describe
+native HTTP routes or the frontend. The 89-tool current-main MCP count does not describe
 browser capabilities or change the website's pinned 1.5 release count of 74.
 
 Read the assignment directly; generic queue health is not assignment reconciliation:
@@ -507,7 +595,7 @@ After a stale-fence refusal or lost response, read before retrying with current 
 and `expected_revision`. Coordination MCP integer arguments are strict: JSON `true` is
 rejected, not coerced to version or revision `1`; optional `version` and list `limit` also
 reject booleans. This fix changes neither public signatures nor wire schemas nor the
-88-tool count. Scope replacement is requester-only, uses a new creation key and
+89-tool count. Scope replacement is requester-only, uses a new creation key and
 complete input specification, cancels the old version at revision r+1, and creates the new
 version at r+2. Other members acknowledge again; no contribution carries forward. Completed,
 cancelled and expired versions cannot be replaced. Historical get retains the old version's
@@ -640,9 +728,35 @@ inbox` as the authoritative recovery path.
 
 The Coordination browser mailbox desk supports authorized human reads and operator
 compose/reply/forward; agent mailboxes remain read-only because agent send authority
-requires adapter-held proof. Historical SMTP destination and outbox rows remain only so
-newer SQLite stores can be opened and migrated. Core exposes no SMTP configuration and
-its scheduler performs no external delivery.
+requires adapter-held proof. Historical SMTP destination, consent, and outbox rows are
+preserved. A local delivery to an operator mailbox can still enqueue a copy when its
+historical verified destination and copy mode qualify. Enqueuing is not sending: core
+does not schedule or lease this outbox, and the ASK opt-in does not activate it or replay
+pending rows. The retained `process_smtp_outbox` implementation can be invoked manually
+or externally, but that is unsupported; core's scheduling boundary does not prove that
+no such worker is running elsewhere. Historical SMTP configuration routes remain withdrawn.
+
+`mailbox wait --session <session-id> --binding-file <binding-file-path>` is a proof-bound
+CLI/MCP pull operation, with `--timeout-ms` 0–25000 and `--limit` 1–200. The timeout
+bounds polling rather than database work. Direct CLI calls block; registered MCP waits
+use AnyIO's shared, default-capacity-limited workers so the event loop can process
+concurrent sends. Cancellation waits for an active poll worker to finish rather than
+abandoning it; worker-capacity waits and database latency are not covered by a hard
+25-second guarantee. This does not cancel jobs. It returns unread mail without marking read,
+advancing a stored cursor, renewing a Session lease, or accepting work. Use returned
+`next_after_delivery_id` as `--after-delivery-id` to continue by delivery ID; do not use
+the message ID or unchanged attachment `cursor`. See [MCP](MCP.md#waiting-for-durable-mail).
+
+The durable-mail health report separates local `state`, `issue_count`, and `reasons`
+from its count-only `smtp` diagnostics. `smtp.affects_local_readiness` is false;
+`core_scheduler_enabled: false` and `processor_state: not_scheduled_by_core` describe
+the core contract, not observed external-worker liveness. Pending `queued`, `retry`, or
+`sending` rows derive `smtp.state: blocked` and
+`delivery_blocked_reason: processor_not_scheduled_by_core`; observation does not rewrite
+those rows. With no open rows, SMTP issues can yield `degraded`, otherwise `ready`.
+These diagnostics do not send, settle, delete, or replay mail and do not degrade local
+readiness solely because of SMTP. ASK notification attempts are separate ledger events,
+not these historical outbox counts, mailbox reads, or work acceptance.
 
 Prefer Workspace archive when mailbox history must remain. The explicit destructive
 Workspace prune treats an agent mailbox as owned by its Workspace and removes that
@@ -709,7 +823,8 @@ HTTP control-gateway identity/auth-boundary probe, an authenticated MCP initiali
 tools/list handshake, queue and durable-mail progress, and verified recovery posture
 independently. Stable reason codes identify the failed component without returning database
 paths, credentials, or raw exception messages. Model-gateway provider routing, Postgres,
-SMTP, and other frozen dependencies are not readiness inputs.
+and other frozen dependencies are not readiness inputs. Optional SMTP diagnostics are
+reported separately and do not affect local readiness.
 
 ## Governance and audit
 

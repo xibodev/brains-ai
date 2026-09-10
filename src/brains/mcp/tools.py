@@ -46,6 +46,7 @@ from brains.control.durable_mail import (
     send_mailbox_message,
     settle_mailbox_notification,
     take_mailbox_notification,
+    wait_mailbox,
 )
 from brains.control.durable_mailbox import (
     create_managed_agent_mailbox,
@@ -710,6 +711,31 @@ def mailbox_inbox_tool(
         after_delivery_id=after_delivery_id,
         limit=limit,
         require_agent_proof=True,
+    )
+
+
+def mailbox_wait_tool(
+    session_id: str,
+    binding_file: str,
+    address: str | None = None,
+    timeout_ms: int = 25_000,
+    after_delivery_id: int | None = None,
+    limit: int = 50,
+):
+    """Wait up to 25000 ms for unread durable mail without marking it read.
+
+    Current agent proof is required on every poll. No cursor advancement, Session
+    renewal, notification settlement, help claim/cancellation, or work acceptance.
+    Returns the inbox envelope plus mail_available, wait_timed_out, and
+    next_after_delivery_id (greatest returned delivery ID, or the input floor/zero).
+    """
+    return wait_mailbox(
+        session_id,
+        _read_mailbox_binding_file(binding_file),
+        address=address,
+        timeout_ms=timeout_ms,
+        after_delivery_id=after_delivery_id,
+        limit=limit,
     )
 
 
