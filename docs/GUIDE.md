@@ -38,13 +38,14 @@ unrelated keys are preserved, and `unwire` restores the file byte for byte.
 
 ## The model
 
-Nine nouns, each meaning one thing.
+The coordination model:
 
 | Term | What it is |
 |---|---|
 | **Workspace** | A repository or working directory. The scope everything else hangs off. |
 | **Session** | One durable handle for an agent working in a Workspace. Survives tool restarts. |
 | **Task** | A unit of work with a code, status, and priority. |
+| **Work assignment** | An immutable local specification with revision-fenced acceptance and evidence-bearing attempt history. CLI/MCP only in this branch. |
 | **Claim** | Exclusive ownership of a Workspace or task, for a bounded period. |
 | **Handoff** | The context you leave behind when you stop. |
 | **Checkpoint** | A resume marker dropped at a natural breakpoint. |
@@ -218,6 +219,80 @@ If work should move to someone else mid-flight, hand it off rather than abandoni
 ```text
 brains-ai task-handoff --from-task TASK-015 --title "Finish the readiness contract"
 ```
+
+## Local work assignments
+
+Use an assignment when you need a durable agreement about an objective and an attributable
+result from an existing Session. This branch provides the local state foundation of
+[#36](https://github.com/xibodev/brains-ai/issues/36); remote runners and specialist
+execution remain planned. There is no native HTTP API or frontend for assignments.
+
+Every call requires a live Session owned by the authenticated operator in the assignment's
+Workspace. Use the registered Workspace path or a recorded alias, not an arbitrary new
+path. The following CLI example uses placeholders for existing Sessions and returned IDs;
+replace them before running. Line continuations use POSIX shell syntax.
+
+```text
+brains-ai assignment-create --workspace <registered-path> --title "Review the fixture" \
+  --spec '{"objective":"Review the fixture"}' \
+  --session <creator-session-id> --idempotency-key fixture-review-1
+brains-ai assignment-get <assignment-code> --session <worker-session-id>
+brains-ai assignment-accept <assignment-code> --session <worker-session-id> \
+  --expected-revision <revision-from-read>
+```
+
+Creation requires `--title` separately from the JSON `--spec`; `objective` is the only
+required specification field. `version` defaults to 1. Optional fields are `context`,
+`deadline` (timezone-aware ISO datetime), `max_runtime_seconds`, `checkout_ref`, `links`,
+and `tool`. Unknown fields are refused. See [MCP](MCP.md#local-work-assignments) for bounds.
+The stored specification is immutable. Reusing the creation key with the same title and
+canonical specification returns the same assignment, even from a replacement creator
+Session under the same operator and Workspace; changing that request is refused.
+
+Acceptance records an attempt under the accepting Session and its actual tool. It does
+not start a process. Perform the agreed work through the harness, then report the evidence:
+
+```text
+brains-ai assignment-get <assignment-code> --session <worker-session-id>
+brains-ai assignment-settle <assignment-code> --session <worker-session-id> \
+  --expected-revision <revision-from-read> --attempt <current-attempt-id> \
+  --outcome completed --evidence "Fixture inspected; findings in review.txt" \
+  --result "Review complete"
+brains-ai assignment-list --workspace <registered-path> --session <creator-session-id>
+```
+
+Only that accepting Session may settle its current attempt. Reattaching to the same
+live Session preserves this ability; a new Session or successor does not take over the
+attempt. Evidence must be nonempty; it is a recorded report, not independent verification.
+`result` is optional. `usage: null` means unknown, not zero usage.
+
+### Read state before acting
+
+- `status` is stored state. `observed_status: uncertain` flags an unresolved attempt whose
+  deadline passed or source Session became unavailable. Reads do not settle it, change
+  its revision, or renew its lease. Inspect `deadline_exceeded` and the attempt's
+  `source_session_unavailable` as well as its evidence.
+- The cooperative runtime budget defaults to one hour; an optional deadline can shorten
+  it. It is not an OS-enforced timeout and does not stop the harness.
+- Accept, settle, cancel, and retry require the current `expected_revision`. After a lost
+  response or stale-revision refusal, read back first. Repeating acceptance by the same
+  Session or an identical report at the current revision is a no-op.
+- `assignment-cancel <code> --session <id> --expected-revision <revision>` cancels ready
+  work immediately. For accepted work it records `cancel_requested`, not a process stop
+  or a confirmed final outcome. The accepting Session must report `cancelled`, `failed`,
+  or `uncertain` with evidence; completion after a cancellation request is refused.
+- `assignment-retry <code> --session <id> --expected-revision <revision>` explicitly
+  returns conclusively failed/cancelled work to `ready`. A later acceptance adds a new
+  attempt while retaining history. Active, cancellation-pending, completed, and uncertain
+  work cannot be retried. There are no implicit retries.
+- A reported `uncertain` outcome remains unresolved and cannot be reconciled by these
+  tools. A read-time uncertainty flag alone does not prevent the original live Session
+  from reporting its actual outcome. Cancellation of reported uncertain work records the
+  request but leaves it uncertain.
+
+`checkout_ref`, `links`, and specification `tool` are advisory data. They grant no
+filesystem ownership, do not read or create a checkout, and do not select or launch a
+harness. Assignments do not provide universal process control or containment.
 
 ## When a human is required
 

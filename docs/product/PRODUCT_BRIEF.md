@@ -45,6 +45,11 @@ It is not a team server. It has no multi-user model today.
 
 - **Coordination** — Workspaces, durable Sessions, tasks, exclusive claims, handoffs, and
   checkpoints that survive a tool restart.
+- **Local assignment state — available in this branch** — create an immutable work
+  specification, accept it with an existing Session, and record an outcome with evidence
+  and revision-fenced attempt history. CLI/MCP only; no native HTTP API or frontend,
+  process spawning, or checkout ownership. Uncertain work remains unresolved rather than
+  being implicitly retried.
 - **Communication** — durable local mailboxes between agent Sessions, and peer help
   requests where an answer must carry evidence.
 - **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived.
@@ -55,7 +60,10 @@ It is not a team server. It has no multi-user model today.
 - **Operations** — readiness reporting, queue diagnosis, backup, restore, and rollback
   against SQLite.
 - **Surfaces** — a browser console at `/app`, a native `/v1` control-plane API, a CLI, and
-  74 MCP tools across four supported harnesses.
+  81 current-main MCP tools across four supported harnesses. Surface coverage differs:
+  the seven local assignment tools have no browser or native HTTP equivalent. This is a
+  branch availability statement, not a release claim; the website's pinned 1.5 release
+  retains its 74-tool count.
 - **Repository lookup** — bounded text search. Not semantic.
 
 ## Not supported today
@@ -88,7 +96,14 @@ guests would receive narrowly scoped, time-limited collaboration access, not a f
 multi-organization model. Optional human-assistant integration, GitHub event linkage,
 scheduled recurring work, and external evidence retention extend that direction.
 
-These are planned capabilities, not currently supported behavior or release commitments.
+The local assignment state foundation is available in this branch, but remote runners
+and bounded specialist execution are still planned. It is partial scope for
+[#36](https://github.com/xibodev/brains-ai/issues/36), which remains open for remote work
+after [#37](https://github.com/xibodev/brains-ai/issues/37) planning. Local acceptance,
+reported evidence, and cooperative deadlines do not establish worker launch, OS-enforced
+budgets, new-Session takeover, or remote recovery.
+
+The remaining intended capabilities are not supported behavior or release commitments.
 The local execution boundary remains cooperative; guest isolation and worker containment
 must not be inferred from existing code. Issues own scope and acceptance criteria;
 the [Brains Project](https://github.com/orgs/xibodev/projects/1) alone owns priority,

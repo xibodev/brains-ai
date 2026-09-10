@@ -1,9 +1,12 @@
 # MCP surface
 
-Brains exposes 74 tools over the Model Context Protocol, all prefixed `brains_`. The
+Current main exposes 81 tools over the Model Context Protocol, all prefixed `brains_`. The
 registry is filtered against `CORE_MCP_TOOLS` in `src/brains/capabilities.py` at startup.
 Tools outside that allowlist are neither registered nor callable through MCP. Actionable
 Session welcome hints recommend supported tools only.
+
+This source contract includes seven local work-assignment tools available in this branch;
+it is not a release claim. The website's pinned 1.5 release retains its 74-tool count.
 
 ## Connecting
 
@@ -154,6 +157,108 @@ Repository text lookup through `search_repo` requires no index.
 | `list_tasks` | Filter by status, priority, or tag |
 | `claim_workspace` | Take a Workspace for a scope and duration |
 | `release_workspace` / `list_workspace_claims` | Release and inspect |
+
+## Local work assignments
+
+These seven core names are registered with the `brains_` prefix (for example,
+`brains_work_assignment_create`). They are local state-only CLI/MCP operations, also
+included in the lean MCP selection. There is no assignment native HTTP API or browser
+surface. They neither spawn processes nor manage checkouts.
+
+| Core tool name | Required arguments | Purpose / optional arguments |
+|---|---|---|
+| `work_assignment_create` | `workspace_path`, `title`, `spec`, `session_id`, `idempotency_key` | Store an immutable version-1 specification; return a `ready` assignment. `spec` is a JSON object, not a serialized string. |
+| `work_assignment_get` | `code`, `session_id` | Read the assignment and complete attempt history. |
+| `work_assignment_list` | `workspace_path`, `session_id` | Read newest-created assignments first; `limit=50`, valid range 1–200. |
+| `work_assignment_accept` | `code`, `session_id`, `expected_revision` | Accept ready work as this existing Session; record its actual tool and a new attempt generation. |
+| `work_assignment_settle` | `code`, `attempt_id`, `outcome`, `evidence`, `session_id`, `expected_revision` | Report `completed`, `failed`, `cancelled`, or `uncertain`; optional `result=""`. Only the accepting Session may report its current attempt. |
+| `work_assignment_cancel` | `code`, `session_id`, `expected_revision` | Cancel ready work or request cancellation of unresolved work; no process stop. |
+| `work_assignment_retry` | `code`, `session_id`, `expected_revision` | Explicitly return conclusively failed/cancelled work to ready; preserve attempts. |
+
+All seven require a live Session owned by the authenticated operator and a currently
+visible Workspace. Assignments are scoped to that operator and the supplied Session's
+Workspace; create/list accept only its registered path or a recorded alias. Anonymous,
+Runtime, and foreign-operator callers are refused. Historical ownerless Sessions are
+limited to bootstrap admin. A Session ID is not a credential or a per-harness isolation
+boundary between Sessions sharing an operator.
+
+### Specification and creation identity
+
+Minimal `spec`:
+
+```json
+{"objective": "Review the fixture"}
+```
+
+`title` is separately required, nonblank text up to 256 UTF-8 bytes. The nonblank
+`idempotency_key` is at most 128 bytes. These and specification text reject NUL bytes.
+
+| Specification field | Contract |
+|---|---|
+| `version` | Optional integer, defaults to 1; only 1 is accepted. |
+| `objective` | Required nonblank string. |
+| `context` | Optional string. |
+| `deadline` | Optional timezone-aware ISO datetime, normalized to UTC. Omit when unused; null is invalid. |
+| `max_runtime_seconds` | Optional integer from 1 to 604800; default acceptance budget is 3600 seconds. Booleans are invalid. |
+| `checkout_ref` | Optional string up to 2048 UTF-8 bytes; inert reference, not filesystem authority. |
+| `links` | Optional list of at most 32 nonblank strings, each up to 2048 UTF-8 bytes; not fetched. |
+| `tool` | Optional string up to 64 UTF-8 bytes; advisory, not harness selection. |
+
+Unknown fields are rejected. The complete canonical JSON specification, including
+defaulted `version`, must fit 32768 UTF-8 bytes; `objective` and `context` individually
+have that same upper bound. Storage retains `specification`, `specification_hash`, and
+`request_hash` in the response. There is no specification-edit operation. Creation keys
+are unique per Workspace/operator, not per Session: an identical canonical specification
+and title returns the existing assignment, including after creator Session replacement;
+a different request under the same key is refused.
+
+### State, observations, and revision fences
+
+Responses include `code`, creator provenance, immutable specification and hashes,
+`status`, `revision`, `generation`, `observed_status`, `deadline_exceeded`, timestamps,
+cancellation attribution, `current_attempt_id`, and ordered `attempts`. A new assignment
+has status `ready`, revision 1, generation 0, and no attempt. Each acceptance increments
+generation and creates a distinct attempt ID.
+
+Attempts expose `source_session_id`, actual `tool`, stored/observed status,
+`deadline_exceeded`, `source_session_unavailable`, acceptance/deadline/report/settlement
+timestamps, runtime budget, cancellation time, `evidence`, `result`, and `usage`.
+`usage: null` means unknown; these tools do not collect or accept usage measurements.
+
+The attempt deadline is acceptance time plus its runtime budget, shortened by any earlier
+specification deadline. An already-passed deadline refuses acceptance. Expiry or source
+Session unavailability makes an unresolved attempt's `observed_status` uncertain without
+changing stored status or revision. Get/list do not settle work or renew Session leases.
+The budget is cooperative, not OS-enforced, and expiry never implies process termination.
+For this observation, a source is unavailable if missing, ended, in `completed`, `failed`,
+`cancelled`, or `dormant` Session state, or past an existing lease's expiry. The absence
+of a lease row alone is not treated as source unavailability.
+
+Accept/settle/cancel/retry require an integer `expected_revision` matching current state.
+Stale revisions always fail, including lost-response replays; read back first. At the
+current revision, same-Session acceptance of already accepted work and an identical
+reported outcome/evidence/result are no-ops. Creation replay also adds no event or lease
+renewal. Reattachment to the same live accepting Session preserves attempt authority;
+replacement/successor Sessions do not inherit it.
+
+Settlement requires nonblank `evidence`; it and optional `result` each fit 65536 UTF-8
+bytes and reject NUL. Reports are attributed evidence, not independent verification or
+requester approval. `completed`, `failed`, and `cancelled` set `settled_at`. A reported
+`uncertain` outcome sets `reported_at` but leaves `settled_at` null and remains unresolved;
+the tools cannot revise or reconcile that report. Read-time uncertainty alone still
+allows the original live Session to report an outcome.
+
+Cancellation of `ready` work is immediately `cancelled` with no attempt. Accepted work
+becomes `cancel_requested`; its accepting Session must report the actual outcome with
+evidence. A winning cancellation request refuses subsequent `completed` reports, while
+`failed`, `cancelled`, or `uncertain` can be reported. Cancellation of reported uncertain
+work records the request but retains `uncertain`. Neither request proves a process stopped.
+
+Retry requires stored `failed` or `cancelled` state and all existing attempts conclusively
+settled. It returns work to `ready`; only a later explicit acceptance creates another
+attempt. Active, cancellation-pending, completed, and uncertain work are blocked. There
+are no implicit retries, takeover, checkout ownership, or remote execution guarantees.
+See the [guide](GUIDE.md#local-work-assignments) for the CLI journey.
 
 ## Communication
 

@@ -95,6 +95,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Identity and authorization | Credential resolution, principals, Org/Workspace capability checks | `src/brains/authz` |
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
 | Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
+| Advertised (this branch) | Local work assignments | Immutable specifications, revision-fenced acceptance, evidence-bearing attempts; CLI/MCP only | `src/brains/control/work_assignments.py`, `src/brains/storage/models.py` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
 | Advertised | Realtime | Closed scoped subscriptions, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
@@ -119,6 +120,7 @@ Advertised durable families include:
 - local operator identity, Workspaces, aliases, and compatibility scope rows;
 - coordination Sessions and events;
 - tasks, claims, handoffs, durable mailbox rows, peer help, checkpoints, snapshots, and knowledge;
+- local work assignments and their durable attempt history (available in this branch);
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
 - event context, realtime replay rows, secure local settings, and migration state.
 
@@ -204,6 +206,58 @@ recurring, generic-webhook, provider-routing, semantic, graph, bridge, and alter
 backend state. Those rows remain only where required to open or migrate an existing
 store; they do not register or activate a product capability. New product work must not
 depend on them merely because they exist.
+
+### Local work-assignment state
+
+`WorkAssignment` and `WorkAssignmentAttempt` map to the standalone `work_assignments`
+and `work_assignment_attempts` tables added by `154_work_assignments`. They reference
+Workspaces, operators, and coordination Sessions, not legacy Issues, Personas, Runtimes,
+or execution assignments. The additive SQLite migration preserves existing rows and
+prior migration history; transactional DDL rolls back on failure and is idempotent on
+rerun. The PostgreSQL delta preserves corpus compatibility without adopting that backend.
+
+The assignment stores a canonical immutable version-1 specification, specification/request
+hashes, creator provenance, Workspace/operator-scoped creation key, status, revision,
+generation, and cancellation attribution. Identical creation replay survives creator
+Session replacement; a changed title or specification under the same key is refused.
+Attempts retain generation, source Session and actual tool, cooperative deadline/budget,
+report and settlement times, evidence/result, and nullable usage. Null usage is unknown.
+
+Mutations authorize the operator's live Session and current Workspace visibility under
+the Session lifecycle writer lock. Conditional revision updates fence stale requests;
+assignment/attempt changes, lease renewal, and a Workspace-scoped `work_assignment_*`
+event commit or roll back together. The event records code/revision/generation rather
+than specification or evidence bodies. These are coordination events, not proof of a
+governed external effect. Read snapshots keep revision and attempt history consistent
+without renewing leases or changing assignment state.
+
+SQL constraints enforce unique creation identity, unique assignment/generation, valid
+statuses and settlement timestamps, and at most one unresolved attempt per assignment.
+`accepted`, `cancel_requested`, and `uncertain` all occupy that unresolved slot.
+Conclusive `completed`, `failed`, and `cancelled` attempts have `settled_at`; a reported
+`uncertain` attempt does not. Explicit retry permits only conclusively failed/cancelled
+work and retains every prior attempt. No implicit retry or uncertain-state reconciliation
+is implemented.
+
+Reads derive `observed_status: uncertain` when an unresolved attempt exceeds its deadline
+or its source Session is unavailable; stored `status` and `revision` remain unchanged.
+The default one-hour budget, optionally shortened by a specification deadline, is
+cooperative and does not enforce OS timeout or process exit. Cancellation before
+acceptance is final without an attempt; after acceptance it is a request awaiting the
+source Session's report, and a winning request fences completion. Cancelling a reported
+uncertain attempt leaves it uncertain.
+
+Same-Session reattachment is distinct from replacement: only the original live accepting
+Session can report its current attempt. Successor linking does not transfer assignment
+attempts. `checkout_ref`, `links`, and specification `tool` are inert; acceptance neither
+launches a process nor reads, creates, or owns a checkout. No universal process-control
+or containment guarantee follows from the state machine.
+
+Seven CLI/MCP operations expose this foundation, bringing current-main MCP to 81 tools.
+There are no assignment native HTTP routes, frontend components, or browser controls;
+the SPA route inventory is unchanged. [MCP](MCP.md#local-work-assignments) defines the
+public fields. Remote runners and specialist execution remain planned; this local
+foundation does not complete [#36](https://github.com/xibodev/brains-ai/issues/36).
 
 ### Knowledge and reference evidence
 

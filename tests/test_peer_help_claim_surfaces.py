@@ -125,7 +125,7 @@ def test_mcp_claim_code_lifecycle_and_no_queue_fallback(tmp_path) -> None:
 
 def test_claim_code_mcp_advertisement_signature_and_registration(monkeypatch) -> None:
     name = "claim_help_request"
-    assert len(CORE_MCP_TOOLS) == 74
+    assert len(CORE_MCP_TOOLS) == 81
     assert name in CORE_MCP_TOOLS
     assert name in mcp_server.LEAN_TOOLS
     assert mcp_server.TOOL_REGISTRY[name] is tools.claim_help_request_tool

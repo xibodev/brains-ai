@@ -80,6 +80,15 @@ from brains.control.tool_registry import (
     verify_tool,
 )
 from brains.control.views import refresh_views
+from brains.control.work_assignments import (
+    accept_work_assignment,
+    cancel_work_assignment,
+    create_work_assignment,
+    get_work_assignment,
+    list_work_assignments,
+    retry_work_assignment,
+    settle_work_assignment,
+)
 from brains.main import app as fastapi_app
 from brains.router.classifier import classify
 from brains.storage.repositories import list_traces
@@ -3095,6 +3104,107 @@ def session_commands_cli(
     from brains.control import session_commands as commands_ctl
 
     _print_json(commands_ctl.list_for_session(session, limit=limit))
+
+
+@app.command("assignment-create")
+def assignment_create_cli(
+    workspace: str = typer.Option(..., "--workspace", metavar="PATH"),
+    title: str = typer.Option(..., "--title"),
+    spec: str = typer.Option(..., "--spec", help="Serialized version-1 JSON object."),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    idempotency_key: str = typer.Option(..., "--idempotency-key"),
+):
+    """Create local state-only work; no process launch or checkout management."""
+    try:
+        specification = json.loads(spec)
+    except ValueError as exc:
+        raise typer.BadParameter("must be valid JSON", param_hint="--spec") from exc
+    _print_json(
+        create_work_assignment(
+            workspace, title, specification, session_id=session, idempotency_key=idempotency_key
+        )
+    )
+
+
+@app.command("assignment-get")
+def assignment_get_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+):
+    """Read local state-only work and its complete attempt history."""
+    _print_json(get_work_assignment(code, session_id=session))
+
+
+@app.command("assignment-list")
+def assignment_list_cli(
+    workspace: str = typer.Option(..., "--workspace", metavar="PATH"),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    """List bounded local state-only work."""
+    _print_json(list_work_assignments(workspace, session_id=session, limit=limit))
+
+
+@app.command("assignment-accept")
+def assignment_accept_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned accepting Session ID."),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Accept local state-only work at the current revision; no process launch."""
+    _print_json(
+        accept_work_assignment(code, session_id=session, expected_revision=expected_revision)
+    )
+
+
+@app.command("assignment-settle")
+def assignment_settle_cli(
+    code: str = typer.Argument(...),
+    attempt: str = typer.Option(..., "--attempt"),
+    outcome: str = typer.Option(
+        ..., "--outcome", help="completed, failed, cancelled, or uncertain."
+    ),
+    evidence: str = typer.Option(..., "--evidence"),
+    result: str = typer.Option("", "--result"),
+    session: str = typer.Option(..., "--session", help="Live owned accepting Session ID."),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Report local state-only work with evidence; uncertain work remains unresolved."""
+    _print_json(
+        settle_work_assignment(
+            code,
+            attempt,
+            outcome,
+            evidence,
+            session_id=session,
+            expected_revision=expected_revision,
+            result=result,
+        )
+    )
+
+
+@app.command("assignment-cancel")
+def assignment_cancel_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Cancel local state-only work; accepted work records a request, not a process stop."""
+    _print_json(
+        cancel_work_assignment(code, session_id=session, expected_revision=expected_revision)
+    )
+
+
+@app.command("assignment-retry")
+def assignment_retry_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Ready local state-only work after conclusive failure or cancellation; no launch."""
+    _print_json(
+        retry_work_assignment(code, session_id=session, expected_revision=expected_revision)
+    )
 
 
 @app.command("event-append")

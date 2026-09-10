@@ -138,6 +138,15 @@ from brains.control.webhooks import (
     list_webhook_triggers,
     set_webhook_enabled,
 )
+from brains.control.work_assignments import (
+    accept_work_assignment,
+    cancel_work_assignment,
+    create_work_assignment,
+    get_work_assignment,
+    list_work_assignments,
+    retry_work_assignment,
+    settle_work_assignment,
+)
 from brains.router.classifier import classify
 from brains.router.model_router import select_model
 from brains.storage.repositories import retrieve_memory, store_memory
@@ -1105,6 +1114,84 @@ def handoff_task_tool(
         tags=tags,
         completion_summary=completion_summary,
     )
+
+
+def work_assignment_create_tool(
+    workspace_path: str,
+    title: str,
+    *,
+    spec: dict,
+    session_id: str,
+    idempotency_key: str,
+) -> dict:
+    """Create local state-only work with a bounded version-1 specification object.
+
+    Requires a live owned Session. The key deduplicates creation; specification
+    references are advisory. No process launch or checkout management.
+    """
+    return create_work_assignment(
+        workspace_path, title, spec, session_id=session_id, idempotency_key=idempotency_key
+    )
+
+
+def work_assignment_get_tool(code: str, *, session_id: str) -> dict:
+    """Read local state-only work and its attempt history as a live owned Session."""
+    return get_work_assignment(code, session_id=session_id)
+
+
+def work_assignment_list_tool(workspace_path: str, *, session_id: str, limit: int = 50) -> list:
+    """List local state-only work as a live owned Session; limit is 1 to 200."""
+    return list_work_assignments(workspace_path, session_id=session_id, limit=limit)
+
+
+def work_assignment_accept_tool(code: str, *, session_id: str, expected_revision: int) -> dict:
+    """Accept local state-only work as a live owned Session, without launching a process.
+
+    Stale revisions fail; read back before retrying.
+    """
+    return accept_work_assignment(code, session_id=session_id, expected_revision=expected_revision)
+
+
+def work_assignment_settle_tool(
+    code: str,
+    attempt_id: str,
+    outcome: str,
+    evidence: str,
+    *,
+    session_id: str,
+    expected_revision: int,
+    result: str = "",
+) -> dict:
+    """Report local state-only work as its live owned accepting Session, with evidence.
+
+    Outcome is completed, failed, cancelled, or uncertain. Stale revisions fail;
+    uncertain reports remain unresolved and cannot be retried or reconciled here.
+    """
+    return settle_work_assignment(
+        code,
+        attempt_id,
+        outcome,
+        evidence,
+        session_id=session_id,
+        expected_revision=expected_revision,
+        result=result,
+    )
+
+
+def work_assignment_cancel_tool(code: str, *, session_id: str, expected_revision: int) -> dict:
+    """Cancel local state-only work as a live owned Session at the current revision.
+
+    Accepted work records a cancellation request; no process is stopped.
+    """
+    return cancel_work_assignment(code, session_id=session_id, expected_revision=expected_revision)
+
+
+def work_assignment_retry_tool(code: str, *, session_id: str, expected_revision: int) -> dict:
+    """Ready local state-only work after conclusive failure or cancellation.
+
+    Requires a live owned Session and current revision. No process is launched.
+    """
+    return retry_work_assignment(code, session_id=session_id, expected_revision=expected_revision)
 
 
 def squad_create_tool(

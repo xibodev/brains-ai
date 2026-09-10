@@ -81,6 +81,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `wire`, `unwire` | Add, inspect, or remove the Brains-owned MCP entry and explicitly consented supported mailbox wakeup hook. |
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
 | Session/state/task/claim/handoff/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
+| `assignment-create`, `assignment-get`, `assignment-list`, `assignment-accept`, `assignment-settle`, `assignment-cancel`, `assignment-retry` | Local state-only work specifications and evidence-bearing attempts through an existing live owned Session; no launch or checkout management. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
 | `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
@@ -405,6 +406,49 @@ other human-owned work.
 Running-agent message delivery and Runtime process stop are withdrawn. Use harness-native
 interaction outside Brains and record only what can be truthfully observed.
 
+### Local assignment inspection and recovery
+
+This branch exposes local assignments through CLI and seven MCP tools, not through
+native HTTP routes or the frontend. The 81-tool current-main MCP count does not describe
+browser capabilities or change the website's pinned 1.5 release count of 74.
+
+Read the assignment directly; generic queue health is not assignment reconciliation:
+
+```text
+brains-ai assignment-get <assignment-code> --session <live-owned-session-id>
+brains-ai assignment-list --workspace <registered-path> --session <live-owned-session-id> --limit 50
+```
+
+A successful read returns stored `status`, current `revision`, `observed_status`, and
+attempt history. Check `deadline_exceeded` and each attempt's
+`source_session_unavailable`. An uncertainty observation does not mutate stored state,
+settle an attempt, or renew a lease. `usage: null` is unknown, not zero.
+
+The default cooperative budget is 3600 seconds; `max_runtime_seconds` permits 1–604800,
+and an earlier explicit specification deadline shortens the attempt deadline. No OS
+timeout is enforced. Session loss or budget expiry is not evidence of process exit.
+
+After a lost mutation response, read back before submitting the current
+`expected_revision`. Stale revisions fail even on replay. Resume the same accepting
+Session through its supported lifecycle if it remains eligible; a new Session or linked
+successor cannot settle or take over its attempt. A replacement creator Session under
+the same operator/Workspace can replay the original creation key, but cannot change its
+immutable specification or title under that key.
+
+Cancellation of accepted work records a request, not a confirmed stop. The accepting
+Session reports `cancelled`, `failed`, or `uncertain` with evidence; completion after the
+request is refused. Retry is explicit and allowed only after conclusive failure or
+cancellation, with no unresolved attempt. Active, cancellation-pending, completed, and
+uncertain work cannot be retried. Reported uncertainty has no reconciliation operation
+in this foundation; cancellation leaves it uncertain. Do not force a status change or
+infer that queue repair makes a retry safe. Read-time uncertainty alone still permits
+the original live Session to report its actual outcome.
+
+`checkout_ref`, `links`, and specification `tool` are inert advisory data: no checkout
+creation, filesystem ownership, reference fetching, or harness launch follows from them.
+See [MCP](MCP.md#local-work-assignments) for fields and [Guide](GUIDE.md#local-work-assignments)
+for creation and settlement examples.
+
 ## Health and readiness
 
 Liveness probe:
@@ -453,6 +497,14 @@ The migration ledger is ordered and checksummed. Edited history, unknown migrati
 gaps, interrupted/failed attempts, missing implementation, and schema/model drift fail
 closed. Restore a modified historical file and add a new migration; never alter the
 recorded migration to force an upgrade through.
+
+Migration `154_work_assignments` adds the standalone `work_assignments` and
+`work_assignment_attempts` tables, constraints, and indexes. Existing coordination data
+and prior migration history are preserved. SQLite DDL participates in the migration
+runner's rollback boundary, and the delta is rerunnable after a failed attempt. Its
+PostgreSQL companion is compatibility inventory, not an alternate supported backend.
+Back up before upgrading and use the normal migration/diagnosis probes; do not delete
+historical migrations or hand-edit assignment state to clear an unresolved attempt.
 
 Migration `150_durable_mailboxes` is additive. It creates the durable mailbox,
 attachment, thread, message, delivery, notification, per-operator

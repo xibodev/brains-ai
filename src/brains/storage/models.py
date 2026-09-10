@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,6 +64,97 @@ class SchemaVersion(Base):
     attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     runner_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class WorkAssignment(Base):
+    """Immutable local work request; independent of legacy Issues and Personas."""
+
+    __tablename__ = "work_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "creator_operator_id",
+            "idempotency_key",
+            name="uq_work_assignments_creation",
+        ),
+        CheckConstraint("revision >= 1", name="ck_work_assignments_revision"),
+        CheckConstraint("generation >= 0", name="ck_work_assignments_generation"),
+        CheckConstraint("spec_version = 1", name="ck_work_assignments_spec_version"),
+        CheckConstraint(
+            "status IN ('ready','accepted','cancel_requested','completed','failed',"
+            "'cancelled','uncertain')",
+            name="ck_work_assignments_status",
+        ),
+        Index("ix_work_assignments_workspace_created", "workspace_id", "created_at"),
+    )
+    code: Mapped[str] = mapped_column(String(39), primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"))
+    creator_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"))
+    creator_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(256))
+    spec_version: Mapped[int] = mapped_column(Integer, default=1)
+    specification_json: Mapped[str] = mapped_column(Text)
+    specification_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="ready")
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    generation: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested_by_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id")
+    )
+
+
+class WorkAssignmentAttempt(Base):
+    """Cooperative acceptance evidence, never an OS/process ownership claim.
+
+    Uncertain attempts remain unresolved and occupy the single-live-attempt slot.
+    Historical source Sessions and concluded attempts are never transferred.
+    """
+
+    __tablename__ = "work_assignment_attempts"
+    __table_args__ = (
+        UniqueConstraint("assignment_code", "generation", name="uq_work_assignment_generation"),
+        CheckConstraint("generation >= 1", name="ck_work_attempt_generation"),
+        CheckConstraint(
+            "max_runtime_seconds BETWEEN 1 AND 604800",
+            name="ck_work_attempt_runtime",
+        ),
+        CheckConstraint(
+            "status IN ('accepted','cancel_requested','completed','failed','cancelled','uncertain')",
+            name="ck_work_attempt_status",
+        ),
+        CheckConstraint(
+            "(status IN ('completed','failed','cancelled') AND settled_at IS NOT NULL) OR "
+            "(status IN ('accepted','cancel_requested','uncertain') AND settled_at IS NULL)",
+            name="ck_work_attempt_settlement",
+        ),
+        Index(
+            "uq_work_assignment_live_attempt",
+            "assignment_code",
+            unique=True,
+            sqlite_where=text("status IN ('accepted','cancel_requested','uncertain')"),
+            postgresql_where=text("status IN ('accepted','cancel_requested','uncertain')"),
+        ),
+    )
+    attempt_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    assignment_code: Mapped[str] = mapped_column(ForeignKey("work_assignments.code"))
+    generation: Mapped[int] = mapped_column(Integer)
+    source_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    tool: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24))
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    max_runtime_seconds: Mapped[int] = mapped_column(Integer)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    evidence: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[str | None] = mapped_column(Text)
+    usage_json: Mapped[str | None] = mapped_column(Text)
 
 
 class Trace(Base):

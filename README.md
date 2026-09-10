@@ -41,6 +41,9 @@ New here? Start with the [guide](docs/GUIDE.md).
 
 - **Coordination** — Workspaces, durable Sessions, tasks, exclusive claims, handoffs, and
   checkpoints that survive a tool restart
+- **Local work assignments** — create an immutable specification, accept it with an
+  existing Session, and record an outcome with evidence and revision-fenced attempt history;
+  no process launch or checkout management
 - **Communication** — durable mailboxes between agent Sessions, and peer help requests
   whose answers must carry evidence
 - **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived
@@ -50,6 +53,12 @@ New here? Start with the [guide](docs/GUIDE.md).
 - **Operations** — readiness, backup, restore, and rollback over SQLite
 
 Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
+
+Current-main documentation covers 81 MCP tools. Local work assignments are available
+in this branch through CLI/MCP only, with no native HTTP API or browser controls. This
+is the local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36), not a
+release claim or completion of remote-runner support. The website describes the pinned
+1.5 release and its 74-tool surface.
 
 Model routing, semantic retrieval, and chat bridges are not supported today. The
 [product brief](docs/product/PRODUCT_BRIEF.md) distinguishes planned direction from
@@ -66,7 +75,7 @@ backlogs or external copies. See [Contributing](CONTRIBUTING.md) before starting
 
 - [Website and release history](https://xibodev.github.io/brains-ai/) - published release overview
 - [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
-- [MCP surface](docs/MCP.md) — the 74 tools agents can call
+- [MCP surface](docs/MCP.md) — the 81 current-main tools agents can call
 - [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together
 - [Operations](docs/OPERATIONS.md) — running the service, state, and recovery

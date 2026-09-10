@@ -33,6 +33,7 @@ _CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("spawn_", "session"),
     ("workspace_", "workspace"),
     ("task_", "task"),
+    ("work_assignment_", "task"),
     ("handoff", "handoff"),
     ("message_", "messaging"),
     ("inbox_", "messaging"),
