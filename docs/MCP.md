@@ -28,8 +28,90 @@ open work, and recorded knowledge in a single round trip.
 |---|---|
 | `get_state` | Everything an agent needs to know on arrival |
 | `search_repo` | Bounded text lookup across the repository. Not semantic |
-| `retrieve_original` | Fetch a stored original by reference |
+| `retrieve_original` | Read bounded, authorized stored evidence or a current-file snapshot by reference |
 | `generate_views` | Refresh the optional Markdown projections |
+
+### Bounded reference retrieval
+
+`brains_retrieve_original(ref: str)` accepts `chunk:<id>`, `artifact:<id>`, and
+`knowledge:<code>`. Its signature is unchanged. A reference addresses a mutable row or
+current file, not versioned content or an immutable capture; it does not guarantee
+unbounded, lossless retrieval.
+
+For artifacts and chunks, the control checks `Chunk → Artifact → Source → Workspace`
+ancestry and current caller visibility before loading content or descriptive metadata,
+or accessing the filesystem. Missing and inaccessible references receive the same
+refusal; principal or policy lookup failure denies access. Knowledge reads allow
+`shared`/`global` entries or entries in a visible Workspace, with bootstrap-admin
+visibility handled by the existing policy.
+
+Current-file reads support only `repo_dir` and `docs_dir` Sources. The Source root must
+be within the registered Workspace root; a relative Source URI is Workspace-relative.
+The artifact path is Source-relative, or absolute only within both roots. Parent
+traversal, root escapes, symlinks and Windows reparse points are denied, including in
+directory components. `metadata_json.abs_path` grants no authority and is ignored.
+Only regular local files are read; remote Sources are not fetched. Missing ancestry is
+refused even for bootstrap admin. An existing Source with `workspace_id: null` permits
+bootstrap admin to read stored chunk text or an artifact summary, never an unscoped file;
+scoped callers are refused. This cooperative local boundary is not a guest security
+sandbox. See [Architecture](ARCHITECTURE.md#knowledge-and-reference-evidence) for race limits.
+
+Results retain `ref`, `kind`, `id`, `content`, and `metadata`, plus kind-specific fields:
+artifact `title`/`path`, and knowledge `title`/`body` (`body` equals `content`). The
+`evidence` object describes what was actually returned:
+
+| Field | Meaning |
+|---|---|
+| `origin` | `stored_chunk`, `stored_knowledge`, `current_file`, `summary`, or `missing` |
+| `freshness` | `current`, `stale`, `expired`, `superseded`, or `unknown`; lifecycle currency is not proof that a finding is true |
+| `snapshot` / `immutable_original` | Snapshot is true for stored rows and current files, false for summary/missing; immutable original is always false |
+| `original_verified` | True only for complete current-file bytes matching a valid full SHA-256 in `Artifact.hash` at read time |
+| `truncated` / `incomplete` | Content was capped / returned evidence is incomplete; a fallback is incomplete even if its summary fits |
+| `reason` | Explains the result, for example `hash_match`, `hash_mismatch`, `stored_row`, `content_limit`, or `file_missing` |
+| `content_limit_bytes` | 65536 (64 KiB), measured in UTF-8 bytes, without splitting a character |
+| `hash_algorithm`, `expected_hash`, `observed_hash`, `hash_scope` | `sha256`, the valid recorded digest or null, computed digest or null, and `full_file` or `not_computed` |
+
+`origin`, `freshness`, `snapshot`, `immutable_original`, `original_verified`, `truncated`,
+and `incomplete` are also mirrored in `metadata`. The cap applies separately to stored
+body/chunk text, recorded knowledge evidence, current-file content, and summary fallback.
+
+- **Artifact:** a matching full-file hash means `freshness: current`; a mismatch returns
+  the current bytes with `freshness: stale`. A missing/invalid hash leaves freshness
+  unknown. A capped file is truncated and incomplete, has no observed hash, and cannot
+  verify the full file. Hash agreement verifies bytes against a recorded digest, not the
+  integrity of the index or the existence of an immutable backup.
+- **Chunk:** stored text is mutable, never verified as an original. `Chunk.hash` records
+  a captured **file** digest, not a checksum of the chunk text. Freshness is unknown unless
+  valid recorded chunk and artifact digests differ, when it is stale. Evidence includes
+  `captured_file_hash`, `source_id`, and `workspace_id`; reading a chunk does not read its file.
+- **Unavailable file:** deleted, binary/non-UTF-8, unreadable, unsafe or unsupported files
+  return a bounded summary, or empty content with `origin: missing` if no summary exists.
+  `incomplete` is true and `original_verified` false. A missing file is stale; other such
+  fallbacks have unknown freshness. `reason` distinguishes the failure.
+- **Knowledge:** evidence includes `provenance`, `confidence`, `recorded_evidence`,
+  `recorded_evidence_truncated`, `created_at`, `updated_at`, `valid_until`, and
+  `successor_ref`. Metadata retains effective/stored status and expiry/supersession flags.
+  Retrieval freshness prioritizes supersession; resolved/rejected history maps to unknown.
+  `truncated` describes the body; `incomplete` also includes recorded-evidence truncation.
+  The successor reference is null unless that successor is visible to the caller.
+
+For example, selected fields from a small stored-knowledge response (other fields omitted):
+
+```json
+{
+  "ref": "knowledge:KNOW-0001",
+  "kind": "knowledge",
+  "content": "Check migration ordering.",
+  "evidence": {
+    "origin": "stored_knowledge",
+    "immutable_original": false,
+    "original_verified": false,
+    "truncated": false,
+    "incomplete": false,
+    "content_limit_bytes": 65536
+  }
+}
+```
 
 ## Sessions
 
@@ -148,7 +230,39 @@ states or automatic worker launch are implied. Evidence is mandatory, not proof 
 |---|---|
 | `knowledge_add` | Record a finding with type, scope, and confidence |
 | `knowledge_search` | Find it before re-deriving it |
-| `knowledge_resolve` | Mark it resolved or superseded |
+| `knowledge_resolve` | Transition to active, confirmed, resolved, rejected, or stale |
+
+`knowledge_search(query, type, status, workspace_path, tags, limit=50)` clamps `limit`
+to 1–100. No status filter retains visible history, ordered by importance, then newest
+creation time and ID. Explicit `status` filters use effective lifecycle **before** the
+limit: `superseded` wins when a successor is recorded or stored status is superseded;
+otherwise an active/confirmed entry past `valid_until` is `stale`. Other stored statuses
+are retained. Naive timestamps represent UTC; expiry means strictly earlier than now.
+Reading does not update knowledge status, timestamps, body or evidence, and correct
+filtering does not depend on running the expiry sweeper.
+
+Entry responses expose `status` (effective), `stored_status`, `freshness`, `expired`,
+and `superseded`. Search freshness can be `historical` for resolved/rejected rows; an
+expired stored active/confirmed row has `freshness: expired` even if also linked to a
+successor, while its effective status is superseded. Use the explicit lifecycle flags.
+`superseded_by_id` is null for an inaccessible successor; `superseded` remains true.
+
+The shared entry serializer used by add/search caps `body` and `evidence` independently
+at 64 KiB UTF-8. `content_bytes` and `evidence_bytes` describe the full stored fields;
+`content_limit_bytes` is 65536. `body_truncated` and `evidence_truncated` identify each
+cap, and `truncated` is their aggregate. A truncated entry includes a knowledge `ref`.
+With context compression enabled, search additionally limits the body to 200 characters,
+recomputes body/aggregate truncation, and always includes `ref` and `compressed: true`.
+Retrieval via that reference still has the byte cap and reads the current stored row.
+
+`knowledge_add(..., supersedes_code=...)` creates the successor and links the predecessor
+in one transaction. A second successor is refused and the attempted new entry rolled
+back; it never overwrites the chain. `knowledge_resolve` does not accept `superseded`
+as a target status and refuses active/confirmed reactivation of superseded entries.
+Lifecycle updates use conditional compare-and-swap checks so a competing status or link
+change is refused rather than silently overwritten. Referenced entries must be visible;
+hidden and missing references receive the same refusal. Retaining a historical row does
+not make its content immutable or versioned.
 
 ## Human decisions
 

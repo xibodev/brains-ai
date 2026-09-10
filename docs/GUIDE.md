@@ -105,6 +105,39 @@ brains-ai workspace-release
 The next Session — whether the same tool restarted or a different tool entirely — picks
 that up with `brains-ai handoff-pick` and `brains-ai state`.
 
+### Reading knowledge and evidence
+
+Knowledge search includes history by default, with effective `status`, `stored_status`,
+`freshness`, `expired`, and `superseded` fields. Use an explicit status when you need
+current findings, for example:
+
+```text
+brains_knowledge_search(query="migration contract", status="active", limit=10)
+```
+
+The limit is clamped to 1–100. Visibility and effective status are filtered before that
+limit: an expired active or confirmed entry is effectively stale, and a successor link
+makes an entry superseded. These reads do not change knowledge rows or require an expiry
+sweeper. Historical findings remain readable within scope; their content is not versioned.
+
+`brains_retrieve_original(ref)` accepts `knowledge:<code>`, `chunk:<id>`, or
+`artifact:<id>`. Despite its name, it returns bounded, authorized evidence, not a guaranteed
+lossless or immutable original. Stored knowledge and chunks are mutable rows. An artifact
+may return a current-file snapshot, or a stored summary when the file cannot be read.
+Only a complete file whose SHA-256 matches the recorded artifact hash has
+`original_verified: true`, at the time of that read; this is not a backup guarantee.
+
+Bodies, recorded evidence, file content and summary fallbacks are each capped at 64 KiB
+of UTF-8. Search compression can shorten the body further to 200 characters. Inspect the
+truncation flags and retrieval's `evidence.incomplete`; following a `ref` does not bypass
+the cap. Hidden successor IDs and references are redacted even when the predecessor is
+visible. See [MCP retrieval](MCP.md#bounded-reference-retrieval) for the response fields
+and registered-root filesystem boundary.
+
+To replace a finding, use `knowledge_add` with `supersedes_code`. An entry cannot acquire
+a second successor or be reactivated as active/confirmed after supersession. Concurrent
+lifecycle changes are refused rather than overwriting the winning status or successor.
+
 ## Two agents, without collisions
 
 The problem this solves: two agents edit the same files, or both do the same work, or one

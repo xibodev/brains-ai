@@ -225,6 +225,30 @@ byte, result, traversal, or read boundary prevented a complete answer; returned 
 are partial and an empty partial set is never represented as `no_matches`. Lookup is
 read-only and needs no preparation.
 
+## Knowledge and retrieval checks
+
+Use `brains_knowledge_search(status="active", limit=10)` to request effective active
+findings, or omit status to inspect flagged history. Expiry and supersession are applied
+before the bounded result limit without changing knowledge rows; an expiry sweeper is
+not required to exclude historical entries from an active search.
+
+For `brains_retrieve_original(ref)`, inspect `evidence.origin`, `freshness`, `reason`,
+`truncated`, and `incomplete` before relying on content. `original_verified: true` means
+only that the complete current file matched its recorded full SHA-256 at read time.
+Stored rows are mutable, and references are neither immutable backups nor an unbounded
+recovery path. Body and recorded evidence have separate 64 KiB UTF-8 caps.
+
+An unknown/inaccessible refusal calls for checking the current principal and stored
+Artifact/Source/Workspace ancestry. For an authorized artifact fallback, inspect the
+reason: `file_missing`, `binary_file`, `file_unreadable`, `unsafe_path`,
+`unsupported_source`, or `unscoped_source`, for example. A readable current file must
+be regular and within both its registered Workspace and `repo_dir`/`docs_dir` Source
+root, with no symlink/reparse components. Metadata absolute paths cannot override these
+roots. Bootstrap admin can read stored evidence from an existing unscoped Source but
+cannot use it to read a file. Summary/missing fallbacks are always incomplete.
+See [MCP](MCP.md#bounded-reference-retrieval) for field semantics and
+[Architecture](ARCHITECTURE.md#knowledge-and-reference-evidence) for the cooperative boundary.
+
 ## Service operation
 
 User-service renderers target Windows Task Scheduler, macOS launchd, and Linux systemd

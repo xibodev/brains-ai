@@ -383,6 +383,7 @@
       "tests/test_recovery_policy.py",
       "tests/test_release_site.py",
       "tests/test_release_version.py",
+      "tests/test_retrieve_evidence.py",
       "tests/test_schemas_roundtrip.py",
       "tests/test_service.py",
       "tests/test_session_leases.py",

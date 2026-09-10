@@ -205,6 +205,35 @@ backend state. Those rows remain only where required to open or migrate an exist
 store; they do not register or activate a product capability. New product work must not
 depend on them merely because they exist.
 
+### Knowledge and reference evidence
+
+`control/knowledge.py` derives effective lifecycle at read time without rewriting
+knowledge rows. Search applies visibility and effective-status predicates before its
+1–100 result limit, retaining flagged history by default. Supersession takes precedence
+over expiry for effective status. Successor IDs/references are exposed only when that
+successor is visible. Lifecycle writes use conditional updates: supersession may link a
+predecessor once, and resolution compares the read status/link snapshot before updating.
+A competing change cannot silently replace the chain or reactivate superseded knowledge.
+
+The existing `retrieve_original(ref)` interface in `control/retrieve.py` returns bounded
+evidence, not immutable, versioned content. Artifact/chunk ancestry is authorized through
+Source and Workspace before content or descriptive columns are loaded. Current-file
+reads accept only regular files under both the registered Workspace and a local
+`repo_dir`/`docs_dir` Source root; metadata absolute paths are ignored. Parent traversal,
+root escapes, symlinks and reparse points are refused. Bootstrap visibility of a Source
+with no Workspace allows stored evidence only, not filesystem access.
+
+POSIX reads use no-follow directory descriptors where available. Other platforms use
+component and descriptor identity checks but retain a concurrent path-replacement race.
+This is a cooperative local filesystem boundary, not guest isolation or a security sandbox.
+
+Stored bodies, recorded evidence, current-file text and fallback summaries are independently
+bounded to 64 KiB UTF-8, with explicit truncation/incompleteness. Only complete current-file
+bytes matching a valid full SHA-256 in `Artifact.hash` set `original_verified`; this verifies
+the read against the recorded digest, not index integrity or immutable retention. Chunk
+hashes describe captured files, not chunk text. Stored rows remain mutable. See
+[MCP](MCP.md#bounded-reference-retrieval) for the response contract.
+
 ### Schema evolution
 
 Startup and `brains-ai db migrate` use one ordered, checksummed migration corpus. The
