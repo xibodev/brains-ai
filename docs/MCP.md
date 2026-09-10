@@ -1,12 +1,13 @@
 # MCP surface
 
-Current main exposes 81 tools over the Model Context Protocol, all prefixed `brains_`. The
+Current main exposes 88 tools over the Model Context Protocol, all prefixed `brains_`. The
 registry is filtered against `CORE_MCP_TOOLS` in `src/brains/capabilities.py` at startup.
 Tools outside that allowlist are neither registered nor callable through MCP. Actionable
 Session welcome hints recommend supported tools only.
 
-This source contract includes seven local work-assignment tools available in this branch;
-it is not a release claim. The website's pinned 1.5 release retains its 74-tool count.
+This source contract includes seven local work-assignment tools and seven existing-peer
+coordination tools available in this branch; it is not a release claim. The website's
+pinned 1.5 release retains its 74-tool count.
 
 ## Connecting
 
@@ -21,6 +22,30 @@ Transports: `streamable-http` (default), `stdio`, and `sse` (legacy).
 Wiring writes only the managed entry. For JSON clients the file keeps its original
 formatting; for Codex the block is sentinel-delimited and the bearer token is referenced
 by environment variable rather than written into the file.
+
+### HTTP transport identity
+
+The Streamable HTTP `Mcp-Session-Id` and legacy SSE session identifier address an MCP
+transport session; neither is a credential or a durable Brains Session ID. With
+authentication enabled, Brains resolves the presented credential and supplies the SDK's
+`AuthenticatedUser` identity carrier. The SDK binds the transport to `client_id`
+(credential ID, falling back to actor ID) plus `subject` (actor ID). Reuse by a different
+authenticated operator is rejected by the SDK before tool dispatch, rather than running
+with the identity captured when the transport opened. Missing credentials are refused.
+
+The carrier's `AccessToken.token` is empty: it stores no additional copy of the secret.
+The credential is still present in the incoming authentication header; this does not
+remove secrets from the request. Existing credentials keep normal same-operator use,
+subject to the SDK identity pair. Credential rotation does not guarantee reuse of an
+existing transport: a changed credential ID changes that pair. This binding does not
+provide per-CLI isolation for Sessions sharing an operator.
+
+These checks apply to authenticated Streamable HTTP and legacy SSE MCP. They do not
+establish global token-liveness or revocation guarantees for all native HTTP routes or
+already-open streams. The existing `allow_unauthenticated_api` opt-out bypasses MCP auth
+middleware, including its Host check; it is not introduced by this fix. Load the updated
+package by restarting the serving process; installing it alone does not update a running
+process. See [Operations](OPERATIONS.md#authentication-and-authorization).
 
 ## Orientation
 
@@ -259,6 +284,178 @@ settled. It returns work to `ready`; only a later explicit acceptance creates an
 attempt. Active, cancellation-pending, completed, and uncertain work are blocked. There
 are no implicit retries, takeover, checkout ownership, or remote execution guarantees.
 See the [guide](GUIDE.md#local-work-assignments) for the CLI journey.
+
+## Existing-peer coordination
+
+These seven core/lean tools use the `brains_` prefix. CLI/MCP expose local protocol state
+only, with no native HTTP API, frontend, worker launch, or readiness guarantee. This is
+partial local scope for [#38](https://github.com/xibodev/brains-ai/issues/38), not delivery
+of worker panels or multi-day checkout management. Assignment state remains the separate
+local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36).
+
+| Core tool name | Required arguments | Purpose / optional arguments |
+|---|---|---|
+| `coordination_propose` | `workspace_path`, `title`, `spec`, `session_id`, `idempotency_key` | Create a proposal; optional `code` plus `expected_revision` replaces its open latest version as the original requester. |
+| `coordination_get` | `code`, `session_id` | Read latest state; optional `version` reads history. |
+| `coordination_list` | `workspace_path`, `session_id` | List member-visible latest versions, newest-created first; `limit=50`, range 1–200. |
+| `coordination_accept` | `code`, `session_id`, `version`, `expected_revision`, `spec_hash` | Acknowledge the exact stored specification. |
+| `coordination_advance` | `code`, `session_id`, `version`, `expected_revision` | Requester explicitly starts collection or closes a complete round. |
+| `coordination_submit` | `code`, `kind`, `payload`, `session_id`, `version`, `expected_revision`, `idempotency_key` | Append an `initial`, `discussion`, or `final` report. |
+| `coordination_cancel` | `code`, `reason`, `session_id`, `version`, `expected_revision` | Requester cancels protocol state, including after expiry. |
+
+Every call requires a live Session owned by the authenticated operator and current
+Workspace visibility. Existing-proposal access requires membership (requester,
+participant, or result owner); list filters out proposals the caller is not a member of. Proposed
+participants must already be live Sessions in that same Workspace under that operator.
+Create/list require its registered path or recorded alias. Anonymous, Runtime,
+foreign-operator, ownerless, and ended Sessions are refused; bootstrap admin
+does not bypass Session ownership. Unknown and inaccessible proposals share a refusal.
+This does not prevent a shared operator from acting as another Session they own or reading
+the local database. Session acknowledgement is not human approval or proof of an
+independent reviewer. Stored tools come from Sessions; model labels are unverified
+declarations, not model selection, routing, or verified diversity.
+
+### Proposal specification
+
+`spec` and `payload` are JSON objects in MCP, serialized JSON in CLI `--spec`/`--payload`.
+Required specification fields are `objective`, `context`, `evidence_expectations`, and
+`participants`. Context and evidence expectations may be empty; `objective` must be nonblank.
+
+| Field | Contract |
+|---|---|
+| `version` | Optional schema version, integer 1 only; distinct from the proposal's incrementing response `version`. |
+| `participants` | 2–8 unique existing Sessions; each input object has exactly `session_id` and `model`. Model is null or nonblank text up to 128 UTF-8 bytes. Do not supply `tool`. |
+| `discussion_rounds` | Optional integer 0–3, default 1; booleans are invalid. |
+| `result_owner_session_id` | Optional, defaults to requester; must be requester or a participant. |
+| `deadline` | Optional timezone-aware ISO datetime, future and at most 30 days away. Omission freezes creation time plus one hour; null is invalid. |
+| `links` | Optional list of at most 32 nonblank strings, each up to 2048 UTF-8 bytes. |
+
+Unknown fields and NUL text are refused. Title is required, nonblank, at most 256 UTF-8
+bytes; creation/contribution keys are nonblank, at most 128 bytes. Session IDs are at most
+32 ASCII letters, digits, underscores or hyphens; Workspace paths fit 1024 UTF-8 bytes.
+Proposal codes fit 39 bytes. Mutation `version` is an integer 1–2147483647 and
+`expected_revision` is 0–9223372036854775806; booleans are not integers for these checks.
+Coordination MCP registration uses strict integer validation, including optional `version`
+and list `limit`, so JSON `true` cannot be coerced to revision/version `1` before dispatch.
+This validation and the transport identity fix preserve public tool signatures, wire
+schemas, and the 88-tool count.
+Objective, context, and evidence expectations each fit 32768 bytes, and the **whole stored
+canonical specification**, including defaults, deadline and recorded tools, must fit that
+same 32 KiB cap. Canonicalization sorts participants by Session ID and JSON keys, uses
+compact UTF-8 JSON, and normalizes deadline to UTC. `spec_hash` is its SHA-256; accept the
+returned hash rather than hashing the input yourself. Context and links are inert: they
+are never fetched and do not generate assignments or integrate with assignment state.
+
+Creation returns a `PC-<uuid>` code at proposal version 1, revision 0, status `planned`,
+round 0. It automatically records the requester's acceptance of that version's stored
+hash. Required acknowledgements are the union of requester, participants and result owner;
+every other member must accept before status becomes `accepted`.
+
+### Phases, reports, and visibility
+
+| Stored phase | Next explicit operation |
+|---|---|
+| `planned` | Remaining members accept the exact hash/version/current revision. |
+| `accepted` | Requester advances to `collecting`; all members must still be live. |
+| `collecting` | Each participant submits one initial report. Only after all initials exist may requester advance, setting `initial_closed: true`. |
+| `discussing` | For 1–3 configured rounds, each participant submits once per round, then requester advances. Zero rounds proceeds directly to final-ready at round 0. |
+| `discussing`, `final_ready: true` | Only result owner submits `final`, setting `completed`. With discussion rounds, final-ready round is configured rounds plus one. |
+
+Initial/discussion payloads require string fields `findings`, `evidence`, `uncertainty`,
+and `dissent`; optional `clarifications` uses the same list bounds as `links`. Final
+requires exactly `summary` and `evidence` strings. Evidence must be nonblank; other
+required strings may be empty. Each string and the complete canonical payload fit 65536
+UTF-8 bytes; NUL and extra fields are refused. Reports are append-only, with one initial
+and one contribution per participant per discussion round, and one final per version.
+Evidence is attributed text, not independently verified proof.
+
+**Every protocol API response**, including mutations, replay, get and list, applies the
+same blinding filter. Until explicit initial closure, a member sees only their own
+initial report; requester and result owner have no exemption. Counts and remaining-Session
+IDs reveal progress, not other authors' payloads. All initials arriving alone does not
+unblind them. Cancellation or replacement before closure also leaves history blinded.
+After closure, members see all reports. All nonblank original initial/discussion dissent
+is mechanically retained in `unresolved_dissent` with `resolved: false`, even after final
+synthesis. There is no dissent-resolution operation; synthesis cannot erase disagreement.
+
+### Snapshot and retry contract
+
+All operations return the complete member-filtered snapshot; list returns an array of
+these snapshots. Fields include code/version/revision, Workspace and creator provenance,
+result owner, title, `specification`, `spec_hash`, status/round, timestamps, deadline,
+`initial_closed`, `final_ready`, `blinded`, `expired_flag`, `incomplete_flag`, and
+`cancellation_reason`. Acceptance helpers are `required_acceptance_session_ids`,
+`accepted_session_ids`, and `remaining_acceptance_session_ids`; collection helpers are
+`remaining_initial_session_ids` and `remaining_discussion_session_ids`.
+
+`counts` contains `participants`, `required_acceptances`, `acceptances`, `initial`,
+`discussion` (current round), `contributions` (all non-acceptance reports), and
+`visible_contributions` (after filtering). `contributions` carries contribution ID,
+author Session, kind, round, payload, and creation time. Acceptance rows are not report
+entries. `final` is the final payload or null; `unresolved_dissent` retains contribution
+ID, author, round, original dissent text and `resolved: false`.
+`incomplete_flag` is false only for `completed`; cancellation remains incomplete.
+`expired_flag` applies only to open phases, so cancellation clears the observed expiry
+flag without changing the deadline. `remaining_discussion_session_ids` is empty outside
+an active discussion round; `final_ready` becomes false after completion.
+
+Mutations require the exact latest proposal version and revision. Revisions are monotonic
+across **one code's versions**, not reset on replacement or shared across different codes.
+To change scope, requester re-proposes with `code`, current `expected_revision`, a new key,
+and a complete input spec. In one transaction, old version is cancelled at revision r+1
+and new version created at r+2. All other acknowledgements and reports must be submitted
+anew; only requester acceptance is automatic. Completed, cancelled, or expired proposals
+cannot be replaced. History remains readable with get's `version`; completed reports are
+not editable. The stored spec includes `tool` on participants: rebuild the input using
+only `session_id` and `model`, rather than resubmitting that output unchanged.
+
+Creation keys are unique per Workspace/operator. An identical creation retry returns the
+member-filtered latest version without extending its deadline; a changed request under
+that key fails. Contribution keys are per code/version/author. Stale fences fail even for
+known retries: get current state first. Identical acceptance, contribution or cancellation
+retries at the current fence are no-ops where permitted; deadline checks still apply to
+acceptance and submission, including final replay. Reads and no-ops neither renew leases
+nor emit events.
+
+Expiry of open state sets `expired_flag: true`, `incomplete_flag: true`, and
+`final_ready: false` on reads; stored status/revision do not change. Accept, advance,
+submit and replacement refuse expired work. Requester may still explicitly cancel it.
+Cancellation records `cancelled` with a required nonblank reason (up to 32768 UTF-8 bytes).
+It does not cancel work assignments, stop processes, or send/cancel mail. There is no
+automatic execution, round advance, deadline settlement, or generated assignment.
+
+### Minimal MCP sequence
+
+Use the [CLI walkthrough](GUIDE.md#existing-peer-deliberation) for the same lifecycle.
+In this call notation, `R`, `A`, `B`, and `W` are existing live Session IDs and their
+registered Workspace path; `s` is the latest returned snapshot. Replace the synthetic
+`ses_peer_a`/`ses_peer_b` strings in `spec` with A/B. `report` contains every required
+initial field; replace its synthetic content for each peer's own report.
+
+```text
+spec = {"objective":"Review fixture","context":"Synthetic fixture snapshot","evidence_expectations":"Cite fixture lines","participants":[{"session_id":"ses_peer_a","model":null},{"session_id":"ses_peer_b","model":null}],"discussion_rounds":0}
+report = {"findings":"Fixture reviewed","evidence":"fixture.txt:1","uncertainty":"Runtime not checked","dissent":""}
+s = brains_coordination_propose(workspace_path=W, title="Fixture review", spec=spec, session_id=R, idempotency_key="fixture-1")
+s = brains_coordination_get(code=s.code, session_id=A)
+s = brains_coordination_accept(code=s.code, session_id=A, version=s.version, expected_revision=s.revision, spec_hash=s.spec_hash)
+```
+
+Repeat get/accept as B. Requester then starts collection; each peer submits their report
+with a fresh read as that peer before writing:
+
+```text
+s = brains_coordination_advance(code=s.code, session_id=R, version=s.version, expected_revision=s.revision)
+s = brains_coordination_get(code=s.code, session_id=A)
+s = brains_coordination_submit(code=s.code, kind="initial", payload=report, session_id=A, version=s.version, expected_revision=s.revision, idempotency_key="initial")
+```
+
+Repeat get/submit as B. Requester closes initial collection, then, as default result owner,
+submits final synthesis. Read back first if another call may have changed the revision.
+
+```text
+s = brains_coordination_advance(code=s.code, session_id=R, version=s.version, expected_revision=s.revision)
+s = brains_coordination_submit(code=s.code, kind="final", payload={"summary":"Review complete; retain peer dissent","evidence":"fixture.txt:1"}, session_id=R, version=s.version, expected_revision=s.revision, idempotency_key="final")
+```
 
 ## Communication
 

@@ -23,6 +23,15 @@ from brains.control.claims import (
     list_workspace_claims,
     release_workspace,
 )
+from brains.control.coordination import (
+    accept_coordination,
+    advance_coordination,
+    cancel_coordination,
+    get_coordination,
+    list_coordinations,
+    propose_coordination,
+    submit_coordination,
+)
 from brains.control.decisions import (
     file_decision_request,
     list_open_decisions,
@@ -3104,6 +3113,140 @@ def session_commands_cli(
     from brains.control import session_commands as commands_ctl
 
     _print_json(commands_ctl.list_for_session(session, limit=limit))
+
+
+@app.command("coordination-propose")
+def coordination_propose_cli(
+    workspace: str = typer.Option(..., "--workspace", metavar="PATH"),
+    title: str = typer.Option(..., "--title"),
+    spec: str = typer.Option(..., "--spec", help="Serialized version-1 JSON object."),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    idempotency_key: str = typer.Option(..., "--idempotency-key"),
+    code: str | None = typer.Option(None, "--code", help="Existing code to replace."),
+    expected_revision: int | None = typer.Option(None, "--expected-revision"),
+):
+    """Propose local existing-peer coordination; model labels are declarations, not calls.
+
+    No worker or process launch. Replacement requires the current revision.
+    """
+    try:
+        specification = json.loads(spec)
+    except ValueError as exc:
+        raise typer.BadParameter("must be valid JSON", param_hint="--spec") from exc
+    _print_json(
+        propose_coordination(
+            workspace,
+            title,
+            specification,
+            session_id=session,
+            idempotency_key=idempotency_key,
+            code=code,
+            expected_revision=expected_revision,
+        )
+    )
+
+
+@app.command("coordination-get")
+def coordination_get_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    version: int | None = typer.Option(None, "--version"),
+):
+    """Read complete member-visible coordination state, optionally a historical version."""
+    _print_json(get_coordination(code, session_id=session, version=version))
+
+
+@app.command("coordination-list")
+def coordination_list_cli(
+    workspace: str = typer.Option(..., "--workspace", metavar="PATH"),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+):
+    """List bounded latest coordination snapshots with membership and blinding filters."""
+    _print_json(list_coordinations(workspace, session_id=session, limit=limit))
+
+
+@app.command("coordination-accept")
+def coordination_accept_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    version: int = typer.Option(..., "--version"),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+    spec_hash: str = typer.Option(..., "--spec-hash"),
+):
+    """Acknowledge the exact coordination specification hash, version and revision."""
+    _print_json(
+        accept_coordination(
+            code,
+            session_id=session,
+            version=version,
+            expected_revision=expected_revision,
+            spec_hash=spec_hash,
+        )
+    )
+
+
+@app.command("coordination-advance")
+def coordination_advance_cli(
+    code: str = typer.Argument(...),
+    session: str = typer.Option(..., "--session", help="Live owned requester Session ID."),
+    version: int = typer.Option(..., "--version"),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Advance coordination explicitly; closing initial collection unblinds peer reports."""
+    _print_json(
+        advance_coordination(
+            code, session_id=session, version=version, expected_revision=expected_revision
+        )
+    )
+
+
+@app.command("coordination-submit")
+def coordination_submit_cli(
+    code: str = typer.Argument(...),
+    kind: str = typer.Option(..., "--kind", help="initial, discussion, or final."),
+    payload: str = typer.Option(..., "--payload", help="Serialized structured JSON object."),
+    idempotency_key: str = typer.Option(..., "--idempotency-key"),
+    session: str = typer.Option(..., "--session", help="Live owned Session ID."),
+    version: int = typer.Option(..., "--version"),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Append an inert report at the exact version/revision; final synthesis preserves dissent."""
+    try:
+        contribution = json.loads(payload)
+    except ValueError as exc:
+        raise typer.BadParameter("must be valid JSON", param_hint="--payload") from exc
+    _print_json(
+        submit_coordination(
+            code,
+            kind,
+            contribution,
+            session_id=session,
+            version=version,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+
+@app.command("coordination-cancel")
+def coordination_cancel_cli(
+    code: str = typer.Argument(...),
+    reason: str = typer.Option(..., "--reason"),
+    session: str = typer.Option(..., "--session", help="Live owned requester Session ID."),
+    version: int = typer.Option(..., "--version"),
+    expected_revision: int = typer.Option(..., "--expected-revision"),
+):
+    """Cancel coordination with a reason and exact version/revision fence."""
+    _print_json(
+        cancel_coordination(
+            code,
+            reason,
+            session_id=session,
+            version=version,
+            expected_revision=expected_revision,
+        )
+    )
 
 
 @app.command("assignment-create")

@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -64,6 +65,87 @@ class SchemaVersion(Base):
     attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     runner_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class CoordinationProposal(Base):
+    """An immutable peer specification version with revision-fenced protocol state."""
+
+    __tablename__ = "coordination_proposals"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "creator_operator_id",
+            "idempotency_key",
+            name="uq_coordination_creation",
+        ),
+        CheckConstraint("version >= 1 AND revision >= 0", name="ck_coordination_version"),
+        CheckConstraint("round BETWEEN 0 AND 4", name="ck_coordination_round"),
+        CheckConstraint(
+            "status IN ('planned','accepted','collecting','discussing','completed','cancelled')",
+            name="ck_coordination_status",
+        ),
+        Index("ix_coordination_workspace_created", "workspace_id", "created_at"),
+    )
+    code: Mapped[str] = mapped_column(String(39), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"))
+    creator_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"))
+    creator_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    result_owner_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(256))
+    specification_json: Mapped[str] = mapped_column(Text)
+    specification_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24))
+    revision: Mapped[int] = mapped_column(Integer)
+    round: Mapped[int] = mapped_column(Integer)
+    initial_closed: Mapped[bool] = mapped_column(Boolean)
+    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    cancellation_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class CoordinationContribution(Base):
+    """Append-only acknowledgements, peer findings, discussion and final evidence."""
+
+    __tablename__ = "coordination_contributions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["proposal_code", "version"],
+            ["coordination_proposals.code", "coordination_proposals.version"],
+        ),
+        UniqueConstraint("proposal_code", "version", "slot", name="uq_coordination_slot"),
+        UniqueConstraint(
+            "proposal_code",
+            "version",
+            "author_session_id",
+            "idempotency_key",
+            name="uq_coordination_contribution_key",
+        ),
+        CheckConstraint(
+            "(kind IN ('accept','initial','final') AND round = 0) OR "
+            "(kind = 'discussion' AND round BETWEEN 1 AND 3)",
+            name="ck_coordination_contribution_kind",
+        ),
+        CheckConstraint(
+            "(kind = 'final' AND slot = 'final') OR "
+            "(kind != 'final' AND slot = kind || ':' || CAST(round AS TEXT) || ':' || author_session_id)",
+            name="ck_coordination_contribution_slot",
+        ),
+    )
+    contribution_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    proposal_code: Mapped[str] = mapped_column(String(39))
+    version: Mapped[int] = mapped_column(Integer)
+    author_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    kind: Mapped[str] = mapped_column(String(16))
+    round: Mapped[int] = mapped_column(Integer)
+    slot: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
+    payload_json: Mapped[str] = mapped_column(Text)
+    request_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class WorkAssignment(Base):

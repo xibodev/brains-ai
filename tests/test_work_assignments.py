@@ -52,14 +52,23 @@ def migrated_template(tmp_path_factory):
     path = tmp_path_factory.mktemp("work-template") / "template.sqlite"
     engine = create_engine(f"sqlite:///{path.as_posix()}")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
-    corpus = migration_registry.build_corpus()
+    # Freeze this fixture at 154: later deltas have their own upgrade tests.
+    corpus = tuple(
+        spec for spec in migration_registry.build_corpus() if spec.migration_id <= MIGRATION
+    )
+    through_154 = MetaData()
     previous = MetaData()
     for table in Base.metadata.sorted_tables:
+        if table.name in {"coordination_proposals", "coordination_contributions"}:
+            continue
+        table.to_metadata(through_154)
         if table.name not in OWN_TABLES:
             table.to_metadata(previous)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(migrations, "engine", engine)
         patch.setattr(migrations, "SessionLocal", factory)
+        patch.setattr(migrations, "corpus", lambda: corpus)
+        patch.setattr(migrations, "Base", SimpleNamespace(metadata=through_154))
         with patch.context() as old:
             old.setattr(
                 migrations,

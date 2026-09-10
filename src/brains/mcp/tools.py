@@ -20,6 +20,15 @@ from brains.control.claims import (
     list_workspace_claims,
     release_workspace,
 )
+from brains.control.coordination import (
+    accept_coordination,
+    advance_coordination,
+    cancel_coordination,
+    get_coordination,
+    list_coordinations,
+    propose_coordination,
+    submit_coordination,
+)
 from brains.control.decisions import (
     escalate_decision,
     file_decision_request,
@@ -1113,6 +1122,103 @@ def handoff_task_tool(
         extra_depends_on=extra_depends_on,
         tags=tags,
         completion_summary=completion_summary,
+    )
+
+
+def coordination_propose_tool(
+    workspace_path: str,
+    title: str,
+    spec: dict,
+    *,
+    session_id: str,
+    idempotency_key: str,
+    code: str | None = None,
+    expected_revision: int | None = None,
+) -> dict:
+    """Propose local existing-peer coordination, or replace it with a revision fence.
+
+    Model labels are declarations, not model calls. No worker or process launch.
+    Returns the complete membership-filtered current state; initials remain blinded.
+    """
+    return propose_coordination(
+        workspace_path,
+        title,
+        spec,
+        session_id=session_id,
+        idempotency_key=idempotency_key,
+        code=code,
+        expected_revision=expected_revision,
+    )
+
+
+def coordination_get_tool(code: str, *, session_id: str, version: int | None = None) -> dict:
+    """Read complete member-visible coordination state, optionally a historical version."""
+    return get_coordination(code, session_id=session_id, version=version)
+
+
+def coordination_list_tool(workspace_path: str, *, session_id: str, limit: int = 50) -> list:
+    """List bounded latest coordination snapshots with the core's membership and blinding filters."""
+    return list_coordinations(workspace_path, session_id=session_id, limit=limit)
+
+
+def coordination_accept_tool(
+    code: str, *, session_id: str, version: int, expected_revision: int, spec_hash: str
+) -> dict:
+    """Acknowledge the exact coordination specification hash, version and revision."""
+    return accept_coordination(
+        code,
+        session_id=session_id,
+        version=version,
+        expected_revision=expected_revision,
+        spec_hash=spec_hash,
+    )
+
+
+def coordination_advance_tool(
+    code: str, *, session_id: str, version: int, expected_revision: int
+) -> dict:
+    """Advance coordination as its requester; only explicit initial closure unblinds peers."""
+    return advance_coordination(
+        code, session_id=session_id, version=version, expected_revision=expected_revision
+    )
+
+
+def coordination_submit_tool(
+    code: str,
+    kind: str,
+    payload: dict,
+    *,
+    session_id: str,
+    version: int,
+    expected_revision: int,
+    idempotency_key: str,
+) -> dict:
+    """Append an initial, discussion, or final contribution at the exact version and revision.
+
+    Payloads are inert structured reports. Final synthesis preserves original dissent.
+    Returns complete member-visible state, including blinding and incomplete flags.
+    """
+    return submit_coordination(
+        code,
+        kind,
+        payload,
+        session_id=session_id,
+        version=version,
+        expected_revision=expected_revision,
+        idempotency_key=idempotency_key,
+    )
+
+
+def coordination_cancel_tool(
+    code: str, reason: str, *, session_id: str, version: int, expected_revision: int
+) -> dict:
+    """Cancel coordination as its requester with a reason and exact version/revision fence."""
+    return cancel_coordination(
+        code,
+        reason,
+        session_id=session_id,
+        version=version,
+        expected_revision=expected_revision,
     )
 
 

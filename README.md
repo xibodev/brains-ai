@@ -54,7 +54,7 @@ New here? Start with the [guide](docs/GUIDE.md).
 
 Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
 
-Current-main documentation covers 81 MCP tools. Local work assignments are available
+Current-main documentation covers 88 MCP tools. Local work assignments are available
 in this branch through CLI/MCP only, with no native HTTP API or browser controls. This
 is the local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36), not a
 release claim or completion of remote-runner support. The website describes the pinned
@@ -75,7 +75,7 @@ backlogs or external copies. See [Contributing](CONTRIBUTING.md) before starting
 
 - [Website and release history](https://xibodev.github.io/brains-ai/) - published release overview
 - [Using Brains](docs/GUIDE.md) — the model, and two coordination walkthroughs
-- [MCP surface](docs/MCP.md) — the 81 current-main tools agents can call
+- [MCP surface](docs/MCP.md) — the 88 current-main tools agents can call
 - [Product brief](docs/product/PRODUCT_BRIEF.md) — what is in scope, and what is not
 - [Architecture](docs/ARCHITECTURE.md) — how the pieces fit together
 - [Operations](docs/OPERATIONS.md) — running the service, state, and recovery

@@ -27,6 +27,8 @@ from __future__ import annotations
 import os
 
 from fastapi import HTTPException
+from mcp.server.auth.middleware.auth_context import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -195,6 +197,19 @@ class MCPAuthMiddleware:
             )(scope, receive, send)
             return
 
+        # Stateful SDK tasks inherit the initialize/GET ContextVars. Publish
+        # the verified identity in the SDK's own auth carrier as well, so its
+        # HTTP and legacy SSE session-owner checks reject a credential swap
+        # before dispatch. No raw secret needs to survive in that carrier.
+        scope = dict(scope)
+        scope["user"] = AuthenticatedUser(
+            AccessToken(
+                token="",
+                client_id=principal.credential_id or principal.actor_id,
+                subject=principal.actor_id,
+                scopes=[],
+            )
+        )
         principal_handle = current_principal.set(principal)
         operator_handle = current_operator.set(principal.operator_slug)
         try:

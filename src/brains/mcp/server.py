@@ -1,4 +1,5 @@
 import argparse
+import inspect
 import logging
 import os
 import sys
@@ -6,10 +7,12 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from functools import wraps
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from pydantic import StrictInt
 
 from brains.capabilities import CORE_MCP_TOOLS
 from brains.config import settings
@@ -117,6 +120,13 @@ _IMPLEMENTED_TOOL_REGISTRY: dict[str, Callable[..., Any]] = {
     "release_task": tools.release_task_tool,
     "handoff_task": tools.handoff_task_tool,
     "list_tasks": tools.list_tasks_tool,
+    "coordination_propose": tools.coordination_propose_tool,
+    "coordination_get": tools.coordination_get_tool,
+    "coordination_list": tools.coordination_list_tool,
+    "coordination_accept": tools.coordination_accept_tool,
+    "coordination_advance": tools.coordination_advance_tool,
+    "coordination_submit": tools.coordination_submit_tool,
+    "coordination_cancel": tools.coordination_cancel_tool,
     "work_assignment_create": tools.work_assignment_create_tool,
     "work_assignment_get": tools.work_assignment_get_tool,
     "work_assignment_list": tools.work_assignment_list_tool,
@@ -270,6 +280,13 @@ LEAN_TOOLS = frozenset(
         "route_decision",
         "escalate_decision",
         "claim_workspace",
+        "coordination_propose",
+        "coordination_get",
+        "coordination_list",
+        "coordination_accept",
+        "coordination_advance",
+        "coordination_submit",
+        "coordination_cancel",
         "work_assignment_create",
         "work_assignment_get",
         "work_assignment_list",
@@ -296,10 +313,32 @@ def _resolve_active_tools() -> list[str]:
 
 ACTIVE_TOOLS = _resolve_active_tools()
 
+
+def _coordination_sdk_wrapper(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Preserve core integer fences before FastMCP's coercive validation."""
+
+    @wraps(fn)
+    def wrapped(**kwargs):
+        return fn(**kwargs)
+
+    signature = inspect.signature(fn, eval_str=True)
+    strict = {int: StrictInt, int | None: StrictInt | None}
+    wrapped.__signature__ = signature.replace(  # type: ignore[attr-defined]
+        parameters=[
+            param.replace(annotation=strict.get(param.annotation, param.annotation))
+            for param in signature.parameters.values()
+        ]
+    )
+    return wrapped
+
+
 for name in ACTIVE_TOOLS:
     # Register each active tool with FastMCP dynamically under the brains_ namespace.
     # Note: FastMCP.tool takes a name argument.
-    mcp.tool(name=f"{TOOL_PREFIX}{name}")(TOOL_REGISTRY[name])
+    handler = TOOL_REGISTRY[name]
+    if name.startswith("coordination_"):
+        handler = _coordination_sdk_wrapper(handler)
+    mcp.tool(name=f"{TOOL_PREFIX}{name}")(handler)
 
 
 def list_tools() -> list[str]:

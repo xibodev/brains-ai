@@ -96,6 +96,7 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
 | Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
 | Advertised (this branch) | Local work assignments | Immutable specifications, revision-fenced acceptance, evidence-bearing attempts; CLI/MCP only | `src/brains/control/work_assignments.py`, `src/brains/storage/models.py` |
+| Advertised (this branch) | Existing-peer deliberation | Versioned proposals, exact-hash acknowledgements, blinded initials, bounded discussion, dissent-preserving synthesis; CLI/MCP only | `src/brains/control/coordination.py`, `src/brains/storage/models.py` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
 | Advertised | Realtime | Closed scoped subscriptions, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
@@ -121,6 +122,7 @@ Advertised durable families include:
 - coordination Sessions and events;
 - tasks, claims, handoffs, durable mailbox rows, peer help, checkpoints, snapshots, and knowledge;
 - local work assignments and their durable attempt history (available in this branch);
+- existing-peer proposal versions and append-only protocol contributions (available in this branch);
 - approvals, routing, governed actions, audit rows, and the signed audit-chain head;
 - event context, realtime replay rows, secure local settings, and migration state.
 
@@ -253,11 +255,85 @@ attempts. `checkout_ref`, `links`, and specification `tool` are inert; acceptanc
 launches a process nor reads, creates, or owns a checkout. No universal process-control
 or containment guarantee follows from the state machine.
 
-Seven CLI/MCP operations expose this foundation, bringing current-main MCP to 81 tools.
+Seven CLI/MCP operations expose this foundation within the 88-tool current-main MCP surface.
 There are no assignment native HTTP routes, frontend components, or browser controls;
 the SPA route inventory is unchanged. [MCP](MCP.md#local-work-assignments) defines the
 public fields. Remote runners and specialist execution remain planned; this local
 foundation does not complete [#36](https://github.com/xibodev/brains-ai/issues/36).
+
+### Existing-peer proposal state
+
+`CoordinationProposal` and `CoordinationContribution` map to `coordination_proposals`
+and `coordination_contributions`, added by `155_peer_coordination`. The additive SQLite
+delta creates these two standalone tables and their constraints/index without rewriting
+existing data or migration history. It uses the runner's transactional DDL boundary and
+is rerunnable after failure. The PostgreSQL companion is compatibility inventory, not
+backend support. Proposals reference Workspaces, operators and existing coordination
+Sessions; contributions reference a proposal's composite code/version key and author
+Session. No worker, execution assignment, or checkout is created.
+
+Each proposal version stores canonical JSON, SHA-256 specification/request hashes,
+requester and result-owner provenance, a Workspace/operator-scoped creation key, deadline,
+phase, round and revision. Participants are sorted by Session ID; stored tool identity
+comes from the Session, while model labels remain unverified declarations. Schema version
+1 is distinct from the incrementing proposal version. Specification bounds are 32 KiB,
+2–8 participants and 0–3 discussion rounds; payloads fit 64 KiB. Context and links are
+inert and never fetched or translated into assignments.
+
+`control/coordination.py` authorizes a live operator-owned member Session and current
+Workspace visibility. Mutations take the Session lifecycle writer lock and use conditional
+revision updates. Version/revision fences, contribution insertion, Session lease renewal
+and a Workspace-scoped `coordination_*` event commit or roll back together. Event metadata
+contains code/version/revision/round/Workspace, not report bodies; these are protocol
+events, not evidence of human approval or governed execution. Reads use a consistent
+snapshot without renewing leases, changing phases, or settling work.
+
+New proposals start at version 1, revision 0, `planned`, with requester acceptance of
+the stored hash recorded automatically. All required members (requester, participants,
+result owner) must acknowledge that version/hash before `accepted`. Only requester
+advances to `collecting`, after checking all members remain live. All participants must
+submit one initial before requester can explicitly close collection. Closure sets
+`initial_closed` and enters `discussing`: round 0 for zero discussion rounds, otherwise
+round 1. Each configured round needs one report per participant before requester advances.
+Only result owner may submit final when `final_ready`, producing `completed`.
+
+SQL uniqueness bounds acceptance/initial/discussion slots per author and round, permits
+one final per version, and deduplicates contribution keys per code/version/author. Reports
+are append-only. All nonblank original initial/discussion dissent remains mechanically
+projected as unresolved, including after synthesis; there is no resolution/erasure API.
+Every public protocol response uses the same `_snapshot` filter: until explicit initial
+closure, only the caller's own initial report is visible, even for requester/result owner,
+while counts and missing-member IDs expose progress. Get, list, mutations and retries
+share this behavior. Cancellation/replacement does not unblind a version never closed.
+This is cooperative API blinding, not a security boundary against a shared operator who
+can act as another owned Session or inspect the database. It cannot prove independent
+reviewer identity or model diversity. A Session acknowledgement is not human approval.
+
+Revisions increase across one proposal code's versions. Replacement by original requester
+cancels an open, unexpired latest version at r+1 and stores its replacement at r+2 in one
+transaction. New acknowledgements and reports are required; only requester acceptance is
+automatic. Completed/cancelled/expired work is not replaceable, and old versions remain
+historical. Mutations refuse stale versions/revisions even for known retries; current-fence
+identical retries are no-ops where allowed, with no event or lease renewal. Creation replay
+returns the member-filtered latest version without extending its deadline. No successor
+Session inherits membership by linking alone.
+
+Deadlines are cooperative: omitted means creation plus one hour; explicit means future
+and within 30 days. Reads flag open expired work as incomplete with final readiness false,
+without changing stored status/revision. There is no automatic execution, phase advance,
+or expiry settlement. Requester may cancel after expiry, but acceptance, advance,
+submission and replacement are refused. Cancellation changes protocol state only: it
+neither cancels a work assignment nor stops a process nor sends/cancels mail.
+
+Seven core/lean MCP tools and matching CLI commands expose this local part of
+[#38](https://github.com/xibodev/brains-ai/issues/38), bringing current-main MCP to 88.
+There is no native HTTP API, frontend component, browser control, or proposal-specific
+readiness promise. Worker panels, multi-day execution and checkout management remain
+outside this implementation. The local assignment foundation of
+[#36](https://github.com/xibodev/brains-ai/issues/36) remains separate. See
+[MCP](MCP.md#existing-peer-coordination) for exact schemas, returned helper fields and
+retry behavior, and [Operations](OPERATIONS.md#existing-peer-proposal-inspection-and-recovery)
+for inspection and recovery.
 
 ### Knowledge and reference evidence
 

@@ -34,6 +34,7 @@ _CATEGORY_PREFIXES: tuple[tuple[str, str], ...] = (
     ("workspace_", "workspace"),
     ("task_", "task"),
     ("work_assignment_", "task"),
+    ("coordination_", "coordination"),
     ("handoff", "handoff"),
     ("message_", "messaging"),
     ("inbox_", "messaging"),

@@ -82,6 +82,7 @@ This is a capability summary, not an exhaustive `--help` copy.
 | `service install|start|stop|restart|status|logs|uninstall` | Manage the user-level supervised stack. |
 | Session/state/task/claim/handoff/help/checkpoint commands | Coordinate durable Workspace work. Mailbox-aware start/heartbeat/successor calls take a native Session ID plus an adapter binding-file path. |
 | `assignment-create`, `assignment-get`, `assignment-list`, `assignment-accept`, `assignment-settle`, `assignment-cancel`, `assignment-retry` | Local state-only work specifications and evidence-bearing attempts through an existing live owned Session; no launch or checkout management. |
+| `coordination-propose`, `coordination-get`, `coordination-list`, `coordination-accept`, `coordination-advance`, `coordination-submit`, `coordination-cancel` | Existing-peer proposal versions, acknowledgements, blinded initial collection, bounded discussion and final synthesis; local CLI/MCP state only. |
 | `mailbox register|phonebook|lookup` | Register one durable address through an adapter-owned binding file or inspect visible active addresses. |
 | `mailbox send|broadcast|reply|forward|inbox|sent|thread` | Commit or inspect address-based durable mail. Agent operations require the attached Session plus binding file; human inbox reads require a local/browser human channel. |
 | `mailbox notification-take|notification-settle` | Adapter-only fixed-nudge claim and observed-result settlement. These commands never return mail content or replace inbox pull. |
@@ -161,9 +162,35 @@ and available Org/Workspace scope.
 | `/health` | Open liveness only; never readiness. |
 | Native `/v1` | `require_api_key` plus route-specific Org/Workspace capability. |
 | `/app` | Signed browser cookie bound to the credential that minted it, or accepted header/key flow. |
-| WS/SSE | Principal plus server-derived subscription authorization, revalidated during the connection. |
-| MCP Streamable HTTP `/mcp` | Credential-store lookup and loopback Host policy by default; SSE is explicit legacy compatibility only. |
+| Gateway WS/SSE | Principal plus server-derived subscription authorization, revalidated during the connection. |
+| MCP Streamable HTTP `/mcp` and legacy SSE | Credential-store lookup, loopback Host policy, and SDK transport-owner binding by default; SSE is explicit legacy compatibility only. |
 | MCP stdio | Local OS process boundary; inherits local state authority. |
+
+The existing `allow_unauthenticated_api` setting is an explicit authentication opt-out,
+not a new mode introduced by the transport fix. It bypasses MCP auth middleware,
+including the Host check. The authenticated boundaries described here assume it is off.
+
+An MCP `Mcp-Session-Id` or legacy SSE session identifier is a transport address, not a
+credential or durable Brains Session ID. Brains bridges the authenticated principal into
+the SDK's `AuthenticatedUser` carrier, whose `client_id` is the credential ID (actor ID
+fallback) and whose `subject` is the actor ID. The SDK uses that pair to bind the transport
+owner and reject foreign-operator reuse before dispatch. A missing credential is refused;
+the transport identifier cannot supply the opening operator's authority to another caller.
+
+The carrier uses an empty `AccessToken.token`, avoiding an additional stored secret copy.
+The incoming authentication header still contains the credential. Existing credentials
+retain normal same-operator behavior subject to the SDK identity pair; rotation that
+changes the credential ID changes the pair. Continued transport reuse after credential
+rotation is not guaranteed. Nor does this provide per-CLI isolation under one operator.
+These MCP checks do not establish uniform token-liveness or revocation behavior across
+native HTTP routes and already-open legacy SSE streams.
+
+Restart the MCP serving process with the updated package to load the fix (restart the
+supervised stack when using `serve-all`). Installing the package alone does not update
+an already-running process. For an isolated transport regression probe, use
+`python -m pytest tests/test_coordination_transport.py`: healthy results reject foreign
+operator reuse and boolean revision/version arguments over actual Streamable HTTP and
+legacy SSE protocol flows. This targeted probe does not replace the candidate's full gate.
 
 Roles are `owner`, `admin`, and `member`. Route capability checks, not labels alone,
 provide authorization. A principal that may read an Org but lacks a capability receives
@@ -409,7 +436,7 @@ interaction outside Brains and record only what can be truthfully observed.
 ### Local assignment inspection and recovery
 
 This branch exposes local assignments through CLI and seven MCP tools, not through
-native HTTP routes or the frontend. The 81-tool current-main MCP count does not describe
+native HTTP routes or the frontend. The 88-tool current-main MCP count does not describe
 browser capabilities or change the website's pinned 1.5 release count of 74.
 
 Read the assignment directly; generic queue health is not assignment reconciliation:
@@ -448,6 +475,55 @@ the original live Session to report its actual outcome.
 creation, filesystem ownership, reference fetching, or harness launch follows from them.
 See [MCP](MCP.md#local-work-assignments) for fields and [Guide](GUIDE.md#local-work-assignments)
 for creation and settlement examples.
+
+### Existing-peer proposal inspection and recovery
+
+The seven peer-coordination tools expose local state for part of
+[#38](https://github.com/xibodev/brains-ai/issues/38). They do not provide worker panels,
+multi-day checkout management, frontend controls, a native HTTP API, or proposal-specific
+readiness coverage. Assignment state remains the separate local foundation of
+[#36](https://github.com/xibodev/brains-ai/issues/36).
+
+Inspect through a live owned member Session in the proposal's Workspace:
+
+```text
+brains-ai coordination-get <code> --session <member-session-id>
+brains-ai coordination-list --workspace <registered-path> --session <member-session-id> --limit 50
+brains-ai coordination-get <code> --session <member-session-id> --version <historical-version>
+```
+
+A successful read returns stored status, current version/revision, member-visible reports,
+helper counts and remaining-Session lists. Check `remaining_acceptance_session_ids`,
+`remaining_initial_session_ids`, `remaining_discussion_session_ids`, `initial_closed`,
+`final_ready`, `expired_flag`, and `incomplete_flag`. Requester acknowledgement is automatic
+at proposal creation; every other required member must acknowledge the exact stored hash.
+Session acknowledgement is not human approval. A count of all initials does not close
+collection: requester must explicitly advance. All API responses blind other members'
+initial payloads, including from requester, until closure; this is not protection against
+a shared operator acting as another owned Session or inspecting SQLite. Declared models
+are unverified. Final synthesis retains every original nonblank dissent as unresolved.
+
+After a stale-fence refusal or lost response, read before retrying with current `version`
+and `expected_revision`. Coordination MCP integer arguments are strict: JSON `true` is
+rejected, not coerced to version or revision `1`; optional `version` and list `limit` also
+reject booleans. This fix changes neither public signatures nor wire schemas nor the
+88-tool count. Scope replacement is requester-only, uses a new creation key and
+complete input specification, cancels the old version at revision r+1, and creates the new
+version at r+2. Other members acknowledge again; no contribution carries forward. Completed,
+cancelled and expired versions cannot be replaced. Historical get retains the old version's
+membership and blinding rules; a successor Session does not inherit proposal membership.
+
+The deadline defaults to creation plus one hour; an explicit aware deadline must be future
+and within 30 days. Open expired state reads as expired/incomplete with final readiness
+false, without changing stored status/revision or renewing leases. There is no sweeper
+settlement or automatic advance/execution. Expired work refuses acceptance, advance,
+submission and replacement. Requester may still explicitly `coordination-cancel` with a
+reason and current version/revision. It cancels protocol state only, not work assignments,
+processes, or mail; pre-closure cancellation leaves initial reports blinded.
+
+Do not hand-edit rows or infer recovery from generic queue repair. Links and context are
+inert and create no assignments or integration. See [MCP](MCP.md#existing-peer-coordination)
+for schema/retry limits and [Guide](GUIDE.md#existing-peer-deliberation) for the sequence.
 
 ## Health and readiness
 
@@ -505,6 +581,15 @@ runner's rollback boundary, and the delta is rerunnable after a failed attempt. 
 PostgreSQL companion is compatibility inventory, not an alternate supported backend.
 Back up before upgrading and use the normal migration/diagnosis probes; do not delete
 historical migrations or hand-edit assignment state to clear an unresolved attempt.
+
+Migration `155_peer_coordination` adds two standalone tables: `coordination_proposals`
+and `coordination_contributions`. They retain immutable versioned specifications and
+append-only acknowledgements/reports, with scoped creation keys, version/slot constraints,
+and an index for Workspace creation order. The additive, rerunnable SQLite delta uses the
+migration runner's transactional DDL boundary and preserves existing data and migration
+history. Its PostgreSQL companion is compatibility inventory only. Use the same backup,
+migration, diagnosis and isolated restore procedures; do not rewrite historical versions
+to clear incomplete work. A schema upgrade does not launch peers or send mail.
 
 Migration `150_durable_mailboxes` is additive. It creates the durable mailbox,
 attachment, thread, message, delivery, notification, per-operator

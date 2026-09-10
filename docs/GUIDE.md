@@ -46,6 +46,7 @@ The coordination model:
 | **Session** | One durable handle for an agent working in a Workspace. Survives tool restarts. |
 | **Task** | A unit of work with a code, status, and priority. |
 | **Work assignment** | An immutable local specification with revision-fenced acceptance and evidence-bearing attempt history. CLI/MCP only in this branch. |
+| **Peer proposal** | A versioned agreement among existing Sessions, with blinded initial reports, bounded discussion, and a result-owner synthesis that retains dissent. CLI/MCP only in this branch. |
 | **Claim** | Exclusive ownership of a Workspace or task, for a bounded period. |
 | **Handoff** | The context you leave behind when you stop. |
 | **Checkpoint** | A resume marker dropped at a natural breakpoint. |
@@ -293,6 +294,105 @@ attempt. Evidence must be nonempty; it is a recorded report, not independent ver
 `checkout_ref`, `links`, and specification `tool` are advisory data. They grant no
 filesystem ownership, do not read or create a checkout, and do not select or launch a
 harness. Assignments do not provide universal process control or containment.
+
+## Existing-peer deliberation
+
+Use a peer proposal when existing Sessions need to review the same explicit scope before
+sharing findings. This branch implements local protocol state for part of
+[#38](https://github.com/xibodev/brains-ai/issues/38), not worker panels, multi-day
+execution, or checkout management. It has CLI/MCP interfaces only. Local work assignments
+remain the separate [#36](https://github.com/xibodev/brains-ai/issues/36) state foundation;
+proposal links do not create or control assignments.
+
+Use 2–8 existing live participant Sessions in the same Workspace, owned by the same
+authenticated operator. Requester may also be a participant. Every caller must be a live
+owned member; sharing an operator credential does not isolate one Session from another.
+Blinding filters responses, not access to the operator's own database, and cannot prevent
+that operator from acting as another owned Session. Model labels are declarations only;
+actual tool names are read from stored Sessions. An acknowledgement is a Session action,
+not human approval or proof of independent review.
+
+### Agree, collect, synthesize
+
+The following uses synthetic Session IDs: replace `ses_requester`, `ses_peer_a`, and
+`ses_peer_b` with existing handles, and `<registered-path>` with their Workspace path or
+alias. Line continuations use POSIX syntax. The minimal specification includes all four
+required fields; zero discussion rounds keeps this example short.
+
+```text
+brains-ai coordination-propose --workspace <registered-path> --title "Fixture review" \
+  --spec '{"objective":"Review fixture","context":"Synthetic fixture snapshot","evidence_expectations":"Cite fixture lines","participants":[{"session_id":"ses_peer_a","model":null},{"session_id":"ses_peer_b","model":null}],"discussion_rounds":0}' \
+  --session ses_requester --idempotency-key fixture-1
+brains-ai coordination-get <code> --session ses_peer_a
+brains-ai coordination-accept <code> --session ses_peer_a --version <version> \
+  --expected-revision <revision> --spec-hash <spec_hash>
+```
+
+Use `code`, `version`, `revision` and `spec_hash` from the returned snapshot. The requester
+is automatically acknowledged on creation; repeat get/accept as `ses_peer_b`. All required
+members must acknowledge the stored canonical version/hash. Read
+`remaining_acceptance_session_ids`; an empty list and `status: accepted` permit the
+requester to start collection. Use the latest returned revision for **each** write;
+get again after a lost response or possible concurrent change.
+
+```text
+brains-ai coordination-advance <code> --session ses_requester --version <version> \
+  --expected-revision <revision>
+brains-ai coordination-get <code> --session ses_peer_a
+brains-ai coordination-submit <code> --session ses_peer_a --version <version> \
+  --expected-revision <revision> --kind initial --idempotency-key initial \
+  --payload '{"findings":"Fixture reviewed","evidence":"fixture.txt:1","uncertainty":"Runtime not checked","dissent":""}'
+```
+
+Repeat get/submit as `ses_peer_b` with that peer's findings, evidence, uncertainty and
+dissent. All four strings are required; evidence must be nonblank. Optional
+`clarifications` is a list of strings. Every response, including mutation results and
+list, hides other members' initial payloads until requester explicitly closes collection.
+Requester and result owner have no special preview. Counts expose progress;
+`remaining_initial_session_ids` must be empty before closure. A last submission does not
+itself unblind the round.
+
+```text
+brains-ai coordination-get <code> --session ses_requester
+brains-ai coordination-advance <code> --session ses_requester --version <version> \
+  --expected-revision <revision>
+brains-ai coordination-submit <code> --session ses_requester --version <version> \
+  --expected-revision <revision> --kind final --idempotency-key final \
+  --payload '{"summary":"Review complete; retain peer dissent","evidence":"fixture.txt:1"}'
+```
+
+After advance, use its new revision for final. Zero rounds makes `final_ready: true`
+immediately after closure. With the default one discussion round, or an explicit 1–3,
+each participant first submits `kind: discussion` with the same structured report fields
+once per round; requester advances only after every participant has submitted. Use a new
+contribution key per round. Only the designated `result_owner_session_id` (requester by
+default) may submit final. Completion retains all original reports and nonblank dissent
+as `unresolved_dissent`, with `resolved: false`; synthesis cannot erase it.
+
+### Changes and interruptions
+
+- Get/list expose complete member-filtered snapshots, helper counts and missing-member
+  lists. `coordination-list --workspace <registered-path> --session <id> --limit 50`
+  returns latest versions; `coordination-get <code> --session <id> --version <old-version>`
+  reads history. See [MCP](MCP.md#existing-peer-coordination) for exact fields, bounds and
+  a compact MCP sequence.
+- To change scope, requester calls `coordination-propose` again with all creation arguments,
+  a new key, `--code <code>` and `--expected-revision <current-revision>`. Supply a complete
+  input spec, omitting the output-only participant `tool`. Replacement cancels the old
+  version at revision r+1 and creates the new version at r+2. Revisions never reset for
+  that code. Other members must acknowledge anew; prior reports remain historical.
+  Completed, cancelled and expired proposals cannot be replaced or edited.
+- An omitted deadline is fixed at creation plus one hour. An explicit timezone-aware
+  deadline must be future and within 30 days. Expiry flags open work as expired/incomplete
+  on reads without changing stored status or revision, advancing rounds, executing work,
+  or settling a result. Keep participating Sessions live through their normal lifecycle.
+- Requester can use `coordination-cancel <code> --session <id> --version <version>
+  --expected-revision <revision> --reason "Review withdrawn"`, including after expiry.
+  This cancels only the protocol; it does not cancel an assignment, stop a process, or
+  send/cancel mail. Cancellation before initial closure does not unblind history.
+- Context, evidence and links are inert recorded text, never automatically fetched or
+  verified. Protocol completion is not human approval, worker execution proof, or a
+  browser/readiness guarantee.
 
 ## When a human is required
 
