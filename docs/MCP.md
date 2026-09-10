@@ -2,8 +2,8 @@
 
 Brains exposes 74 tools over the Model Context Protocol, all prefixed `brains_`. The
 registry is filtered against `CORE_MCP_TOOLS` in `src/brains/capabilities.py` at startup.
-Tools outside that allowlist are neither registered nor callable through MCP. Session
-welcome hints can still mention withdrawn tools; those hints do not make them available.
+Tools outside that allowlist are neither registered nor callable through MCP. Actionable
+Session welcome hints recommend supported tools only.
 
 ## Connecting
 
@@ -34,6 +34,12 @@ open work, and recorded knowledge in a single round trip.
 ## Sessions
 
 A Session is a durable coordination handle, not a process. It survives tool restarts.
+
+Starting or reusing a Session does not schedule graph building or embedding, even when
+retained prewarm settings are enabled or an embedding model is configured. Existing index
+data is preserved. Welcome previews of historical patterns, memory keys and legacy mail
+are informational; legacy unread counts are separate from the durable `mailbox_inbox`.
+Repository text lookup through `search_repo` requires no index.
 
 | Tool | Purpose |
 |---|---|

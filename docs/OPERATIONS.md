@@ -25,16 +25,19 @@ Environment switches, pip extras, direct URLs, and explicit MCP tool selections 
 restore those withdrawn public surfaces. This is not a guarantee that all internal
 activation paths have been removed.
 
-Session registration still calls a best-effort background prewarm path. The settings
-`prewarm_index_on_session`, `graph_auto_build`, and `semantic_auto_embed` default to
-true. For an eligible Workspace directory, the worker checks stored index state and
-can build a missing code graph. Embedding additionally requires a configured
-`embed_model` (empty by default), a missing repository source, and the file-count gate
-to pass. This residual path does not make semantic retrieval or code graphs supported;
-its presence alone does not establish that indexing or a network request occurred.
-Set `BRAINS_PREWARM_INDEX_ON_SESSION=0` in the environment of each process that
-registers Sessions, then restart those processes, to suppress scheduling through this
-path. This does not remove existing index state or enable withdrawn tools.
+Session start and reuse do not schedule graph building or embedding. Retained prewarm
+settings and embedding-model configuration cannot reactivate indexing through Session
+registration. Indexing modules, configuration and stored sources, chunks, vectors and
+graphs remain intact; this change does not delete data or expose withdrawn tools.
+
+Welcome output preserves historical previews but no longer recommends withdrawn tools.
+Legacy unread-mail counts are not the durable mailbox inbox. Local harness PATH readiness
+checks remain part of welcome assembly; they do not launch harnesses.
+
+These changes apply to processes running the updated package. They do not cancel work
+already scheduled by an older process. To suppress scheduling while remaining on an
+older package, set `BRAINS_PREWARM_INDEX_ON_SESSION=0` in each registering process's
+environment and restart that process so it loads the setting.
 
 ## Install and start
 

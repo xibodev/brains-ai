@@ -1307,14 +1307,6 @@ def _session_registration_result(
                 "automatic": True,
             },
         )
-    # Best-effort: warm the code graph + embeddings in the background so the first
-    # retrieval call this session makes is instant. Never blocks session start.
-    try:
-        from brains.context.prewarm import schedule_prewarm
-
-        schedule_prewarm(workspace.path)
-    except Exception:
-        pass
     return {
         "session_id": session_id,
         "workspace": workspace.slug,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import timedelta
+from unittest.mock import Mock
 
 import pytest
 
@@ -16,6 +17,7 @@ from brains.control.resume import resume_brain_session
 from brains.control.session_commands import KIND_STOP, enqueue, get
 from brains.control.sessions import (
     heartbeat_session,
+    register_workspace,
     start_session,
     sweep_stale_session_leases,
 )
@@ -26,11 +28,16 @@ from brains.storage.db import SessionLocal
 from brains.storage.models import (
     AgentSession,
     AgentTask,
+    Artifact,
+    Chunk,
+    CodeGraphEdge,
+    CodeGraphNode,
     Event,
     EventContext,
     SessionCommand,
     SessionLease,
     SessionSuccessor,
+    Source,
     WorkspaceClaim,
 )
 
@@ -211,12 +218,122 @@ def test_event_on_dormant_handle_does_not_reactivate_or_renew_it(tmp_path) -> No
         assert lease.lease_expires_at == expired_at
 
 
-def test_mcp_start_reuses_sole_live_handle(tmp_path) -> None:
-    workspace = str(tmp_path / "repo")
-    first = start_session_tool(workspace, tool="opencode")
-    second = start_session_tool(workspace, tool="opencode")
+@pytest.mark.parametrize("embed_model", ["", "synthetic-embed-model"], ids=["no-model", "model"])
+@pytest.mark.parametrize("indexed", [False, True], ids=["cold", "retained"])
+def test_mcp_start_reuses_sole_live_handle(tmp_path, monkeypatch, embed_model, indexed) -> None:
+    from brains import __version__
+    from brains.config import settings
+    from brains.context import code_graph, embeddings, prewarm, semantic
+    from brains.control import welcome
+
+    monkeypatch.setattr(settings, "prewarm_index_on_session", True)
+    monkeypatch.setattr(settings, "graph_auto_build", True)
+    monkeypatch.setattr(settings, "semantic_auto_embed", True)
+    monkeypatch.setattr(settings, "embed_model", embed_model)
+    # Record forbidden calls without running a worker, even before the fix.
+    # An exception alone would be swallowed by best-effort startup handling.
+    blocked_calls = []
+    for module, name in (
+        (prewarm, "schedule_prewarm"),
+        (code_graph, "_ensure_graph_built"),
+        (code_graph, "build_code_graph"),
+        (semantic, "embed_repo"),
+        (embeddings, "embed_texts"),
+        (embeddings.httpx, "post"),
+    ):
+        spy = Mock(spec=getattr(module, name), return_value=False)
+        monkeypatch.setattr(module, name, spy)
+        blocked_calls.append(spy)
+    welcome_spy = Mock(wraps=welcome.build_welcome)
+    monkeypatch.setattr(welcome, "build_welcome", welcome_spy)
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    workspace = str(repo)
+    registered = register_workspace(workspace)
+    # Use conftest's temporary SQLite store, optionally with a historical index.
+    if indexed:
+        with SessionLocal() as session:
+            source = Source(workspace_id=registered.id, source_type="repo", uri=workspace)
+            session.add(source)
+            session.flush()
+            artifact = Artifact(source_id=source.id, path="historical.py", language="python")
+            session.add(artifact)
+            session.flush()
+            session.add(
+                Chunk(
+                    artifact_id=artifact.id,
+                    ordinal=0,
+                    content="def historical(): pass",
+                    embedding=embeddings.pack_vector([1.0, 0.0]),
+                )
+            )
+            module = CodeGraphNode(
+                workspace_id=registered.id, kind="module", name="historical", path="historical.py"
+            )
+            function = CodeGraphNode(
+                workspace_id=registered.id,
+                kind="function",
+                name="historical.historical",
+                path="historical.py",
+                lineno=1,
+            )
+            session.add_all([module, function])
+            session.flush()
+            session.add(
+                CodeGraphEdge(
+                    workspace_id=registered.id,
+                    src_id=module.id,
+                    dst_id=function.id,
+                    relation="contains",
+                )
+            )
+            session.commit()
+
+    def index_snapshot():
+        # Compare every stored column, including vector bytes and graph endpoints.
+        with SessionLocal() as session:
+            source_ids = session.query(Source.id).filter(Source.workspace_id == registered.id)
+            artifact_ids = session.query(Artifact.id).filter(Artifact.source_id.in_(source_ids))
+            return [
+                session.execute(model.__table__.select().where(scope).order_by(model.id)).all()
+                for model, scope in (
+                    (Source, Source.workspace_id == registered.id),
+                    (Artifact, Artifact.source_id.in_(source_ids)),
+                    (Chunk, Chunk.artifact_id.in_(artifact_ids)),
+                    (CodeGraphNode, CodeGraphNode.workspace_id == registered.id),
+                    (CodeGraphEdge, CodeGraphEdge.workspace_id == registered.id),
+                )
+            ]
+
+    before = index_snapshot()
+    assert [len(rows) for rows in before] == ([1, 1, 1, 2, 1] if indexed else [0, 0, 0, 0, 0])
+    results = []
+    for reused in (False, True):
+        result = start_session_tool(workspace, tool="opencode")
+        results.append(result)
+        assert result["reused"] is reused
+        assert result["lease_expires_at"] is not None
+        assert result["welcome"]["brain_version"] == __version__
+        assert result["welcome"]["tool_status"]["session_tool"] == "opencode"
+        assert welcome_spy.call_count == len(results)
+        for spy in blocked_calls:
+            spy.assert_not_called()
+        assert index_snapshot() == before
+
+    first, second = results
     assert second["session_id"] == first["session_id"]
     assert second["reused"] is True
+    with SessionLocal() as session:
+        row = session.query(AgentSession).filter_by(workspace_id=registered.id).one()
+        assert row.id == first["session_id"]
+        assert row.state == "running"
+        lease = session.get(SessionLease, row.id)
+        assert lease is not None
+        assert lease.lease_expires_at > lease.renewed_at
+        events = session.query(Event).filter_by(session_id=row.id)
+        assert events.filter_by(kind="session_start").count() == 1
+        assert events.filter_by(kind="session_reused").count() == 1
 
 
 def test_canonical_start_refuses_ambiguous_live_handles(tmp_path) -> None:

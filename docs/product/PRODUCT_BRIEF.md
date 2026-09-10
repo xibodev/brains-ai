@@ -74,11 +74,10 @@ not supply it.
 | Managed skills and prompt libraries | Each harness has its own. Brains does not compete with them. |
 | Autonomous outward action | Not adopted. Outward effects remain human-governed. |
 
-These scope decisions do not mean every internal activation path is absent. Session
-registration still reaches best-effort graph/embedding prewarm, and welcome hints can
-mention withdrawn tools. Those tools remain unavailable through MCP. See
-[Operations](../OPERATIONS.md#scope-and-proof-boundary) for the prewarm conditions and
-the existing setting that suppresses that path.
+Session registration does not activate retained graph or embedding prewarm. Welcome
+hints recommend supported tools while preserving informational historical previews.
+Retained indexing code and stored data are not deleted or made supported by this boundary.
+See [Operations](../OPERATIONS.md#scope-and-proof-boundary) for process-upgrade limitations.
 
 ## Intended, not built
 

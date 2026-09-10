@@ -8,9 +8,8 @@ deterministic payload describing what's relevant for the newly-started
 session's workspace so the calling agent can act on it immediately.
 
 The shape of the payload is intentionally narrow: counts and a few
-representative names, never the full bodies. Agents that want to act
-follow up with the targeted tool (``read_messages``, ``use_pattern``,
-``retrieve_memory``, ``list_sources``, etc).
+representative names, never the full bodies. Actionable hints name supported
+tools; retained mail, pattern and memory previews are informational.
 
 Mailbox messages are *not* marked read. The only mutation is a bounded local
 PATH readiness refresh for registered tools; it resolves executables without
@@ -49,8 +48,7 @@ def _matches_workspace(applies_to: str | None, workspace: Workspace) -> bool:
     ``slug`` or any segment of its ``path``. An empty / null
     ``applies_to`` means the pattern is generally applicable and matches
     everything — we treat it as a non-match for the welcome packet (so we
-    don't drown the agent in generic patterns) and let the agent discover
-    those via the explicit ``list_patterns`` call.
+    don't drown the agent in generic patterns).
     """
     if not applies_to:
         return False
@@ -79,20 +77,17 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
     * ``applicable_patterns``: list of approved patterns whose
       ``applies_to`` glob matches this workspace.
     * ``relevant_memories``: list of stored memory ``key``s whose key
-      contains the workspace slug. Values are not inlined — agents call
-      ``retrieve_memory`` for the body.
+      contains the workspace slug. Values are not inlined; these are historical
+      previews, not a supported memory-retrieval interface.
     * ``tool_status``: aggregate registry counts plus readiness for this
       Session's local PATH or bound Runtime.
     * ``index_status``: ``{"sources": int, "indexed": int}`` for this
-      workspace's RAG / repo-indexer state. Lets the agent notice the
-      indexer is empty before it goes hunting blindly.
+      workspace's retained RAG / repo-indexer state. Text lookup needs no index.
     * ``hints``: short string list of suggested next tool calls based on
-      what's present. e.g. "you have 3 unread messages — call
-      read_messages".
+      what's present, plus informational notices about retained state.
     * ``brain_version``: the installed ``brains`` package version. Lets
       the agent — and any operator reading the trace — confirm which
-      build of the coordination plane is serving them. Run
-      ``brains upgrade`` if a newer release has shipped.
+      build of the coordination plane is serving them.
     * ``skills``: deduplicated Skills attached to this session's Persona
       and/or Project (BL-P1-08), each carrying ``sources`` provenance
       (``["persona"]``, ``["project"]``, or both). Empty when the session
@@ -144,7 +139,10 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
             ]
             payload["unread_messages"] = {"count": total, "subjects": subjects}
             if total:
-                payload["hints"].append(f"{total} unread message(s) — call read_messages")
+                payload["hints"].append(
+                    f"{total} unread message(s) in retained legacy mail; "
+                    "this is not the durable mailbox inbox"
+                )
     except Exception:
         pass
 
@@ -166,7 +164,7 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
             ]
             if matched:
                 payload["hints"].append(
-                    f"{len(matched)} matching pattern(s) — call use_pattern before improvising"
+                    f"{len(matched)} matching pattern(s) in retained historical context"
                 )
     except Exception:
         pass
@@ -213,7 +211,7 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
             payload["relevant_memories"] = keys
             if keys:
                 payload["hints"].append(
-                    f"{len(keys)} workspace memory key(s) — call retrieve_memory"
+                    f"{len(keys)} workspace memory key(s) in retained historical context"
                 )
     except Exception:
         pass
@@ -260,7 +258,8 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
             }
             if registered and missing:
                 payload["hints"].append(
-                    f"{missing} registered tool(s) currently missing on PATH — see list_registered_tools"
+                    f"{missing} registered tool(s) currently missing on PATH; "
+                    "review local harness installation"
                 )
             if registered and unverified and not local_session:
                 payload["hints"].append(
@@ -282,9 +281,7 @@ def build_welcome(workspace: Workspace, session_id: str) -> dict[str, Any]:
             )
             payload["index_status"] = {"sources": sources, "indexed": indexed}
             if sources == 0:
-                payload["hints"].append(
-                    "no indexed sources for this workspace — consider fetch_and_index_source"
-                )
+                payload["hints"].append("repository text lookup needs no index — call search_repo")
     except Exception:
         pass
 

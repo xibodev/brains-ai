@@ -67,6 +67,11 @@ brains-ai session-start --workspace .
 brains-ai state
 ```
 
+Starting or reusing a Session does not build a graph or generate embeddings. Existing
+index data remains intact, and repository text lookup needs no index. The welcome packet
+suggests supported tools; historical pattern, memory and legacy-mail previews remain
+informational. Read durable agent mail through the mailbox tools, not legacy unread counts.
+
 `state` is the orientation call: active Workspaces, live Sessions, open work, and any
 recorded knowledge. Before deriving something expensive, look for it:
 
