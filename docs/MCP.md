@@ -9,6 +9,12 @@ This source contract includes seven local work-assignment tools, seven existing-
 coordination tools, and `mailbox_wait` available in this branch; it is not a release claim.
 The website's pinned 1.5 release retains its 74-tool count.
 
+The unreleased operator work foundation adds ten protected native HTTP endpoints and
+controls in the existing Workspace Work tab, without adding MCP tools or changing these
+agent signatures. Human authoring is distinct from Session acceptance and reporting;
+see the [operator HTTP family](GUIDE.md#operator-work-http-family). This is partial #42
+scope, not completion of broader cross-process events/replay or transport comparison.
+
 ## Connecting
 
 ```text
@@ -187,8 +193,9 @@ Repository text lookup through `search_repo` requires no index.
 
 These seven core names are registered with the `brains_` prefix (for example,
 `brains_work_assignment_create`). They are local state-only CLI/MCP operations, also
-included in the lean MCP selection. There is no assignment native HTTP API or browser
-surface. They neither spawn processes nor manage checkouts.
+included in the lean MCP selection. The separate operator HTTP/browser surface provides
+human creation, get/list and cancellation; agent acceptance, settlement and execution
+retry remain CLI/MCP operations. Neither surface spawns processes or manages checkouts.
 
 | Core tool name | Required arguments | Purpose / optional arguments |
 |---|---|---|
@@ -237,6 +244,13 @@ are unique per Workspace/operator, not per Session: an identical canonical speci
 and title returns the existing assignment, including after creator Session replacement;
 a different request under the same key is refused.
 
+Responses distinguish `creator_kind: session` with its `creator_session_id` from
+`creator_kind: operator` with a null Session ID; both carry `creator_operator_id`.
+Creation identity also distinguishes author kind, so a human request cannot replay a
+Session-authored creation key as its own. Historical pre-156 Session request hashes
+remain replay-compatible without rewriting stored authors or hashes. A live owned Session
+can accept an operator-authored assignment through the existing tools.
+
 ### State, observations, and revision fences
 
 Responses include `code`, creator provenance, immutable specification and hashes,
@@ -256,8 +270,9 @@ Session unavailability makes an unresolved attempt's `observed_status` uncertain
 changing stored status or revision. Get/list do not settle work or renew Session leases.
 The budget is cooperative, not OS-enforced, and expiry never implies process termination.
 For this observation, a source is unavailable if missing, ended, in `completed`, `failed`,
-`cancelled`, or `dormant` Session state, or past an existing lease's expiry. The absence
-of a lease row alone is not treated as source unavailability.
+`cancelled`, or `dormant` Session state, or PID-less and past an existing lease's expiry.
+The absence of a lease row alone is not treated as source unavailability. For PID-tracked
+Sessions, an expired lease alone does not mark the source unavailable.
 
 Accept/settle/cancel/retry require an integer `expected_revision` matching current state.
 Stale revisions always fail, including lost-response replays; read back first. At the
@@ -285,10 +300,21 @@ attempt. Active, cancellation-pending, completed, and uncertain work are blocked
 are no implicit retries, takeover, checkout ownership, or remote execution guarantees.
 See the [guide](GUIDE.md#local-work-assignments) for the CLI journey.
 
+Operator get/list do not require a live Session and can inspect history after its author
+or worker ends. They require current Workspace read capability and the same
+`creator_operator_id`, even for bootstrap admin, and include both author kinds.
+Their snapshots add `permissions: {can_cancel, reason}`. Human browser-cookie writes
+also require Workspace write capability; raw API credentials can read but cannot mutate.
+Operator cancellation uses the same state/revision fence, with no Session renewal;
+`cancel_requested_by_session_id` is null for a human action and the committed event
+records the operator/channel. No HTTP assignment retry or agent accept/settle endpoint
+is provided. See [Guide](GUIDE.md#operator-work-http-family) for paths and bodies.
+
 ## Existing-peer coordination
 
-These seven core/lean tools use the `brains_` prefix. CLI/MCP expose local protocol state
-only, with no native HTTP API, frontend, worker launch, or readiness guarantee. This is
+These seven core/lean tools use the `brains_` prefix. CLI/MCP expose local protocol state;
+the separate operator HTTP/browser surface adds human creation, observation, cancellation
+and phase advancement. Neither provides worker launch or a readiness guarantee. This is
 partial local scope for [#38](https://github.com/xibodev/brains-ai/issues/38), not delivery
 of worker panels or multi-day checkout management. Assignment state remains the separate
 local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36).
@@ -303,8 +329,8 @@ local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36).
 | `coordination_submit` | `code`, `kind`, `payload`, `session_id`, `version`, `expected_revision`, `idempotency_key` | Append an `initial`, `discussion`, or `final` report. |
 | `coordination_cancel` | `code`, `reason`, `session_id`, `version`, `expected_revision` | Requester cancels protocol state, including after expiry. |
 
-Every call requires a live Session owned by the authenticated operator and current
-Workspace visibility. Existing-proposal access requires membership (requester,
+Every peer CLI/MCP call requires a live Session owned by the authenticated operator and
+current Workspace visibility. Existing-proposal access requires membership (requester,
 participant, or result owner); list filters out proposals the caller is not a member of. Proposed
 participants must already be live Sessions in that same Workspace under that operator.
 Create/list require its registered path or recorded alias. Anonymous, Runtime,
@@ -346,10 +372,20 @@ compact UTF-8 JSON, and normalizes deadline to UTC. `spec_hash` is its SHA-256; 
 returned hash rather than hashing the input yourself. Context and links are inert: they
 are never fetched and do not generate assignments or integrate with assignment state.
 
-Creation returns a `PC-<uuid>` code at proposal version 1, revision 0, status `planned`,
+Session creation returns a `PC-<uuid>` code at proposal version 1, revision 0, status `planned`,
 round 0. It automatically records the requester's acceptance of that version's stored
 hash. Required acknowledgements are the union of requester, participants and result owner;
 every other member must accept before status becomes `accepted`.
+
+Human-authored proposals instead have `creator_kind: operator`, a null
+`requester_session_id` (also returned as `creator_session_id`), and an explicit
+`result_owner_session_id`. That owner must be an existing live owned Session in the
+Workspace; the HTTP specification permits it outside the 2–8 participants, while the
+browser form selects it from participants. Human creation inserts no automatic Session
+acknowledgement: all participants and the result owner must accept the exact version/hash
+through these MCP tools or CLI. The operator may explicitly advance or cancel the latest
+owned proposal, including Session-authored work whose requester has ended; every operator
+advance rechecks participant/result-owner liveness. Agents alone submit reports/final.
 
 ### Phases, reports, and visibility
 
@@ -373,14 +409,20 @@ Evidence is attributed text, not independently verified proof.
 same blinding filter. Until explicit initial closure, a member sees only their own
 initial report; requester and result owner have no exemption. Counts and remaining-Session
 IDs reveal progress, not other authors' payloads. All initials arriving alone does not
-unblind them. Cancellation or replacement before closure also leaves history blinded.
+unblind them. Cancellation, expiry or replacement before closure also leaves history blinded.
 After closure, members see all reports. All nonblank original initial/discussion dissent
 is mechanically retained in `unresolved_dissent` with `resolved: false`, even after final
 synthesis. There is no dissent-resolution operation; synthesis cannot erase disagreement.
 
+Operator HTTP reads and mutation/replay responses use a non-member observer view: before
+closure **no** initial payload is visible, even to the human requester. `contributions`
+and `unresolved_dissent` are empty, `final` is null, and counts/missing-member IDs remain
+visible. After closure the observer sees all recorded reports, evidence and dissent.
+This applies to both Session- and operator-authored versions, including historical reads.
+
 ### Snapshot and retry contract
 
-All operations return the complete member-filtered snapshot; list returns an array of
+All CLI/MCP operations return the complete member-filtered snapshot; list returns an array of
 these snapshots. Fields include code/version/revision, Workspace and creator provenance,
 result owner, title, `specification`, `spec_hash`, status/round, timestamps, deadline,
 `initial_closed`, `final_ready`, `blinded`, `expired_flag`, `incomplete_flag`, and
@@ -399,6 +441,18 @@ ID, author, round, original dissent text and `resolved: false`.
 flag without changing the deadline. `remaining_discussion_session_ids` is empty outside
 an active discussion round; `final_ready` becomes false after completion.
 
+Creator provenance includes `creator_operator_id`, `creator_kind`, `requester_session_id`
+and its `creator_session_id` alias. Operator get/list use current Workspace read capability
+and matching creator operator rather than live Session membership; no bootstrap-admin
+cross-creator override applies. Lists include both author kinds and only latest versions.
+These snapshots additionally return `permissions.can_advance`, `advance_blocked_reason`,
+`can_cancel`, and `cancel_blocked_reason`. Reasons cover human-channel/write-capability
+requirements, historical versions, protocol prerequisites, expiry and unavailable peers.
+Writes recheck these conditions and current version/revision. Operator reads and writes
+neither create nor renew a Session. Changed human writes commit operator-attributed events;
+raw API credentials are read-only for this family. There are no HTTP agent accept/submit
+or human proposal-replacement endpoints.
+
 Mutations require the exact latest proposal version and revision. Revisions are monotonic
 across **one code's versions**, not reset on replacement or shared across different codes.
 To change scope, requester re-proposes with `code`, current `expected_revision`, a new key,
@@ -411,8 +465,10 @@ only `session_id` and `model`, rather than resubmitting that output unchanged.
 
 Creation keys are unique per Workspace/operator. An identical creation retry returns the
 member-filtered latest version without extending its deadline; a changed request under
-that key fails. Contribution keys are per code/version/author. Stale fences fail even for
-known retries: get current state first. Identical acceptance, contribution or cancellation
+that key fails. Author kind also fences new creation hashes; pre-156 Session hashes remain
+compatible for Session replays without historical rewrites. Human creation replay returns
+the observer-filtered latest snapshot. Contribution keys are per code/version/author.
+Stale fences fail even for known retries: get current state first. Identical acceptance, contribution or cancellation
 retries at the current fence are no-ops where permitted; deadline checks still apply to
 acceptance and submission, including final replay. Reads and no-ops neither renew leases
 nor emit events.

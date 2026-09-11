@@ -61,7 +61,15 @@ def migrated_template(tmp_path_factory):
     for table in Base.metadata.sorted_tables:
         if table.name in {"coordination_proposals", "coordination_contributions"}:
             continue
-        table.to_metadata(through_154)
+        historical = table.to_metadata(through_154)
+        if table.name == "work_assignments":
+            historical._columns.remove(historical.c.creator_kind)
+            historical.constraints = {
+                constraint
+                for constraint in historical.constraints
+                if constraint.name != "ck_work_assignments_creator"
+            }
+            historical.c.creator_session_id.nullable = False
         if table.name not in OWN_TABLES:
             table.to_metadata(previous)
     with pytest.MonkeyPatch.context() as patch:
@@ -150,6 +158,12 @@ def migrated_template(tmp_path_factory):
             ).fetchone() == ("applied", 2)
             # An interrupted ledger replay may call upgrade again; DDL is idempotent.
             importlib.import_module(f"brains.storage.sql_migrations.{MIGRATION}").upgrade(conn)
+        migrations.reset_migration_cache()
+        # Keep the 154 rollback/replay probe above, then exercise current core
+        # behavior against the real later migrations (including author kinds).
+        patch.setattr(migrations, "corpus", migration_registry.build_corpus)
+        patch.setattr(migrations, "Base", Base)
+        assert migrations.run_migrations().healthy
         migrations.reset_migration_cache()
     engine.dispose()
     return path
@@ -305,6 +319,8 @@ def test_spec_is_canonical_immutable_and_references_are_inert(world, monkeypatch
         row = world.create(spec)
         accepted = world.accept(row)
     assert row["specification"]["version"] == 1
+    assert row["creator_kind"] == "session"
+    assert row["creator_session_id"] == "creator"
     assert row["code"].startswith("WA-") and len(row["code"]) == 39
     assert accepted["attempts"][0]["tool"] == "opencode"
     assert accepted["attempts"][0]["usage"] is None
@@ -397,6 +413,18 @@ def test_lost_ack_requires_read_then_exact_noop(world):
     with world.db() as session:
         assert session.query(Event).count() == 3
         assert session.query(WorkAssignmentAttempt).count() == 1
+
+
+def test_pre_author_kind_creation_hash_remains_replayable(world):
+    row = world.create()
+    with world.db() as session:
+        session.get(WorkAssignment, row["code"]).request_hash = work._hash(
+            work._json({"title": row["title"], "specification": row["specification"]})
+        )
+        session.commit()
+    assert world.create(session_id="continuation")["code"] == row["code"]
+    with pytest.raises(ValueError, match="different request"):
+        world.create({"objective": "different"})
 
 
 def test_delayed_cancel_requires_observed_confirmation_and_preserves_history(world):

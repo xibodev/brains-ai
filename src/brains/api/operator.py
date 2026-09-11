@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from brains.authz import policy
 from brains.authz.deps import require_console_principal, require_operator_principal
@@ -38,6 +38,28 @@ class TaskCreateBody(BaseModel):
     priority: str = "p2"
     depends_on: str = ""
     tags: str = ""
+
+
+class WorkCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=256)
+    specification: dict[str, Any]
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class AssignmentCancelBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=0)
+
+
+class CoordinationAdvanceBody(AssignmentCancelBody):
+    version: StrictInt = Field(ge=1)
+
+
+class CoordinationCancelBody(CoordinationAdvanceBody):
+    reason: str = Field(min_length=1, max_length=32_768)
 
 
 class TaskSessionBody(BaseModel):
@@ -208,6 +230,49 @@ class FeedbackPromotionBody(BaseModel):
 
 def _bad_request(exc: Exception) -> HTTPException:
     return HTTPException(status_code=400, detail=str(exc))
+
+
+def _work_error(exc: ValueError | PermissionError) -> HTTPException:
+    """Translate the core's known ValueError contracts without leaking peer details."""
+    message = str(exc)
+    if message in (
+        "operator work assignment mutations require a human channel",
+        "operator coordination mutations require a human channel",
+    ):
+        return HTTPException(status_code=403, detail="work mutations require a human channel")
+    if (
+        isinstance(exc, PermissionError)
+        or message
+        in (
+            "unknown or unavailable work assignment",
+            "unknown or unavailable coordination",
+        )
+        or message.startswith(("unknown session:", "session "))
+    ):
+        # Session refusals can contain replacement ids, summaries and successor ids.
+        return HTTPException(status_code=404, detail="work resource unavailable")
+    if message in (
+        "stale work assignment revision; read the current assignment",
+        "stale coordination version or revision; read the current proposal",
+        "stale coordination revision; read the current proposal",
+        "idempotency_key already used for a different request",
+        "work assignment cannot be cancelled",
+        "coordination cannot be cancelled",
+        "coordination is not open",
+        "coordination deadline exceeded",
+        "all acceptances are required before advancing",
+        "all initial contributions are required before closing collection",
+        "all discussion contributions are required before advancing",
+        "coordination cannot advance in this state",
+        "coordination cannot advance before a final synthesis",
+    ):
+        return HTTPException(status_code=409, detail=message)
+    return HTTPException(status_code=422, detail=message)
+
+
+def _require_work_human(principal: Principal) -> None:
+    if not principal.is_human_channel:
+        raise HTTPException(status_code=403, detail="work mutations require a human channel")
 
 
 def _record_action(
@@ -516,6 +581,237 @@ def workspace_lookup(
     """Return the same bounded source-lookup envelope as CLI and MCP."""
     workspace = _workspace(principal, slug, CAP_ORG_READ)
     return lookup_workspace(workspace["path"], q, limit=limit)
+
+
+@router.get("/workspaces/{slug}/assignments")
+def workspace_assignments(
+    slug: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.work_assignments import list_operator_assignments
+
+    workspace = _workspace(principal, slug)
+    try:
+        return {
+            "items": list_operator_assignments(workspace["id"], principal=principal, limit=limit)
+        }
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.get("/workspaces/{slug}/assignments/{code}")
+def workspace_assignment(
+    slug: str,
+    code: str,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.work_assignments import get_operator_assignment
+
+    workspace = _workspace(principal, slug)
+    try:
+        return get_operator_assignment(workspace["id"], code, principal=principal)
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.post("/workspaces/{slug}/assignments")
+def create_workspace_assignment(
+    slug: str,
+    body: WorkCreateBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.work_assignments import create_operator_assignment
+
+    _require_work_human(principal)
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        return create_operator_assignment(
+            workspace["id"],
+            body.title,
+            body.specification,
+            principal=principal,
+            idempotency_key=body.idempotency_key,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.post("/workspaces/{slug}/assignments/{code}/cancel")
+def cancel_workspace_assignment(
+    slug: str,
+    code: str,
+    body: AssignmentCancelBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.work_assignments import cancel_operator_assignment
+
+    _require_work_human(principal)
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        return cancel_operator_assignment(
+            workspace["id"], code, principal=principal, expected_revision=body.expected_revision
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.get("/workspaces/{slug}/coordinations")
+def workspace_coordinations(
+    slug: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.coordination import list_operator_coordinations
+
+    workspace = _workspace(principal, slug)
+    try:
+        return {
+            "items": list_operator_coordinations(workspace["id"], principal=principal, limit=limit)
+        }
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.get("/workspaces/{slug}/coordinations/{code}")
+def workspace_coordination(
+    slug: str,
+    code: str,
+    version: int | None = Query(default=None, ge=1),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.coordination import get_operator_coordination
+
+    workspace = _workspace(principal, slug)
+    try:
+        return get_operator_coordination(
+            workspace["id"], code, principal=principal, version=version
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.post("/workspaces/{slug}/coordinations")
+def create_workspace_coordination(
+    slug: str,
+    body: WorkCreateBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.coordination import propose_operator_coordination
+
+    _require_work_human(principal)
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        return propose_operator_coordination(
+            workspace["id"],
+            body.title,
+            body.specification,
+            principal=principal,
+            idempotency_key=body.idempotency_key,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.post("/workspaces/{slug}/coordinations/{code}/advance")
+def advance_workspace_coordination(
+    slug: str,
+    code: str,
+    body: CoordinationAdvanceBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.coordination import advance_operator_coordination
+
+    _require_work_human(principal)
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        return advance_operator_coordination(
+            workspace["id"],
+            code,
+            principal=principal,
+            version=body.version,
+            expected_revision=body.expected_revision,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.post("/workspaces/{slug}/coordinations/{code}/cancel")
+def cancel_workspace_coordination(
+    slug: str,
+    code: str,
+    body: CoordinationCancelBody,
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    from brains.control.coordination import cancel_operator_coordination
+
+    _require_work_human(principal)
+    workspace = _workspace(principal, slug, CAP_ORG_WRITE)
+    try:
+        return cancel_operator_coordination(
+            workspace["id"],
+            code,
+            body.reason,
+            principal=principal,
+            version=body.version,
+            expected_revision=body.expected_revision,
+        )
+    except (PermissionError, ValueError) as exc:
+        raise _work_error(exc) from exc
+
+
+@router.get("/workspaces/{slug}/work-participants")
+def workspace_work_participants(
+    slug: str,
+    limit: int = Query(default=200, ge=1, le=200),
+    principal: Principal = Depends(require_operator_principal),
+) -> dict:
+    """Bounded owned candidates from recorded liveness, without probing or renewal."""
+    from sqlalchemy import or_
+
+    from brains.control.common import utc_now
+    from brains.storage.models import AgentSession, SessionLease
+
+    workspace = _workspace(principal, slug)
+    if principal.operator_id is None:
+        return {"items": []}
+    with SessionLocal() as session:
+        # Mirror require_live_session's stored-state/lease observation. Legacy
+        # Sessions with no lease and PID-tracked Sessions retain their semantics.
+        # Filter before LIMIT so expired/foreign entries cannot crowd out options.
+        rows = (
+            session.query(AgentSession)
+            .outerjoin(SessionLease, SessionLease.session_id == AgentSession.id)
+            .filter(
+                AgentSession.workspace_id == workspace["id"],
+                AgentSession.created_by_operator_id == principal.operator_id,
+                AgentSession.created_by_operator_id.is_not(None),
+                AgentSession.ended_at.is_(None),
+                AgentSession.state.notin_(("completed", "failed", "dormant")),
+                or_(
+                    AgentSession.pid.is_not(None),
+                    SessionLease.session_id.is_(None),
+                    SessionLease.lease_expires_at >= utc_now(),
+                ),
+            )
+            .order_by(AgentSession.started_at.desc(), AgentSession.id)
+            .limit(limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "session_id": row.id,
+                    "tool": row.tool,
+                    "state": row.state,
+                    "started_at": row.started_at.isoformat(),
+                    "last_activity_at": (
+                        row.last_activity_at.isoformat() if row.last_activity_at else None
+                    ),
+                }
+                for row in rows
+            ]
+        }
 
 
 @router.get("/coordination")

@@ -132,6 +132,7 @@ POST_CHECKSUM_DELTAS = (
     "153_mailbox_identity_lifecycle",
     "154_work_assignments",
     "155_peer_coordination",
+    "156_operator_work_authorship",
 )
 
 _LEGACY_LEDGER_DDL = """

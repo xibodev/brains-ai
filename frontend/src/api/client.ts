@@ -30,6 +30,12 @@ import type {
   OperatorWorkspace,
   OperatorWorkspaceDetail,
   WorkspaceLookupEnvelope,
+  WorkspaceWorkCreate,
+  WorkspaceAssignmentSpec,
+  WorkspaceAssignment,
+  WorkspaceDeliberationSpec,
+  WorkspaceDeliberation,
+  WorkspaceWorkParticipant,
   MailboxAccess,
   MailboxAddress,
   MailboxMessageList,
@@ -179,6 +185,46 @@ export const api = {
       { signal },
     ),
   operatorCoordination: () => request<OperatorCoordination>("/operator/coordination"),
+  operatorWorkspaceAssignments: (slug: string, signal?: AbortSignal) =>
+    request<{ items: WorkspaceAssignment[] }>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/assignments?limit=50`, { signal },
+    ).then((body) => body.items),
+  operatorWorkspaceAssignment: (slug: string, code: string, signal?: AbortSignal) =>
+    request<WorkspaceAssignment>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/assignments/${encodeURIComponent(code)}`, { signal },
+    ),
+  operatorCreateAssignment: (slug: string, body: WorkspaceWorkCreate<WorkspaceAssignmentSpec>, signal?: AbortSignal) =>
+    request<WorkspaceAssignment>(`/operator/workspaces/${encodeURIComponent(slug)}/assignments`, {
+      method: "POST", body: JSON.stringify(body), signal,
+    }),
+  operatorCancelAssignment: (slug: string, code: string, expectedRevision: number, signal?: AbortSignal) =>
+    request<WorkspaceAssignment>(`/operator/workspaces/${encodeURIComponent(slug)}/assignments/${encodeURIComponent(code)}/cancel`, {
+      method: "POST", body: JSON.stringify({ expected_revision: expectedRevision }), signal,
+    }),
+  operatorWorkspaceDeliberations: (slug: string, signal?: AbortSignal) =>
+    request<{ items: WorkspaceDeliberation[] }>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/coordinations?limit=50`, { signal },
+    ).then((body) => body.items),
+  operatorWorkspaceDeliberation: (slug: string, code: string, version?: number, signal?: AbortSignal) =>
+    request<WorkspaceDeliberation>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/coordinations/${encodeURIComponent(code)}${qs({ version })}`, { signal },
+    ),
+  operatorCreateDeliberation: (slug: string, body: WorkspaceWorkCreate<WorkspaceDeliberationSpec>, signal?: AbortSignal) =>
+    request<WorkspaceDeliberation>(`/operator/workspaces/${encodeURIComponent(slug)}/coordinations`, {
+      method: "POST", body: JSON.stringify(body), signal,
+    }),
+  operatorAdvanceDeliberation: (slug: string, code: string, version: number, expectedRevision: number, signal?: AbortSignal) =>
+    request<WorkspaceDeliberation>(`/operator/workspaces/${encodeURIComponent(slug)}/coordinations/${encodeURIComponent(code)}/advance`, {
+      method: "POST", body: JSON.stringify({ version, expected_revision: expectedRevision }), signal,
+    }),
+  operatorCancelDeliberation: (slug: string, code: string, reason: string, version: number, expectedRevision: number, signal?: AbortSignal) =>
+    request<WorkspaceDeliberation>(`/operator/workspaces/${encodeURIComponent(slug)}/coordinations/${encodeURIComponent(code)}/cancel`, {
+      method: "POST", body: JSON.stringify({ reason, version, expected_revision: expectedRevision }), signal,
+    }),
+  operatorWorkParticipants: (slug: string, signal?: AbortSignal) =>
+    request<{ items: WorkspaceWorkParticipant[] }>(
+      `/operator/workspaces/${encodeURIComponent(slug)}/work-participants?limit=200`, { signal },
+    ).then((body) => body.items),
   operatorMailboxAccess: () =>
     request<{ data: MailboxAccess[] }>("/operator/mailboxes/access").then((body) => body.data),
   operatorMailboxPhonebook: (workspace: string) =>

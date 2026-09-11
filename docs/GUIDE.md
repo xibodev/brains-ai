@@ -45,8 +45,8 @@ The coordination model:
 | **Workspace** | A repository or working directory. The scope everything else hangs off. |
 | **Session** | One durable handle for an agent working in a Workspace. Survives tool restarts. |
 | **Task** | A unit of work with a code, status, and priority. |
-| **Work assignment** | An immutable local specification with revision-fenced acceptance and evidence-bearing attempt history. CLI/MCP only in this branch. |
-| **Peer proposal** | A versioned agreement among existing Sessions, with blinded initial reports, bounded discussion, and a result-owner synthesis that retains dissent. CLI/MCP only in this branch. |
+| **Work assignment** | An immutable local specification with revision-fenced acceptance and evidence-bearing attempt history. Human authoring/inspection in Workspace Work; agent acceptance/reporting through CLI/MCP. |
+| **Peer proposal** | A versioned agreement with existing Sessions, blinded initial reports, bounded discussion, and a result-owner synthesis that retains dissent. Human authoring/phase controls in Workspace Work; agent acknowledgement/reporting through CLI/MCP. |
 | **Claim** | Exclusive ownership of a Workspace or task, for a bounded period. |
 | **Handoff** | The context you leave behind when you stop. |
 | **Checkpoint** | A resume marker dropped at a natural breakpoint. |
@@ -256,15 +256,116 @@ Waiting neither settles adapter notifications nor claims, accepts, or cancels wo
 Local delivery, a notification attempt, a read, work acceptance, and result approval
 are separate facts. See [MCP](MCP.md#waiting-for-durable-mail) for the response contract.
 
+## Operator work in the browser
+
+Open an existing Workspace at `/app/workspaces/:slug` and select **Work**. Assignments
+and Deliberations sit alongside Tasks & decisions; neither requires a new browser route
+or creates a Workspace. These are local, unreleased controls for part of
+[#42](https://github.com/xibodev/brains-ai/issues/42). Broader cross-process events/replay
+and transport comparison remain incomplete; remote runners (#36) and specialist workers
+(#38) remain deferred to #37 planning.
+
+Sign in with the normal browser-cookie flow. These work mutations require a human
+browser channel and Workspace write capability; a raw API credential is refused for
+writes even when it belongs to the same operator. Authorized API credentials can read.
+Get/list require Workspace read capability and return only rows whose
+`creator_operator_id` matches the authenticated operator, including that operator's
+Session-authored rows. Bootstrap admin has no cross-creator override. Operator reads
+remain available after creator or participant Sessions end, without creating a surrogate
+Session, probing a process, or renewing any Session lease.
+
+### Author and inspect work
+
+- **New assignment** uses structured fields for title, objective, context, checkout
+  reference, cooperative runtime and optional deadline. The specification is immutable.
+  Inspect stored and observed status, revision/generation, attempt history and
+  agent-reported evidence/result. Creation is recorded as you; a live agent accepts and
+  reports through its own CLI/MCP Session.
+- **New proposal** uses structured fields for title, objective, context, evidence
+  expectations, 2–8 participants, optional declared models, 0–3 discussion rounds and
+  deadline. Select existing live owned Sessions from the server's participant list and
+  explicitly choose a result owner from those participants. This selection names the
+  agent that will synthesize; it is not an “Act as” control. The HTTP specification also
+  permits a separate live owned result-owner Session in the same Workspace. Model labels
+  are declarations, not verified identities or model routing.
+- Human creation stores `creator_kind: operator`, `creator_session_id: null`, and the
+  authenticated `creator_operator_id`; proposals also return `requester_session_id: null`.
+  No synthetic agent acknowledgement is inserted. Every required agent, including the
+  result owner, must acknowledge the exact version/hash through CLI/MCP.
+- The operator is a non-member observer. Until `initial_closed: true`, every operator
+  response hides all initial report content: `contributions` and `unresolved_dissent`
+  are empty and `final` is null. Counts and missing-Session lists still show progress.
+  After explicit closure, all recorded reports, evidence, original unresolved dissent
+  and any final synthesis are visible. Cancellation, expiry or replacement before closure
+  never unblinds that history. Historical proposal versions are selectable and read-only.
+
+The forms do not accept arbitrary JSON. **Begin initial collection**, **Close initial
+collection**, and **Close discussion round** use the current server-provided permissions
+and revision fence. Advancing requires the relevant acknowledgements/reports and live
+owned participants/result owner. It does not require the original requester Session to
+remain live. Only the named agent result owner submits final synthesis, through CLI/MCP.
+
+Cancellation is explicitly confirmed and operator-attributed. Ready assignments cancel
+immediately; accepted assignments record `cancel_requested`, not a process kill. The
+accepting agent must report an outcome with evidence. Proposal cancellation requires a
+reason and changes only protocol state, not assignments, processes or mail.
+
+### Refresh and retry
+
+Work panels show **Manual refresh** and a last-refreshed timestamp. Refresh to observe
+peer progress; successful mutations also trigger readback. There is no automatic polling
+or guaranteed live cross-process update for these panels. A recorded action or existing
+mail send is not proof of harness delivery, execution or acceptance.
+
+A revision conflict refreshes the latest record and blocks another action until you
+explicitly confirm **I reviewed the refreshed record**. The UI never automatically
+accepts the changed state or resubmits the mutation. After a lost creation response,
+resubmit the unchanged open form to reuse its idempotency key; editing starts a new
+request. That is creation recovery, not an assignment execution retry. There is no
+assignment retry, agent accept/settle, proposal accept/submit, or proposal replacement
+HTTP endpoint in this operator family.
+
+### Operator work HTTP family
+
+All ten endpoints below are under **`/v1/operator/workspaces/{slug}`**, within the
+protected operator family. `{slug}` identifies an existing authorized Workspace.
+List responses use `{"items": [...]}`; detail and mutation responses are snapshots.
+
+| Method | Path suffix | Request / result |
+|---|---|---|
+| GET | `/assignments` | `limit=50`, range 1–200; owned assignment snapshots. |
+| GET | `/assignments/{code}` | Assignment with complete attempt history and permissions. |
+| POST | `/assignments` | `title`, `specification` object, `idempotency_key`. |
+| POST | `/assignments/{code}/cancel` | `expected_revision`. |
+| GET | `/coordinations` | `limit=50`, range 1–200; owned latest proposal versions. |
+| GET | `/coordinations/{code}` | Optional positive `version` for history. |
+| POST | `/coordinations` | `title`, `specification` object, `idempotency_key`; explicit `result_owner_session_id` in the specification. |
+| POST | `/coordinations/{code}/advance` | `version`, `expected_revision`. |
+| POST | `/coordinations/{code}/cancel` | `version`, `expected_revision`, nonblank `reason`. |
+| GET | `/work-participants` | `limit=200`, range 1–200; owned recorded-live Session candidates with tool/state/timestamps. |
+
+Creation bodies reject extra actor fields; author identity comes from authentication.
+Specification fields and bounds are described in [MCP](MCP.md#local-work-assignments)
+and [peer coordination](MCP.md#existing-peer-coordination), with the human result-owner
+rule above. Mutation version/revision fields require integers, not booleans or strings.
+Assignment `permissions` contains `can_cancel` and `reason`; proposal `permissions`
+contains `can_advance`, `advance_blocked_reason`, `can_cancel`, and
+`cancel_blocked_reason`. Treat these as snapshot guidance: the write rechecks authority,
+state and liveness. Missing/out-of-scope work shares a `404`; human-channel refusal is
+`403`, state/revision/idempotency conflict is `409`, and invalid input is `422`.
+These endpoints add no public authentication exemption and no MCP tools: the current-main
+count remains 89; the website's pinned 1.5 release still describes 74.
+
 ## Local work assignments
 
 Use an assignment when you need a durable agreement about an objective and an attributable
 result from an existing Session. This branch provides the local state foundation of
 [#36](https://github.com/xibodev/brains-ai/issues/36); remote runners and specialist
-execution remain planned. There is no native HTTP API or frontend for assignments.
+execution remain planned. Human authoring and inspection are also available through the
+[operator Work tab and HTTP family](#operator-work-in-the-browser).
 
-Every call requires a live Session owned by the authenticated operator in the assignment's
-Workspace. Use the registered Workspace path or a recorded alias, not an arbitrary new
+Every assignment CLI/MCP call requires a live Session owned by the authenticated operator
+in the assignment's Workspace. Use the registered Workspace path or a recorded alias, not an arbitrary new
 path. The following CLI example uses placeholders for existing Sessions and returned IDs;
 replace them before running. Line continuations use POSIX shell syntax.
 
@@ -335,13 +436,15 @@ harness. Assignments do not provide universal process control or containment.
 Use a peer proposal when existing Sessions need to review the same explicit scope before
 sharing findings. This branch implements local protocol state for part of
 [#38](https://github.com/xibodev/brains-ai/issues/38), not worker panels, multi-day
-execution, or checkout management. It has CLI/MCP interfaces only. Local work assignments
+execution, or checkout management. Agents use CLI/MCP; the
+[operator Work tab](#operator-work-in-the-browser) provides human authoring, observation,
+cancellation and phase advancement. Local work assignments
 remain the separate [#36](https://github.com/xibodev/brains-ai/issues/36) state foundation;
 proposal links do not create or control assignments.
 
 Use 2–8 existing live participant Sessions in the same Workspace, owned by the same
-authenticated operator. Requester may also be a participant. Every caller must be a live
-owned member; sharing an operator credential does not isolate one Session from another.
+authenticated operator. A Session requester may also be a participant. Every CLI/MCP
+caller must be a live owned member; sharing an operator credential does not isolate one Session from another.
 Blinding filters responses, not access to the operator's own database, and cannot prevent
 that operator from acting as another owned Session. Model labels are declarations only;
 actual tool names are read from stored Sessions. An acknowledgement is a Session action,
@@ -427,7 +530,7 @@ as `unresolved_dissent`, with `resolved: false`; synthesis cannot erase it.
   send/cancel mail. Cancellation before initial closure does not unblind history.
 - Context, evidence and links are inert recorded text, never automatically fetched or
   verified. Protocol completion is not human approval, worker execution proof, or a
-  browser/readiness guarantee.
+   readiness guarantee.
 
 ## When a human is required
 

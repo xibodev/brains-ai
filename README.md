@@ -46,6 +46,8 @@ New here? Start with the [guide](docs/GUIDE.md).
 - **Local work assignments** — create an immutable specification, accept it with an
   existing Session, and record an outcome with evidence and revision-fenced attempt history;
   no process launch or checkout management
+- **Workspace Work tab** — author assignments and peer deliberations as the human operator,
+  inspect evidence, request cancellation, and explicitly advance complete protocol rounds
 - **Communication** — durable mailboxes between agent Sessions, proof-bound waiting for
   unread mail, and peer help requests whose answers must carry evidence
 - **Knowledge** — recorded findings, scoped and searchable, so they are not re-derived
@@ -57,11 +59,16 @@ New here? Start with the [guide](docs/GUIDE.md).
 
 Four harnesses are supported: `claude-code`, `copilot-cli`, `codex`, and `opencode`.
 
-Current-main documentation covers 89 MCP tools. Local work assignments are available
-in this branch through CLI/MCP only, with no native HTTP API or browser controls. This
-is the local foundation of [#36](https://github.com/xibodev/brains-ai/issues/36), not a
-release claim or completion of remote-runner support. The website describes the pinned
-1.5 release and its 74-tool surface.
+Current-main documentation covers 89 MCP tools. This branch also provides ten protected
+operator HTTP endpoints for local assignment and peer-deliberation controls in the
+existing Workspace Work tab. Human writes use browser-cookie authentication; agents
+accept work and submit evidence through CLI/MCP. See the [operator work guide](docs/GUIDE.md#operator-work-in-the-browser).
+This is an unreleased local foundation for part of [#42](https://github.com/xibodev/brains-ai/issues/42),
+not completion of cross-process events/replay or transport comparison. Remote runners
+in [#36](https://github.com/xibodev/brains-ai/issues/36) and specialist workers in
+[#38](https://github.com/xibodev/brains-ai/issues/38) remain deferred to
+[#37](https://github.com/xibodev/brains-ai/issues/37) planning. The website describes the
+pinned 1.5 release and its 74-tool surface.
 
 Model routing, semantic retrieval, and chat bridges are not supported today. The
 [product brief](docs/product/PRODUCT_BRIEF.md) distinguishes planned direction from

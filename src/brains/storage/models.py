@@ -15,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, synonym
 
 from .db import Base
 
@@ -81,6 +81,11 @@ class CoordinationProposal(Base):
         CheckConstraint("version >= 1 AND revision >= 0", name="ck_coordination_version"),
         CheckConstraint("round BETWEEN 0 AND 4", name="ck_coordination_round"),
         CheckConstraint(
+            "(creator_kind = 'session' AND creator_session_id IS NOT NULL) OR "
+            "(creator_kind = 'operator' AND creator_session_id IS NULL)",
+            name="ck_coordination_creator",
+        ),
+        CheckConstraint(
             "status IN ('planned','accepted','collecting','discussing','completed','cancelled')",
             name="ck_coordination_status",
         ),
@@ -90,7 +95,14 @@ class CoordinationProposal(Base):
     version: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"))
     creator_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"))
-    creator_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    creator_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="session", server_default="session"
+    )
+    creator_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True
+    )
+    # Keep migration 155's stored identity while naming the protocol role explicitly.
+    requester_session_id: Mapped[str | None] = synonym("creator_session_id")
     result_owner_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
     idempotency_key: Mapped[str] = mapped_column(String(128))
     request_hash: Mapped[str] = mapped_column(String(64))
@@ -163,6 +175,11 @@ class WorkAssignment(Base):
         CheckConstraint("generation >= 0", name="ck_work_assignments_generation"),
         CheckConstraint("spec_version = 1", name="ck_work_assignments_spec_version"),
         CheckConstraint(
+            "(creator_kind = 'session' AND creator_session_id IS NOT NULL) OR "
+            "(creator_kind = 'operator' AND creator_session_id IS NULL)",
+            name="ck_work_assignments_creator",
+        ),
+        CheckConstraint(
             "status IN ('ready','accepted','cancel_requested','completed','failed',"
             "'cancelled','uncertain')",
             name="ck_work_assignments_status",
@@ -172,7 +189,12 @@ class WorkAssignment(Base):
     code: Mapped[str] = mapped_column(String(39), primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"))
     creator_operator_id: Mapped[int] = mapped_column(ForeignKey("operators.id"))
-    creator_session_id: Mapped[str] = mapped_column(ForeignKey("agent_sessions.id"))
+    creator_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="session", server_default="session"
+    )
+    creator_session_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_sessions.id"), nullable=True
+    )
     idempotency_key: Mapped[str] = mapped_column(String(128))
     request_hash: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(256))

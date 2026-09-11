@@ -48,18 +48,33 @@ def migrated_template(tmp_path_factory):
     engine = create_engine(f"sqlite:///{path.as_posix()}")
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     corpus = migration_registry.build_corpus()
+    through_155 = MetaData()
     previous = MetaData()
     for table in Base.metadata.sorted_tables:
+        historical = table.to_metadata(through_155)
+        if table.name in {"work_assignments", "coordination_proposals"}:
+            historical._columns.remove(historical.c.creator_kind)
+            historical.constraints = {
+                constraint
+                for constraint in historical.constraints
+                if constraint.name not in {"ck_work_assignments_creator", "ck_coordination_creator"}
+            }
+            historical.c.creator_session_id.nullable = False
         if table.name not in OWN_TABLES:
-            table.to_metadata(previous)
+            historical.to_metadata(previous)
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(migrations, "engine", engine)
         patch.setattr(migrations, "SessionLocal", factory)
+        patch.setattr(migrations, "Base", SimpleNamespace(metadata=through_155))
+        # Prove real 155 interruption/replay before applying later model upgrades.
+        patch.setattr(
+            migrations, "corpus", lambda: tuple(s for s in corpus if s.migration_id <= MIGRATION)
+        )
         with patch.context() as old:
             old.setattr(
                 migrations,
                 "corpus",
-                lambda: tuple(s for s in corpus if s.migration_id != MIGRATION),
+                lambda: tuple(s for s in corpus if s.migration_id < MIGRATION),
             )
             old.setattr(migrations, "Base", SimpleNamespace(metadata=previous))
             migrations.reset_migration_cache()
@@ -122,6 +137,10 @@ def migrated_template(tmp_path_factory):
                 "SELECT status, attempts FROM schema_versions WHERE version=?", (MIGRATION,)
             ).fetchone() == ("applied", 2)
             importlib.import_module(f"brains.storage.sql_migrations.{MIGRATION}").upgrade(conn)
+        patch.setattr(migrations, "corpus", lambda: corpus)
+        patch.setattr(migrations, "Base", Base)
+        migrations.reset_migration_cache()
+        assert migrations.run_migrations().healthy
         migrations.reset_migration_cache()
     engine.dispose()
     return path

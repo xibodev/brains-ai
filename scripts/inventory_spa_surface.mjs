@@ -68,7 +68,8 @@ const APP = "App.tsx", BOUNDARY = "coreRoutes.tsx";
 const REACT_MODULES = new Set(["react", "react/jsx-runtime", "react/jsx-dev-runtime"]);
 const REVIEWED_REACT_IMPORTS = new Set([
   "StrictMode", "ComponentProps", "CSSProperties", "ReactNode", "RefObject",
-  "createContext", "useCallback", "useContext", "useEffect", "useMemo", "useRef", "useState",
+  // Local IDs and post-commit focus restoration; callback bodies remain inspected.
+  "createContext", "useCallback", "useContext", "useEffect", "useId", "useLayoutEffect", "useMemo", "useRef", "useState",
 ]);
 const REVIEWED_OBJECT_METHODS = new Set(["entries", "fromEntries", "keys", "values"]);
 const READ_ONLY_ROUTER = new Set(["Outlet", "useLocation", "useParams", "useSearchParams"]);

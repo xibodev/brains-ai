@@ -5,6 +5,11 @@ can act as another Session they own and can read their local database. Tool name
 come from stored Sessions; model labels are declarations, never verified routing.
 Context and links are inert snapshots/references and are never fetched.
 
+Operator controls use the supplied Principal, never a borrowed Session. Human
+creation records agreement without a peer acknowledgement; all selected agents
+and the explicit result owner must acknowledge. Operator observers see no initial
+bodies until initial_closed, even when a contributing Session belongs to them.
+
 Versions are immutable specifications. Revisions are monotonic across each code's
 versions, starting at zero on version 1. Replacement cancels the old version at
 r + 1 and creates the new version at r + 2 in the same transaction, so its exact
@@ -32,6 +37,8 @@ from uuid import uuid4
 
 from sqlalchemy import func
 
+from brains.authz.policy import require_workspace_capability
+from brains.authz.principal import CAP_ORG_READ, CAP_ORG_WRITE, Principal
 from brains.authz.resolver import resolve_local_principal
 from brains.control.common import utc_now
 from brains.control.events import TAXONOMY_VERSION, classify_event_kind
@@ -114,7 +121,7 @@ def _refs(value, name: str) -> list:
     return [_text(item, name, 2048, required=True) for item in value]
 
 
-def _specification(value: dict, requester: str) -> dict:
+def _specification(value: dict, requester: str | None) -> dict:
     allowed = {
         "version",
         "objective",
@@ -128,6 +135,8 @@ def _specification(value: dict, requester: str) -> dict:
     }
     if type(value) is not dict or any(type(k) is not str or k not in allowed for k in value):
         raise ValueError("specification must be a version-1 object with only allowed fields")
+    if requester is None and not value.get("result_owner_session_id"):
+        raise ValueError("operator proposals require an explicit result_owner_session_id")
     spec = {
         "version": _integer(value.get("version", 1), "version", 1, 1),
         "objective": _text(value.get("objective"), "objective", SPEC_LIMIT, required=True),
@@ -245,7 +254,11 @@ def _participants(row: CoordinationProposal) -> set[str]:
 
 
 def _members(row: CoordinationProposal) -> set[str]:
-    return _participants(row) | {row.creator_session_id, row.result_owner_session_id}
+    return _participants(row) | {
+        ident
+        for ident in (row.creator_session_id, row.result_owner_session_id)
+        if ident is not None
+    }
 
 
 def _access(row, actor, workspace, principal) -> None:
@@ -253,7 +266,7 @@ def _access(row, actor, workspace, principal) -> None:
         row is None
         or row.workspace_id != workspace.id
         or row.creator_operator_id != principal.operator_id
-        or actor.id not in _members(row)
+        or (actor is not None and actor.id not in _members(row))
     ):
         raise ValueError(_UNAVAILABLE)
 
@@ -344,7 +357,7 @@ def _append(session, row, actor, kind, payload, *, round=0, key=None) -> None:
     )
 
 
-def _snapshot(session, row, actor) -> dict:
+def _snapshot(session, row, viewer_session_id: str | None) -> dict:
     entries = _entries(session, row)
     peers = _participants(row)
     accepted = {e.author_session_id for e in entries if e.kind == "accept"}
@@ -360,7 +373,9 @@ def _snapshot(session, row, actor) -> dict:
         e
         for e in entries
         if e.kind != "accept"
-        and (row.initial_closed or (e.kind == "initial" and e.author_session_id == actor.id))
+        and (
+            row.initial_closed or (e.kind == "initial" and e.author_session_id == viewer_session_id)
+        )
     ]
     contributions = [
         {
@@ -391,7 +406,9 @@ def _snapshot(session, row, actor) -> dict:
         "revision": row.revision,
         "workspace_id": row.workspace_id,
         "creator_operator_id": row.creator_operator_id,
-        "creator_session_id": row.creator_session_id,
+        "creator_kind": row.creator_kind,
+        "requester_session_id": row.requester_session_id,
+        "creator_session_id": row.requester_session_id,
         "result_owner_session_id": row.result_owner_session_id,
         "title": row.title,
         "specification": spec,
@@ -429,12 +446,11 @@ def _snapshot(session, row, actor) -> dict:
     }
 
 
-def _finish(session, row, actor, action: str) -> dict:
-    require_live_session(session, actor.id, action="coordination", renew_lease=True)
+def _record_event(session, row, action: str, *, session_id: str | None, attribution: dict) -> None:
     kind = f"coordination_{action}"
     event = Event(
         workspace_id=row.workspace_id,
-        session_id=actor.id,
+        session_id=session_id,
         kind=kind,
         message=f"{row.code}: {action}",
         metadata_json=_json(
@@ -444,6 +460,7 @@ def _finish(session, row, actor, action: str) -> dict:
                 "revision": row.revision,
                 "round": row.round,
                 "workspace_id": row.workspace_id,
+                **attribution,
             }
         ),
     )
@@ -458,7 +475,12 @@ def _finish(session, row, actor, action: str) -> dict:
             taxonomy_version=TAXONOMY_VERSION,
         )
     )
-    result = _snapshot(session, row, actor)
+
+
+def _finish(session, row, actor, action: str) -> dict:
+    require_live_session(session, actor.id, action="coordination", renew_lease=True)
+    _record_event(session, row, action, session_id=actor.id, attribution={"actor_kind": "session"})
+    result = _snapshot(session, row, actor.id)
     session.commit()
     return result
 
@@ -486,11 +508,12 @@ def propose_coordination(
         title = _text(title, "title", 256, required=True)
         key = _text(idempotency_key, "idempotency_key", 128, required=True)
         spec = _specification(specification, actor.id)
-        request_hash = _hash(_json({"title": title, "specification": spec, "code": code}))
+        request = {"title": title, "specification": spec, "code": code}
+        request_hash = _hash(_json({**request, "creator_kind": "session"}))
         old = None
         if code is not None:
             old = _proposal(session, code, actor, workspace, principal)
-            if actor.id != old.creator_session_id:
+            if actor.id != old.requester_session_id:
                 raise ValueError(_UNAVAILABLE)
             _revision(old, old.version, expected_revision)
         elif expected_revision is not None:
@@ -506,10 +529,15 @@ def propose_coordination(
         )
         if replay is not None:
             _access(replay, actor, workspace, principal)
-            if replay.request_hash != request_hash:
+            # Migration-155 creation keys predate creator_kind. Keep their retries
+            # compatible, but never accept an operator key through a Session API.
+            if replay.creator_kind != "session" or replay.request_hash not in {
+                request_hash,
+                _hash(_json(request)),
+            }:
                 raise ValueError("idempotency_key already used for a different request")
             current = _proposal(session, replay.code, actor, workspace, principal)
-            return _snapshot(session, current, actor)
+            return _snapshot(session, current, actor.id)
         if old is not None:
             _open(old)
         now = _aware(utc_now())
@@ -536,7 +564,8 @@ def propose_coordination(
             version=old.version + 1 if old is not None else 1,
             workspace_id=workspace.id,
             creator_operator_id=principal.operator_id,
-            creator_session_id=actor.id,
+            creator_kind="session",
+            requester_session_id=actor.id,
             result_owner_session_id=owner,
             idempotency_key=key,
             request_hash=request_hash,
@@ -560,7 +589,9 @@ def propose_coordination(
 def get_coordination(code: str, *, session_id: str, version: int | None = None) -> dict:
     with _transaction(session_id, write=False) as (session, actor, workspace, principal):
         return _snapshot(
-            session, _proposal(session, code, actor, workspace, principal, version=version), actor
+            session,
+            _proposal(session, code, actor, workspace, principal, version=version),
+            actor.id,
         )
 
 
@@ -593,7 +624,7 @@ def list_coordinations(workspace_path: str, *, session_id: str, limit: int = 50)
         result = []
         for row in rows.yield_per(100):
             if actor.id in _members(row):
-                result.append(_snapshot(session, row, actor))
+                result.append(_snapshot(session, row, actor.id))
                 if len(result) == limit:
                     break
         return result
@@ -610,7 +641,7 @@ def accept_coordination(
             raise ValueError("spec_hash does not match this version")
         accepted = {e.author_session_id for e in _entries(session, row) if e.kind == "accept"}
         if actor.id in accepted:
-            return _snapshot(session, row, actor)
+            return _snapshot(session, row, actor.id)
         if row.status != "planned":
             raise ValueError("coordination is not awaiting acceptance")
         _append(session, row, actor, "accept", _json({"spec_hash": spec_hash}))
@@ -625,31 +656,10 @@ def advance_coordination(
 ) -> dict:
     with _transaction(session_id, write=True) as (session, actor, workspace, principal):
         row = _proposal(session, code, actor, workspace, principal)
-        if actor.id != row.creator_session_id:
+        if actor.id != row.requester_session_id:
             raise ValueError(_UNAVAILABLE)
         _revision(row, version, expected_revision)
-        _open(row)
-        entries = _entries(session, row)
-        peers = _participants(row)
-        rounds = json.loads(row.specification_json)["discussion_rounds"]
-        if row.status == "accepted":
-            for ident in sorted(_members(row)):
-                _peer(session, ident, workspace, principal)
-            _cas(session, row, status="collecting")
-        elif row.status == "collecting":
-            if {e.author_session_id for e in entries if e.kind == "initial"} != peers:
-                raise ValueError("all initial contributions are required before closing collection")
-            _cas(session, row, status="discussing", initial_closed=True, round=1 if rounds else 0)
-        elif row.status == "discussing" and 1 <= row.round <= rounds:
-            if {
-                e.author_session_id
-                for e in entries
-                if e.kind == "discussion" and e.round == row.round
-            } != peers:
-                raise ValueError("all discussion contributions are required before advancing")
-            _cas(session, row, round=row.round + 1)
-        else:
-            raise ValueError("coordination cannot advance in this state")
+        _advance(session, row, workspace, principal)
         return _finish(session, row, actor, "advanced")
 
 
@@ -683,7 +693,7 @@ def submit_coordination(
         if replay is not None:
             if replay.request_hash != request_hash:
                 raise ValueError("idempotency_key already used for a different contribution")
-            return _snapshot(session, row, actor)
+            return _snapshot(session, row, actor.id)
         _open(row)
         rounds = json.loads(row.specification_json)["discussion_rounds"]
         round = row.round if kind == "discussion" else 0
@@ -712,13 +722,309 @@ def cancel_coordination(
 ) -> dict:
     with _transaction(session_id, write=True) as (session, actor, workspace, principal):
         row = _proposal(session, code, actor, workspace, principal)
-        if actor.id != row.creator_session_id:
+        if actor.id != row.requester_session_id:
             raise ValueError(_UNAVAILABLE)
         _revision(row, version, expected_revision)
         reason = _text(reason, "reason", SPEC_LIMIT, required=True)
         if row.status == "cancelled" and row.cancellation_reason == reason:
-            return _snapshot(session, row, actor)
+            return _snapshot(session, row, actor.id)
         if row.status not in _OPEN:
             raise ValueError("coordination cannot be cancelled")
         _cas(session, row, status="cancelled", cancellation_reason=reason)
         return _finish(session, row, actor, "cancelled")
+
+
+def _advance_blocked(row, entries) -> str | None:
+    if row.status not in _OPEN:
+        return "coordination_not_open"
+    if _aware(utc_now()) >= _aware(row.deadline_at):
+        return "deadline_exceeded"
+    if row.status in ("planned", "accepted"):
+        accepted = {e.author_session_id for e in entries if e.kind == "accept"}
+        if accepted != _members(row):
+            return "acceptances_required"
+        return None if row.status == "accepted" else "cannot_advance_in_state"
+    if row.status == "collecting":
+        initial = {e.author_session_id for e in entries if e.kind == "initial"}
+        return None if initial == _participants(row) else "initial_contributions_required"
+    rounds = json.loads(row.specification_json)["discussion_rounds"]
+    if 1 <= row.round <= rounds:
+        discussion = {
+            e.author_session_id for e in entries if e.kind == "discussion" and e.round == row.round
+        }
+        return None if discussion == _participants(row) else "discussion_contributions_required"
+    return "final_synthesis_required"
+
+
+_ADVANCE_ERRORS = {
+    "coordination_not_open": "coordination is not open",
+    "deadline_exceeded": "coordination deadline exceeded",
+    "acceptances_required": "all acceptances are required before advancing",
+    "initial_contributions_required": (
+        "all initial contributions are required before closing collection"
+    ),
+    "discussion_contributions_required": (
+        "all discussion contributions are required before advancing"
+    ),
+    "cannot_advance_in_state": "coordination cannot advance in this state",
+    "final_synthesis_required": "coordination cannot advance before a final synthesis",
+}
+
+
+def _advance(session, row, workspace, principal, *, operator: bool = False) -> None:
+    blocked = _advance_blocked(row, _entries(session, row))
+    if blocked:
+        raise ValueError(_ADVANCE_ERRORS[blocked])
+    if operator or row.status == "accepted":
+        # Human authority does not depend on the original requester remaining live.
+        # Selected agents must still be live and owned under the writer reservation.
+        required = _participants(row) | {row.result_owner_session_id} if operator else _members(row)
+        for ident in sorted(required):
+            _peer(session, ident, workspace, principal)
+    if row.status == "accepted":
+        _cas(session, row, status="collecting")
+    elif row.status == "collecting":
+        rounds = json.loads(row.specification_json)["discussion_rounds"]
+        _cas(session, row, status="discussing", initial_closed=True, round=1 if rounds else 0)
+    else:
+        _cas(session, row, round=row.round + 1)
+
+
+@contextmanager
+def _operator_transaction(workspace_id: int, principal: Principal, *, write: bool):
+    """Authenticate the supplied transport principal without a Session surrogate."""
+    if (
+        not isinstance(principal, Principal)
+        or not principal.is_operator
+        or principal.operator_id is None
+    ):
+        raise ValueError(_UNAVAILABLE)
+    _integer(workspace_id, "workspace_id", 1, 2**63 - 1)
+    capability = CAP_ORG_WRITE if write else CAP_ORG_READ
+    require_workspace_capability(
+        principal, capability, workspace_id, entity="coordination", ref=workspace_id
+    )
+    if write and not principal.is_human_channel:
+        raise ValueError("operator coordination mutations require a human channel")
+    init_db()
+    with SessionLocal() as session:
+        if write:
+            # SQLite serializes this with Session/proposal/lifecycle writers. Do
+            # not read proposal or peer state until the writer reservation exists.
+            session.query(Workspace).filter(Workspace.id == workspace_id).update(
+                {Workspace.id: Workspace.id}, synchronize_session=False
+            )
+        elif session.get_bind().dialect.name == "sqlite":
+            session.connection().exec_driver_sql("BEGIN")
+        workspace = session.get(Workspace, workspace_id)
+        if workspace is None or session.get(Operator, principal.operator_id) is None:
+            raise ValueError(_UNAVAILABLE)
+        org_id = workspace.org_id
+        if org_id is None:
+            org_id = session.query(Org.id).filter(Org.slug == "default").scalar()
+        if not principal.has_capability(capability, org_id) or not _visible(
+            session, principal, workspace
+        ):
+            raise ValueError(_UNAVAILABLE)
+        yield session, workspace, org_id
+
+
+def _operator_snapshot(session, row, workspace, principal, org_id) -> dict:
+    result = _snapshot(session, row, viewer_session_id=None)
+    blocked = None
+    if not principal.is_human_channel:
+        blocked = "human_channel_required"
+    elif not principal.has_capability(CAP_ORG_WRITE, org_id):
+        blocked = "write_capability_required"
+    elif row.version != (
+        session.query(func.max(CoordinationProposal.version))
+        .filter(CoordinationProposal.code == row.code)
+        .scalar()
+    ):
+        blocked = "historical_version"
+    advance_reason = blocked or _advance_blocked(row, _entries(session, row))
+    if advance_reason is None:
+        try:
+            for ident in sorted(_participants(row) | {row.result_owner_session_id}):
+                _peer(session, ident, workspace, principal)
+        except ValueError:
+            advance_reason = "participant_unavailable"
+    # Expired open state may still be explicitly cancelled, as on the Session API.
+    cancel_reason = blocked or ("coordination_not_open" if row.status not in _OPEN else None)
+    result["permissions"] = {
+        "can_advance": advance_reason is None,
+        "advance_blocked_reason": advance_reason,
+        "can_cancel": cancel_reason is None,
+        "cancel_blocked_reason": cancel_reason,
+    }
+    return result
+
+
+def _finish_operator(session, row, workspace, principal, org_id, action: str) -> dict:
+    _record_event(
+        session,
+        row,
+        action,
+        session_id=None,
+        attribution={
+            "actor_kind": "operator",
+            "operator_id": principal.operator_id,
+            "channel": principal.channel,
+        },
+    )
+    result = _operator_snapshot(session, row, workspace, principal, org_id)
+    session.commit()
+    return result
+
+
+def list_operator_coordinations(
+    workspace_id: int, *, principal: Principal, limit: int = 50
+) -> list:
+    """List the operator's latest versions as a blinded, non-member observer."""
+    _integer(limit, "limit", 1, 200)
+    with _operator_transaction(workspace_id, principal, write=False) as (
+        session,
+        workspace,
+        org_id,
+    ):
+        latest = (
+            session.query(
+                CoordinationProposal.code, func.max(CoordinationProposal.version).label("version")
+            )
+            .group_by(CoordinationProposal.code)
+            .subquery()
+        )
+        rows = (
+            session.query(CoordinationProposal)
+            .join(
+                latest,
+                (CoordinationProposal.code == latest.c.code)
+                & (CoordinationProposal.version == latest.c.version),
+            )
+            .filter(
+                CoordinationProposal.workspace_id == workspace.id,
+                CoordinationProposal.creator_operator_id == principal.operator_id,
+            )
+            .order_by(CoordinationProposal.created_at.desc(), CoordinationProposal.code)
+            .limit(limit)
+            .all()
+        )
+        return [_operator_snapshot(session, row, workspace, principal, org_id) for row in rows]
+
+
+def get_operator_coordination(
+    workspace_id: int, code: str, *, principal: Principal, version: int | None = None
+) -> dict:
+    """Read latest or immutable historical scope with the same observer filter."""
+    with _operator_transaction(workspace_id, principal, write=False) as (
+        session,
+        workspace,
+        org_id,
+    ):
+        row = _proposal(session, code, None, workspace, principal, version=version)
+        return _operator_snapshot(session, row, workspace, principal, org_id)
+
+
+def propose_operator_coordination(
+    workspace_id: int,
+    title: str,
+    specification: dict,
+    *,
+    principal: Principal,
+    idempotency_key: str,
+) -> dict:
+    """Human agreement creates scope, never a synthetic peer acknowledgement.
+
+    The explicit result owner may be another owned live Session outside the panel;
+    it must also acknowledge the exact hash. Human replacement is not exposed.
+    """
+    with _operator_transaction(workspace_id, principal, write=True) as (session, workspace, org_id):
+        title = _text(title, "title", 256, required=True)
+        key = _text(idempotency_key, "idempotency_key", 128, required=True)
+        spec = _specification(specification, None)
+        request_hash = _hash(
+            _json({"title": title, "specification": spec, "code": None, "creator_kind": "operator"})
+        )
+        replay = (
+            session.query(CoordinationProposal)
+            .filter(
+                CoordinationProposal.workspace_id == workspace.id,
+                CoordinationProposal.creator_operator_id == principal.operator_id,
+                CoordinationProposal.idempotency_key == key,
+            )
+            .one_or_none()
+        )
+        if replay is not None:
+            if replay.creator_kind != "operator" or replay.request_hash != request_hash:
+                raise ValueError("idempotency_key already used for a different request")
+            current = _proposal(session, replay.code, None, workspace, principal)
+            return _operator_snapshot(session, current, workspace, principal, org_id)
+        now = _aware(utc_now())
+        deadline = _deadline(spec["deadline"]) if "deadline" in spec else now + timedelta(hours=1)
+        if not now < deadline <= now + timedelta(days=MAX_DEADLINE_DAYS):
+            raise ValueError("deadline must be future and within 30 days")
+        spec["deadline"] = deadline.isoformat()
+        for participant in spec["participants"]:
+            stored = _peer(session, participant["session_id"], workspace, principal)
+            participant["tool"] = _text(stored.tool, "tool", 64, required=True)
+        owner = spec["result_owner_session_id"]
+        _peer(session, owner, workspace, principal)
+        encoded = _json(spec)
+        _text(encoded, "specification", SPEC_LIMIT)
+        row = CoordinationProposal(
+            code=f"PC-{uuid4()}",
+            version=1,
+            workspace_id=workspace.id,
+            creator_operator_id=principal.operator_id,
+            creator_kind="operator",
+            requester_session_id=None,
+            result_owner_session_id=owner,
+            idempotency_key=key,
+            request_hash=request_hash,
+            title=title,
+            specification_json=encoded,
+            specification_hash=_hash(encoded),
+            status="planned",
+            revision=0,
+            round=0,
+            initial_closed=False,
+            deadline_at=deadline,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(row)
+        session.flush()
+        return _finish_operator(session, row, workspace, principal, org_id, "proposed")
+
+
+def advance_operator_coordination(
+    workspace_id: int, code: str, *, principal: Principal, version: int, expected_revision: int
+) -> dict:
+    """Explicitly advance owned scope, including Session-created latest versions."""
+    with _operator_transaction(workspace_id, principal, write=True) as (session, workspace, org_id):
+        row = _proposal(session, code, None, workspace, principal)
+        _revision(row, version, expected_revision)
+        _advance(session, row, workspace, principal, operator=True)
+        return _finish_operator(session, row, workspace, principal, org_id, "advanced")
+
+
+def cancel_operator_coordination(
+    workspace_id: int,
+    code: str,
+    reason: str,
+    *,
+    principal: Principal,
+    version: int,
+    expected_revision: int,
+) -> dict:
+    """Cancel latest owned scope without changing agents, assignments, or blinding."""
+    with _operator_transaction(workspace_id, principal, write=True) as (session, workspace, org_id):
+        row = _proposal(session, code, None, workspace, principal)
+        _revision(row, version, expected_revision)
+        reason = _text(reason, "reason", SPEC_LIMIT, required=True)
+        if row.status == "cancelled" and row.cancellation_reason == reason:
+            return _operator_snapshot(session, row, workspace, principal, org_id)
+        if row.status not in _OPEN:
+            raise ValueError("coordination cannot be cancelled")
+        _cas(session, row, status="cancelled", cancellation_reason=reason)
+        return _finish_operator(session, row, workspace, principal, org_id, "cancelled")

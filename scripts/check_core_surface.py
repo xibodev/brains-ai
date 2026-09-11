@@ -54,7 +54,7 @@ CORE_SPA_TARGET_PREFIXES = (
     "/workspaces",
 )
 CORE_ROUTE_GUARD_SHA256 = "4ca8bb17336e2947aac674aa55275bff4633f5fbec1d14f4004c3a559f88ad32"
-SPA_AST_HELPER_SHA256 = "8405f2c1538808c282afdefa8417ae9bed5a060234c811055fe470184c3f0003"
+SPA_AST_HELPER_SHA256 = "96ff5dc4ecaa2a81a11101d39fd3a9a377190f749b378646422c1caf070f9793"
 CORE_WIRE_RULE_SHA256 = "9ad047867401f064dae31480ba75a7a57a87bddb66bfbe05fbd4494ca39caeff"
 CORE_FRONTEND_MODULES = frozenset(
     {
@@ -73,6 +73,9 @@ CORE_FRONTEND_MODULES = frozenset(
         "components/StatusPill.tsx",
         "components/Toast.tsx",
         "components/TopBar.tsx",
+        "components/WorkspaceAssignments.tsx",
+        "components/WorkspaceDeliberations.tsx",
+        "components/WorkspaceWorkShared.tsx",
         "components/format.ts",
         "components/sessionScope.ts",
         "components/useDialogFocus.ts",

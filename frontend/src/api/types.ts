@@ -1022,3 +1022,168 @@ export interface OperatorTransitionResult {
   code: string;
   status: string;
 }
+
+// Native operator workspace work. Authorship is transport-derived; never send
+// creator/requester Session aliases in a browser mutation.
+export interface WorkspaceWorkCreate<S> {
+  title: string;
+  specification: S;
+  idempotency_key: string;
+}
+
+export interface WorkspaceAssignmentSpec {
+  version: 1;
+  objective: string;
+  context?: string;
+  checkout_ref?: string;
+  max_runtime_seconds?: number;
+  deadline?: string;
+  links?: string[];
+  tool?: string;
+}
+
+export interface WorkspaceWorkAttempt {
+  attempt_id: string;
+  generation: number;
+  source_session_id: string;
+  tool: string;
+  status: string;
+  observed_status: string;
+  deadline_exceeded: boolean;
+  source_session_unavailable: boolean;
+  accepted_at: string | null;
+  deadline_at: string | null;
+  max_runtime_seconds: number;
+  cancel_requested_at: string | null;
+  reported_at: string | null;
+  settled_at: string | null;
+  evidence: string | null;
+  result: string | null;
+  usage: Record<string, unknown> | null;
+}
+
+export interface WorkspaceAssignment {
+  code: string;
+  workspace_id: number;
+  title: string;
+  creator_operator_id: number;
+  creator_kind: string;
+  creator_session_id: string | null;
+  idempotency_key: string;
+  request_hash: string;
+  spec_version: number;
+  specification: WorkspaceAssignmentSpec;
+  specification_hash: string;
+  status: string;
+  observed_status: string;
+  revision: number;
+  generation: number;
+  deadline_exceeded: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  cancel_requested_at: string | null;
+  cancel_requested_by_session_id: string | null;
+  current_attempt_id: string | null;
+  attempts: WorkspaceWorkAttempt[];
+  permissions: { can_cancel: boolean; reason: string | null };
+}
+
+export interface WorkspaceWorkParticipant {
+  session_id: string;
+  tool: string;
+  state: string;
+  started_at: string;
+  last_activity_at: string | null;
+}
+
+export interface WorkspaceDeliberationSpec {
+  version: 1;
+  objective: string;
+  context: string;
+  evidence_expectations: string;
+  participants: Array<{ session_id: string; model: string | null }>;
+  result_owner_session_id: string;
+  discussion_rounds: number;
+  deadline?: string;
+  links?: string[];
+}
+
+export interface WorkspaceWorkReport {
+  findings: string;
+  evidence: string;
+  uncertainty: string;
+  dissent: string;
+  clarifications?: string[];
+}
+
+export interface WorkspaceWorkFinal {
+  summary: string;
+  evidence: string;
+}
+
+export type WorkspaceWorkContribution = {
+  contribution_id: string;
+  author_session_id: string;
+  round: number;
+  created_at: string;
+} & (
+  | { kind: "initial" | "discussion"; payload: WorkspaceWorkReport }
+  | { kind: "final"; payload: WorkspaceWorkFinal }
+);
+
+export interface WorkspaceDeliberation {
+  code: string;
+  version: number;
+  revision: number;
+  workspace_id: number;
+  creator_operator_id: number;
+  creator_kind: string;
+  requester_session_id: string | null;
+  creator_session_id: string | null;
+  result_owner_session_id: string;
+  title: string;
+  specification: Omit<WorkspaceDeliberationSpec, "participants"> & {
+    participants: Array<{ session_id: string; model: string | null; tool: string }>;
+  };
+  spec_hash: string;
+  status: string;
+  round: number;
+  initial_closed: boolean;
+  final_ready: boolean;
+  expired_flag: boolean;
+  incomplete_flag: boolean;
+  blinded: boolean;
+  required_acceptance_session_ids: string[];
+  accepted_session_ids: string[];
+  remaining_acceptance_session_ids: string[];
+  remaining_initial_session_ids: string[];
+  remaining_discussion_session_ids: string[];
+  counts: {
+    participants: number;
+    required_acceptances: number;
+    acceptances: number;
+    initial: number;
+    discussion: number;
+    contributions: number;
+    visible_contributions: number;
+  };
+  contributions: WorkspaceWorkContribution[];
+  unresolved_dissent: Array<{
+    contribution_id: string;
+    author_session_id: string;
+    round: number;
+    dissent: string;
+    resolved: false;
+  }>;
+  final: WorkspaceWorkFinal | null;
+  deadline: string;
+  created_at: string;
+  updated_at: string;
+  cancellation_reason: string | null;
+  permissions: {
+    can_advance: boolean;
+    advance_blocked_reason: string | null;
+    can_cancel: boolean;
+    cancel_blocked_reason: string | null;
+  };
+}

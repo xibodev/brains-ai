@@ -13,6 +13,8 @@ import {
   countByStatus,
 } from "../components/OperatorPrimitives";
 import { isCurrent } from "../components/sessionScope";
+import { WorkspaceAssignments } from "../components/WorkspaceAssignments";
+import { WorkspaceDeliberations } from "../components/WorkspaceDeliberations";
 import { classifyAsyncError, useAsync, type AsyncErrorKind } from "../store/useAsync";
 
 type WorkspaceTab = "overview" | "work" | "communication" | "knowledge" | "activity" | "access";
@@ -132,7 +134,7 @@ export function Workspaces() {
                   aria-labelledby={`workspace-tab-${tab}`}
                   tabIndex={0}
                 >
-                  <WorkspaceTabContent tab={tab} detail={workspace} />
+                  <WorkspaceTabContent key={workspace.workspace.slug} tab={tab} detail={workspace} />
                 </div>
               </>
             )}
@@ -147,7 +149,11 @@ function WorkspaceTabContent({ tab, detail }: { tab: WorkspaceTab; detail: Opera
   const navigation = useCoreNavigation();
   const activeHandoff = detail.handoffs.find((row) => row.status === "active");
   if (tab === "work") {
-    return <div className="operator-room-grid"><OperatorCard kicker="Tasks" title={`${detail.tasks.length} durable tasks`}><div className="operator-work-list">{detail.tasks.map((task) => <div className="operator-work-item" key={task.code}><div><code>{task.code}</code><OperatorStatus tone={task.status === "blocked" ? "warning" : task.status === "done" ? "ready" : "neutral"}>{task.status}</OperatorStatus></div><strong>{task.title}</strong><small>{task.priority} / {task.claimed_by_session_id ? `claimed by ${task.claimed_by_session_id.slice(0, 8)}` : "unclaimed"}</small></div>)}</div></OperatorCard><OperatorCard kicker="Human authority" title="Open decisions"><div className="operator-work-list">{detail.decisions.map((row) => <div className="operator-work-item" key={row.code}><code>{row.code}</code><strong>{row.title}</strong><small>{relativeTime(row.created_at)}</small></div>)}{!detail.decisions.length && <span className="operator-muted">No open decisions.</span>}</div></OperatorCard></div>;
+    return <div className="workspace-work-tab">
+      <WorkspaceAssignments key={`assignments-${detail.workspace.slug}`} slug={detail.workspace.slug} />
+      <WorkspaceDeliberations key={`deliberations-${detail.workspace.slug}`} slug={detail.workspace.slug} />
+      <div id="workspace-tasks-decisions" className="operator-room-grid"><OperatorCard kicker="Tasks" title={`${detail.tasks.length} durable tasks`}><div className="operator-work-list">{detail.tasks.map((task) => <div className="operator-work-item" key={task.code}><div><code>{task.code}</code><OperatorStatus tone={task.status === "blocked" ? "warning" : task.status === "done" ? "ready" : "neutral"}>{task.status}</OperatorStatus></div><strong>{task.title}</strong><small>{task.priority} / {task.claimed_by_session_id ? `claimed by ${task.claimed_by_session_id.slice(0, 8)}` : "unclaimed"}</small></div>)}{!detail.tasks.length && <span className="operator-muted">No tasks recorded.</span>}</div></OperatorCard><OperatorCard kicker="Human authority" title="Open decisions"><div className="operator-work-list">{detail.decisions.map((row) => <div className="operator-work-item" key={row.code}><code>{row.code}</code><strong>{row.title}</strong><small>{relativeTime(row.created_at)}</small></div>)}{!detail.decisions.length && <span className="operator-muted">No open decisions.</span>}</div></OperatorCard></div>
+    </div>;
   }
   if (tab === "communication") {
     return <div className="operator-room-grid"><OperatorCard kicker="Continuity" title="Handoffs"><div className="operator-work-list">{detail.handoffs.map((row) => <div className="operator-work-item" key={String(row.handoff_id || row.id)}><OperatorStatus tone={row.status === "active" ? "ready" : "neutral"}>{row.status || "unknown"}</OperatorStatus><strong>{row.title || "Untitled handoff"}</strong><small>{relativeTime(row.set_at || row.created_at)}</small></div>)}{!detail.handoffs.length && <span className="operator-muted">No handoffs recorded.</span>}</div></OperatorCard><OperatorCard kicker="Presence" title="Live agents"><div className="operator-agent-list">{detail.live_agents.map((agent) => <div className="operator-agent-row" key={agent.session_id}><span><i>{(agent.tool || "A").slice(0, 1).toUpperCase()}</i><b>{agent.tool || "agent"}<small>{agent.session_id.slice(0, 12)}</small></b></span><span className="operator-agent-actions"><code>{relativeTime(agent.last_activity_at)}</code>{agent.mailbox_deep_link && <button className="operator-button quiet" onClick={() => navigation.open(coreHref(agent.mailbox_deep_link!.replace(/^\/app/, "")))}>Open mailbox</button>}</span></div>)}{!detail.live_agents.length && <span className="operator-muted">No live agents.</span>}</div></OperatorCard></div>;

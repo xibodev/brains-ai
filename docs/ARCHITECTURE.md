@@ -59,7 +59,7 @@ children share durable state but not Python memory.
 The normal browser surface is `/app`:
 
 - Command Center;
-- Workspaces;
+- Workspaces, including Assignments and Deliberations in the existing Work tab;
 - Coordination;
 - Governance;
 - Operations, including Access and supported Configuration;
@@ -95,8 +95,8 @@ The supported processes have separate memory and one shared SQLite store.
 | Advertised | Identity and authorization | Credential resolution, principals, Org/Workspace capability checks | `src/brains/authz` |
 | Advertised | Workspace-first console | Command Center, Workspaces, Coordination, Governance, Operations, Act | `frontend`, `src/brains/web/spa` |
 | Advertised | Coordination controls | Sessions, tasks, claims, handoffs, durable mailbox, peer help, knowledge, checkpoints | `src/brains/control`, `src/brains/mcp` |
-| Advertised (this branch) | Local work assignments | Immutable specifications, revision-fenced acceptance, evidence-bearing attempts; CLI/MCP only | `src/brains/control/work_assignments.py`, `src/brains/storage/models.py` |
-| Advertised (this branch) | Existing-peer deliberation | Versioned proposals, exact-hash acknowledgements, blinded initials, bounded discussion, dissent-preserving synthesis; CLI/MCP only | `src/brains/control/coordination.py`, `src/brains/storage/models.py` |
+| Advertised (this branch) | Local work assignments | Immutable specifications, revision-fenced acceptance, evidence-bearing attempts; CLI/MCP agent actions and HTTP/browser human controls | `src/brains/control/work_assignments.py`, `src/brains/storage/models.py` |
+| Advertised (this branch) | Existing-peer deliberation | Versioned proposals, exact-hash acknowledgements, blinded initials, bounded discussion, dissent-preserving synthesis; CLI/MCP agent actions and HTTP/browser human controls | `src/brains/control/coordination.py`, `src/brains/storage/models.py` |
 | Advertised | Human governance | Asks, decisions, governed actions, approval routing, audit | `src/brains/control`, `src/brains/govern`, `src/brains/audit` |
 | Advertised | Realtime | Closed scoped subscriptions, durable event replay, WS/SSE delivery | `src/brains/api/ws.py`, `src/brains/events` |
 | Advertised | Storage and recovery | SQLite engine, migrations, integrity, backup/restore, recovery policy | `src/brains/storage`, `src/brains/backup` |
@@ -248,7 +248,7 @@ Session replacement; a changed title or specification under the same key is refu
 Attempts retain generation, source Session and actual tool, cooperative deadline/budget,
 report and settlement times, evidence/result, and nullable usage. Null usage is unknown.
 
-Mutations authorize the operator's live Session and current Workspace visibility under
+Session mutations authorize the operator's live Session and current Workspace visibility under
 the Session lifecycle writer lock. Conditional revision updates fence stale requests;
 assignment/attempt changes, lease renewal, and a Workspace-scoped `work_assignment_*`
 event commit or roll back together. The event records code/revision/generation rather
@@ -279,8 +279,9 @@ launches a process nor reads, creates, or owns a checkout. No universal process-
 or containment guarantee follows from the state machine.
 
 Seven CLI/MCP operations expose this foundation within the 89-tool current-main MCP surface.
-There are no assignment native HTTP routes, frontend components, or browser controls;
-the SPA route inventory is unchanged. [MCP](MCP.md#local-work-assignments) defines the
+The operator adapter adds HTTP create/get/list/cancel and browser components within
+Workspace Work; agent accept/settle and execution retry remain CLI/MCP-only.
+The SPA route inventory is unchanged. [MCP](MCP.md#local-work-assignments) defines the
 public fields. Remote runners and specialist execution remain planned; this local
 foundation does not complete [#36](https://github.com/xibodev/brains-ai/issues/36).
 
@@ -303,15 +304,15 @@ comes from the Session, while model labels remain unverified declarations. Schem
 2–8 participants and 0–3 discussion rounds; payloads fit 64 KiB. Context and links are
 inert and never fetched or translated into assignments.
 
-`control/coordination.py` authorizes a live operator-owned member Session and current
-Workspace visibility. Mutations take the Session lifecycle writer lock and use conditional
+The Session path in `control/coordination.py` authorizes a live operator-owned member
+Session and current Workspace visibility. Mutations take the Session lifecycle writer lock and use conditional
 revision updates. Version/revision fences, contribution insertion, Session lease renewal
 and a Workspace-scoped `coordination_*` event commit or roll back together. Event metadata
 contains code/version/revision/round/Workspace, not report bodies; these are protocol
 events, not evidence of human approval or governed execution. Reads use a consistent
 snapshot without renewing leases, changing phases, or settling work.
 
-New proposals start at version 1, revision 0, `planned`, with requester acceptance of
+New Session-authored proposals start at version 1, revision 0, `planned`, with requester acceptance of
 the stored hash recorded automatically. All required members (requester, participants,
 result owner) must acknowledge that version/hash before `accepted`. Only requester
 advances to `collecting`, after checking all members remain live. All participants must
@@ -351,13 +352,87 @@ neither cancels a work assignment nor stops a process nor sends/cancels mail.
 Seven core/lean MCP tools and matching CLI commands expose this local part of
 [#38](https://github.com/xibodev/brains-ai/issues/38). With the separate `mailbox_wait`
 addition, current-main MCP has 89 tools.
-There is no native HTTP API, frontend component, browser control, or proposal-specific
-readiness promise. Worker panels, multi-day execution and checkout management remain
+The operator HTTP adapter and Workspace Work components provide human creation,
+observation, cancellation and phase advancement, with no agent accept/submit endpoints
+or proposal-specific readiness promise. Worker panels, multi-day execution and checkout management remain
 outside this implementation. The local assignment foundation of
 [#36](https://github.com/xibodev/brains-ai/issues/36) remains separate. See
 [MCP](MCP.md#existing-peer-coordination) for exact schemas, returned helper fields and
 retry behavior, and [Operations](OPERATIONS.md#existing-peer-proposal-inspection-and-recovery)
 for inspection and recovery.
+
+### Operator-authored work and browser observation
+
+`156_operator_work_authorship` adds `creator_kind` to both parent tables and makes
+`creator_session_id` nullable under a check constraint: `session` requires a Session ID,
+`operator` requires null. The proposal model's `requester_session_id` remains an alias
+of the stored creator column. Existing authors default to `session`; specifications,
+hashes, attempt/contribution history and prior migrations are preserved. The SQLite
+rebuild uses stored historical DDL and restores indexes/triggers, retaining incoming
+foreign keys. A savepoint keeps both rebuilds atomic within the caller's transaction;
+rollback and rerun preserve history with foreign-key enforcement on or off. The model's
+column order matches the migrated tables. The PostgreSQL companion is compatibility
+inventory, not a supported backend.
+
+`api/operator.py` exposes ten work endpoints in the existing protected operator family:
+assignment create/get/list/cancel, proposal create/get/list/advance/cancel and a bounded
+participant-candidate read. [Guide](GUIDE.md#operator-work-http-family) lists the exact
+paths and bodies. The adapter passes the authenticated principal to the control layer;
+it accepts no caller-declared author and never substitutes a Session. HTTP mutations
+require a human browser-cookie channel and Workspace write capability. Raw API credentials
+may read within scope but cannot perform these mutations. Get/list require Workspace read
+capability and matching `creator_operator_id`, for either creator kind; bootstrap admin
+has no cross-creator override. Unknown and inaccessible work share a refusal.
+
+Human creation records `creator_kind: operator`, the authenticated `creator_operator_id`
+and null creator Session. Human proposals require an explicit existing live owned
+result-owner Session and 2–8 live owned participant Sessions in the Workspace; the owner
+may be outside the panel in the HTTP specification. No automatic agent acknowledgement
+is inserted. All required agents acknowledge the exact hash/version through CLI/MCP;
+only the named result owner submits final synthesis. Human advance can operate on the
+latest Session-authored proposal after its requester ends, but rechecks participants and
+result owner for liveness and ownership at each transition. Cancellation remains a
+cooperative state action, never process control.
+
+Operator transactions reserve the SQLite writer before reading mutation state, recheck
+scope/capability, and condition updates on the current revision (also proposal version).
+State and a scoped `work_assignment_*` or `coordination_*` event commit together.
+Human events have null `session_id` and metadata `actor_kind: operator`, `operator_id`
+and `channel`, not agent authorship or evidence bodies. They prove a recorded local
+action, not a governed external effect. Operator reads and writes never create or renew
+a Session; history remains readable after creator/participant Sessions end. Creation keys
+remain Workspace/operator-scoped, with author kind included in new request hashes.
+Pre-156 Session hashes remain replay-compatible without rewriting historical rows.
+
+The shared proposal serializer receives no viewer Session for operator reads, including
+mutation responses and creation replay. Before `initial_closed`, it returns no reports:
+`contributions` and `unresolved_dissent` are empty, `final` is null, while progress counts
+and missing-member IDs remain visible. After explicit closure all recorded reports,
+evidence and unresolved original dissent are visible. Cancellation, replacement or expiry
+cannot unblind a never-closed version. This observer filter also applies to historical
+Session-authored proposals; it is still a cooperative API boundary, not protection from
+direct database access or acting through another owned Session's agent interface.
+
+Operator snapshots add server-computed permissions: assignment `can_cancel`/`reason`,
+and proposal `can_advance`/`advance_blocked_reason` plus
+`can_cancel`/`cancel_blocked_reason`. These guide controls, not replace write-time checks.
+`WorkspaceAssignments`, `WorkspaceDeliberations` and `WorkspaceWorkShared` use structured
+forms and inspectable evidence in `/app/workspaces/:slug`'s Work tab. Participant choices
+come from recorded live owned Sessions; the UI selects an explicit result owner from the
+panel, not an “Act as” identity. There is no arbitrary-JSON input.
+
+Work panels use manual refresh and post-mutation readback, not automatic polling or
+guaranteed realtime delivery. A conflict refreshes latest state and requires explicit
+re-review before another action; it never automatically accepts changes or resubmits.
+An unchanged open creation form reuses its idempotency key after a lost response; editing
+starts a new request. No assignment execution-retry or proposal-replacement endpoint is
+added. Existing send controls still record local delivery, not agent execution.
+
+This is an unreleased local foundation for part of
+[#42](https://github.com/xibodev/brains-ai/issues/42). Broader cross-process events/replay
+and transport comparison remain incomplete. Remote runners (#36) and specialist workers
+(#38) remain deferred to #37 planning. MCP stays at 89 tools; the pinned 1.5 website
+retains 74. No new SPA route is introduced.
 
 ### Knowledge and reference evidence
 

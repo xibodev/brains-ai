@@ -286,7 +286,19 @@ provide authorization. A principal that may read an Org but lacks a capability r
 An Org cannot lose its last owner through normal API mutation.
 
 Use operator credentials with explicit membership for people and harnesses. Treat the
-bootstrap admin key as install-wide authority.
+bootstrap admin key as install-wide authority subject to each control's ownership rules.
+In particular, operator assignment/proposal get/list and mutations require matching
+`creator_operator_id`; bootstrap admin cannot override another creator's scope.
+
+The [operator work HTTP family](GUIDE.md#operator-work-http-family) consists of ten
+protected endpoints under `/v1/operator/workspaces/{slug}`. Reads require Workspace read
+capability; human writes require Workspace write capability and browser-cookie identity.
+Raw API credentials may read owned work but are refused for these mutations, including
+when an API header is supplied alongside a browser cookie. The body cannot declare an
+operator or substitute an agent Session. No public authentication exemption is added.
+Get/list include Session-authored rows under the same creator operator and remain usable
+after Sessions end, without Session creation or lease renewal. Permission fields in
+snapshots explain available actions; the server rechecks them when writing.
 
 Useful credential probes:
 
@@ -523,9 +535,10 @@ interaction outside Brains and record only what can be truthfully observed.
 
 ### Local assignment inspection and recovery
 
-This branch exposes local assignments through CLI and seven MCP tools, not through
-native HTTP routes or the frontend. The 89-tool current-main MCP count does not describe
-browser capabilities or change the website's pinned 1.5 release count of 74.
+This branch exposes local assignments through CLI and seven MCP tools, plus human
+creation, inspection and cancellation in the existing Workspace Work tab and protected
+operator HTTP family. The current-main MCP count stays 89; the website's pinned 1.5
+release count stays 74. These are unreleased local controls, not remote execution.
 
 Read the assignment directly; generic queue health is not assignment reconciliation:
 
@@ -559,6 +572,14 @@ in this foundation; cancellation leaves it uncertain. Do not force a status chan
 infer that queue repair makes a retry safe. Read-time uncertainty alone still permits
 the original live Session to report its actual outcome.
 
+Operator-authored assignments carry `creator_kind: operator` and
+`creator_session_id: null`. Browser creation/cancellation records operator/channel
+attribution in the same transaction as the state change, without renewing any Session.
+Operator reads need no live Session; `permissions.can_cancel` and `permissions.reason`
+describe cancellation eligibility. The browser has no assignment execution-retry control
+or endpoint. Its unchanged-form creation retry retrieves the same creation key; editing
+starts a new request. Agent acceptance/settlement/retry remain CLI/MCP operations.
+
 `checkout_ref`, `links`, and specification `tool` are inert advisory data: no checkout
 creation, filesystem ownership, reference fetching, or harness launch follows from them.
 See [MCP](MCP.md#local-work-assignments) for fields and [Guide](GUIDE.md#local-work-assignments)
@@ -568,8 +589,9 @@ for creation and settlement examples.
 
 The seven peer-coordination tools expose local state for part of
 [#38](https://github.com/xibodev/brains-ai/issues/38). They do not provide worker panels,
-multi-day checkout management, frontend controls, a native HTTP API, or proposal-specific
-readiness coverage. Assignment state remains the separate local foundation of
+multi-day checkout management or proposal-specific readiness coverage. Human creation,
+inspection, cancellation and phase controls are available through Workspace Work and
+the operator HTTP family. Assignment state remains the separate local foundation of
 [#36](https://github.com/xibodev/brains-ai/issues/36).
 
 Inspect through a live owned member Session in the proposal's Workspace:
@@ -580,16 +602,31 @@ brains-ai coordination-list --workspace <registered-path> --session <member-sess
 brains-ai coordination-get <code> --session <member-session-id> --version <historical-version>
 ```
 
+Alternatively use Workspace Work or operator GET for Session-independent observation,
+including after the requester ends. These reads are creator-operator-scoped, not an
+admin view of other operators' work. They show latest versions in lists and allow explicit
+historical get. Operator snapshots include `permissions.can_advance`,
+`advance_blocked_reason`, `can_cancel`, and `cancel_blocked_reason`; historical versions
+cannot be mutated. Operator advance requires live owned participants and result owner,
+even when all recorded reports needed for the transition are present.
+
 A successful read returns stored status, current version/revision, member-visible reports,
 helper counts and remaining-Session lists. Check `remaining_acceptance_session_ids`,
 `remaining_initial_session_ids`, `remaining_discussion_session_ids`, `initial_closed`,
-`final_ready`, `expired_flag`, and `incomplete_flag`. Requester acknowledgement is automatic
-at proposal creation; every other required member must acknowledge the exact stored hash.
+`final_ready`, `expired_flag`, and `incomplete_flag`. Session requester acknowledgement is
+automatic for Session-authored creation. Human-authored creation has no requester Session
+or automatic agent acknowledgement; an explicit live owned result-owner Session and all
+participants must acknowledge the exact stored hash.
 Session acknowledgement is not human approval. A count of all initials does not close
 collection: requester must explicitly advance. All API responses blind other members'
 initial payloads, including from requester, until closure; this is not protection against
 a shared operator acting as another owned Session or inspecting SQLite. Declared models
 are unverified. Final synthesis retains every original nonblank dissent as unresolved.
+
+The human requester/observer sees no initial content before explicit closure: reports,
+evidence, uncertainty, clarifications and dissent are withheld on get/list, mutations and
+creation replay. Progress counts remain visible. After closure, all recorded reports and
+dissent are visible. Neither cancellation nor expiry unblinds a never-closed version.
 
 After a stale-fence refusal or lost response, read before retrying with current `version`
 and `expected_revision`. Coordination MCP integer arguments are strict: JSON `true` is
@@ -612,6 +649,22 @@ processes, or mail; pre-closure cancellation leaves initial reports blinded.
 Do not hand-edit rows or infer recovery from generic queue repair. Links and context are
 inert and create no assignments or integration. See [MCP](MCP.md#existing-peer-coordination)
 for schema/retry limits and [Guide](GUIDE.md#existing-peer-deliberation) for the sequence.
+
+### Browser work refresh and delivery boundary
+
+Workspace Work uses structured assignment/proposal forms, manual refresh and post-action
+readback. It does not automatically poll for peer updates. Refresh and inspect the
+last-refreshed timestamp when waiting for acknowledgements or evidence. On a `409`
+conflict, the UI refreshes latest state and requires explicit re-review before another
+action; it does not automatically retry or accept changed scope. Creation recovery keeps
+the same key only for an unchanged open form. Existing send controls record local delivery;
+neither a send nor a work-state event proves agent wakeup, acceptance or execution.
+
+This local operator foundation is partial [#42](https://github.com/xibodev/brains-ai/issues/42).
+Broader cross-process events/replay and transport comparison remain incomplete. Remote
+runners (#36) and specialist workers (#38) remain deferred to #37 planning. The ten
+HTTP endpoints do not include agent accept/submit, assignment execution retry or proposal
+replacement. See [Guide](GUIDE.md#operator-work-http-family) for the compact route table.
 
 ## Health and readiness
 
@@ -678,6 +731,25 @@ migration runner's transactional DDL boundary and preserves existing data and mi
 history. Its PostgreSQL companion is compatibility inventory only. Use the same backup,
 migration, diagnosis and isolated restore procedures; do not rewrite historical versions
 to clear incomplete work. A schema upgrade does not launch peers or send mail.
+
+Migration `156_operator_work_authorship` adds explicit `creator_kind` to
+`work_assignments` and `coordination_proposals` and permits null `creator_session_id`
+only for `operator` authors. Existing rows default to `session` and keep their original
+Session authors, specifications, hashes, attempts and contributions. Proposal
+`requester_session_id` is the model/API alias of the stored creator Session column.
+The SQLite rebuild preserves historical constraints, indexes, triggers and incoming
+foreign keys, with a savepoint inside the caller's transaction for rollback and rerun.
+Existing migration 154/155 history is not rewritten; old Session creation hashes retain
+replay compatibility. Its PostgreSQL companion remains compatibility inventory only.
+
+For isolated migration verification, run `python -m pytest tests/test_operator_work_migration.py`.
+A healthy result preserves both author kinds and prior history, rejects mixed/missing
+authorship, matches full ordered model/table column definitions, and exercises interrupted
+upgrade rollback and ledger retry with foreign-key enforcement on and off. Core and HTTP
+contract probes are `tests/test_operator_work_assignments.py`,
+`tests/test_operator_peer_coordination.py`, and `tests/test_operator_workspace_work.py`:
+they check attribution, creator scope, blinding, fences and Session-independent reads.
+Use disposable SQLite state and the isolation rules in [Quality gates](QUALITY_GATES.md).
 
 Migration `150_durable_mailboxes` is additive. It creates the durable mailbox,
 attachment, thread, message, delivery, notification, per-operator

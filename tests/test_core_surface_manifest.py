@@ -43,8 +43,37 @@ def test_spa_ast_helper_executes_directly_against_repository() -> None:
     payload = json.loads(completed.stdout)
     assert "main.tsx" in payload["modules"]
     assert "App.tsx" in payload["modules"]
+    assert set(payload["modules"]) == check_core_surface.CORE_FRONTEND_MODULES
     assert payload["graph"]["main.tsx"]
     assert payload["navigation"]
+
+
+def test_workspace_work_http_surface_has_exactly_ten_operations() -> None:
+    from brains.main import app
+
+    prefix = "/v1/operator/workspaces/{slug}"
+    families = tuple(
+        f"{prefix}/{name}" for name in ("assignments", "coordinations", "work-participants")
+    )
+    operations = {
+        f"{method.upper()} {path}"
+        for path, methods in app.openapi()["paths"].items()
+        if any(path == family or path.startswith(f"{family}/") for family in families)
+        for method in methods
+        if method.upper() in check_core_surface.HTTP_METHODS
+    }
+    assert operations == {
+        f"GET {prefix}/assignments",
+        f"GET {prefix}/assignments/{{code}}",
+        f"POST {prefix}/assignments",
+        f"POST {prefix}/assignments/{{code}}/cancel",
+        f"GET {prefix}/coordinations",
+        f"GET {prefix}/coordinations/{{code}}",
+        f"POST {prefix}/coordinations",
+        f"POST {prefix}/coordinations/{{code}}/advance",
+        f"POST {prefix}/coordinations/{{code}}/cancel",
+        f"GET {prefix}/work-participants",
+    }
 
 
 def test_spa_ast_helper_fails_clearly_without_declared_parser(
@@ -1462,6 +1491,42 @@ def _finite_boundary_fixture(
         boundary = boundary_mutation(boundary)
     (source / "coreRoutes.tsx").write_text(boundary, encoding="utf-8")
     return check_core_surface._frontend_reachability(source)
+
+
+def test_finite_boundary_accepts_local_ids_and_post_commit_focus(tmp_path) -> None:
+    _, _, sites = _finite_boundary_fixture(
+        tmp_path,
+        """
+import { useId, useLayoutEffect, useRef, useState } from "react";
+export function Consumer() {
+  const id = useId();
+  const trigger = useRef<HTMLButtonElement>(null);
+  const [creating, setCreating] = useState(false);
+  useLayoutEffect(() => { if (!creating) trigger.current?.focus(); }, [creating]);
+  return <button ref={trigger} disabled={creating} aria-controls={id}
+    onClick={() => setCreating(true)}>Create</button>;
+}
+""",
+    )
+    assert not any(site["file"].endswith("/Consumer.tsx") for site in sites)
+
+
+@pytest.mark.parametrize(
+    "consumer",
+    [
+        'import { useLayoutEffect } from "react"; useLayoutEffect(() => { window.location.href = "/labs"; }, []);',
+        'import { useLayoutEffect } from "react"; useLayoutEffect(() => { window.open(target); }, []);',
+        'import { useLayoutEffect as effect } from "react"; void effect;',
+        'import { useId as id } from "react"; void id;',
+        'import { useImperativeHandle } from "react"; void useImperativeHandle;',
+        'import * as React from "react"; React.useLayoutEffect(() => {}, []);',
+        'export const Consumer = () => <a href="#workspace-assignments">Assignments</a>;',
+        "export const Consumer = () => <a href={target}>Dynamic</a>;",
+    ],
+)
+def test_reviewed_hooks_do_not_exempt_navigation_or_other_imports(tmp_path, consumer) -> None:
+    with pytest.raises(RuntimeError, match="failed closed"):
+        _finite_boundary_fixture(tmp_path, consumer)
 
 
 @pytest.mark.parametrize(

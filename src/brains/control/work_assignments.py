@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from brains.authz.policy import require_workspace_capability
+from brains.authz.principal import CAP_ORG_READ, CAP_ORG_WRITE, Principal
 from brains.authz.resolver import resolve_local_principal
 from brains.control.common import utc_now
 from brains.control.events import TAXONOMY_VERSION, classify_event_kind
@@ -199,6 +201,50 @@ def _workspace_path(session, workspace: Workspace, path: str) -> None:
         raise ValueError(_UNAVAILABLE)
 
 
+@contextmanager
+def _with_operator_workspace(workspace_id: int, principal: Principal, *, write: bool):
+    """Use the adapter's authenticated identity, never a local or declared actor.
+
+    Policy resolution opens its own connections, so it precedes the writer lock.
+    Recheck its capability and visibility policy in the transaction's snapshot.
+    No Session lifecycle or lease operation belongs on this path.
+    """
+    if (
+        not isinstance(principal, Principal)
+        or not principal.is_operator
+        or principal.operator_id is None
+    ):
+        raise ValueError(_UNAVAILABLE)
+    _integer(workspace_id, "workspace_id", 1, 2**63 - 1)
+    capability = CAP_ORG_WRITE if write else CAP_ORG_READ
+    require_workspace_capability(
+        principal, capability, workspace_id, entity="work assignment", ref=workspace_id
+    )
+    if write and not principal.is_human_channel:
+        raise ValueError("operator work assignment mutations require a human channel")
+    init_db()
+    with SessionLocal() as session:
+        if write:
+            # Take SQLite's writer reservation before any state/idempotency reads.
+            # This also orders operator writes against Session lifecycle writers.
+            session.query(Workspace).filter(Workspace.id == workspace_id).update(
+                {Workspace.id: Workspace.id}, synchronize_session=False
+            )
+        elif session.get_bind().dialect.name == "sqlite":
+            session.connection().exec_driver_sql("BEGIN")
+        workspace = session.get(Workspace, workspace_id)
+        if workspace is None or session.get(Operator, principal.operator_id) is None:
+            raise ValueError(_UNAVAILABLE)
+        org_id = workspace.org_id
+        if org_id is None:
+            org_id = session.query(Org.id).filter(Org.slug == "default").scalar()
+        if not principal.has_capability(capability, org_id) or not _visible(
+            session, principal, workspace
+        ):
+            raise ValueError(_UNAVAILABLE)
+        yield session, workspace
+
+
 def _assignment(session, code: str, workspace: Workspace, principal) -> WorkAssignment:
     _text(code, "code", 39, required=True)
     row = session.get(WorkAssignment, code)
@@ -232,7 +278,7 @@ def _snapshot(session, row: WorkAssignment) -> dict:
             source is None
             or source.ended_at is not None
             or source.state in ("completed", "failed", "cancelled", "dormant")
-            or (lease is not None and _aware(lease.lease_expires_at) < now)
+            or (source.pid is None and lease is not None and _aware(lease.lease_expires_at) < now)
         )
         attempts.append(
             {
@@ -261,6 +307,7 @@ def _snapshot(session, row: WorkAssignment) -> dict:
         "workspace_id": row.workspace_id,
         "title": row.title,
         "creator_operator_id": row.creator_operator_id,
+        "creator_kind": row.creator_kind,
         "creator_session_id": row.creator_session_id,
         "idempotency_key": row.idempotency_key,
         "request_hash": row.request_hash,
@@ -306,17 +353,27 @@ def _cas(session, row: WorkAssignment, expected: int, **values) -> None:
     session.refresh(row)
 
 
-def _finish(session, row: WorkAssignment, actor: AgentSession, action: str) -> dict:
-    """Assignment, attempt, lease and scoped event commit or roll back together."""
-    require_live_session(session, actor.id, action="work assignment", renew_lease=True)
+def _record_event(
+    session,
+    row: WorkAssignment,
+    action: str,
+    *,
+    session_id: str | None,
+    attribution: dict,
+) -> None:
     kind = f"work_assignment_{action}"
     event = Event(
         workspace_id=row.workspace_id,
-        session_id=actor.id,
+        session_id=session_id,
         kind=kind,
         message=f"{row.code}: {action}",
         metadata_json=_json(
-            {"code": row.code, "revision": row.revision, "generation": row.generation}
+            {
+                "code": row.code,
+                "revision": row.revision,
+                "generation": row.generation,
+                **attribution,
+            }
         ),
     )
     session.add(event)
@@ -330,9 +387,68 @@ def _finish(session, row: WorkAssignment, actor: AgentSession, action: str) -> d
             taxonomy_version=TAXONOMY_VERSION,
         )
     )
+
+
+def _finish(session, row: WorkAssignment, actor: AgentSession, action: str) -> dict:
+    """Assignment, attempt, lease and scoped event commit or roll back together."""
+    require_live_session(session, actor.id, action="work assignment", renew_lease=True)
+    _record_event(session, row, action, session_id=actor.id, attribution={"actor_kind": "session"})
     result = _snapshot(session, row)
     session.commit()
     return result
+
+
+def _create_assignment(
+    session,
+    workspace: Workspace,
+    principal: Principal,
+    title: str,
+    spec: str,
+    key: str,
+    *,
+    creator_kind: str,
+    creator_session_id: str | None,
+) -> tuple[WorkAssignment, bool]:
+    request = {"title": title, "specification": json.loads(spec)}
+    request_hash = _hash(_json({**request, "creator_kind": creator_kind}))
+    row = (
+        session.query(WorkAssignment)
+        .filter(
+            WorkAssignment.workspace_id == workspace.id,
+            WorkAssignment.creator_operator_id == principal.operator_id,
+            WorkAssignment.idempotency_key == key,
+        )
+        .one_or_none()
+    )
+    if row is not None:
+        # Migration 154 hashes predate author kinds; preserve their replay fence.
+        compatible_hashes = {request_hash}
+        if creator_kind == "session":
+            compatible_hashes.add(_hash(_json(request)))
+        if row.creator_kind != creator_kind or row.request_hash not in compatible_hashes:
+            raise ValueError("idempotency_key already used for a different request")
+        return row, False
+    now = utc_now()
+    row = WorkAssignment(
+        code=f"WA-{uuid4()}",
+        workspace_id=workspace.id,
+        creator_operator_id=principal.operator_id,
+        creator_kind=creator_kind,
+        creator_session_id=creator_session_id,
+        idempotency_key=key,
+        request_hash=request_hash,
+        title=title,
+        spec_version=1,
+        specification_json=spec,
+        specification_hash=_hash(spec),
+        status="ready",
+        revision=1,
+        generation=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    return row, True
 
 
 def create_work_assignment(
@@ -346,42 +462,126 @@ def create_work_assignment(
     title = _text(title, "title", 256, required=True)
     key = _text(idempotency_key, "idempotency_key", 128, required=True)
     spec = _specification(specification)
-    request_hash = _hash(_json({"title": title, "specification": json.loads(spec)}))
     with _with_session_lifecycle(session_id, write=True) as (session, actor, workspace, principal):
         _workspace_path(session, workspace, workspace_path)
-        row = (
+        row, created = _create_assignment(
+            session,
+            workspace,
+            principal,
+            title,
+            spec,
+            key,
+            creator_kind="session",
+            creator_session_id=actor.id,
+        )
+        if not created:
+            return _snapshot(session, row)
+        return _finish(session, row, actor, "created")
+
+
+def _operator_snapshot(session, row: WorkAssignment, principal: Principal) -> dict:
+    result = _snapshot(session, row)
+    if not principal.is_human_channel:
+        reason = "human_channel_required"
+    else:
+        workspace = session.get(Workspace, row.workspace_id)
+        if workspace is None:
+            raise ValueError(_UNAVAILABLE)
+        org_id = workspace.org_id
+        if org_id is None:
+            org_id = session.query(Org.id).filter(Org.slug == "default").scalar()
+        if not principal.has_capability(CAP_ORG_WRITE, org_id):
+            reason = "write_capability_required"
+        elif row.status in ("cancelled", "cancel_requested") or (
+            row.status == "uncertain" and row.cancel_requested_at is not None
+        ):
+            reason = "cancellation_already_requested"
+        elif row.status not in ("ready", "accepted", "uncertain"):
+            reason = "assignment_not_cancellable"
+        else:
+            reason = None
+    result["permissions"] = {"can_cancel": reason is None, "reason": reason}
+    return result
+
+
+def _finish_operator(session, row: WorkAssignment, principal: Principal, action: str) -> dict:
+    _record_event(
+        session,
+        row,
+        action,
+        session_id=None,
+        attribution={
+            "actor_kind": "operator",
+            "operator_id": principal.operator_id,
+            "channel": principal.channel,
+        },
+    )
+    result = _operator_snapshot(session, row, principal)
+    session.commit()
+    return result
+
+
+def list_operator_assignments(workspace_id: int, *, principal: Principal, limit: int = 50) -> list:
+    """Read owned assignments without requiring or renewing a Session."""
+    _integer(limit, "limit", 1, 200)
+    with _with_operator_workspace(workspace_id, principal, write=False) as (session, workspace):
+        rows = (
             session.query(WorkAssignment)
             .filter(
                 WorkAssignment.workspace_id == workspace.id,
                 WorkAssignment.creator_operator_id == principal.operator_id,
-                WorkAssignment.idempotency_key == key,
             )
-            .one_or_none()
+            .order_by(WorkAssignment.created_at.desc(), WorkAssignment.code)
+            .limit(limit)
+            .all()
         )
-        if row is not None:
-            if row.request_hash != request_hash:
-                raise ValueError("idempotency_key already used for a different request")
-            return _snapshot(session, row)
-        now = utc_now()
-        row = WorkAssignment(
-            code=f"WA-{uuid4()}",
-            workspace_id=workspace.id,
-            creator_operator_id=principal.operator_id,
-            creator_session_id=actor.id,
-            idempotency_key=key,
-            request_hash=request_hash,
-            title=title,
-            spec_version=1,
-            specification_json=spec,
-            specification_hash=_hash(spec),
-            status="ready",
-            revision=1,
-            generation=0,
-            created_at=now,
-            updated_at=now,
+        return [_operator_snapshot(session, row, principal) for row in rows]
+
+
+def get_operator_assignment(workspace_id: int, code: str, *, principal: Principal) -> dict:
+    with _with_operator_workspace(workspace_id, principal, write=False) as (session, workspace):
+        row = _assignment(session, code, workspace, principal)
+        return _operator_snapshot(session, row, principal)
+
+
+def create_operator_assignment(
+    workspace_id: int,
+    title: str,
+    specification: dict,
+    *,
+    principal: Principal,
+    idempotency_key: str,
+) -> dict:
+    """Record human-authored work; acceptance still belongs to a live peer."""
+    title = _text(title, "title", 256, required=True)
+    key = _text(idempotency_key, "idempotency_key", 128, required=True)
+    spec = _specification(specification)
+    with _with_operator_workspace(workspace_id, principal, write=True) as (session, workspace):
+        row, created = _create_assignment(
+            session,
+            workspace,
+            principal,
+            title,
+            spec,
+            key,
+            creator_kind="operator",
+            creator_session_id=None,
         )
-        session.add(row)
-        return _finish(session, row, actor, "created")
+        if not created:
+            return _operator_snapshot(session, row, principal)
+        return _finish_operator(session, row, principal, "created")
+
+
+def cancel_operator_assignment(
+    workspace_id: int, code: str, *, principal: Principal, expected_revision: int
+) -> dict:
+    """Cancel ready work or request cooperative cancellation; never stop a process."""
+    with _with_operator_workspace(workspace_id, principal, write=True) as (session, workspace):
+        row = _assignment(session, code, workspace, principal)
+        action = _cancel_assignment(session, row, expected_revision, session_id=None)
+        if action is None:
+            return _operator_snapshot(session, row, principal)
+        return _finish_operator(session, row, principal, action)
 
 
 def get_work_assignment(code: str, *, session_id: str) -> dict:
@@ -485,34 +685,41 @@ def settle_work_assignment(
 def cancel_work_assignment(code: str, *, session_id: str, expected_revision: int) -> dict:
     with _with_session_lifecycle(session_id, write=True) as (session, actor, workspace, principal):
         row = _assignment(session, code, workspace, principal)
-        _revision(row, expected_revision)
-        if row.status in ("cancelled", "cancel_requested"):
+        action = _cancel_assignment(session, row, expected_revision, session_id=actor.id)
+        if action is None:
             return _snapshot(session, row)
-        if row.status not in ("ready", "accepted", "uncertain"):
-            raise ValueError("work assignment cannot be cancelled")
-        if row.status == "uncertain" and row.cancel_requested_at is not None:
-            return _snapshot(session, row)
-        now = utc_now()
-        status = (
-            "cancelled"
-            if row.status == "ready"
-            else ("uncertain" if row.status == "uncertain" else "cancel_requested")
-        )
-        _cas(
-            session,
-            row,
-            expected_revision,
-            status=status,
-            cancel_requested_at=now,
-            cancel_requested_by_session_id=actor.id,
-        )
-        if row.generation and status != "cancelled":
-            attempt = _attempts(session, row)[-1]
-            attempt.cancel_requested_at = now
-            attempt.status = status
-        return _finish(
-            session, row, actor, "cancelled" if status == "cancelled" else "cancel_requested"
-        )
+        return _finish(session, row, actor, action)
+
+
+def _cancel_assignment(
+    session, row: WorkAssignment, expected_revision: int, *, session_id: str | None
+) -> str | None:
+    _revision(row, expected_revision)
+    if row.status in ("cancelled", "cancel_requested"):
+        return None
+    if row.status not in ("ready", "accepted", "uncertain"):
+        raise ValueError("work assignment cannot be cancelled")
+    if row.status == "uncertain" and row.cancel_requested_at is not None:
+        return None
+    now = utc_now()
+    status = (
+        "cancelled"
+        if row.status == "ready"
+        else ("uncertain" if row.status == "uncertain" else "cancel_requested")
+    )
+    _cas(
+        session,
+        row,
+        expected_revision,
+        status=status,
+        cancel_requested_at=now,
+        cancel_requested_by_session_id=session_id,
+    )
+    if row.generation and status != "cancelled":
+        attempt = _attempts(session, row)[-1]
+        attempt.cancel_requested_at = now
+        attempt.status = status
+    return "cancelled" if status == "cancelled" else "cancel_requested"
 
 
 def retry_work_assignment(code: str, *, session_id: str, expected_revision: int) -> dict:
