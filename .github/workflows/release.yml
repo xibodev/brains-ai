@@ -132,10 +132,15 @@ jobs:
         with:
           name: dist
           path: dist/
+      - name: Stage distribution packages for PyPI
+        run: |
+          mkdir -p dist-pypi
+          cp dist/*.whl dist/*.tar.gz dist-pypi/
+          ls -la dist-pypi/
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist/
+          packages-dir: dist-pypi/
           print-hash: true
           # Tolerate re-runs against an already-published version (PyPI is
           # immutable; a slot can be burned by an aborted release that still
@@ -176,14 +181,17 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc') }}
 
       - name: Promote exact candidate image to release tags
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
           candidate_image="ghcr.io/${{ github.repository_owner }}/brains-ai:candidate-${{ github.sha }}"
           tag_args=()
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
             tag_args+=( "--tag" "$tag" )
-          done
-          echo "Promoting ${candidate_image} to ${tag_args[*]}"
+          done <<< "$TAGS"
+          echo "Promoting ${candidate_image} to: ${tag_args[*]}"
           docker buildx imagetools create "${tag_args[@]}" "$candidate_image"
 
   release:
