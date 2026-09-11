@@ -130,6 +130,8 @@ def _specification(value: dict, requester: str | None) -> dict:
         "evidence_expectations",
         "deadline",
         "discussion_rounds",
+        "exchange_mode",
+        "max_turns_per_peer",
         "result_owner_session_id",
         "links",
     }
@@ -137,6 +139,16 @@ def _specification(value: dict, requester: str | None) -> dict:
         raise ValueError("specification must be a version-1 object with only allowed fields")
     if requester is None and not value.get("result_owner_session_id"):
         raise ValueError("operator proposals require an explicit result_owner_session_id")
+    exchange_mode = value.get("exchange_mode", "rounds")
+    if exchange_mode not in ("rounds", "threaded"):
+        raise ValueError("exchange_mode must be 'rounds' or 'threaded'")
+    discussion_rounds = _integer(value.get("discussion_rounds", 1), "discussion_rounds", 0, 3)
+    max_turns = _integer(
+        value.get("max_turns_per_peer", discussion_rounds or 3),
+        "max_turns_per_peer",
+        1,
+        3,
+    )
     spec = {
         "version": _integer(value.get("version", 1), "version", 1, 1),
         "objective": _text(value.get("objective"), "objective", SPEC_LIMIT, required=True),
@@ -144,7 +156,9 @@ def _specification(value: dict, requester: str | None) -> dict:
         "evidence_expectations": _text(
             value.get("evidence_expectations"), "evidence_expectations", SPEC_LIMIT
         ),
-        "discussion_rounds": _integer(value.get("discussion_rounds", 1), "discussion_rounds", 0, 3),
+        "discussion_rounds": discussion_rounds,
+        "exchange_mode": exchange_mode,
+        "max_turns_per_peer": max_turns,
         "result_owner_session_id": _identifier(value.get("result_owner_session_id", requester)),
         "links": _refs(value.get("links", []), "links"),
     }
@@ -174,14 +188,21 @@ def _payload(kind: str, value: dict) -> str:
         if kind == "final"
         else {"findings", "evidence", "uncertainty", "dissent"}
     )
-    optional = set() if kind == "final" else {"clarifications"}
+    optional = {"consensus", "open_questions", "dissent"} if kind == "final" else {"clarifications"}
     if type(value) is not dict or not fields <= value.keys() or value.keys() - fields - optional:
         raise ValueError("payload must contain the required structured fields only")
     result: dict = {
         field: _text(value[field], field, PAYLOAD_LIMIT, required=field == "evidence")
         for field in fields
     }
-    if "clarifications" in value:
+    if kind == "final":
+        for opt in ("consensus", "open_questions", "dissent"):
+            if opt in value:
+                if isinstance(value[opt], list):
+                    result[opt] = _refs(value[opt], opt)
+                else:
+                    result[opt] = _text(value[opt], opt, PAYLOAD_LIMIT)
+    elif "clarifications" in value:
         result["clarifications"] = _refs(value["clarifications"], "clarifications")
     encoded = _json(result)
     _text(encoded, "payload", PAYLOAD_LIMIT)
@@ -366,9 +387,24 @@ def _snapshot(session, row, viewer_session_id: str | None) -> dict:
         e.author_session_id for e in entries if e.kind == "discussion" and e.round == row.round
     }
     spec = json.loads(row.specification_json)
-    final_ready = row.status == "discussing" and (
-        row.round == 0 or row.round > spec["discussion_rounds"]
-    )
+    exchange_mode = spec.get("exchange_mode", "rounds")
+    if exchange_mode == "threaded":
+        final_ready = row.status == "discussing" and (
+            row.round == 0 or row.round > spec["discussion_rounds"]
+        )
+        discussion_authors = {e.author_session_id for e in entries if e.kind == "discussion"}
+        remaining_discussion = (
+            sorted(peers - discussion_authors)
+            if row.status == "discussing" and not final_ready
+            else []
+        )
+    else:
+        final_ready = row.status == "discussing" and (
+            row.round == 0 or row.round > spec["discussion_rounds"]
+        )
+        remaining_discussion = (
+            sorted(peers - discussion) if row.status == "discussing" and not final_ready else []
+        )
     visible = [
         e
         for e in entries
@@ -433,9 +469,7 @@ def _snapshot(session, row, viewer_session_id: str | None) -> dict:
             "visible_contributions": len(contributions),
         },
         "remaining_initial_session_ids": sorted(peers - initial),
-        "remaining_discussion_session_ids": sorted(peers - discussion)
-        if row.status == "discussing" and not final_ready
-        else [],
+        "remaining_discussion_session_ids": remaining_discussion,
         "contributions": contributions,
         "unresolved_dissent": dissent,
         "final": next((e["payload"] for e in contributions if e["kind"] == "final"), None),
@@ -695,8 +729,22 @@ def submit_coordination(
                 raise ValueError("idempotency_key already used for a different contribution")
             return _snapshot(session, row, actor.id)
         _open(row)
-        rounds = json.loads(row.specification_json)["discussion_rounds"]
-        round = row.round if kind == "discussion" else 0
+        spec = json.loads(row.specification_json)
+        rounds = spec["discussion_rounds"]
+        exchange_mode = spec.get("exchange_mode", "rounds")
+        max_turns = spec.get("max_turns_per_peer", rounds or 3)
+        if kind == "discussion":
+            if exchange_mode == "threaded":
+                peer_discussion = [
+                    e for e in entries if e.kind == "discussion" and e.author_session_id == actor.id
+                ]
+                round = len(peer_discussion) + 1
+                if round > max_turns:
+                    raise ValueError("participant has reached maximum discussion turns")
+            else:
+                round = row.round
+        else:
+            round = 0
         if kind == "final":
             if actor.id != row.result_owner_session_id:
                 raise ValueError(_UNAVAILABLE)
@@ -706,8 +754,13 @@ def submit_coordination(
             raise ValueError(_UNAVAILABLE)
         elif kind == "initial" and row.status != "collecting":
             raise ValueError("coordination is not collecting initial contributions")
-        elif kind == "discussion" and (row.status != "discussing" or not 1 <= round <= rounds):
-            raise ValueError("coordination is not collecting this discussion round")
+        elif kind == "discussion":
+            if row.status != "discussing":
+                raise ValueError("coordination is not collecting discussion")
+            if exchange_mode == "rounds" and not (1 <= round <= rounds):
+                raise ValueError("coordination is not collecting this discussion round")
+            if exchange_mode == "threaded" and row.round > rounds and rounds > 0:
+                raise ValueError("discussion is closed for this coordination")
         if any(
             e.kind == kind and e.round == round and e.author_session_id == actor.id for e in entries
         ):
@@ -747,7 +800,19 @@ def _advance_blocked(row, entries) -> str | None:
     if row.status == "collecting":
         initial = {e.author_session_id for e in entries if e.kind == "initial"}
         return None if initial == _participants(row) else "initial_contributions_required"
-    rounds = json.loads(row.specification_json)["discussion_rounds"]
+    spec = json.loads(row.specification_json)
+    rounds = spec["discussion_rounds"]
+    exchange_mode = spec.get("exchange_mode", "rounds")
+    if exchange_mode == "threaded":
+        if row.status == "discussing":
+            discussion_authors = {e.author_session_id for e in entries if e.kind == "discussion"}
+            if discussion_authors != _participants(row):
+                return "discussion_contributions_required"
+            if row.round > rounds and rounds > 0:
+                return "final_synthesis_required"
+            return None
+        return "cannot_advance_in_state"
+
     if 1 <= row.round <= rounds:
         discussion = {
             e.author_session_id for e in entries if e.kind == "discussion" and e.round == row.round
@@ -784,10 +849,24 @@ def _advance(session, row, workspace, principal, *, operator: bool = False) -> N
     if row.status == "accepted":
         _cas(session, row, status="collecting")
     elif row.status == "collecting":
-        rounds = json.loads(row.specification_json)["discussion_rounds"]
-        _cas(session, row, status="discussing", initial_closed=True, round=1 if rounds else 0)
+        spec = json.loads(row.specification_json)
+        rounds = spec["discussion_rounds"]
+        exchange_mode = spec.get("exchange_mode", "rounds")
+        _cas(
+            session,
+            row,
+            status="discussing",
+            initial_closed=True,
+            round=1 if (rounds or exchange_mode == "threaded") else 0,
+        )
     else:
-        _cas(session, row, round=row.round + 1)
+        spec = json.loads(row.specification_json)
+        rounds = spec["discussion_rounds"]
+        exchange_mode = spec.get("exchange_mode", "rounds")
+        if exchange_mode == "threaded":
+            _cas(session, row, round=max(row.round, rounds) + 1)
+        else:
+            _cas(session, row, round=row.round + 1)
 
 
 @contextmanager

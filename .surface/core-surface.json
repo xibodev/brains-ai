@@ -324,6 +324,7 @@
       "tests/test_context_freshness.py",
       "tests/test_context_planner.py",
       "tests/test_control_plane.py",
+      "tests/test_conversational_work_coordination.py",
       "tests/test_coordination_lifecycle.py",
       "tests/test_coordination_plane.py",
       "tests/test_coordination_transport.py",
