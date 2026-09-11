@@ -2,13 +2,16 @@ name: release
 
 # Triggered by a SemVer tag push (e.g. `v0.1.0a3`, `v0.2.0`, `v1.0.0`).
 #
-# Jobs:
+# Exact-Artifact Promotion:
 #   1. qualify    — refuse to publish unless ci's aggregate `quality gate` check
-#                   succeeded for this exact tagged commit
-#   2. build      — produce sdist + wheel into dist/
-#   3. pypi       — publish to PyPI via Trusted Publishers (OIDC, no tokens)
-#   4. docker     — build + push multi-arch image to GHCR
-#   5. release    — create a GitHub Release with the dist/ artifacts attached
+#                   succeeded for this exact tagged commit; download and verify
+#                   the exact pre-built wheel, sdist, and provenance manifest from CI
+#                   without rebuilding.
+#   2. pypi       — publish the exact qualified wheel + sdist to PyPI via Trusted
+#                   Publishers (OIDC, no tokens). Zero rebuild.
+#   3. docker     — promote the pre-built multi-arch candidate image on GHCR via
+#                   imagetools create. Zero rebuild.
+#   4. release    — create a GitHub Release with the exact dist/ artifacts attached.
 #
 # One-time setup (must be done by a repo admin before the first tag push):
 #
@@ -41,11 +44,12 @@ concurrency:
 
 jobs:
   qualify:
-    name: verify the tagged commit passed ci
+    name: verify tagged commit passed ci and retrieve exact qualified artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
       checks: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
       # Publication is gated on evidence, not on intent. A tag only ships if the
@@ -73,17 +77,41 @@ jobs:
           fi
           echo "ok: quality gate succeeded for ${sha}"
 
-  build:
-    name: build wheel + sdist
-    needs: qualify
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v3
       - name: Verify tag matches package version
         run: python scripts/check_release_version.py "$GITHUB_REF_NAME"
-      - run: uv build
-      - run: ls -la dist
+
+      - name: Download exact qualified dist artifacts from CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "Finding qualifying CI run for commit ${sha}..."
+          run_id="$(
+            gh run list \
+              --commit "${sha}" \
+              --workflow ci.yml \
+              --json databaseId,conclusion \
+              --jq '[.[] | select(.conclusion == "success")] | .[0].databaseId // empty'
+          )"
+          if [ -z "${run_id}" ]; then
+            echo "::error::could not find successful CI run for ${sha}"
+            exit 1
+          fi
+          echo "Found qualifying CI run: ${run_id}"
+          mkdir -p dist
+          gh run download "${run_id}" --name dist --dir dist
+          ls -la dist
+
+      - name: Verify exact artifact provenance without rebuilding
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          python scripts/artifact_promotion.py verify \
+            --dist dist \
+            --candidate "${sha}" \
+            --manifest dist/artifact-provenance.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -92,7 +120,7 @@ jobs:
 
   pypi:
     name: publish to PyPI (trusted publisher)
-    needs: build
+    needs: qualify
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -116,8 +144,8 @@ jobs:
           skip-existing: true
 
   docker:
-    name: build + push GHCR image
-    needs: build
+    name: promote GHCR image
+    needs: qualify
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -125,9 +153,6 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -150,17 +175,16 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, 'a') && !contains(github.ref_name, 'b') && !contains(github.ref_name, 'rc') }}
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Promote exact candidate image to release tags
+        run: |
+          set -euo pipefail
+          candidate_image="ghcr.io/${{ github.repository_owner }}/brains-ai:candidate-${{ github.sha }}"
+          tag_args=()
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            tag_args+=( "--tag" "$tag" )
+          done
+          echo "Promoting ${candidate_image} to ${tag_args[*]}"
+          docker buildx imagetools create "${tag_args[@]}" "$candidate_image"
 
   release:
     name: create GitHub Release

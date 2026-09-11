@@ -31,7 +31,7 @@ from brains.api.openai import session_attribution
 from brains.api.schemas import AnthropicMessagesRequest, CountTokensRequest
 from brains.config import settings
 from brains.context.planner import plan
-from brains.gateway.normalizer import redact_payload
+from brains.govern.redaction import redact_payload
 from brains.providers.registry import ProviderConfigError, ProviderInvocationError
 from brains.router.classifier import classify
 from brains.router.model_router import ModelNotFoundError, select_model

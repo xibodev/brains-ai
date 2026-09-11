@@ -8,7 +8,7 @@ from brains.api.auth import require_api_key
 from brains.api.schemas import ChatCompletionRequest, ChatMessage, ResponsesRequest
 from brains.config import settings
 from brains.context.planner import plan
-from brains.gateway.normalizer import redact_payload
+from brains.govern.redaction import redact_payload
 from brains.observability.metrics import record_passthrough_mutation
 from brains.providers.registry import ProviderConfigError, ProviderInvocationError
 from brains.router.classifier import classify

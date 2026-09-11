@@ -332,6 +332,26 @@ jobs:
             --wheel "$wheel" \
             --package-manifest dist/native-wakeup-package-provenance.json
           echo "manifest-sha256=$(sha256sum dist/native-wakeup-package-provenance.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Create exact-artifact provenance manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git_executable="$(realpath "$(command -v git)")"
+          uv run python scripts/artifact_promotion.py create \
+            --dist dist \
+            --candidate "$GITHUB_SHA" \
+            --git-executable "$git_executable" \
+            --output dist/artifact-provenance.json
+      - name: Verify exact-artifact provenance manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          git_executable="$(realpath "$(command -v git)")"
+          uv run python scripts/artifact_promotion.py verify \
+            --dist dist \
+            --candidate "$GITHUB_SHA" \
+            --git-executable "$git_executable" \
+            --manifest dist/artifact-provenance.json
       - name: Core surface boundary from fresh artifacts
         run: uv run python scripts/check_core_surface.py --dist dist
       - name: Show artifacts
@@ -586,6 +606,9 @@ jobs:
     name: docker image smoke
     needs: [docs, lint, typecheck]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Build runtime image
@@ -630,6 +653,35 @@ jobs:
       - name: Teardown
         if: always()
         run: docker rm -f brains-smoke || true
+
+      - name: Set up QEMU
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push candidate multi-arch image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: candidate-build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/brains-ai:candidate-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   opencode-lifecycle-probe:
     name: pinned OpenCode lifecycle probe

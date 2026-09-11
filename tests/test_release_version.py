@@ -47,5 +47,5 @@ def test_publication_jobs_share_approval_environment() -> None:
     for name in ("pypi", "docker"):
         environment = jobs[name]["environment"]
         assert (environment["name"] if isinstance(environment, dict) else environment) == "pypi"
-        assert jobs[name]["needs"] == "build"
+        assert jobs[name]["needs"] == "qualify"
     assert set(jobs["release"]["needs"]) == {"pypi", "docker"}

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from typing import Any
 
 REDACTED = "<redacted>"
 
@@ -508,6 +509,36 @@ def redact_mapping(args: dict) -> list[str]:
     ]
 
 
+def redact_payload(value: Any, sensitive_key_parts: tuple[str, ...] | None = None) -> Any:
+    """Recursively redact secret-bearing dictionary keys in payload-like data.
+
+    Any dictionary key that contains one of `settings.redaction_sensitive_key_parts`
+    (or `sensitive_key_parts` if provided, case-insensitive) is replaced with
+    `[REDACTED]`. Lists and nested dicts are traversed recursively.
+    """
+    if sensitive_key_parts is None:
+        try:
+            from brains.config import settings
+
+            parts = tuple(settings.redaction_sensitive_key_parts)
+        except Exception:
+            parts = SECRET_NAME_PARTS
+    else:
+        parts = sensitive_key_parts
+
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if any(part in str(key).lower() for part in parts):
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = redact_payload(item, sensitive_key_parts=parts)
+        return redacted
+    if isinstance(value, list):
+        return [redact_payload(item, sensitive_key_parts=parts) for item in value]
+    return value
+
+
 def contains_secret(text: str) -> bool:
     """True when :func:`redact_text` would change ``text``."""
     return redact_text(text) != (text or "")
@@ -523,5 +554,6 @@ __all__ = [
     "redact_argv",
     "redact_command_text",
     "redact_mapping",
+    "redact_payload",
     "redact_text",
 ]

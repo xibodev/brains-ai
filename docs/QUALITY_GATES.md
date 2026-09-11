@@ -138,9 +138,10 @@ following must hold for the exact commit proposed for the tag:
 5. A human reviews the candidate identity and all required evidence before approving any
    merge to `main`, remote push, tag, or publication. The tag-triggered release workflow
    verifies that the tag matches the package version, refuses to publish without a green
-   `quality gate` for that exact commit, rebuilds from the tagged source, and publishes
-   only through its configured protected environment. A passing earlier commit or a
-   Docker-only substitute does not qualify the tag.
+   `quality gate` for that exact commit, promotes the exact pre-qualified artifacts (wheel,
+   sdist, and OCI image) without rebuilding, and publishes only through its configured
+   protected environment. A passing earlier commit or a Docker-only substitute does not
+   qualify the tag.
 
 Both PyPI and GHCR publication jobs use the `pypi` environment; GitHub Release creation
 waits for both. Before tagging, inspect that environment's required reviewers, self-review
