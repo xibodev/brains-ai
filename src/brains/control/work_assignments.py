@@ -742,3 +742,57 @@ def retry_work_assignment(code: str, *, session_id: str, expected_revision: int)
             cancel_requested_by_session_id=None,
         )
         return _finish(session, row, actor, "retried")
+
+
+def reconcile_assignment_attempts(code: str) -> dict:
+    """Reconcile expired or orphaned attempts for an assignment without process killing.
+
+    Distinguishes requested cancellation (settled as cancelled), budget timeout
+    (settled as failed with runtime_budget_exceeded), and session termination
+    (settled as failed with source_session_terminated). Fences against late
+    stale completions by finalizing the attempt generation.
+    """
+    now = _aware(utc_now())
+    init_db()
+    with SessionLocal() as session:
+        row = session.get(WorkAssignment, code)
+        if row is None:
+            raise ValueError(_UNAVAILABLE)
+        attempts = _attempts(session, row)
+        if not attempts or row.status not in UNRESOLVED:
+            return _snapshot(session, row)
+
+        current = attempts[-1]
+        if current.status not in UNRESOLVED:
+            return _snapshot(session, row)
+
+        source = session.get(AgentSession, current.source_session_id)
+        lease = session.get(SessionLease, current.source_session_id)
+        expired = now >= _aware(current.deadline_at)
+        unavailable = (
+            source is None
+            or source.ended_at is not None
+            or source.state in ("completed", "failed", "cancelled", "dormant")
+            or (source.pid is None and lease is not None and _aware(lease.lease_expires_at) < now)
+        )
+
+        if not (expired or unavailable or row.status == "cancel_requested"):
+            return _snapshot(session, row)
+
+        if row.status == "cancel_requested" or current.status == "cancel_requested":
+            settled_status = "cancelled"
+            evidence = "cancellation requested and settled by reconciliation"
+        elif expired:
+            settled_status = "failed"
+            evidence = f"runtime budget exceeded ({current.max_runtime_seconds}s deadline)"
+        else:
+            settled_status = "failed"
+            evidence = "source session terminated or lease expired during execution"
+
+        _cas(session, row, row.revision, status=settled_status)
+        current.status = settled_status
+        current.evidence = evidence
+        current.reported_at = now
+        current.settled_at = now
+        session.commit()
+        return _snapshot(session, row)

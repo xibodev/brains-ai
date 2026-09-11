@@ -548,6 +548,7 @@ _EXEC_BOUNDARY = {
 _KNOWN_UNGOVERNED_EXEC = (
     SRC / "brains/control/durable_mailbox.py",  # local binding ACL/process identity probes
     SRC / "brains/control/supervisor.py",
+    SRC / "brains/control/worktrees.py",
     SRC / "brains/cli/app.py",  # self-update: `git pull`, `pip install`
     SRC / "brains/cli/run.py",
     SRC / "brains/auth/copilot.py",
