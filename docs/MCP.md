@@ -12,8 +12,8 @@ The website's pinned 1.5 release retains its 74-tool count.
 The unreleased operator work foundation adds ten protected native HTTP endpoints and
 controls in the existing Workspace Work tab, without adding MCP tools or changing these
 agent signatures. Human authoring is distinct from Session acceptance and reporting;
-see the [operator HTTP family](GUIDE.md#operator-work-http-family). This is partial #42
-scope, not completion of broader cross-process events/replay or transport comparison.
+see the [operator HTTP family](GUIDE.md#operator-work-http-family). Cross-process
+events and replay recovery operate over WebSocket and SSE with scope containment ([#42](https://github.com/xibodev/brains-ai/issues/42)).
 
 ## Connecting
 

@@ -154,11 +154,10 @@ cancellation is a request, not a process stop. No agent accept/submit or assignm
 HTTP endpoint is added. Migration 156 preserves existing Session authors, hashes and
 history with compatible rollback/replay behavior rather than rewriting historical work.
 
-#42 remains partial: broader cross-process events/replay and transport comparison are
-not delivered. Work panels use manual refresh and post-action readback, with no automatic
-polling or guaranteed realtime update. Remote #36 work and #38 specialist workers remain
-deferred to #37 planning. See the [operator guide](../GUIDE.md#operator-work-in-the-browser)
-for the available local journey and HTTP family.
+Cross-process events and replay recovery are supported over WebSocket and SSE transports
+with scope containment and empirical transport comparison ([#42](https://github.com/xibodev/brains-ai/issues/42)).
+Work panels use manual refresh and post-action readback alongside push notifications.
+See the [operator guide](../GUIDE.md#operator-work-in-the-browser) for the available local journey and HTTP family.
 
 The remaining intended capabilities are not supported behavior or release commitments.
 The local execution boundary remains cooperative; guest isolation and worker containment

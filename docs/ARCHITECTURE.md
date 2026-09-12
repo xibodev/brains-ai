@@ -428,10 +428,9 @@ An unchanged open creation form reuses its idempotency key after a lost response
 starts a new request. No assignment execution-retry or proposal-replacement endpoint is
 added. Existing send controls still record local delivery, not agent execution.
 
-This is an unreleased local foundation for part of
-[#42](https://github.com/xibodev/brains-ai/issues/42). Broader cross-process events/replay
-and transport comparison remain incomplete. Remote runners (#36) and specialist workers
-(#38) remain deferred to #37 planning. MCP stays at 89 tools; the pinned 1.5 website
+Cross-process events and replay recovery ([#42](https://github.com/xibodev/brains-ai/issues/42))
+distinguish storage persistence, live fan-out, client receipt, and replay recovery over
+WebSocket and SSE with scope containment. MCP stays at 89 tools; the pinned 1.5 website
 retains 74. No new SPA route is introduced.
 
 ### Knowledge and reference evidence

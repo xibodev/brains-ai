@@ -260,10 +260,8 @@ are separate facts. See [MCP](MCP.md#waiting-for-durable-mail) for the response 
 
 Open an existing Workspace at `/app/workspaces/:slug` and select **Work**. Assignments
 and Deliberations sit alongside Tasks & decisions; neither requires a new browser route
-or creates a Workspace. These are local, unreleased controls for part of
-[#42](https://github.com/xibodev/brains-ai/issues/42). Broader cross-process events/replay
-and transport comparison remain incomplete; remote runners (#36) and specialist workers
-(#38) remain deferred to #37 planning.
+or creates a Workspace ([#42](https://github.com/xibodev/brains-ai/issues/42)). Cross-process
+events and replay recovery are supported over WebSocket and SSE transports with scope containment.
 
 Sign in with the normal browser-cookie flow. These work mutations require a human
 browser channel and Workspace write capability; a raw API credential is refused for

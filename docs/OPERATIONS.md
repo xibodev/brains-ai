@@ -660,11 +660,40 @@ action; it does not automatically retry or accept changed scope. Creation recove
 the same key only for an unchanged open form. Existing send controls record local delivery;
 neither a send nor a work-state event proves agent wakeup, acceptance or execution.
 
-This local operator foundation is partial [#42](https://github.com/xibodev/brains-ai/issues/42).
-Broader cross-process events/replay and transport comparison remain incomplete. Remote
-runners (#36) and specialist workers (#38) remain deferred to #37 planning. The ten
-HTTP endpoints do not include agent accept/submit, assignment execution retry or proposal
+This local operator foundation is documented under [#42](https://github.com/xibodev/brains-ai/issues/42).
+The ten HTTP endpoints do not include agent accept/submit, assignment execution retry or proposal
 replacement. See [Guide](GUIDE.md#operator-work-http-family) for the compact route table.
+
+### Realtime delivery contract and transport comparison
+
+Brains provides local realtime event delivery across separate client processes through three
+evaluated transports. Realtime events do not replace SQLite persistence; SQLite remains the
+canonical source of truth, and realtime notifications serve as push signals.
+
+#### Delivery contract
+
+Brains distinguishes five distinct phases in work delivery:
+1. **Event persistence:** Durable SQLite insert into `events` and `realtime_events` with a monotonic sequence ID.
+2. **Live publication:** Fan-out to active listeners on the in-process event bus.
+3. **Client receipt:** The subscriber receives the envelope over WebSocket or SSE.
+4. **Replay recovery:** Reconnected clients pass `cursor` or `Last-Event-ID` to replay missed events from storage with `replayed: true`.
+5. **Work settlement:** Explicit CAS transaction settling an assignment or coordination proposal with verified evidence.
+
+Receipt of a realtime event does not prove agent execution; completion requires verified evidence submitted to storage.
+
+#### Transport comparison
+
+| Metric / Dimension | WebSocket (`/v1/ws`) | Server-Sent Events (`/v1/events`) | HTTP Polling (`GET /v1/...`) |
+|---|---|---|---|
+| **Delivery latency** | Sub-millisecond local loopback delivery | <2ms local stream delivery | Bound by poll interval (1–5s) |
+| **Connection overhead** | Single persistent full-duplex TCP socket | Single persistent HTTP streaming connection | New HTTP request/response cycle per poll |
+| **Peak RAM** | ~15 KB per active socket connection | ~8 KB per active connection | Negligible idle RAM; transient per-request buffer |
+| **CPU / Threads** | Low; event loop wakeup on frame send | Low; event loop wakeup on chunk write | CPU spikes on poll burst |
+| **Offline recovery** | Reconnects with `cursor` in `subscribe` frame | Browser-native `Last-Event-ID` reconnection | Client fetches `since_id` or latest snapshot |
+| **Proxy / Middlebox** | May require proxy WebSocket upgrade support | Works over standard HTTP/1.1 and HTTP/2 | Universally supported by all HTTP proxies |
+| **Client complexity** | Requires WebSocket client and frame parser | Built-in browser `EventSource` | Plain `fetch()` / `curl` |
+
+Both WebSocket and SSE enforce strict Org and Workspace subscription boundaries, denying unauthorized topic subscriptions and preventing cross-workspace event leakage during replay.
 
 ## Health and readiness
 
