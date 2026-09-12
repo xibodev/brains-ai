@@ -134,7 +134,7 @@ of UTF-8. Search compression can shorten the body further to 200 characters. Ins
 truncation flags and retrieval's `evidence.incomplete`; following a `ref` does not bypass
 the cap. Hidden successor IDs and references are redacted even when the predecessor is
 visible. See [MCP retrieval](MCP.md#bounded-reference-retrieval) for the response fields
-and registered-root filesystem boundary.
+and registered-root filesystem boundary. Hybrid semantic retrieval combines lexical lookup with local vector search.
 
 To replace a finding, use `knowledge_add` with `supersedes_code`. An entry cannot acquire
 a second successor or be reactivated as active/confirmed after supersession. Concurrent
