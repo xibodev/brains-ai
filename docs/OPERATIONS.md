@@ -374,6 +374,10 @@ be regular and within both its registered Workspace and `repo_dir`/`docs_dir` So
 root, with no symlink/reparse components. Metadata absolute paths cannot override these
 roots. Bootstrap admin can read stored evidence from an existing unscoped Source but
 cannot use it to read a file. Summary/missing fallbacks are always incomplete.
+Hybrid semantic search fuses lexical and local vector ranking with test penalties
+and bi-temporal filtering. Specialist execution runs bounded inside assignment
+worktrees with scrubbed credentials. Code graph uses stable URNs with
+confidence-tiered call edges.
 See [MCP](MCP.md#bounded-reference-retrieval) for field semantics and
 [Architecture](ARCHITECTURE.md#knowledge-and-reference-evidence) for the cooperative boundary.
 
